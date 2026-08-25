@@ -1,5 +1,3 @@
-const WEBHOOK_URL = "http://localhost:5678/webhook-test/ultron";
-
 const composer = document.getElementById("composer");
 const input = document.getElementById("messageInput");
 const sendButton = document.getElementById("sendButton");
@@ -45,17 +43,24 @@ composer.addEventListener("submit", async (event) => {
   setStatus("THINKING");
 
   try {
-    const response = await fetch(WEBHOOK_URL, {
+    const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message })
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    const raw = await response.text();
+    let data;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      throw new Error(`Invalid response from local core: ${raw.slice(0, 300)}`);
     }
 
-    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.details || data.error || `HTTP ${response.status}`);
+    }
+
     const reply = data.response || data.assistant_message || data.output || data.text;
 
     if (!reply) {
@@ -66,7 +71,7 @@ composer.addEventListener("submit", async (event) => {
     setStatus("CORE READY");
   } catch (error) {
     console.error(error);
-    addMessage("assistant", "I couldn't reach the Ultron Core. Check that n8n is listening on the webhook and that the local interface is allowed to make the request.");
+    addMessage("assistant", `I couldn't reach the Ultron Core. ${error.message}`);
     setStatus("CORE OFFLINE");
   } finally {
     sendButton.disabled = false;
