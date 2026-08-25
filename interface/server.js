@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = 3000;
-const N8N_WEBHOOK = 'http://localhost:5678/webhook-test/ultron';
+const N8N_WEBHOOK = 'http://localhost:5678/webhook/ultron';
 const ROOT = __dirname;
 
 const MIME_TYPES = {
@@ -81,7 +81,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Serve the static interface.
   let requestPath = decodeURIComponent((req.url || '/').split('?')[0]);
   if (requestPath === '/') requestPath = '/index.html';
 
