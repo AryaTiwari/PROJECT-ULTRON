@@ -18,6 +18,40 @@ function setStatus(text) {
   statusText.textContent = text;
 }
 
+function findReply(data) {
+  if (!data) return "";
+  if (typeof data === "string") return data.trim();
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const reply = findReply(item);
+      if (reply) return reply;
+    }
+    return "";
+  }
+
+  if (typeof data === "object") {
+    const direct = [
+      data.assistant_message,
+      data.response,
+      data.output,
+      data.text,
+      data.message,
+    ];
+
+    for (const value of direct) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+
+    for (const key of ["body", "data", "result", "json"] ) {
+      const reply = findReply(data[key]);
+      if (reply) return reply;
+    }
+  }
+
+  return "";
+}
+
 input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = `${Math.min(input.scrollHeight, 150)}px`;
@@ -61,7 +95,7 @@ composer.addEventListener("submit", async (event) => {
       throw new Error(data.details || data.error || `HTTP ${response.status}`);
     }
 
-    const reply = data.response || data.assistant_message || data.output || data.text;
+    const reply = findReply(data);
 
     if (!reply) {
       throw new Error("ULTRON returned no response text.");
