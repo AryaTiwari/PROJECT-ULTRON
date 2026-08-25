@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#05070b" />
+    <title>ULTRON — Personal AI</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">U</div>
+          <div>
+            <div class="brand-name">ULTRON</div>
+            <div class="brand-subtitle">PERSONAL AI SYSTEM</div>
+          </div>
+        </div>
+
+        <div class="system-status" id="systemStatus">
+          <span class="status-dot"></span>
+          <span id="statusText">CORE READY</span>
+        </div>
+      </header>
+
+      <section class="hero" id="hero">
+        <div class="orb-wrap" aria-hidden="true">
+          <div class="orb-ring ring-one"></div>
+          <div class="orb-ring ring-two"></div>
+          <div class="orb-core"><span>U</span></div>
+        </div>
+
+        <p class="eyebrow">ULTRON CORE</p>
+        <h1>What do you need?</h1>
+        <p class="hero-copy">Your memory, reasoning, routing and tools are connected. Give ULTRON a task.</p>
+      </section>
+
+      <section class="conversation" id="conversation" aria-live="polite"></section>
+
+      <form class="composer" id="composer">
+        <textarea
+          id="messageInput"
+          rows="1"
+          autocomplete="off"
+          placeholder="Ask ULTRON anything..."
+          aria-label="Message ULTRON"
+        ></textarea>
+        <button id="sendButton" type="submit" aria-label="Send message">
+          <span>↑</span>
+        </button>
+      </form>
+
+      <footer class="footer">
+        <span>LOCAL INTERFACE</span>
+        <span>•</span>
+        <span>MEMORY ENABLED</span>
+        <span>•</span>
+        <span>n8n CORE</span>
+      </footer>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
