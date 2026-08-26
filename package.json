@@ -9,6 +9,7 @@
     "core:check": "node core/smoke-test.js",
     "core:memory-test": "node core/memory-smoke-test.js",
     "core:voice-test": "node core/voice/smoke-test.js",
+    "core:test-build": "node core/test-build-check.js",
     "core:diagnose": "node core/diagnostics.js",
     "core:self-update": "node core/self-upgrade.js",
     "start": "node core/server.js"
