@@ -5,6 +5,7 @@
   "description": "ULTRON Mark 2 local AI assistant core",
   "scripts": {
     "core:start": "node core/server.js",
+    "core:check": "node core/smoke-test.js",
     "interface:start": "node interface/server.js",
     "start": "node core/server.js"
   },
