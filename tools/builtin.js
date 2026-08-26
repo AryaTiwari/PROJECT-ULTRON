@@ -2,6 +2,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { registerTool } = require('../core/executor');
+const voice = require('../core/voice');
 
 function registerBuiltinTools() {
   registerTool('system_info', async () => ({
@@ -46,6 +47,14 @@ function registerBuiltinTools() {
     description: 'Open a web URL using the system default browser.',
     requiresConfirmation: true,
     risk: 'medium',
+  });
+
+  registerTool('speak_text', async (input = {}) => voice.synthesize(input.text, {
+    filename: input.filename,
+  }), {
+    description: 'Convert text into ULTRON voice audio using the configured TTS provider.',
+    requiresConfirmation: false,
+    risk: 'low',
   });
 }
 
