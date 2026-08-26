@@ -47,4 +47,29 @@ async function insertConversationMessage(message) {
   return Array.isArray(result) ? result[0] : result;
 }
 
-module.exports = { available, listMemories, insertMemory, insertConversationMessage };
+async function insertModelPerformance(event) {
+  const result = await request('model_performance', {
+    method: 'POST',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify([event]),
+  });
+  return Array.isArray(result) ? result[0] : result;
+}
+
+async function insertSystemEvent(event) {
+  const result = await request('system_events', {
+    method: 'POST',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify([event]),
+  });
+  return Array.isArray(result) ? result[0] : result;
+}
+
+module.exports = {
+  available,
+  listMemories,
+  insertMemory,
+  insertConversationMessage,
+  insertModelPerformance,
+  insertSystemEvent,
+};
