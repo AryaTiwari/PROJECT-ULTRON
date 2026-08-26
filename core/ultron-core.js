@@ -5,6 +5,8 @@ const { assess } = require('./guardian');
 const { analyze } = require('./critic');
 const { listTools } = require('./executor');
 const { chat } = require('./model-router');
+const { classify } = require('./task-classifier');
+const { selectModel } = require('./model-policy');
 const local = require('./memory/local-store');
 const memoryJudge = require('./memory/judge');
 const supabase = require('./memory/supabase');
@@ -60,7 +62,7 @@ class UltronCore {
       try {
         return await supabase.listMemories(200);
       } catch {
-        // local fallback remains authoritative when remote memory is unavailable.
+        // Keep the local store usable when Supabase is temporarily unavailable.
       }
     }
     return local.getMemories();
@@ -112,18 +114,22 @@ class UltronCore {
     if (!userMessage) return { ok: false, error: 'Message is required.' };
 
     const timestamp = new Date().toISOString();
+    const task = classify(userMessage);
+    const selectedModel = selectModel(userMessage, options.model);
     const guardian = assess({ message: userMessage, action: options.action || null });
     const critic = analyze({ message: userMessage, plannedAction: options.action || null }, guardian);
 
-    local.appendConversation({ id: id(), role: 'user', content: userMessage, created_at: timestamp });
+    local.appendConversation({ id: id(), role: 'user', content: userMessage, task_type: task.taskType, created_at: timestamp });
     if (supabase.available()) {
-      try { await supabase.insertConversationMessage({ role: 'user', content: userMessage, created_at: timestamp }); } catch { /* local fallback */ }
+      try {
+        await supabase.insertConversationMessage({ role: 'user', content: userMessage, metadata: { task_type: task.taskType }, created_at: timestamp });
+      } catch { /* local fallback */ }
     }
 
     if (guardian.decision === 'block') {
       const response = `I can't execute that request. ${guardian.reasons.join(' ')}`;
       local.appendConversation({ id: id(), role: 'assistant', content: response, created_at: new Date().toISOString() });
-      return { ok: true, response, blocked: true, guardian, critic, memory: { saved: false } };
+      return { ok: true, response, blocked: true, guardian, critic, task };
     }
 
     if (guardian.decision === 'warn' && options.confirmed !== true) {
@@ -133,11 +139,13 @@ class UltronCore {
         response: `Guardian warning: ${guardian.reasons.join(' ')}`,
         guardian,
         critic,
+        task,
+        model: selectedModel,
       };
     }
 
     if (critic.status === 'blocked') {
-      return { ok: true, requires_confirmation: true, response: 'The request needs a safer approach before execution.', guardian, critic };
+      return { ok: true, requires_confirmation: true, response: 'The request needs a safer approach before execution.', guardian, critic, task };
     }
 
     const memoryCandidates = extractMemoryCandidates(userMessage);
@@ -150,21 +158,24 @@ class UltronCore {
 
     let result;
     try {
-      result = await chat({ messages, model: options.model });
+      result = await chat({ messages, model: selectedModel });
     } catch (error) {
-      return { ok: false, error: error.message, guardian, critic, memory: memoryResults };
+      return { ok: false, error: error.message, guardian, critic, task, model: selectedModel, memory: memoryResults };
     }
 
     const createdAt = new Date().toISOString();
-    local.appendConversation({ id: id(), role: 'assistant', content: result.content, model: result.model, created_at: createdAt });
+    local.appendConversation({ id: id(), role: 'assistant', content: result.content, model: result.model, task_type: task.taskType, created_at: createdAt });
     if (supabase.available()) {
-      try { await supabase.insertConversationMessage({ role: 'assistant', content: result.content, model: result.model, created_at: createdAt }); } catch { /* local fallback */ }
+      try {
+        await supabase.insertConversationMessage({ role: 'assistant', content: result.content, model: result.model, metadata: { task_type: task.taskType }, created_at: createdAt });
+      } catch { /* local fallback */ }
     }
 
     return {
       ok: true,
       response: result.content,
       model: result.model,
+      task,
       guardian,
       critic,
       memory: memoryResults,
@@ -173,4 +184,4 @@ class UltronCore {
   }
 }
 
-module.exports = { UltronCore, extractMemoryCandidates, buildSystemPrompt };
+module.exports = { UltronCore, extractMemoryCandidates, buildSystemPrompt, config };
