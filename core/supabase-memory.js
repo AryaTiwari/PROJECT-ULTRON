@@ -1,4 +1,4 @@
-const { normalizeForComparison, normalizeMemoryCandidate, looksLikeDuplicate } = require('./memory');
+const { normalizeForComparison, normalizeMemoryCandidate } = require('./memory');
 
 function getConfig() {
   return {
@@ -11,7 +11,8 @@ async function supabaseRequest(table, options = {}) {
   const { url, key } = getConfig();
   if (!url || !key) return null;
 
-  const response = await fetch(`${url}/rest/v1/${table}`, {
+  const query = options.query ? `?${options.query}` : '';
+  const response = await fetch(`${url}/rest/v1/${table}${query}`, {
     method: options.method || 'GET',
     headers: {
       apikey: key,
@@ -30,28 +31,26 @@ async function supabaseRequest(table, options = {}) {
   return data;
 }
 
-async function findSimilarMemory(candidate) {
-  const normalized = normalizeForComparison(candidate.content);
-  if (!normalized) return null;
+async function createConversation(title = null) {
+  const data = await supabaseRequest('conversations', { method: 'POST', body: [{ title }] });
+  return Array.isArray(data) ? data[0] : data;
+}
 
+async function getExactMemory(content) {
+  const normalized = normalizeForComparison(content);
+  if (!normalized) return null;
   const data = await supabaseRequest('memories', {
-    headers: { Accept: 'application/json' },
+    query: `normalized_content=eq.${encodeURIComponent(normalized)}&active=eq.true&limit=1`,
   });
-  if (!Array.isArray(data)) return null;
-  return data.find(item => {
-    if (item.active === false) return false;
-    return looksLikeDuplicate(candidate, [item]);
-  }) || null;
+  return Array.isArray(data) ? data[0] || null : null;
 }
 
 async function saveMemory(candidate) {
   const normalized = normalizeMemoryCandidate(candidate);
   if (!normalized.content) return { stored: false, reason: 'empty' };
 
-  const duplicate = await findSimilarMemory(normalized);
-  if (duplicate) {
-    return { stored: false, duplicate: true, existing: duplicate };
-  }
+  const duplicate = await getExactMemory(normalized.content);
+  if (duplicate) return { stored: false, duplicate: true, existing: duplicate };
 
   const inserted = await supabaseRequest('memories', {
     method: 'POST',
@@ -84,6 +83,8 @@ async function saveConversationMessage(conversationId, message) {
 
 module.exports = {
   getConfig,
+  createConversation,
+  getExactMemory,
   saveMemory,
   saveConversationMessage,
 };
