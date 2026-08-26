@@ -1,0 +1,13 @@
+{
+  "name": "project-ultron",
+  "version": "0.3.0-mark2",
+  "private": true,
+  "description": "ULTRON Mark 2 local-first personal AI assistant core",
+  "scripts": {
+    "core:start": "node core/server.js",
+    "core:check": "node core/smoke-test.js",
+    "core:memory-test": "node core/memory-smoke-test.js",
+    "start": "node core/server.js"
+  },
+  "engines": { "node": ">=18" }
+}

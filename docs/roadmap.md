@@ -1,59 +1,84 @@
-# Project Ultron Roadmap
+# Project Ultron Mark 2 Roadmap
 
-## Phase 0 — Foundation
+## Mark 2A — Core foundation — IN PROGRESS
 
-- GitHub repository
-- Local development environment
-- Docker
-- n8n self-hosted locally
-- Supabase project
-- Environment/secrets management
+- Stable editable ULTRON personality
+- Local ULTRON Core API
+- Task classification
+- Model policy layer
+- OmniRoute-compatible model gateway
+- Guardian safety gate
+- Critic evaluation layer
+- Permission-aware Executor registry
+- Local conversation persistence
+- Supabase memory adapter
+- Memory Judge with duplicate prevention
+- Supabase schema for long-term memory and telemetry
+- Replaceable future interface boundary
 
-## Phase 1 — Ultron Core
+## Mark 2B — Memory intelligence — NEXT
 
-- Stable Ultron personality
-- Request/response router
-- Gemini integration
-- Provider abstraction so additional AI models can be added
-- Supabase-backed conversation and long-term memory
-- Tool registry for APIs and automations
+- Semantic embeddings
+- Memory update/supersede logic
+- Entity-aware facts
+- Better retrieval ranking
+- Conversation summarization
+- Model/tool performance telemetry
 
-## Phase 2 — Personal assistant capabilities
+## Mark 2C — Laptop capabilities
 
-- Reminders
-- Email automation
-- Weather API
-- Stock-market API
-- Web/search tools
-- Calendar integration
+- PowerShell tool
+- File/folder tool
+- Application launcher
+- Browser automation adapter
+- System information and diagnostics
 - GitHub/development tools
-- Personal task automation
+- Tool permission profiles
 
-## Phase 3 — Desktop voice assistant
+## Mark 2D — Voice body
 
-- Windows desktop UI
-- Local microphone input
-- Wake-word detection
 - Speech-to-text
 - Text-to-speech
-- Popup states: idle, listening, thinking, speaking
-- Automatic startup with Windows
-- Manual stop/shutdown control
+- Wake word
+- Listening/thinking/speaking states
+- Brahma/Jarvis capability adapters
 
-## Phase 4 — External services
+## Mark 2E — Adaptive intelligence
 
-- WhatsApp personal automation where permitted by the platform/API
-- Instagram personal/business integrations where permitted by Meta APIs
+- Per-task model selection
+- Provider health tracking
+- Quota/limit awareness
+- Learned routing from successful interactions
+- Fallback and recovery
+
+## Mark 2F — Self-maintenance
+
+- Diagnostics
+- Self-healing for recoverable failures
+- GitHub update inspection
+- Staged upgrades
+- Automated tests
+- Backup and rollback
+
+## Mark 2G — Final interface
+
+- Google AI Studio ULTRON HUD
+- Network/system visualization
+- Dynamic mood states
+- Voice visualization
+- Guardian/Critic/Executor visualization
+
+## Future
+
+- Gmail
+- Calendar
+- Weather
+- Stocks
+- WhatsApp where permitted
+- Instagram where permitted
 - Elevate OS integrations
-- Additional APIs and open-source services
-
-## Phase 5 — Hardware
-
-- Alexa interface
-- Optional ESP32-S3 voice terminal
-- Optional Raspberry Pi / low-power always-on server
-- Shared Ultron Core across laptop, phone and hardware interfaces
+- Alexa/hardware interfaces
 
 ## Design rule
 
-Do not hard-code the assistant to one AI provider, one interface, or one automation platform. Ultron Core, memory, tools, voice, and UI must remain modular so components can be replaced or moved later.
+ULTRON Core, memory, tools, voice, AI routing, and UI remain modular. Donor projects are capability sources; they do not own ULTRON's identity or safety policy.
