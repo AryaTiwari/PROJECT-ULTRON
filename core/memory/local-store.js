@@ -59,4 +59,26 @@ function getRecentMessages(limit = config.recentMessageLimit) {
   return readJson(config.conversationFile, { messages: [] }).messages.slice(-limit);
 }
 
-module.exports = { getMemories, saveMemory, updateMemory, appendConversation, getRecentMessages };
+function appendModelPerformance(event) {
+  const file = path.join(path.dirname(config.memoryFile), 'model-performance.json');
+  const state = readJson(file, { events: [] });
+  state.events.push(event);
+  if (state.events.length > 10000) state.events.splice(0, state.events.length - 10000);
+  writeJson(file, state);
+  return event;
+}
+
+function getModelPerformance(limit = 200) {
+  const file = path.join(path.dirname(config.memoryFile), 'model-performance.json');
+  return readJson(file, { events: [] }).events.slice(-limit).reverse();
+}
+
+module.exports = {
+  getMemories,
+  saveMemory,
+  updateMemory,
+  appendConversation,
+  getRecentMessages,
+  appendModelPerformance,
+  getModelPerformance,
+};
