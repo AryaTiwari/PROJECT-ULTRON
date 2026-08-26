@@ -3,6 +3,7 @@ const { UltronCore } = require('./ultron-core');
 const { config } = require('./config');
 const { snapshot } = require('./inspector');
 const { execute, listTools } = require('./executor');
+const voice = require('./voice');
 
 const core = new UltronCore();
 
@@ -62,6 +63,27 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return send(res, 500, { ok: false, error: error?.message || String(error) });
     }
+  }
+
+  if (req.method === 'POST' && req.url === '/api/tts') {
+    try {
+      const raw = await readBody(req);
+      const body = JSON.parse(raw || '{}');
+      if (!String(body.text || '').trim()) return send(res, 400, { ok: false, error: 'Text is required.' });
+      const result = await voice.synthesize(body.text, {
+        filename: body.filename,
+        model: body.model,
+        referenceId: body.reference_id,
+        format: body.format,
+      });
+      return send(res, 200, result);
+    } catch (error) {
+      return send(res, 502, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  if (req.method === 'GET' && req.url === '/api/voice/status') {
+    return send(res, 200, { ok: true, ...voice.status() });
   }
 
   if (req.method === 'POST' && req.url === '/api/chat') {
