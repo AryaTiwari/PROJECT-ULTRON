@@ -1,73 +1,82 @@
-# PROJECT ULTRON
+# PROJECT ULTRON — Mark 2
 
-Personal AI assistant project — modular, voice-enabled, tool-using, and designed for long-term expansion.
+ULTRON is a local-first personal AI assistant designed as an orchestration system rather than a single model.
 
-## Vision
-
-Ultron is designed as a personal AI orchestration system rather than a single AI model. Different models and APIs can provide specialized capabilities while a shared personality, memory, and tool layer keeps the experience consistent.
-
-## Initial Architecture
+## Mark 2 foundation
 
 ```text
-User / Voice Interface
-        |
-        v
-   Ultron Core
-   - Personality
-   - Memory
-   - Router
-        |
-        v
-       n8n
-        |
-   +----+-----+----------------+
-   |          |                |
- Gemini    Other AI Models   APIs/Tools
-   |          |                |
-   +----------+----------------+
-              |
-              v
-        Response / TTS
-              |
-        Alexa / Laptop / Phone
+User / future UI / voice
+          |
+          v
+     Input Normalizer
+          |
+     +----v-------------------------------+
+     |            ULTRON CORE              |
+     | Personality / Context / Memory     |
+     | Guardian / Critic / Executor       |
+     +----+-------------------+------------+
+          |                   |
+          v                   v
+     Model Router          Tool Layer
+          |                   |
+       OmniRoute        Brahma / Jarvis /
+          |             future native tools
+          v                   |
+     AI providers             |
+          |                   |
+          +---------+---------+
+                    v
+              Response layer
+                    |
+             future UI / voice
 ```
 
-## Planned Capabilities
+## Current Mark 2 components
 
-- Long-term conversation and personal memory
-- Consistent Ultron personality across multiple AI providers
-- AI/model routing based on task complexity
-- Weather and stock APIs
-- Reminders and task management
-- Gmail and Google services
-- Instagram Business integration
-- Elevate OS creator research and CRM workflows
-- Website/development assistance
-- Personal WhatsApp automation (subject to technical/API constraints)
-- Alexa as an interface and speaker
-- Laptop wake-word and microphone interface
-- Future phone microphone and dedicated hardware interface
+- Editable ULTRON personality configuration in `core/personality/default.json`.
+- Flexible Guardian risk gate in `core/guardian.js`.
+- Critic approach-analysis layer in `core/critic.js`.
+- Permission-aware Executor boundary in `core/executor.js`.
+- OpenAI-compatible model gateway adapter in `core/model-router.js`, ready for local OmniRoute.
+- Supabase-backed memory adapter plus a local fallback cache.
+- Initial Supabase schema in `supabase/migrations/0001_mark2_memory.sql`.
+- Local Core HTTP API in `core/server.js`.
+- Interface remains replaceable; the current `interface/` folder is only a temporary development client.
 
-## Repository Structure
+## Donor projects
+
+`BRAHMA-BODY`, `JARVIS-BODY`, and `MULTI-AI-BRAIN` are capability sources. We will selectively integrate proven pieces instead of merging their application shells wholesale.
+
+See `integrations/CAPABILITY_SOURCES.md` and `docs/MARK2_ARCHITECTURE.md`.
+
+## Local development
+
+Install Node.js 18+.
+
+Run the core:
+
+```powershell
+npm run core:start
+```
+
+Check that the core modules load:
+
+```powershell
+npm run core:check
+```
+
+Health endpoint:
 
 ```text
-core/           Ultron identity, memory, routing, prompts
-integrations/   External services and APIs
-voice/          Wake word, speech-to-text, text-to-speech
-tools/          Reusable Ultron tools
-n8n/            n8n workflows and documentation
-docs/           Architecture and development documentation
+http://127.0.0.1:8787/health
 ```
 
-## Security
+For model responses, configure `OMNIROUTE_CHAT_URL` and run the local OmniRoute gateway. If it is unavailable, ULTRON reports the failure instead of returning a fake response.
 
-Never commit API keys, access tokens, passwords, Supabase service-role keys, or other secrets. Use local environment variables and keep `.env` files ignored by Git.
+## Secrets
 
-## Development Philosophy
+Never commit real API keys, OAuth tokens, Supabase service-role keys, passwords, or other credentials. Use `.env` locally; `.env.example` contains placeholders only.
 
-1. Prefer deterministic APIs/workflows when AI reasoning is unnecessary.
-2. Use lightweight/free models for simple tasks.
-3. Use stronger models such as Gemini for complex reasoning.
-4. Keep memory independent from any single AI provider.
-5. Keep integrations modular so new APIs can be added without rebuilding the core.
-6. Require confirmation for sensitive or irreversible actions until explicitly trusted.
+## Branching
+
+Mark 2 foundation work is developed on the `mark2-foundation` branch first. The final Google AI Studio interface will be integrated later behind the stable ULTRON Core API contract.
