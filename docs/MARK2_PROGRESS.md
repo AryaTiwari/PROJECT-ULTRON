@@ -8,11 +8,14 @@
 - Critic evaluation layer
 - Permission-aware Executor registry
 - Task classification and model policy
-- OmniRoute-compatible OpenAI chat gateway
+- OmniRoute-compatible authenticated OpenAI chat gateway
 - Local persistent conversation store
 - Supabase memory adapter
 - Memory Judge with exact, normalized, lexical near-duplicate checks
 - Optional embedding-based semantic duplicate hook
+- Relevance-based memory retrieval
+- Model performance telemetry with local fallback
+- Core inspection endpoint for future UI
 - Supabase schema for conversations, memories, model performance, and system events
 - Capability-source boundaries for Brahma, Jarvis/OpenJarvis, and Multi-AI Brain
 - One-command local startup helper
@@ -22,7 +25,7 @@
 
 1. Memory Judge v2: semantic embeddings, update/supersede logic, stronger entity-aware memory.
 2. Tool adapters: computer, PowerShell, files, browser, GitHub.
-3. Model performance telemetry and learned routing.
+3. Learned model routing from performance history.
 4. Brahma voice/browser capabilities wrapped as ULTRON tools.
 5. Wake-word and speech pipeline.
 6. GitHub-aware update manager with staged changes and rollback.
