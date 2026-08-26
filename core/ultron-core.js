@@ -66,7 +66,7 @@ class UltronCore {
     if (conflict && (candidate.explicitCorrection || Number(candidate.confidence ?? 0) >= Number(conflict.confidence ?? 0))) {
       const replacement = {
         id: id(), memory_type: candidate.type || 'fact', content: candidate.content,
-        normalized_content: memoryJudge.normalize(candidate.content), content_hash: require('./memory/judge').normalize(candidate.content),
+        normalized_content: memoryJudge.normalize(candidate.content), content_hash: memoryJudge.hash(candidate.content),
         importance: candidate.importance ?? conflict.importance ?? 0.5, confidence: candidate.confidence ?? 0.8,
         source: candidate.source || 'conversation', active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), metadata: { supersedes: conflict.id },
       };
