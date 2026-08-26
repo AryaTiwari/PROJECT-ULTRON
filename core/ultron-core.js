@@ -12,6 +12,7 @@ const memoryJudge = require('./memory/judge');
 const memoryRetriever = require('./memory/retriever');
 const supabase = require('./memory/supabase');
 const telemetry = require('./telemetry');
+const { registerBuiltinTools } = require('../tools/builtin');
 
 function id() {
   return crypto.randomUUID();
@@ -39,6 +40,7 @@ function extractMemoryCandidates(message) {
 
 class UltronCore {
   constructor() {
+    registerBuiltinTools();
     this.personality = loadPersonality();
     this.startedAt = new Date().toISOString();
   }
