@@ -26,7 +26,9 @@ const server = http.createServer(async (req,res)=>{
     if(req.method==='GET' && (req.url==='/' || req.url==='/test-ui')) return send(res,200,fs.readFileSync(uiFile,'utf8'),'text/html; charset=utf-8');
     if(req.method==='GET' && req.url.startsWith('/api/audio?')){
       const q=new URL(req.url,'http://127.0.0.1').searchParams; const requested=path.basename(q.get('path')||''); if(!requested)return send(res,400,{ok:false,error:'Audio path is required.'});
-      const file=path.resolve(audioRoot,requested); if(!file.startsWith(audioRoot+path.sep)||!fs.existsSync(file))return send(res,404,{ok:false,error:'Audio file not found.'}); return send(res,200,fs.readFileSync(file),'audio/mpeg');
+      const file=path.resolve(audioRoot,requested); if(!file.startsWith(audioRoot+path.sep)||!fs.existsSync(file))return send(res,404,{ok:false,error:'Audio file not found.'});
+      const ext=path.extname(file).toLowerCase(); const type=ext==='.wav'?'audio/wav':ext==='.ogg'?'audio/ogg':'audio/mpeg'; const stat=fs.statSync(file);
+      res.writeHead(200,{'Content-Type':type,'Content-Length':stat.size,'Cache-Control':'no-store','Accept-Ranges':'bytes'}); return fs.createReadStream(file).pipe(res);
     }
     if(req.method==='GET'&&req.url==='/health')return send(res,200,{ok:true,service:'ultron-core',...core.status(),runtime:'mark2-test'});
     if(req.method==='GET'&&req.url==='/api/tools')return send(res,200,{ok:true,tools:listTools()});
