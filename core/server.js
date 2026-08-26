@@ -1,6 +1,7 @@
 const http = require('http');
 const { UltronCore } = require('./ultron-core');
 const { config } = require('./config');
+const { snapshot } = require('./inspector');
 
 const core = new UltronCore();
 
@@ -37,6 +38,14 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/tools') {
     return send(res, 200, { ok: true, tools: require('./executor').listTools() });
+  }
+
+  if (req.method === 'GET' && req.url === '/api/inspect') {
+    try {
+      return send(res, 200, { ok: true, ...(await snapshot(core)) });
+    } catch (error) {
+      return send(res, 500, { ok: false, error: error?.message || String(error) });
+    }
   }
 
   if (req.method === 'POST' && req.url === '/api/chat') {
