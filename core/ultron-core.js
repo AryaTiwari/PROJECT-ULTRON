@@ -9,7 +9,9 @@ const { classify } = require('./task-classifier');
 const { selectModel } = require('./model-policy');
 const local = require('./memory/local-store');
 const memoryJudge = require('./memory/judge');
+const memoryRetriever = require('./memory/retriever');
 const supabase = require('./memory/supabase');
+const telemetry = require('./telemetry');
 
 function id() {
   return crypto.randomUUID();
@@ -60,9 +62,10 @@ class UltronCore {
   async getMemories() {
     if (supabase.available()) {
       try {
-        return await supabase.listMemories(200);
+        const memories = await supabase.listMemories(500);
+        if (Array.isArray(memories)) return memories;
       } catch {
-        // Keep the local store usable when Supabase is temporarily unavailable.
+        // Keep local memory usable when Supabase is unavailable.
       }
     }
     return local.getMemories();
@@ -95,11 +98,16 @@ class UltronCore {
     return { ...decision, saved: true, memory };
   }
 
+  async getRelevantMemories(userMessage, limit = 8) {
+    const memories = await this.getMemories();
+    return memoryRetriever.retrieve(userMessage, memories, limit);
+  }
+
   buildMessages(userMessage, memories, recent) {
-    const memoryText = memories.slice(0, 30).map(m => `- [${m.memory_type || 'fact'}] ${m.content}`).join('\n') || 'No stored memories.';
+    const memoryText = memories.map(m => `- [${m.memory_type || 'fact'}] ${m.content}`).join('\n') || 'No relevant stored memories.';
     const conversationText = recent.map(m => `${m.role}: ${m.content}`).join('\n') || 'No previous conversation.';
     const context = [
-      'LONG-TERM MEMORY:', memoryText, '',
+      'RELEVANT LONG-TERM MEMORY:', memoryText, '',
       'RECENT CONVERSATION:', conversationText,
     ].join('\n');
 
@@ -152,14 +160,29 @@ class UltronCore {
     const memoryResults = [];
     for (const candidate of memoryCandidates) memoryResults.push(await this.rememberCandidate(candidate));
 
-    const memories = await this.getMemories();
+    const relevantMemories = await this.getRelevantMemories(userMessage, 8);
     const recent = local.getRecentMessages();
-    const messages = this.buildMessages(userMessage, memories, recent);
+    const messages = this.buildMessages(userMessage, relevantMemories, recent);
 
+    const started = Date.now();
     let result;
     try {
       result = await chat({ messages, model: selectedModel });
+      await telemetry.recordModelResult({
+        model: result.model,
+        taskType: task.taskType,
+        success: true,
+        latencyMs: Date.now() - started,
+      });
     } catch (error) {
+      await telemetry.recordModelResult({
+        model: selectedModel,
+        taskType: task.taskType,
+        success: false,
+        latencyMs: Date.now() - started,
+        errorType: error?.name || 'model_error',
+        metadata: { message: String(error?.message || error).slice(0, 500) },
+      });
       return { ok: false, error: error.message, guardian, critic, task, model: selectedModel, memory: memoryResults };
     }
 
@@ -179,6 +202,7 @@ class UltronCore {
       guardian,
       critic,
       memory: memoryResults,
+      relevant_memories: relevantMemories,
       tools: listTools(),
     };
   }
