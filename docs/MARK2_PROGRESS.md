@@ -17,6 +17,10 @@
 - Model performance telemetry with local fallback
 - Core inspection endpoint for future UI
 - Supabase schema for conversations, memories, model performance, and system events
+- Permission-aware laptop tools
+- Fish Audio ULTRON voice adapter with the selected reference voice
+- TTS tool registration and `/api/tts` endpoint
+- Voice status endpoint for the future interface
 - Capability-source boundaries for Brahma, Jarvis/OpenJarvis, and Multi-AI Brain
 - One-command local startup helper
 - Replaceable interface boundary for the future Google AI Studio UI
@@ -24,10 +28,10 @@
 ## Next implementation queue
 
 1. Memory Judge v2: semantic embeddings, update/supersede logic, stronger entity-aware memory.
-2. Tool adapters: computer, PowerShell, files, browser, GitHub.
+2. Tool adapters: PowerShell, files, browser, GitHub, controlled computer actions.
 3. Learned model routing from performance history.
-4. Brahma voice/browser capabilities wrapped as ULTRON tools.
-5. Wake-word and speech pipeline.
+4. Fish Audio streaming/playback pipeline and voice-state events.
+5. Wake-word and speech-to-text pipeline.
 6. GitHub-aware update manager with staged changes and rollback.
 7. Self-healing diagnostics.
 8. Controlled self-upgrade pipeline.
