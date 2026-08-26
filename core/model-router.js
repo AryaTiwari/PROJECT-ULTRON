@@ -8,46 +8,61 @@ function getConfig() {
   };
 }
 
-function withTimeout(promise, timeoutMs) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Model request timed out.')), timeoutMs)),
-  ]);
+function extractContent(data) {
+  return data?.choices?.[0]?.message?.content
+    ?? data?.choices?.[0]?.text
+    ?? data?.output_text
+    ?? data?.response
+    ?? '';
 }
 
 async function chat({ messages, model } = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    throw new TypeError('Model router requires a non-empty messages array.');
+  }
+
   const config = getConfig();
   const selectedModel = model || config.model;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    const response = await withTimeout(fetch(config.endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: selectedModel, messages }),
-      signal: controller.signal,
-    }), config.timeoutMs + 1000);
+    let response;
+    try {
+      response = await fetch(config.endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModel, messages }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error(`Model gateway timed out after ${config.timeoutMs}ms.`);
+      }
+      throw new Error(`Could not reach model gateway at ${config.endpoint}: ${error?.message || error}`);
+    }
 
     const raw = await response.text();
     let data;
-    try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
-
-    if (!response.ok) {
-      throw new Error(`Model gateway returned HTTP ${response.status}: ${raw.slice(0, 500)}`);
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { raw };
     }
 
-    const content = data?.choices?.[0]?.message?.content
-      ?? data?.choices?.[0]?.text
-      ?? data?.output_text
-      ?? data?.response
-      ?? '';
+    if (!response.ok) {
+      throw new Error(`Model gateway returned HTTP ${response.status}: ${raw.slice(0, 800)}`);
+    }
 
-    if (!String(content).trim()) throw new Error('Model gateway returned no response text.');
+    const content = extractContent(data);
+    if (!String(content).trim()) {
+      throw new Error('Model gateway returned no response text.');
+    }
 
     return {
       content: String(content),
       model: data?.model || selectedModel,
+      provider: data?.provider || 'omniroute',
       raw: data,
     };
   } finally {
@@ -55,4 +70,4 @@ async function chat({ messages, model } = {}) {
   }
 }
 
-module.exports = { chat, getConfig };
+module.exports = { chat, getConfig, extractContent };
