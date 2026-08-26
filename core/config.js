@@ -5,6 +5,12 @@ function numberEnv(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function normalizeBaseUrl(value) {
+  return String(value || '').replace(/\/$/, '');
+}
+
+const omniRouteBase = normalizeBaseUrl(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1');
+
 const config = {
   name: process.env.ULTRON_NAME || 'ULTRON',
   host: process.env.ULTRON_CORE_HOST || '127.0.0.1',
@@ -16,7 +22,8 @@ const config = {
   memorySimilarityThreshold: numberEnv('ULTRON_MEMORY_SIMILARITY_THRESHOLD', 0.82),
   memoryNearDuplicateThreshold: numberEnv('ULTRON_MEMORY_NEAR_DUPLICATE_THRESHOLD', 0.72),
   router: {
-    endpoint: process.env.OMNIROUTE_CHAT_URL || 'http://127.0.0.1:20128/v1/chat/completions',
+    baseUrl: omniRouteBase,
+    endpoint: process.env.OMNIROUTE_CHAT_URL || `${omniRouteBase}/chat/completions`,
     apiKey: process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '',
     model: process.env.ULTRON_MODEL || 'auto',
     timeoutMs: numberEnv('ULTRON_MODEL_TIMEOUT_MS', 120000),
