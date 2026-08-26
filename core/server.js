@@ -2,6 +2,7 @@ const http = require('http');
 const { UltronCore } = require('./ultron-core');
 const { config } = require('./config');
 const { snapshot } = require('./inspector');
+const { execute, listTools } = require('./executor');
 
 const core = new UltronCore();
 
@@ -37,12 +38,27 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/api/tools') {
-    return send(res, 200, { ok: true, tools: require('./executor').listTools() });
+    return send(res, 200, { ok: true, tools: listTools() });
   }
 
   if (req.method === 'GET' && req.url === '/api/inspect') {
     try {
       return send(res, 200, { ok: true, ...(await snapshot(core)) });
+    } catch (error) {
+      return send(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  if (req.method === 'POST' && req.url === '/api/tools/execute') {
+    try {
+      const raw = await readBody(req);
+      const body = JSON.parse(raw || '{}');
+      if (!body.name) return send(res, 400, { ok: false, error: 'Tool name is required.' });
+      const result = await execute(body.name, body.input || {}, {
+        confirmed: body.confirmed === true,
+        source: body.source || 'interface',
+      });
+      return send(res, result.ok ? 200 : result.requires_confirmation ? 409 : 400, result);
     } catch (error) {
       return send(res, 500, { ok: false, error: error?.message || String(error) });
     }
