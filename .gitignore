@@ -17,6 +17,10 @@ __pycache__/
 .venv/
 venv/
 
+# ULTRON local runtime state
+.ultron/
+logs/*.log
+
 # n8n local data
 .n8n/
 
@@ -25,6 +29,3 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
-
-# Logs
-logs/*.log
