@@ -4,6 +4,8 @@ const { config } = require('./config');
 const { snapshot } = require('./inspector');
 const { execute, listTools } = require('./executor');
 const voice = require('./voice');
+const { maintenanceSnapshot, heal } = require('./maintenance-api');
+const { startVoiceDaemon, stopVoiceDaemon, voiceDaemonStatus } = require('./voice/daemon');
 
 const core = new UltronCore();
 
@@ -43,11 +45,31 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/api/inspect') {
-    try {
-      return send(res, 200, { ok: true, ...(await snapshot(core)) });
-    } catch (error) {
-      return send(res, 500, { ok: false, error: error?.message || String(error) });
-    }
+    try { return send(res, 200, { ok: true, ...(await snapshot(core)) }); }
+    catch (error) { return send(res, 500, { ok: false, error: error?.message || String(error) }); }
+  }
+
+  if (req.method === 'GET' && req.url === '/api/maintenance') {
+    try { return send(res, 200, { ok: true, ...(await maintenanceSnapshot(core)) }); }
+    catch (error) { return send(res, 500, { ok: false, error: error?.message || String(error) }); }
+  }
+
+  if (req.method === 'POST' && req.url === '/api/self-heal') {
+    try { return send(res, 200, await heal()); }
+    catch (error) { return send(res, 500, { ok: false, error: error?.message || String(error) }); }
+  }
+
+  if (req.method === 'GET' && req.url === '/api/voice/daemon') {
+    return send(res, 200, { ok: true, ...voiceDaemonStatus() });
+  }
+
+  if (req.method === 'POST' && req.url === '/api/voice/daemon/start') {
+    try { return send(res, 200, await startVoiceDaemon()); }
+    catch (error) { return send(res, 500, { ok: false, error: error?.message || String(error) }); }
+  }
+
+  if (req.method === 'POST' && req.url === '/api/voice/daemon/stop') {
+    return send(res, 200, stopVoiceDaemon());
   }
 
   if (req.method === 'POST' && req.url === '/api/tools/execute') {
@@ -83,7 +105,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/api/voice/status') {
-    return send(res, 200, { ok: true, ...voice.status() });
+    return send(res, 200, { ok: true, ...voice.status(), daemon: voiceDaemonStatus() });
   }
 
   if (req.method === 'POST' && req.url === '/api/chat') {
