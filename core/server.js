@@ -1,4 +1,6 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { Mark2Runtime } = require('./mark2-runtime');
 const { config } = require('./config');
 const { snapshot } = require('./inspector');
@@ -8,10 +10,11 @@ const { maintenanceSnapshot, heal } = require('./maintenance-api');
 const { startVoiceDaemon, stopVoiceDaemon, voiceDaemonStatus } = require('./voice/daemon');
 
 const core = new Mark2Runtime();
+const uiFile = path.resolve(__dirname, '..', 'interface-test', 'index.html');
 
-function send(res, status, payload) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' });
-  res.end(JSON.stringify(payload));
+function send(res, status, payload, contentType = 'application/json; charset=utf-8') {
+  res.writeHead(status, { 'Content-Type': contentType, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' });
+  res.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
 }
 
 function readBody(req) {
@@ -25,7 +28,11 @@ function readBody(req) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'OPTIONS') return send(res, 204, {});
+  if (req.method === 'OPTIONS') return send(res, 204, '');
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/test-ui')) {
+    try { return send(res, 200, fs.readFileSync(uiFile, 'utf8'), 'text/html; charset=utf-8'); }
+    catch (error) { return send(res, 500, { ok: false, error: error.message }); }
+  }
   if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true, service: 'ultron-core', ...core.status(), runtime: 'mark2-test' });
   if (req.method === 'GET' && req.url === '/api/tools') return send(res, 200, { ok: true, tools: listTools() });
   if (req.method === 'GET' && req.url === '/api/inspect') { try { return send(res, 200, { ok: true, ...(await snapshot(core)) }); } catch (error) { return send(res, 500, { ok: false, error: error?.message || String(error) }); } }
