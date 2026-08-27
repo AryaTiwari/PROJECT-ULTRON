@@ -18,8 +18,7 @@ function parseModel(model) {
   if (!value || value === 'auto') return { provider: null, model: 'auto' };
   const slash = value.indexOf('/');
   if (slash < 0) return { provider: null, model: value };
-  const provider = value.slice(0, slash).toLowerCase();
-  return { provider, model: value.slice(slash + 1) };
+  return { provider: value.slice(0, slash).toLowerCase(), model: value.slice(slash + 1) };
 }
 
 function providerForModel(model) {
@@ -41,28 +40,26 @@ function providerForModel(model) {
 
 async function credentials() {
   const out = {};
-  for (const key of Object.keys(PROVIDERS)) out[key] = '';
   try {
     const stored = await loadCredentials();
     for (const [provider, cfg] of Object.entries(PROVIDERS)) {
-      out[provider] = String(stored[cfg.key] || '').trim();
+      out[provider] = String(stored[cfg.key] || process.env[cfg.key] || '').trim();
     }
-    // Useful aliases.
-    if (!out.gemini) out.gemini = String(stored.GOOGLE_API_KEY || '').trim();
-    if (!out.anthropic) out.anthropic = String(stored.ANTHROPIC_API_KEY || '').trim();
-    if (!out.openai) out.openai = String(stored.OPENAI_API_KEY || '').trim();
-  } catch {}
+    const aliases = { gemini: 'GOOGLE_API_KEY', openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
+    for (const [provider, key] of Object.entries(aliases)) if (!out[provider]) out[provider] = String(process.env[key] || '').trim();
+  } catch {
+    for (const [provider, cfg] of Object.entries(PROVIDERS)) out[provider] = String(process.env[cfg.key] || '').trim();
+  }
   return out;
 }
 
-async function chooseAutoModel(requested = 'auto') {
+async function chooseAutoModel() {
   const creds = await credentials();
   const envAuto = String(process.env.ULTRON_DIRECT_DEFAULT_MODEL || '').trim();
   if (envAuto) {
     const p = providerForModel(envAuto);
-    if (p && (creds[p] || p === 'opencode')) return envAuto;
+    if (p && creds[p]) return envAuto;
   }
-  // Prefer a configured quality provider, then broader multi-model aggregators.
   if (creds.gemini) return `gemini/${process.env.ULTRON_DIRECT_GEMINI_MODEL || PROVIDERS.gemini.defaultModel}`;
   if (creds.openai) return `openai/${PROVIDERS.openai.defaultModel}`;
   if (creds.anthropic) return `anthropic/${PROVIDERS.anthropic.defaultModel}`;
@@ -73,7 +70,7 @@ async function chooseAutoModel(requested = 'auto') {
   if (creds.groq) return `groq/${PROVIDERS.groq.defaultModel}`;
   if (creds.mistral) return `mistral/${PROVIDERS.mistral.defaultModel}`;
   if (creds.xai) return `xai/${PROVIDERS.xai.defaultModel}`;
-  throw new Error('No direct AI provider credential is configured. Add a provider key in ULTRON ACCESS.');
+  throw new Error('No direct AI provider credential is configured. Add a provider key in ULTRON ACCESS or environment.');
 }
 
 function normalizeMessages(messages) {
@@ -85,32 +82,24 @@ function normalizeMessages(messages) {
 
 async function directChat({ messages, model = 'auto', tools = null } = {}) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('Model request requires messages.');
-  const resolved = model === 'auto' ? await chooseAutoModel(model) : model;
+  const resolved = model === 'auto' ? await chooseAutoModel() : model;
   const { provider: parsedProvider, model: parsedModel } = parseModel(resolved);
   const provider = parsedProvider && PROVIDERS[parsedProvider] ? parsedProvider : providerForModel(resolved);
   if (!provider || !PROVIDERS[provider]) throw new Error(`Unsupported direct model: ${resolved}`);
-
   const cfg = PROVIDERS[provider];
   const creds = await credentials();
   const apiKey = creds[provider];
-  if (!apiKey && provider !== 'opencode') throw new Error(`Provider ${provider} is not configured locally.`);
-
+  if (!apiKey) throw new Error(`Provider ${provider} is not configured locally.`);
   const cleanMessages = normalizeMessages(messages);
   let response;
 
   if (cfg.family === 'gemini') {
     const system = cleanMessages.find((m) => m.role === 'system')?.content || '';
-    const contents = cleanMessages.filter((m) => m.role !== 'system').map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
+    const contents = cleanMessages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
     const body = { contents };
     if (system) body.systemInstruction = { parts: [{ text: system }] };
-    response = await fetch(`${cfg.baseUrl}/models/${encodeURIComponent(parsedModel || cfg.defaultModel)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const raw = await response.text();
-    let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    response = await fetch(`${cfg.baseUrl}/models/${encodeURIComponent(parsedModel || cfg.defaultModel)}:generateContent?key=${encodeURIComponent(apiKey)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const raw = await response.text(); let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch {}
     if (!response.ok) throw new Error(`Gemini HTTP ${response.status}: ${raw.slice(0, 800)}`);
     const content = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
     if (!content.trim()) throw new Error('Gemini returned no response text.');
@@ -122,26 +111,16 @@ async function directChat({ messages, model = 'auto', tools = null } = {}) {
     const anthropicMessages = cleanMessages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
     const body = { model: parsedModel || cfg.defaultModel, max_tokens: Number(process.env.ULTRON_ANTHROPIC_MAX_TOKENS || 2048), messages: anthropicMessages };
     if (system) body.system = system;
-    response = await fetch(`${cfg.baseUrl}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify(body),
-    });
-    const raw = await response.text();
-    let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    response = await fetch(`${cfg.baseUrl}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body) });
+    const raw = await response.text(); let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch {}
     if (!response.ok) throw new Error(`Anthropic HTTP ${response.status}: ${raw.slice(0, 800)}`);
     const content = Array.isArray(data?.content) ? data.content.filter((x) => x.type === 'text').map((x) => x.text).join('') : '';
     if (!content.trim()) throw new Error('Anthropic returned no response text.');
     return { content, toolCalls: [], model: data?.model || parsedModel || cfg.defaultModel, provider, raw: data };
   }
 
-  response = await fetch(`${cfg.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-    body: JSON.stringify({ model: parsedModel || cfg.defaultModel, messages: cleanMessages, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
-  });
-  const raw = await response.text();
-  let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch {}
+  response = await fetch(`${cfg.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: parsedModel || cfg.defaultModel, messages: cleanMessages, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }) });
+  const raw = await response.text(); let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch {}
   if (!response.ok) throw new Error(`${provider} HTTP ${response.status}: ${raw.slice(0, 800)}`);
   const message = data?.choices?.[0]?.message || {};
   const content = message.content ?? data?.choices?.[0]?.text ?? data?.output_text ?? '';
@@ -152,7 +131,7 @@ async function directChat({ messages, model = 'auto', tools = null } = {}) {
 
 async function health() {
   const creds = await credentials();
-  const configured = Object.fromEntries(Object.entries(PROVIDERS).map(([id, cfg]) => [id, Boolean(creds[id])]));
+  const configured = Object.fromEntries(Object.entries(PROVIDERS).map(([id]) => [id, Boolean(creds[id])]));
   return { direct: true, providers: configured, anyConfigured: Object.values(configured).some(Boolean) };
 }
 
