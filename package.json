@@ -16,7 +16,7 @@
     "core:test-build": "node --env-file=.env core/test-build-check.js",
     "core:diagnose": "node --env-file=.env core/diagnostics.js",
     "core:self-update": "node --env-file=.env core/self-upgrade.js",
-    "start": "npm run interface:build && node --env-file=.env core/server.js"
+    "start": "node scripts/start-unified.mjs && npm run interface:build && node --env-file=.env core/server.js"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
