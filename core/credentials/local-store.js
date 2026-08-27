@@ -24,7 +24,7 @@ function powershell(script, input = '') {
 }
 
 async function protect(value) {
-  return powershell('$s = ConvertTo-SecureString -String ([Console]::In.ReadToEnd()) -AsPlainText -Force; $s | ConvertFrom-SecureString');
+  return powershell('$inputValue = [Console]::In.ReadToEnd(); $s = ConvertTo-SecureString -String $inputValue -AsPlainText -Force; $s | ConvertFrom-SecureString', value);
 }
 
 async function unprotect(value) {
