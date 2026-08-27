@@ -37,30 +37,45 @@ function cleanup() {
 function resolveOpenCodeCommand() {
   const candidates = [];
   const explicit = process.env.OPENCODE_BIN;
-  if (explicit) candidates.push(explicit);
+  if (explicit) candidates.push({ kind: 'direct', command: explicit });
 
   if (process.platform === 'win32') {
-    try {
-      const result = spawnSync('where.exe', ['opencode'], { encoding: 'utf8', windowsHide: true });
-      if (result.status === 0) {
-        for (const line of String(result.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)) candidates.push(line);
-      }
-    } catch {}
-
     const appData = process.env.APPDATA || '';
     const localAppData = process.env.LOCALAPPDATA || '';
     const userProfile = process.env.USERPROFILE || process.env.HOME || '';
-    candidates.push(
+    const shimCandidates = [
       path.join(appData, 'npm', 'opencode.cmd'),
+      path.join(appData, 'npm', 'opencode.CMD'),
       path.join(appData, 'npm', 'opencode.exe'),
       path.join(localAppData, 'Programs', 'opencode', 'opencode.exe'),
       path.join(userProfile, '.opencode', 'bin', 'opencode.exe'),
-    );
+    ];
+    for (const candidate of shimCandidates) if (candidate && fs.existsSync(candidate)) candidates.push({ kind: 'direct', command: candidate });
+
+    // npm-installed CLIs are reliably invokable through cmd.exe even when Node's
+    // spawn() cannot execute the .cmd shim directly.
+    for (const name of ['opencode.cmd', 'opencode']) candidates.push({ kind: 'cmd', command: name });
+
+    try {
+      const result = spawnSync('where.exe', ['opencode.cmd'], { encoding: 'utf8', windowsHide: true });
+      if (result.status === 0) {
+        for (const line of String(result.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)) candidates.unshift({ kind: 'direct', command: line });
+      }
+    } catch {}
   } else {
-    candidates.push('/usr/local/bin/opencode', '/usr/bin/opencode', path.join(process.env.HOME || '', '.opencode', 'bin', 'opencode'));
+    for (const candidate of ['/usr/local/bin/opencode', '/usr/bin/opencode', path.join(process.env.HOME || '', '.opencode', 'bin', 'opencode')]) {
+      if (fs.existsSync(candidate)) candidates.push({ kind: 'direct', command: candidate });
+    }
+    candidates.push({ kind: 'direct', command: 'opencode' });
   }
 
-  return candidates.find((candidate) => candidate && (path.isAbsolute(candidate) ? fs.existsSync(candidate) : true)) || null;
+  const seen = new Set();
+  return candidates.find((candidate) => {
+    const key = `${candidate.kind}:${candidate.command}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }) || null;
 }
 
 async function main() {
@@ -74,18 +89,18 @@ async function main() {
     return;
   }
 
-  const command = resolveOpenCodeCommand();
-  if (!command) {
+  const resolved = resolveOpenCodeCommand();
+  if (!resolved) {
     throw new Error('OpenCode is installed for the interactive shell, but the executable could not be resolved by Node. Set OPENCODE_BIN to the full path of opencode.cmd/opencode.exe.');
   }
 
-  console.log(`[OpenCode] Starting local model server at http://${host}:${port} using ${command}`);
-  child = spawn(command, ['serve', '--hostname', host, '--port', String(port)], {
-    stdio: 'ignore',
-    detached: true,
-    windowsHide: true,
-    shell: false,
-  });
+  console.log(`[OpenCode] Starting local model server at http://${host}:${port} using ${resolved.command}`);
+  const args = ['serve', '--hostname', host, '--port', String(port)];
+  if (resolved.kind === 'cmd') {
+    child = spawn('cmd.exe', ['/d', '/c', resolved.command, ...args], { stdio: 'ignore', detached: true, windowsHide: true, shell: false });
+  } else {
+    child = spawn(resolved.command, args, { stdio: 'ignore', detached: true, windowsHide: true, shell: false });
+  }
   child.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`));
   process.once('SIGINT', cleanup);
   process.once('SIGTERM', cleanup);
