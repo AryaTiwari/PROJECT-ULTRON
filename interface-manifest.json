@@ -22,6 +22,7 @@
     "src/components/Ultron3DGlobe.tsx",
     "src/components/UltronChatPage.tsx",
     "src/components/UltronCore.tsx",
+    "src/components/ChatErrorBoundary.tsx",
     "src/core/RuntimeBridge.tsx",
     "src/core/ultronContext.tsx",
     "src/services/ultronApi.ts",
