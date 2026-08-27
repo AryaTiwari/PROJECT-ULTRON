@@ -2,68 +2,64 @@
 
 Personal AI assistant project — modular, voice-enabled, tool-using, and designed for long-term expansion.
 
-## Vision
+## Mark 2 unified runtime
 
-Ultron is designed as a personal AI orchestration system rather than a single AI model. Different models and APIs can provide specialized capabilities while a shared personality, memory, and tool layer keeps the experience consistent.
-
-## Initial Architecture
+The `mark2-development` branch is the single development surface for ULTRON Core and the Interface1 UI.
 
 ```text
-User / Voice Interface
-        |
-        v
-   Ultron Core
-   - Personality
-   - Memory
-   - Router
-        |
-        v
-       n8n
-        |
-   +----+-----+----------------+
-   |          |                |
- Gemini    Other AI Models   APIs/Tools
-   |          |                |
-   +----------+----------------+
-              |
-              v
-        Response / TTS
-              |
-        Alexa / Laptop / Phone
+User
+  |
+  v
+Integrated Interface1 UI
+  |
+  v
+ULTRON Mark 2 Core (single 127.0.0.1:8787 service)
+  |--- Guardian
+  |--- Critic
+  |--- Executor
+  |--- Memory Judge / Retriever
+  |--- OmniRoute model router
+  |--- Voice / TTS
+  |--- Local credential vault
+  |--- Live system status
 ```
 
-## Planned Capabilities
+### Start everything
 
-- Long-term conversation and personal memory
-- Consistent Ultron personality across multiple AI providers
-- AI/model routing based on task complexity
-- Weather and stock APIs
-- Reminders and task management
-- Gmail and Google services
-- Instagram Business integration
-- Elevate OS creator research and CRM workflows
-- Website/development assistance
-- Personal WhatsApp automation (subject to technical/API constraints)
-- Alexa as an interface and speaker
-- Laptop wake-word and microphone interface
-- Future phone microphone and dedicated hardware interface
+```powershell
+git checkout mark2-development
+git pull origin mark2-development
+npm start
+```
 
-## Repository Structure
+Then open:
 
 ```text
-core/           Ultron identity, memory, routing, prompts
-integrations/   External services and APIs
-voice/          Wake word, speech-to-text, text-to-speech
-tools/          Reusable Ultron tools
-n8n/            n8n workflows and documentation
-docs/           Architecture and development documentation
+http://127.0.0.1:8787/
 ```
+
+`npm start` provisions the UI build dependencies when they are missing, synchronizes the pinned Interface1 source into a local ignored cache, builds the React UI, and starts the ULTRON Core server. You do not need to start the old Interface1 server separately.
+
+The exact Interface1 source revision is pinned in `interface-manifest.json` so the integrated runtime is reproducible.
+
+## Current capabilities
+
+- Long-term local memory with duplicate/semantic judging and retrieval
+- Consistent ULTRON personality across model providers
+- OmniRoute-compatible model routing
+- Guardian → Critic → Executor decision pipeline
+- Fish Audio voice integration with the configured ULTRON voice and optional metallic post-processing
+- Laptop voice daemon / wake-word groundwork
+- Live GitHub, Instagram, administrator, OmniRoute, internet-speed, memory, and mood status checks
+- Local credential vault using Windows DPAPI-backed storage
+- Integrated Interface1 globe, orbital mesh, chat console, diagnostics, decision history, personality controls, soundscape, and transcript export
+- Mood-driven interface palette with CALM blue as the baseline
 
 ## Security
 
-Never commit API keys, access tokens, passwords, Supabase service-role keys, or other secrets. Use local environment variables and keep `.env` files ignored by Git.
+Never commit API keys, access tokens, passwords, Supabase service-role keys, or other secrets. Use the local credential vault or environment variables. The generated Interface1 vendor directory is ignored by Git.
 
-## Development Philosophy
+## Development philosophy
 
 1. Prefer deterministic APIs/workflows when AI reasoning is unnecessary.
 2. Use lightweight/free models for simple tasks.
