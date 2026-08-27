@@ -12,6 +12,8 @@ const { getVoiceModel } = require('./voice/fish-model');
 const { maintenanceSnapshot, heal } = require('./maintenance-api');
 const { startVoiceDaemon, stopVoiceDaemon, voiceDaemonStatus } = require('./voice/daemon');
 const voiceConfig = require('./voice/config').config;
+const { collectSystemStatus } = require('./status/system-status');
+const credentialStore = require('./credentials/local-store');
 
 const execFileAsync = promisify(execFile);
 const core = new Mark2Runtime();
@@ -51,6 +53,11 @@ async function playLocalAudio(file) {
   return { ok: true, played: true, path: resolved };
 }
 
+function allowedCredentialKeys(body) {
+  const allowed = ['GITHUB_TOKEN', 'GH_TOKEN', 'INSTAGRAM_ACCESS_TOKEN', 'INSTAGRAM_USER_ID', 'IG_ACCESS_TOKEN', 'IG_USER_ID', 'OMNIROUTE_API_KEY', 'FISH_API_KEY', 'GEMINI_API_KEY'];
+  return Object.fromEntries(Object.entries(body || {}).filter(([key, value]) => allowed.includes(key) && value != null && String(value) !== '').map(([key, value]) => [key, String(value)]));
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') return send(res, 204, '');
@@ -68,6 +75,21 @@ const server = http.createServer(async (req, res) => {
       return fs.createReadStream(file).pipe(res);
     }
     if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true, service: 'ultron-core', ...core.status(), runtime: 'mark2-test' });
+    if (req.method === 'GET' && req.url === '/api/status') return send(res, 200, await collectSystemStatus());
+    if (req.method === 'GET' && req.url === '/api/status/mood') return send(res, 200, (await collectSystemStatus()).status.mood);
+    if (req.method === 'GET' && req.url === '/api/status/github') return send(res, 200, (await collectSystemStatus()).status.github);
+    if (req.method === 'GET' && req.url === '/api/status/instagram') return send(res, 200, (await collectSystemStatus()).status.instagram);
+    if (req.method === 'GET' && req.url === '/api/status/administrator') return send(res, 200, (await collectSystemStatus()).status.administrator);
+    if (req.method === 'GET' && req.url === '/api/status/omniroute') return send(res, 200, (await collectSystemStatus()).status.omniroute);
+    if (req.method === 'GET' && req.url === '/api/status/internet-speed') return send(res, 200, (await collectSystemStatus()).status.internetSpeed);
+    if (req.method === 'GET' && req.url === '/api/status/memory') return send(res, 200, (await collectSystemStatus()).status.memory);
+    if (req.method === 'GET' && req.url === '/api/credentials/status') return send(res, 200, await credentialStore.status());
+    if (req.method === 'POST' && req.url === '/api/credentials') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const values = allowedCredentialKeys(body);
+      if (!Object.keys(values).length) return send(res, 400, { ok: false, error: 'No supported credential fields were supplied.' });
+      return send(res, 200, { ok: true, ...(await credentialStore.setMany(values)) });
+    }
     if (req.method === 'GET' && req.url === '/api/tools') return send(res, 200, { ok: true, tools: listTools() });
     if (req.method === 'GET' && req.url === '/api/inspect') return send(res, 200, { ok: true, ...(await snapshot(core)) });
     if (req.method === 'GET' && req.url === '/api/maintenance') return send(res, 200, { ok: true, ...(await maintenanceSnapshot(core)) });
