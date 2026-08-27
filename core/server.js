@@ -49,7 +49,7 @@ async function playLocalAudio(file) {
   if (process.platform !== 'win32') return { ok: false, error: 'Local direct playback currently targets Windows.' };
   const escaped = resolved.replace(/'/g, "''");
   const ps = `$p = New-Object System.Windows.Media.MediaPlayer; $p.Open([Uri]::new('${escaped}')); Start-Sleep -Milliseconds 500; $p.Play(); while ($p.NaturalDuration.HasTimeSpan -eq $false) { Start-Sleep -Milliseconds 100 }; Start-Sleep -Milliseconds ([int]$p.NaturalDuration.TimeSpan.TotalMilliseconds + 250); $p.Close()`;
-  await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "Add-Type -AssemblyName PresentationCore; " + ps], { timeout: 120000, windowsHide: true, maxBuffer: 1024 * 1024 });
+  await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName PresentationCore; ' + ps], { timeout: 120000, windowsHide: true, maxBuffer: 1024 * 1024 });
   return { ok: true, played: true, path: resolved };
 }
 
@@ -90,6 +90,15 @@ const server = http.createServer(async (req, res) => {
       if (!Object.keys(values).length) return send(res, 400, { ok: false, error: 'No supported credential fields were supplied.' });
       return send(res, 200, { ok: true, ...(await credentialStore.setMany(values)) });
     }
+    if (req.method === 'GET' && req.url === '/api/memory') return send(res, 200, { ok: true, memories: await core.getMemories() });
+    if (req.method === 'POST' && req.url === '/api/memory') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const key = String(body.key || '').trim();
+      const value = String(body.value || '').trim();
+      if (!key || !value) return send(res, 400, { ok: false, error: 'Memory key and value are required.' });
+      const result = await core.rememberCandidate({ key, value, category: body.category || 'user', source: 'interface' });
+      return send(res, 200, { ok: true, result, memories: await core.getMemories() });
+    }
     if (req.method === 'GET' && req.url === '/api/tools') return send(res, 200, { ok: true, tools: listTools() });
     if (req.method === 'GET' && req.url === '/api/inspect') return send(res, 200, { ok: true, ...(await snapshot(core)) });
     if (req.method === 'GET' && req.url === '/api/maintenance') return send(res, 200, { ok: true, ...(await maintenanceSnapshot(core)) });
@@ -98,10 +107,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/api/voice/daemon/start') return send(res, 200, await startVoiceDaemon());
     if (req.method === 'POST' && req.url === '/api/voice/daemon/stop') return send(res, 200, stopVoiceDaemon());
     if (req.method === 'GET' && req.url === '/api/voice/model') {
-      try {
-        const model = await getVoiceModel();
-        return send(res, 200, { ok: true, configured_reference_id: voiceConfig.referenceId, model: { id: model?._id, title: model?.title, type: model?.type, state: model?.state, visibility: model?.visibility, author: model?.author?.nickname, description: model?.description } });
-      } catch (error) { return send(res, 502, { ok: false, configured_reference_id: voiceConfig.referenceId, error: error.message }); }
+      try { const model = await getVoiceModel(); return send(res, 200, { ok: true, configured_reference_id: voiceConfig.referenceId, model: { id: model?._id, title: model?.title, type: model?.type, state: model?.state, visibility: model?.visibility, author: model?.author?.nickname, description: model?.description } }); }
+      catch (error) { return send(res, 502, { ok: false, configured_reference_id: voiceConfig.referenceId, error: error.message }); }
     }
     if (req.method === 'POST' && req.url === '/api/tools/execute') {
       const body = JSON.parse((await readBody(req)) || '{}');
