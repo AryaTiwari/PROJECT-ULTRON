@@ -1,24 +1,10 @@
 import process from 'node:process';
-
-const enableOmniRoute = /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_ENABLE_OMNIROUTE || ''));
-
-if (!enableOmniRoute) {
-  console.log('[OmniRoute] Disabled for unified Mark 2 startup. Direct model fabric is active. Set ULTRON_ENABLE_OMNIROUTE=1 to enable legacy gateway fallback.');
-  process.exit(0);
-}
-
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
 
-const port = Number(process.env.OMNIROUTE_PORT || 20128);
-const host = process.env.OMNIROUTE_HOST || '127.0.0.1';
-const configuredDir = process.env.OMNIROUTE_DIR;
-const defaultDir = process.platform === 'win32' && process.env.USERPROFILE
-  ? path.join(process.env.USERPROFILE, 'Downloads', 'OmniRoute-release-v3.8.51', 'OmniRoute-release-v3.8.51')
-  : '';
-const omniDir = configuredDir || defaultDir;
+const enabled = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_ENABLE_OPENCODE ?? '1'));
+const port = Number(process.env.OPENCODE_PORT || 4096);
+const host = process.env.OPENCODE_HOST || '127.0.0.1';
 let child = null;
 
 function isPortOpen() {
@@ -31,11 +17,11 @@ function isPortOpen() {
   });
 }
 
-async function waitForPort(timeoutMs = 120000) {
+async function waitForPort(timeoutMs = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (await isPortOpen()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 400));
   }
   return false;
 }
@@ -47,27 +33,30 @@ function cleanup() {
 }
 
 async function main() {
-  if (await isPortOpen()) {
-    console.log(`[OmniRoute] Existing gateway detected at http://${host}:${port}.`);
+  if (!enabled) {
+    console.log('[OpenCode] Disabled for unified Mark 2 startup. Set ULTRON_ENABLE_OPENCODE=1 to enable.');
     return;
   }
-  if (!omniDir || !fs.existsSync(path.join(omniDir, 'package.json'))) {
-    throw new Error('OmniRoute is not running and its directory could not be found.');
+
+  if (await isPortOpen()) {
+    console.log(`[OpenCode] Existing local server detected at http://${host}:${port}.`);
+    return;
   }
-  const runNext = path.join(omniDir, 'scripts', 'dev', 'run-next.mjs');
-  if (!fs.existsSync(runNext)) throw new Error(`OmniRoute dev launcher not found at ${runNext}.`);
-  console.log(`[OmniRoute] Starting legacy gateway from ${omniDir}`);
-  child = spawn(process.execPath, ['--max-old-space-size=8192', runNext, 'dev'], { cwd: omniDir, stdio: 'ignore', detached: true, windowsHide: true });
-  child.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
+
+  console.log(`[OpenCode] Starting local model server at http://${host}:${port} ...`);
+  child = spawn('opencode', ['serve', '--hostname', host, '--port', String(port)], {
+    stdio: 'ignore',
+    detached: true,
+    windowsHide: true,
+  });
+  child.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`));
   process.once('SIGINT', cleanup);
   process.once('SIGTERM', cleanup);
   child.unref();
+
   const ready = await waitForPort();
-  if (!ready) {
-    cleanup();
-    throw new Error(`OmniRoute did not become reachable at http://${host}:${port} within 120 seconds.`);
-  }
-  console.log(`[OmniRoute] Legacy gateway ready at http://${host}:${port}.`);
+  if (!ready) throw new Error(`OpenCode local server did not become reachable at http://${host}:${port}. Ensure the 'opencode' command is installed and on PATH.`);
+  console.log(`[OpenCode] Local server ready at http://${host}:${port}.`);
 }
 
 main().catch((error) => { console.error(`[Unified Start] ${error.message}`); process.exit(1); });
