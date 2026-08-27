@@ -102,7 +102,11 @@ async function playLocalAudio(file) {
 }
 
 function allowedCredentialKeys(body) {
-  const allowed = ['GITHUB_TOKEN', 'GH_TOKEN', 'INSTAGRAM_ACCESS_TOKEN', 'INSTAGRAM_USER_ID', 'IG_ACCESS_TOKEN', 'IG_USER_ID', 'OMNIROUTE_API_KEY', 'FISH_API_KEY', 'GEMINI_API_KEY'];
+  const allowed = [
+    'GITHUB_TOKEN','GH_TOKEN','INSTAGRAM_ACCESS_TOKEN','INSTAGRAM_USER_ID','IG_ACCESS_TOKEN','IG_USER_ID',
+    'OMNIROUTE_API_KEY','FISH_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY',
+    'DEEPSEEK_API_KEY','GROQ_API_KEY','MISTRAL_API_KEY','XAI_API_KEY','OPENROUTER_API_KEY','OPENCODE_API_KEY','OPENCODE_GO_API_KEY'
+  ];
   return Object.fromEntries(Object.entries(body || {}).filter(([key, value]) => allowed.includes(key) && value != null && String(value) !== '').map(([key, value]) => [key, String(value)]));
 }
 
@@ -183,12 +187,9 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await core.handleMessage(body.message, { confirmed: body.confirmed === true, model: body.model, action: body.action || null, source: body.source || 'interface' }));
     }
 
-    // Integrated Interface1 is served as the single application surface.
     if (req.method === 'GET') {
       if (serveIntegratedInterface(req, res)) return;
-      if ((req.url === '/test-ui' || req.url === '/legacy-test-ui') && fs.existsSync(legacyUiFile)) {
-        return send(res, 200, fs.readFileSync(legacyUiFile, 'utf8'), 'text/html; charset=utf-8');
-      }
+      if ((req.url === '/test-ui' || req.url === '/legacy-test-ui') && fs.existsSync(legacyUiFile)) return send(res, 200, fs.readFileSync(legacyUiFile, 'utf8'), 'text/html; charset=utf-8');
     }
 
     return send(res, 404, { ok: false, error: 'Not found.' });
