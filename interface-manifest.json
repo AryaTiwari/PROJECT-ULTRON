@@ -1,0 +1,32 @@
+{
+  "repository": "AryaTiwari/Interface1",
+  "ref": "4aac0ae579d33c5e59e4c8aa09b29d471905e4c0",
+  "root": "interface",
+  "files": [
+    "index.html",
+    "vite.config.ts",
+    "src/main.tsx",
+    "src/App.tsx",
+    "src/index.css",
+    "src/components/CodeBlock.tsx",
+    "src/components/ConversationConsole.tsx",
+    "src/components/CredentialManager.tsx",
+    "src/components/DataTraceEmitter.tsx",
+    "src/components/DiagnosticsDrawer.tsx",
+    "src/components/FormattedMessage.tsx",
+    "src/components/GuardianPipeline.tsx",
+    "src/components/NetworkMesh.tsx",
+    "src/components/PersonalityModal.tsx",
+    "src/components/TopHeader.tsx",
+    "src/components/Ultron3DGlobe.tsx",
+    "src/components/UltronChatPage.tsx",
+    "src/components/UltronCore.tsx",
+    "src/core/RuntimeBridge.tsx",
+    "src/core/ultronContext.tsx",
+    "src/services/ultronApi.ts",
+    "src/services/ultronSoundscape.ts",
+    "src/types/ultron.ts",
+    "src/utils/colorLerp.ts",
+    "src/utils/dynamicRgb.ts"
+  ]
+}
