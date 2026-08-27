@@ -1,33 +1,34 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
+const { spawn } = require('child_process');
 
-const execFileAsync = promisify(execFile);
 const root = path.resolve(process.env.ULTRON_DATA_DIR || path.join(os.homedir(), '.ultron'));
 const file = path.join(root, 'credentials.dpapi.json');
 
-function ensureRoot() {
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-}
+function ensureRoot() { fs.mkdirSync(root, { recursive: true, mode: 0o700 }); }
+function assertWindows() { if (process.platform !== 'win32') throw new Error('Local credential storage currently requires Windows DPAPI.'); }
 
-function assertWindows() {
-  if (process.platform !== 'win32') throw new Error('Local credential storage currently requires Windows DPAPI.');
+function powershell(script, input = '') {
+  assertWindows();
+  return new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', code => code === 0 ? resolve(stdout.trim()) : reject(new Error(stderr.trim() || `PowerShell exited with code ${code}`)));
+    child.stdin.end(String(input));
+  });
 }
 
 async function protect(value) {
-  assertWindows();
-  const script = `$s = ConvertTo-SecureString -String ([Console]::In.ReadToEnd()) -AsPlainText -Force; $s | ConvertFrom-SecureString`;
-  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { input: String(value), windowsHide: true, timeout: 10000 });
-  return stdout.trim();
+  return powershell('$s = ConvertTo-SecureString -String ([Console]::In.ReadToEnd()) -AsPlainText -Force; $s | ConvertFrom-SecureString');
 }
 
 async function unprotect(value) {
-  assertWindows();
-  const script = `$s = ConvertTo-SecureString -String ([Console]::In.ReadToEnd()); $b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s); try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }`;
-  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { input: String(value), windowsHide: true, timeout: 10000 });
-  return stdout.trim();
+  return powershell('$s = ConvertTo-SecureString -String ([Console]::In.ReadToEnd()); $b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s); try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }', value);
 }
 
 async function load() {
