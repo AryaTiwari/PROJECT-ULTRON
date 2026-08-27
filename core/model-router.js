@@ -5,10 +5,8 @@ const { load: loadCredentials } = require('./credentials/local-store');
 
 async function resolveOmniRouteApiKey() {
   if (config.router.apiKey) return config.router.apiKey;
-  try {
-    const credentials = await loadCredentials();
-    return String(credentials.OMNIROUTE_API_KEY || '').trim();
-  } catch { return ''; }
+  try { const credentials = await loadCredentials(); return String(credentials.OMNIROUTE_API_KEY || '').trim(); }
+  catch { return ''; }
 }
 
 async function omniHeaders() {
@@ -36,41 +34,47 @@ async function chatViaOmniRoute({ messages, model, tools = null } = {}) {
   } finally { clearTimeout(timeout); }
 }
 
+function isOmniRouteModel(model) {
+  return String(model || '').trim().toLowerCase().startsWith('omniroute/');
+}
+
 async function chat({ messages, model, tools = null } = {}) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('Model request requires messages.');
+  const requestedModel = model || config.router.model;
   const mode = String(process.env.ULTRON_MODEL_PROVIDER || 'opencode-server').toLowerCase();
 
-  if (mode === 'opencode-server' || mode === 'opencode') {
-    return openCode.chat({ messages, model: model || config.router.model, tools });
-  }
+  // `omniroute/<catalog-model>` is explicitly transported through the
+  // OpenCode custom provider configured from OmniRoute's live /v1/models catalog.
+  // This keeps OmniRoute's full model catalog without making its raw API the
+  // primary ULTRON transport.
+  if (isOmniRouteModel(requestedModel)) return openCode.chat({ messages, model: requestedModel, tools });
 
-  if (mode === 'direct') return direct.directChat({ messages, model: model || config.router.model, tools });
+  if (mode === 'opencode-server' || mode === 'opencode') {
+    return openCode.chat({ messages, model: requestedModel, tools });
+  }
+  if (mode === 'direct') return direct.directChat({ messages, model: requestedModel, tools });
 
   if (mode === 'auto') {
-    try { return await openCode.chat({ messages, model: model || config.router.model, tools }); }
+    try { return await openCode.chat({ messages, model: requestedModel, tools }); }
     catch (openCodeError) {
-      try { return await direct.directChat({ messages, model: model || config.router.model, tools }); }
-      catch (directError) {
-        throw new Error(`OpenCode and direct model routing both failed. OpenCode: ${openCodeError.message}. Direct: ${directError.message}`);
-      }
+      try { return await direct.directChat({ messages, model: requestedModel, tools }); }
+      catch (directError) { throw new Error(`OpenCode and direct model routing both failed. OpenCode: ${openCodeError.message}. Direct: ${directError.message}`); }
     }
   }
-
-  if (mode === 'omniroute') return chatViaOmniRoute({ messages, model, tools });
+  if (mode === 'omniroute') return chatViaOmniRoute({ messages, model: requestedModel, tools });
   throw new Error('No model provider mode is configured. Use opencode-server (default), direct, auto, or omniroute.');
 }
 
 async function health() {
   const openCodeHealth = await openCode.health();
-  if (openCodeHealth.ok) return openCodeHealth;
   const directHealth = await direct.health();
-  if (directHealth.anyConfigured) return { ok: true, mode: 'direct-fallback', ...openCodeHealth, direct: directHealth };
+  if (openCodeHealth.ok) return { ok: true, mode: 'opencode-server', ...openCodeHealth, direct: directHealth };
+  if (directHealth.anyConfigured) return { ok: true, mode: 'direct', direct: directHealth, opencode: openCodeHealth };
   try {
     const apiKey = await resolveOmniRouteApiKey();
-    const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-    const response = await fetch(config.router.endpoint.replace(/\/chat\/completions$/, '/models'), { headers });
+    const response = await fetch(config.router.endpoint.replace(/\/chat\/completions$/, '/models'), { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {} });
     return { ok: response.ok, status: response.status, mode: 'omniroute-legacy', authenticated: Boolean(apiKey), openCode: openCodeHealth };
   } catch (error) { return { ok: false, error: error.message, mode: 'no-router', openCode: openCodeHealth }; }
 }
 
-module.exports = { chat, health, chatViaOmniRoute };
+module.exports = { chat, health, chatViaOmniRoute, isOmniRouteModel };
