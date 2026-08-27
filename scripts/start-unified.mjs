@@ -49,17 +49,23 @@ async function main() {
   }
 
   console.log(`[OmniRoute] Starting gateway from ${omniDir}`);
-  child = spawn(process.platform === 'win32' ? 'cmd.exe' : 'npm', process.platform === 'win32'
+
+  const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+  const args = process.platform === 'win32'
     ? ['/d', '/s', '/c', 'npm run dev']
-    : ['run', 'dev'], {
-      cwd: omniDir,
-      stdio: 'inherit',
-      windowsHide: false,
-    });
+    : ['run', 'dev'];
+
+  child = spawn(command, args, {
+    cwd: omniDir,
+    stdio: 'ignore',
+    detached: true,
+    windowsHide: false,
+  });
 
   child.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
   process.once('SIGINT', cleanup);
   process.once('SIGTERM', cleanup);
+  child.unref();
 
   const ready = await waitForPort();
   if (!ready) {
