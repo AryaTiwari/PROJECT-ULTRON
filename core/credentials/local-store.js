@@ -31,14 +31,46 @@ async function unprotect(value) {
   return powershell('$s = ConvertTo-SecureString -String ([Console]::In.ReadToEnd()); $b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s); try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }', value);
 }
 
+function openCodeAuthCandidates() {
+  const home = os.homedir();
+  return [process.env.OPENCODE_AUTH_JSON, path.join(home, '.local', 'share', 'opencode', 'auth.json')].filter(Boolean);
+}
+
+function readOpenCodeAuth() {
+  for (const authPath of openCodeAuthCandidates()) {
+    try {
+      if (!fs.existsSync(authPath)) continue;
+      const parsed = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+      const out = {};
+      for (const [provider, entry] of Object.entries(parsed || {})) {
+        if (!entry || typeof entry !== 'object') continue;
+        if (entry.type === 'api' && entry.key) out[provider] = String(entry.key).trim();
+      }
+      if (Object.keys(out).length) return out;
+    } catch {}
+  }
+  return {};
+}
+
 async function load() {
   ensureRoot();
-  if (!fs.existsSync(file)) return {};
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
   const out = {};
-  for (const [key, encrypted] of Object.entries(raw)) {
-    try { out[key] = await unprotect(encrypted); } catch { out[key] = ''; }
+  if (fs.existsSync(file)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const [key, encrypted] of Object.entries(raw)) {
+        try { out[key] = await unprotect(encrypted); } catch { out[key] = ''; }
+      }
+    } catch {}
   }
+
+  // OpenCode stores API credentials independently in ~/.local/share/opencode/auth.json.
+  // Reuse existing API-key entries at read time without copying them into Git or
+  // ULTRON's DPAPI vault.
+  const opencode = readOpenCodeAuth();
+  if (!out.OPENCODE_API_KEY && opencode.opencode) out.OPENCODE_API_KEY = opencode.opencode;
+  if (!out.OPENCODE_GO_API_KEY && opencode['opencode-go']) out.OPENCODE_GO_API_KEY = opencode['opencode-go'];
+
   return out;
 }
 
