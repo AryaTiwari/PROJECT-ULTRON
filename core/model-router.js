@@ -1,5 +1,5 @@
 const { config } = require('./config');
-const directGemini = require('./direct-gemini');
+const direct = require('./direct-model-router');
 const { load: loadCredentials } = require('./credentials/local-store');
 
 async function resolveOmniRouteApiKey() {
@@ -7,9 +7,7 @@ async function resolveOmniRouteApiKey() {
   try {
     const credentials = await loadCredentials();
     return String(credentials.OMNIROUTE_API_KEY || '').trim();
-  } catch {
-    return '';
-  }
+  } catch { return ''; }
 }
 
 async function omniHeaders() {
@@ -27,8 +25,7 @@ async function chatViaOmniRoute({ messages, model, tools = null } = {}) {
     if (Array.isArray(tools) && tools.length) body.tools = tools;
     const response = await fetch(config.router.endpoint, { method: 'POST', headers: await omniHeaders(), body: JSON.stringify(body), signal: controller.signal });
     const raw = await response.text();
-    let data = {};
-    try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+    let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
     if (!response.ok) throw new Error(`OmniRoute HTTP ${response.status}: ${raw.slice(0, 800)}`);
     const message = data?.choices?.[0]?.message || {};
     const content = message.content ?? data?.choices?.[0]?.text ?? data?.output_text ?? data?.response ?? '';
@@ -40,45 +37,40 @@ async function chatViaOmniRoute({ messages, model, tools = null } = {}) {
 
 async function chat({ messages, model, tools = null } = {}) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('Model request requires messages.');
-
   const mode = String(process.env.ULTRON_MODEL_PROVIDER || 'direct').toLowerCase();
 
-  // Direct Gemini is the primary path so ULTRON does not require an OmniRoute
-  // provider merely to hold a conversation. OmniRoute remains available as an
-  // explicit mode or fallback when direct Gemini is unavailable.
-  if (mode !== 'omniroute' && await directGemini.available()) {
-    try {
-      return await directGemini.chat({ messages, model });
-    } catch (directError) {
+  if (mode === 'direct' || mode === 'auto') {
+    try { return await direct.directChat({ messages, model, tools }); }
+    catch (directError) {
       if (mode === 'direct') throw directError;
     }
   }
 
-  const omniErrorMode = mode === 'omniroute' || mode === 'auto' || mode === 'direct-fallback';
-  if (omniErrorMode) {
-    try {
-      return await chatViaOmniRoute({ messages, model, tools });
-    } catch (omniError) {
-      if (mode === 'direct-fallback') throw omniError;
-      if (await directGemini.available()) {
-        return await directGemini.chat({ messages, model });
+  if (mode === 'omniroute' || mode === 'auto') {
+    try { return await chatViaOmniRoute({ messages, model, tools }); }
+    catch (omniError) {
+      if (mode === 'auto') {
+        try { return await direct.directChat({ messages, model, tools }); }
+        catch (directError) {
+          throw new Error(`Direct model and OmniRoute both failed. Direct: ${directError.message}. OmniRoute: ${omniError.message}`);
+        }
       }
       throw omniError;
     }
   }
 
-  throw new Error('No model provider is configured. Add GEMINI_API_KEY to the local credential vault or select ULTRON_MODEL_PROVIDER=omniroute.');
+  throw new Error('No model provider mode is configured. Use ULTRON_MODEL_PROVIDER=direct (default) or omniroute.');
 }
 
 async function health() {
-  const direct = await directGemini.available();
-  if (direct) return { ok: true, provider: 'gemini-direct', authenticated: true };
+  const directHealth = await direct.health();
+  if (directHealth.anyConfigured) return { ok: true, mode: 'direct', ...directHealth };
   try {
     const apiKey = await resolveOmniRouteApiKey();
     const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
     const response = await fetch(config.router.endpoint.replace(/\/chat\/completions$/, '/models'), { headers });
-    return { ok: response.ok, status: response.status, provider: 'omniroute', authenticated: Boolean(apiKey) };
-  } catch (error) { return { ok: false, error: error.message, provider: 'omniroute', authenticated: false }; }
+    return { ok: response.ok, status: response.status, mode: 'omniroute', authenticated: Boolean(apiKey) };
+  } catch (error) { return { ok: false, error: error.message, mode: 'omniroute', authenticated: false }; }
 }
 
 module.exports = { chat, health, chatViaOmniRoute };
