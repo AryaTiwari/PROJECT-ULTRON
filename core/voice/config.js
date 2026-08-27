@@ -1,10 +1,11 @@
 const EXACT_ULTRON_VOICE_ID = 'a3b75ca2c6f5465fa7e0289147d4bb03';
+const ULTRON_TTS_MODEL = 's2-pro';
 
 const config = {
   provider: 'fish',
   apiKey: process.env.FISH_API_KEY || '',
   endpoint: process.env.FISH_TTS_URL || 'https://api.fish.audio/v1/tts',
-  model: process.env.FISH_TTS_MODEL || 's2.1-pro-free',
+  model: ULTRON_TTS_MODEL,
   referenceId: EXACT_ULTRON_VOICE_ID,
   format: process.env.FISH_TTS_FORMAT || 'mp3',
   outputDir: process.env.ULTRON_TTS_OUTPUT_DIR || '.ultron/audio',
@@ -16,4 +17,4 @@ function available() {
   return Boolean(config.apiKey && config.referenceId);
 }
 
-module.exports = { config, available, EXACT_ULTRON_VOICE_ID };
+module.exports = { config, available, EXACT_ULTRON_VOICE_ID, ULTRON_TTS_MODEL };
