@@ -1,8 +1,20 @@
 const { config } = require('./config');
+const { load: loadCredentials } = require('./credentials/local-store');
 
-function headers() {
+async function resolveApiKey() {
+  if (config.router.apiKey) return config.router.apiKey;
+  try {
+    const credentials = await loadCredentials();
+    return String(credentials.OMNIROUTE_API_KEY || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function headers() {
   const base = { 'Content-Type': 'application/json' };
-  if (config.router.apiKey) base.Authorization = `Bearer ${config.router.apiKey}`;
+  const apiKey = await resolveApiKey();
+  if (apiKey) base.Authorization = `Bearer ${apiKey}`;
   return base;
 }
 
@@ -13,7 +25,7 @@ async function chat({ messages, model, tools = null } = {}) {
   try {
     const body = { model: model || config.router.model, messages };
     if (Array.isArray(tools) && tools.length) body.tools = tools;
-    const response = await fetch(config.router.endpoint, { method: 'POST', headers: headers(), body: JSON.stringify(body), signal: controller.signal });
+    const response = await fetch(config.router.endpoint, { method: 'POST', headers: await headers(), body: JSON.stringify(body), signal: controller.signal });
     const raw = await response.text();
     let data = {};
     try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
@@ -28,9 +40,11 @@ async function chat({ messages, model, tools = null } = {}) {
 
 async function health() {
   try {
-    const response = await fetch(config.router.endpoint.replace(/\/chat\/completions$/, '/models'), { headers: config.router.apiKey ? { Authorization: `Bearer ${config.router.apiKey}` } : {} });
-    return { ok: response.ok || response.status === 401, status: response.status };
-  } catch (error) { return { ok: false, error: error.message }; }
+    const apiKey = await resolveApiKey();
+    const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+    const response = await fetch(config.router.endpoint.replace(/\/chat\/completions$/, '/models'), { headers });
+    return { ok: response.ok, status: response.status, authenticated: Boolean(apiKey) };
+  } catch (error) { return { ok: false, error: error.message, authenticated: false }; }
 }
 
 module.exports = { chat, health };
