@@ -1,5 +1,6 @@
 const { config } = require('./config');
 const direct = require('./direct-model-router');
+const openCode = require('./opencode-router');
 const { load: loadCredentials } = require('./credentials/local-store');
 
 async function resolveOmniRouteApiKey() {
@@ -37,40 +38,39 @@ async function chatViaOmniRoute({ messages, model, tools = null } = {}) {
 
 async function chat({ messages, model, tools = null } = {}) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('Model request requires messages.');
-  const mode = String(process.env.ULTRON_MODEL_PROVIDER || 'direct').toLowerCase();
+  const mode = String(process.env.ULTRON_MODEL_PROVIDER || 'opencode-server').toLowerCase();
 
-  if (mode === 'direct' || mode === 'auto') {
-    try { return await direct.directChat({ messages, model, tools }); }
-    catch (directError) {
-      if (mode === 'direct') throw directError;
-    }
+  if (mode === 'opencode-server' || mode === 'opencode') {
+    return openCode.chat({ messages, model: model || config.router.model, tools });
   }
 
-  if (mode === 'omniroute' || mode === 'auto') {
-    try { return await chatViaOmniRoute({ messages, model, tools }); }
-    catch (omniError) {
-      if (mode === 'auto') {
-        try { return await direct.directChat({ messages, model, tools }); }
-        catch (directError) {
-          throw new Error(`Direct model and OmniRoute both failed. Direct: ${directError.message}. OmniRoute: ${omniError.message}`);
-        }
+  if (mode === 'direct') return direct.directChat({ messages, model: model || config.router.model, tools });
+
+  if (mode === 'auto') {
+    try { return await openCode.chat({ messages, model: model || config.router.model, tools }); }
+    catch (openCodeError) {
+      try { return await direct.directChat({ messages, model: model || config.router.model, tools }); }
+      catch (directError) {
+        throw new Error(`OpenCode and direct model routing both failed. OpenCode: ${openCodeError.message}. Direct: ${directError.message}`);
       }
-      throw omniError;
     }
   }
 
-  throw new Error('No model provider mode is configured. Use ULTRON_MODEL_PROVIDER=direct (default) or omniroute.');
+  if (mode === 'omniroute') return chatViaOmniRoute({ messages, model, tools });
+  throw new Error('No model provider mode is configured. Use opencode-server (default), direct, auto, or omniroute.');
 }
 
 async function health() {
+  const openCodeHealth = await openCode.health();
+  if (openCodeHealth.ok) return openCodeHealth;
   const directHealth = await direct.health();
-  if (directHealth.anyConfigured) return { ok: true, mode: 'direct', ...directHealth };
+  if (directHealth.anyConfigured) return { ok: true, mode: 'direct-fallback', ...openCodeHealth, direct: directHealth };
   try {
     const apiKey = await resolveOmniRouteApiKey();
     const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
     const response = await fetch(config.router.endpoint.replace(/\/chat\/completions$/, '/models'), { headers });
-    return { ok: response.ok, status: response.status, mode: 'omniroute', authenticated: Boolean(apiKey) };
-  } catch (error) { return { ok: false, error: error.message, mode: 'omniroute', authenticated: false }; }
+    return { ok: response.ok, status: response.status, mode: 'omniroute-legacy', authenticated: Boolean(apiKey), openCode: openCodeHealth };
+  } catch (error) { return { ok: false, error: error.message, mode: 'no-router', openCode: openCodeHealth }; }
 }
 
 module.exports = { chat, health, chatViaOmniRoute };
