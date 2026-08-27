@@ -5,6 +5,7 @@
   "files": [
     "index.html",
     "vite.config.ts",
+    "tsconfig.json",
     "src/main.tsx",
     "src/App.tsx",
     "src/index.css",
