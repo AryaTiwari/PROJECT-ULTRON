@@ -28,13 +28,17 @@ function fetchText(url) {
   });
 }
 
+const localViteConfig = `import tailwindcss from '@tailwindcss/vite';\nimport react from '@vitejs/plugin-react';\nimport path from 'path';\nimport { defineConfig } from 'vite';\n\nexport default defineConfig({\n  root: path.resolve(__dirname),\n  plugins: [react(), tailwindcss()],\n  resolve: {\n    alias: { '@': path.resolve(__dirname, '.') },\n  },\n  server: {\n    hmr: process.env.DISABLE_HMR !== 'true',\n    watch: process.env.DISABLE_HMR === 'true' ? null : {},\n  },\n  build: {\n    outDir: path.resolve(__dirname, 'dist'),\n    emptyOutDir: true,\n  },\n});\n`;
+
 async function main() {
   const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
   const targetRoot = path.join(projectRoot, manifest.root);
   const versionFile = path.join(targetRoot, '.source-ref');
   const currentRef = await fs.readFile(versionFile, 'utf8').catch(() => '');
+  const entryExists = await fs.stat(path.join(targetRoot, 'src', 'main.tsx')).then(() => true).catch(() => false);
 
-  if (currentRef.trim() === manifest.ref && (await fs.stat(path.join(targetRoot, 'src', 'main.tsx')).catch(() => null))) {
+  if (currentRef.trim() === manifest.ref && entryExists) {
+    await fs.writeFile(path.join(targetRoot, 'vite.config.ts'), localViteConfig, 'utf8');
     console.log(`[Interface] Using cached Interface1 source ${manifest.ref}.`);
     return;
   }
@@ -51,6 +55,7 @@ async function main() {
     console.log(`[Interface] synced ${relativePath}`);
   }
 
+  await fs.writeFile(path.join(targetRoot, 'vite.config.ts'), localViteConfig, 'utf8');
   await fs.writeFile(versionFile, `${manifest.ref}\n`, 'utf8');
   console.log(`[Interface] Interface1 source ready at ${targetRoot}.`);
 }
