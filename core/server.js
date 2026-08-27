@@ -17,7 +17,8 @@ const credentialStore = require('./credentials/local-store');
 
 const execFileAsync = promisify(execFile);
 const core = new Mark2Runtime();
-const uiFile = path.resolve(__dirname, '..', 'interface-test', 'index.html');
+const legacyUiFile = path.resolve(__dirname, '..', 'interface-test', 'index.html');
+const interfaceDistRoot = path.resolve(__dirname, '..', 'interface', 'dist');
 const audioRoot = path.resolve(voiceConfig.outputDir);
 
 function send(res, status, payload, contentType = 'application/json; charset=utf-8') {
@@ -43,6 +44,53 @@ function readBody(req) {
   });
 }
 
+function mimeType(file) {
+  const ext = path.extname(file).toLowerCase();
+  return {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.mjs': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.txt': 'text/plain; charset=utf-8',
+  }[ext] || 'application/octet-stream';
+}
+
+function safeInterfacePath(requestPath) {
+  const pathname = new URL(requestPath, 'http://127.0.0.1').pathname;
+  const relative = pathname.replace(/^\/+/, '');
+  const candidate = path.resolve(interfaceDistRoot, relative);
+  if (!candidate.startsWith(interfaceDistRoot + path.sep) && candidate !== interfaceDistRoot) return null;
+  return candidate;
+}
+
+function serveIntegratedInterface(req, res) {
+  const candidate = safeInterfacePath(req.url || '/');
+  if (candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+    const stat = fs.statSync(candidate);
+    res.writeHead(200, { 'Content-Type': mimeType(candidate), 'Content-Length': stat.size, 'Cache-Control': candidate.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache' });
+    fs.createReadStream(candidate).pipe(res);
+    return true;
+  }
+
+  const indexFile = path.join(interfaceDistRoot, 'index.html');
+  if (fs.existsSync(indexFile)) {
+    const stat = fs.statSync(indexFile);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': stat.size, 'Cache-Control': 'no-cache' });
+    fs.createReadStream(indexFile).pipe(res);
+    return true;
+  }
+  return false;
+}
+
 async function playLocalAudio(file) {
   const resolved = path.resolve(file);
   if (!resolved.startsWith(audioRoot + path.sep) || !fs.existsSync(resolved)) throw new Error('Audio file not found.');
@@ -61,20 +109,18 @@ function allowedCredentialKeys(body) {
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') return send(res, 204, '');
-    if (req.method === 'GET' && (req.url === '/' || req.url === '/test-ui')) return send(res, 200, fs.readFileSync(uiFile, 'utf8'), 'text/html; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true, service: 'ultron-core', ...core.status(), runtime: 'mark2-unified' });
     if (req.method === 'GET' && req.url.startsWith('/api/audio?')) {
       const q = new URL(req.url, 'http://127.0.0.1').searchParams;
       const requested = path.basename(q.get('path') || '');
       if (!requested) return send(res, 400, { ok: false, error: 'Audio path is required.' });
       const file = path.resolve(audioRoot, requested);
       if (!file.startsWith(audioRoot + path.sep) || !fs.existsSync(file)) return send(res, 404, { ok: false, error: 'Audio file not found.' });
-      const ext = path.extname(file).toLowerCase();
-      const type = ext === '.wav' ? 'audio/wav' : ext === '.ogg' ? 'audio/ogg' : 'audio/mpeg';
+      const type = mimeType(file);
       const stat = fs.statSync(file);
       res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size, 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes' });
       return fs.createReadStream(file).pipe(res);
     }
-    if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true, service: 'ultron-core', ...core.status(), runtime: 'mark2-test' });
     if (req.method === 'GET' && req.url === '/api/status') return send(res, 200, await collectSystemStatus());
     if (req.method === 'GET' && req.url === '/api/status/mood') return send(res, 200, (await collectSystemStatus()).status.mood);
     if (req.method === 'GET' && req.url === '/api/status/github') return send(res, 200, (await collectSystemStatus()).status.github);
@@ -136,6 +182,15 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await readBody(req)) || '{}');
       return send(res, 200, await core.handleMessage(body.message, { confirmed: body.confirmed === true, model: body.model, action: body.action || null, source: body.source || 'interface' }));
     }
+
+    // Integrated Interface1 is served as the single application surface.
+    if (req.method === 'GET') {
+      if (serveIntegratedInterface(req, res)) return;
+      if ((req.url === '/test-ui' || req.url === '/legacy-test-ui') && fs.existsSync(legacyUiFile)) {
+        return send(res, 200, fs.readFileSync(legacyUiFile, 'utf8'), 'text/html; charset=utf-8');
+      }
+    }
+
     return send(res, 404, { ok: false, error: 'Not found.' });
   } catch (error) {
     return send(res, 500, { ok: false, error: error?.message || String(error) });
