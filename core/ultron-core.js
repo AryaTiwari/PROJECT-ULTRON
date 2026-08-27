@@ -14,9 +14,7 @@ const supabase = require('./memory/supabase');
 const telemetry = require('./telemetry');
 const { registerBuiltinTools } = require('../tools/builtin');
 
-function id() {
-  return crypto.randomUUID();
-}
+function id() { return crypto.randomUUID(); }
 
 function extractMemoryCandidates(message) {
   const text = String(message || '').trim();
@@ -27,7 +25,6 @@ function extractMemoryCandidates(message) {
     { regex: /^i\s+(?:like|love|prefer|hate|dislike)\s+(.{1,200})[.!]?$/i, type: 'preference' },
     { regex: /^remember\s+(?:that\s+)?(.{1,250})[.!]?$/i, type: 'fact' },
   ];
-
   for (const item of patterns) {
     const match = item.regex.exec(text);
     if (!match) continue;
@@ -36,6 +33,14 @@ function extractMemoryCandidates(message) {
     break;
   }
   return candidates;
+}
+
+function modelToOpenCode(model) {
+  const value = String(model || '').trim();
+  if (!value) return value;
+  if (value.startsWith('omniroute/')) return value;
+  if (value === 'big-pickle') return value;
+  return value;
 }
 
 class UltronCore {
@@ -63,12 +68,7 @@ class UltronCore {
 
   async getMemories() {
     if (supabase.available()) {
-      try {
-        const memories = await supabase.listMemories(500);
-        if (Array.isArray(memories)) return memories;
-      } catch {
-        // Keep local memory usable when Supabase is unavailable.
-      }
+      try { const memories = await supabase.listMemories(500); if (Array.isArray(memories)) return memories; } catch {}
     }
     return local.getMemories();
   }
@@ -77,26 +77,15 @@ class UltronCore {
     const memories = await this.getMemories();
     const decision = await memoryJudge.judge(candidate, memories);
     if (decision.decision !== 'SAVE') return decision;
-
     const memory = {
-      id: id(),
-      memory_type: candidate.type || 'fact',
-      content: candidate.content,
-      normalized_content: decision.normalized,
-      content_hash: decision.content_hash,
-      importance: candidate.importance ?? 0.5,
-      confidence: candidate.confidence ?? 0.8,
-      source: candidate.source || 'conversation',
-      active: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      metadata: {},
+      id: id(), memory_type: candidate.type || 'fact', content: candidate.content,
+      normalized_content: decision.normalized, content_hash: decision.content_hash,
+      importance: candidate.importance ?? 0.5, confidence: candidate.confidence ?? 0.8,
+      source: candidate.source || 'conversation', active: true,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(), metadata: {},
     };
-
     local.saveMemory(memory);
-    if (supabase.available()) {
-      try { await supabase.insertMemory(memory); } catch { /* local copy is retained */ }
-    }
+    if (supabase.available()) { try { await supabase.insertMemory(memory); } catch {} }
     return { ...decision, saved: true, memory };
   }
 
@@ -108,11 +97,7 @@ class UltronCore {
   buildMessages(userMessage, memories, recent) {
     const memoryText = memories.map(m => `- [${m.memory_type || 'fact'}] ${m.content}`).join('\n') || 'No relevant stored memories.';
     const conversationText = recent.map(m => `${m.role}: ${m.content}`).join('\n') || 'No previous conversation.';
-    const context = [
-      'RELEVANT LONG-TERM MEMORY:', memoryText, '',
-      'RECENT CONVERSATION:', conversationText,
-    ].join('\n');
-
+    const context = ['RELEVANT LONG-TERM MEMORY:', memoryText, '', 'RECENT CONVERSATION:', conversationText].join('\n');
     return [
       { role: 'system', content: `${buildSystemPrompt(this.personality)}\n\n${context}` },
       { role: 'user', content: userMessage },
@@ -122,91 +107,41 @@ class UltronCore {
   async handleMessage(message, options = {}) {
     const userMessage = String(message || '').trim();
     if (!userMessage) return { ok: false, error: 'Message is required.' };
-
     const timestamp = new Date().toISOString();
     const task = classify(userMessage);
-    const selectedModel = selectModel(userMessage, options.model);
+    const selectedModel = modelToOpenCode(selectModel(userMessage, options.model));
     const guardian = assess({ message: userMessage, action: options.action || null });
     const critic = analyze({ message: userMessage, plannedAction: options.action || null }, guardian);
 
     local.appendConversation({ id: id(), role: 'user', content: userMessage, task_type: task.taskType, created_at: timestamp });
-    if (supabase.available()) {
-      try {
-        await supabase.insertConversationMessage({ role: 'user', content: userMessage, metadata: { task_type: task.taskType }, created_at: timestamp });
-      } catch { /* local fallback */ }
-    }
-
+    if (supabase.available()) { try { await supabase.insertConversationMessage({ role: 'user', content: userMessage, metadata: { task_type: task.taskType }, created_at: timestamp }); } catch {} }
     if (guardian.decision === 'block') {
       const response = `I can't execute that request. ${guardian.reasons.join(' ')}`;
       local.appendConversation({ id: id(), role: 'assistant', content: response, created_at: new Date().toISOString() });
       return { ok: true, response, blocked: true, guardian, critic, task };
     }
-
-    if (guardian.decision === 'warn' && options.confirmed !== true) {
-      return {
-        ok: true,
-        requires_confirmation: true,
-        response: `Guardian warning: ${guardian.reasons.join(' ')}`,
-        guardian,
-        critic,
-        task,
-        model: selectedModel,
-      };
-    }
-
-    if (critic.status === 'blocked') {
-      return { ok: true, requires_confirmation: true, response: 'The request needs a safer approach before execution.', guardian, critic, task };
-    }
+    if (guardian.decision === 'warn' && options.confirmed !== true) return { ok: true, requires_confirmation: true, response: `Guardian warning: ${guardian.reasons.join(' ')}`, guardian, critic, task, model: selectedModel };
+    if (critic.status === 'blocked') return { ok: true, requires_confirmation: true, response: 'The request needs a safer approach before execution.', guardian, critic, task };
 
     const memoryCandidates = extractMemoryCandidates(userMessage);
     const memoryResults = [];
     for (const candidate of memoryCandidates) memoryResults.push(await this.rememberCandidate(candidate));
-
     const relevantMemories = await this.getRelevantMemories(userMessage, 8);
     const recent = local.getRecentMessages();
     const messages = this.buildMessages(userMessage, relevantMemories, recent);
-
     const started = Date.now();
     let result;
     try {
       result = await chat({ messages, model: selectedModel });
-      await telemetry.recordModelResult({
-        model: result.model,
-        taskType: task.taskType,
-        success: true,
-        latencyMs: Date.now() - started,
-      });
+      await telemetry.recordModelResult({ model: result.model, taskType: task.taskType, success: true, latencyMs: Date.now() - started });
     } catch (error) {
-      await telemetry.recordModelResult({
-        model: selectedModel,
-        taskType: task.taskType,
-        success: false,
-        latencyMs: Date.now() - started,
-        errorType: error?.name || 'model_error',
-        metadata: { message: String(error?.message || error).slice(0, 500) },
-      });
+      await telemetry.recordModelResult({ model: selectedModel, taskType: task.taskType, success: false, latencyMs: Date.now() - started, errorType: error?.name || 'model_error', metadata: { message: String(error?.message || error).slice(0, 500) } });
       return { ok: false, error: error.message, guardian, critic, task, model: selectedModel, memory: memoryResults };
     }
-
     const createdAt = new Date().toISOString();
     local.appendConversation({ id: id(), role: 'assistant', content: result.content, model: result.model, task_type: task.taskType, created_at: createdAt });
-    if (supabase.available()) {
-      try {
-        await supabase.insertConversationMessage({ role: 'assistant', content: result.content, model: result.model, metadata: { task_type: task.taskType }, created_at: createdAt });
-      } catch { /* local fallback */ }
-    }
-
-    return {
-      ok: true,
-      response: result.content,
-      model: result.model,
-      task,
-      guardian,
-      critic,
-      memory: memoryResults,
-      relevant_memories: relevantMemories,
-      tools: listTools(),
-    };
+    if (supabase.available()) { try { await supabase.insertConversationMessage({ role: 'assistant', content: result.content, model: result.model, metadata: { task_type: task.taskType }, created_at: createdAt }); } catch {} }
+    return { ok: true, response: result.content, model: result.model, task, guardian, critic, memory: memoryResults, relevant_memories: relevantMemories, tools: listTools() };
   }
 }
 
