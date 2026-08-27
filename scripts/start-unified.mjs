@@ -48,18 +48,21 @@ async function main() {
     throw new Error(`OmniRoute is not running and its directory could not be found. Set OMNIROUTE_DIR to the OmniRoute project folder.`);
   }
 
+  const runNext = path.join(omniDir, 'scripts', 'dev', 'run-next.mjs');
+  if (!fs.existsSync(runNext)) {
+    throw new Error(`OmniRoute dev launcher not found at ${runNext}.`);
+  }
+
   console.log(`[OmniRoute] Starting gateway from ${omniDir}`);
 
-  const command = process.platform === 'win32' ? 'cmd.exe' : 'npm';
-  const args = process.platform === 'win32'
-    ? ['/d', '/s', '/c', 'npm run dev']
-    : ['run', 'dev'];
-
-  child = spawn(command, args, {
+  // Launch the actual Node entrypoint directly. Using npm/cmd on Windows
+  // creates an extra process tree that can remain attached to the terminal
+  // even when detached; invoking Node directly avoids that behavior.
+  child = spawn(process.execPath, ['--max-old-space-size=8192', runNext, 'dev'], {
     cwd: omniDir,
     stdio: 'ignore',
     detached: true,
-    windowsHide: false,
+    windowsHide: true,
   });
 
   child.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
