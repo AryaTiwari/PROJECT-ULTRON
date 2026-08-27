@@ -9,7 +9,7 @@ const PROVIDERS = {
   mistral: { key: 'MISTRAL_API_KEY', family: 'openai-compatible', defaultModel: 'mistral-small-latest', baseUrl: 'https://api.mistral.ai/v1' },
   xai: { key: 'XAI_API_KEY', family: 'openai-compatible', defaultModel: 'grok-4', baseUrl: 'https://api.x.ai/v1' },
   openrouter: { key: 'OPENROUTER_API_KEY', family: 'openai-compatible', defaultModel: 'openrouter/free', baseUrl: 'https://openrouter.ai/api/v1' },
-  opencode: { key: 'OPENCODE_API_KEY', family: 'openai-compatible', defaultModel: 'glm-5', baseUrl: 'https://opencode.ai/zen/v1' },
+  opencode: { key: 'OPENCODE_API_KEY', family: 'openai-compatible', defaultModel: 'big-pickle', baseUrl: 'https://opencode.ai/zen/v1' },
   'opencode-go': { key: 'OPENCODE_GO_API_KEY', family: 'openai-compatible', defaultModel: 'kimi-k3', baseUrl: 'https://opencode.ai/zen/go/v1' },
 };
 
@@ -25,6 +25,7 @@ function providerForModel(model) {
   const { provider } = parseModel(model);
   if (provider && PROVIDERS[provider]) return provider;
   const lower = String(model || '').toLowerCase();
+  if (lower === 'big-pickle') return 'opencode';
   if (/^(gemini|models\/gemini|gg\/)/.test(lower)) return 'gemini';
   if (/^(gpt|o[134]|openai|oa\/)/.test(lower)) return 'openai';
   if (/^(claude|anthropic|cc\/)/.test(lower)) return 'anthropic';
@@ -58,7 +59,7 @@ async function chooseAutoModel() {
   const envAuto = String(process.env.ULTRON_DIRECT_DEFAULT_MODEL || '').trim();
   if (envAuto) {
     const p = providerForModel(envAuto);
-    if (p && creds[p]) return envAuto;
+    if (p && (creds[p] || p === 'opencode')) return envAuto;
   }
   if (creds.gemini) return `gemini/${process.env.ULTRON_DIRECT_GEMINI_MODEL || PROVIDERS.gemini.defaultModel}`;
   if (creds.openai) return `openai/${PROVIDERS.openai.defaultModel}`;
@@ -89,7 +90,7 @@ async function directChat({ messages, model = 'auto', tools = null } = {}) {
   const cfg = PROVIDERS[provider];
   const creds = await credentials();
   const apiKey = creds[provider];
-  if (!apiKey) throw new Error(`Provider ${provider} is not configured locally.`);
+  if (!apiKey && provider !== 'opencode') throw new Error(`Provider ${provider} is not configured locally.`);
   const cleanMessages = normalizeMessages(messages);
   let response;
 
