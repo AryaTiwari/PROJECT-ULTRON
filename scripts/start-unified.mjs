@@ -34,10 +34,16 @@ function cleanup() {
   }
 }
 
+function classifyCommand(command) {
+  const lower = String(command || '').toLowerCase();
+  if (process.platform === 'win32' && (lower.endsWith('.cmd') || lower.endsWith('.bat'))) return 'cmd';
+  return 'direct';
+}
+
 function resolveOpenCodeCommand() {
   const candidates = [];
   const explicit = process.env.OPENCODE_BIN;
-  if (explicit) candidates.push({ kind: 'direct', command: explicit });
+  if (explicit) candidates.push({ kind: classifyCommand(explicit), command: explicit });
 
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || '';
@@ -50,16 +56,19 @@ function resolveOpenCodeCommand() {
       path.join(localAppData, 'Programs', 'opencode', 'opencode.exe'),
       path.join(userProfile, '.opencode', 'bin', 'opencode.exe'),
     ];
-    for (const candidate of shimCandidates) if (candidate && fs.existsSync(candidate)) candidates.push({ kind: 'direct', command: candidate });
+    for (const candidate of shimCandidates) {
+      if (candidate && fs.existsSync(candidate)) candidates.push({ kind: classifyCommand(candidate), command: candidate });
+    }
 
-    // npm-installed CLIs are reliably invokable through cmd.exe even when Node's
-    // spawn() cannot execute the .cmd shim directly.
-    for (const name of ['opencode.cmd', 'opencode']) candidates.push({ kind: 'cmd', command: name });
+    // npm-installed CLIs are reliably invokable through cmd.exe on Windows.
+    for (const name of ['opencode.cmd', 'opencode']) candidates.push({ kind: classifyCommand(name), command: name });
 
     try {
       const result = spawnSync('where.exe', ['opencode.cmd'], { encoding: 'utf8', windowsHide: true });
       if (result.status === 0) {
-        for (const line of String(result.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)) candidates.unshift({ kind: 'direct', command: line });
+        for (const line of String(result.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)) {
+          candidates.unshift({ kind: classifyCommand(line), command: line });
+        }
       }
     } catch {}
   } else {
@@ -97,10 +106,15 @@ async function main() {
   console.log(`[OpenCode] Starting local model server at http://${host}:${port} using ${resolved.command}`);
   const args = ['serve', '--hostname', host, '--port', String(port)];
   if (resolved.kind === 'cmd') {
-    child = spawn('cmd.exe', ['/d', '/c', resolved.command, ...args], { stdio: 'ignore', detached: true, windowsHide: true, shell: false });
+    child = spawn('cmd.exe', ['/d', '/c', resolved.command, ...args], {
+      stdio: 'ignore', detached: true, windowsHide: true, shell: false,
+    });
   } else {
-    child = spawn(resolved.command, args, { stdio: 'ignore', detached: true, windowsHide: true, shell: false });
+    child = spawn(resolved.command, args, {
+      stdio: 'ignore', detached: true, windowsHide: true, shell: false,
+    });
   }
+
   child.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`));
   process.once('SIGINT', cleanup);
   process.once('SIGTERM', cleanup);
