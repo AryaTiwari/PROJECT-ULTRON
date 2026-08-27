@@ -1,8 +1,16 @@
+import process from 'node:process';
+
+const enableOmniRoute = /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_ENABLE_OMNIROUTE || ''));
+
+if (!enableOmniRoute) {
+  console.log('[OmniRoute] Disabled for unified Mark 2 startup. Direct model fabric is active. Set ULTRON_ENABLE_OMNIROUTE=1 to enable legacy gateway fallback.');
+  process.exit(0);
+}
+
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import process from 'node:process';
 
 const port = Number(process.env.OMNIROUTE_PORT || 20128);
 const host = process.env.OMNIROUTE_HOST || '127.0.0.1';
@@ -43,42 +51,23 @@ async function main() {
     console.log(`[OmniRoute] Existing gateway detected at http://${host}:${port}.`);
     return;
   }
-
   if (!omniDir || !fs.existsSync(path.join(omniDir, 'package.json'))) {
-    throw new Error(`OmniRoute is not running and its directory could not be found. Set OMNIROUTE_DIR to the OmniRoute project folder.`);
+    throw new Error('OmniRoute is not running and its directory could not be found.');
   }
-
   const runNext = path.join(omniDir, 'scripts', 'dev', 'run-next.mjs');
-  if (!fs.existsSync(runNext)) {
-    throw new Error(`OmniRoute dev launcher not found at ${runNext}.`);
-  }
-
-  console.log(`[OmniRoute] Starting gateway from ${omniDir}`);
-
-  // Launch the actual Node entrypoint directly. Using npm/cmd on Windows
-  // creates an extra process tree that can remain attached to the terminal
-  // even when detached; invoking Node directly avoids that behavior.
-  child = spawn(process.execPath, ['--max-old-space-size=8192', runNext, 'dev'], {
-    cwd: omniDir,
-    stdio: 'ignore',
-    detached: true,
-    windowsHide: true,
-  });
-
+  if (!fs.existsSync(runNext)) throw new Error(`OmniRoute dev launcher not found at ${runNext}.`);
+  console.log(`[OmniRoute] Starting legacy gateway from ${omniDir}`);
+  child = spawn(process.execPath, ['--max-old-space-size=8192', runNext, 'dev'], { cwd: omniDir, stdio: 'ignore', detached: true, windowsHide: true });
   child.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
   process.once('SIGINT', cleanup);
   process.once('SIGTERM', cleanup);
   child.unref();
-
   const ready = await waitForPort();
   if (!ready) {
     cleanup();
     throw new Error(`OmniRoute did not become reachable at http://${host}:${port} within 120 seconds.`);
   }
-  console.log(`[OmniRoute] Gateway ready at http://${host}:${port}.`);
+  console.log(`[OmniRoute] Legacy gateway ready at http://${host}:${port}.`);
 }
 
-main().catch((error) => {
-  console.error(`[Unified Start] ${error.message}`);
-  process.exit(1);
-});
+main().catch((error) => { console.error(`[Unified Start] ${error.message}`); process.exit(1); });
