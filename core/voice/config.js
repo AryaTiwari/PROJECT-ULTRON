@@ -7,9 +7,9 @@ function readVoiceState() { try { return JSON.parse(fs.readFileSync(VOICE_CLONE_
 const state = readVoiceState();
 const localPython = process.platform === 'win32' ? path.join(VOICE_ROOT, '.venv', 'Scripts', 'python.exe') : path.join(VOICE_ROOT, '.venv', 'bin', 'python');
 const config = {
-  provider: 'chatterbox-turbo-local',
-  model: process.env.ULTRON_VOICE_MODEL || 'ResembleAI/chatterbox-turbo',
-  engine: process.env.ULTRON_VOICE_ENGINE || 'chatterbox-turbo',
+  provider: process.env.ULTRON_TTS_PROVIDER || 'nvidia-magpie-zeroshot',
+  model: process.env.ULTRON_VOICE_MODEL || 'nvidia/magpie-tts-zeroshot',
+  engine: process.env.ULTRON_VOICE_ENGINE || 'nvidia-magpie-zeroshot',
   referencePath: process.env.ULTRON_VOICE_REFERENCE_PATH || path.resolve('.ultron/voice/ultron-reference.mp3'),
   referenceSource: 'AryaTiwari/Interface1/Ultron-2026-08-27-11-05-[soft]-I-was-designed-to-[emphasis]-save-the-wor.mp3',
   cloneState: VOICE_CLONE_STATE,
@@ -22,5 +22,5 @@ const config = {
   serviceHost: process.env.ULTRON_VOICE_HOST || '127.0.0.1',
   servicePort: Number(process.env.ULTRON_VOICE_PORT || 8790),
 };
-function available() { return config.provider === 'chatterbox-turbo-local' && fs.existsSync(config.referencePath); }
+function available() { return fs.existsSync(config.referencePath); }
 module.exports = { config, available, VOICE_CLONE_STATE, readVoiceState };
