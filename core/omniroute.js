@@ -25,7 +25,76 @@ async function chat({ messages, model = 'auto', taskType = 'general', tools = nu
 function parseSseBlock(block) { const dataLines = String(block || '').replace(/\r/g, '').split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()); return dataLines.length ? dataLines.join('\n') : null; }
 function findSseBoundary(buffer) { const crlf = buffer.indexOf('\r\n\r\n'); const lf = buffer.indexOf('\n\n'); if (crlf < 0) return lf; if (lf < 0) return crlf; return Math.min(crlf, lf); }
 function sseBoundaryLength(buffer, index) { return buffer.slice(index, index + 4) === '\r\n\r\n' ? 4 : 2; }
-async function streamChat({ messages, model = 'auto', taskType = 'general', tools = null, onDelta } = {}) { if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute streaming request requires messages.'); if (typeof onDelta !== 'function') throw new Error('OmniRoute streaming request requires an onDelta callback.'); const resolvedModel = await resolveModel(model, taskType); const candidates = [resolvedModel]; if (resolvedModel !== 'auto' && taskType) candidates.push('auto'); if (!candidates.includes('auto/best-fast')) candidates.push('auto/best-fast'); let lastError = null; for (const candidate of [...new Set(candidates)]) { for (let attempt = 0; attempt < 2; attempt += 1) { try { const key = await apiKey(); const controller = new AbortController(); const timeoutMs = Number(config.router.timeoutMs || 120000); const timer = setTimeout(() => controller.abort(), timeoutMs); let response; try { response = await fetch(`${baseUrl()}/chat/completions`, { method: 'POST', headers: headers(key, true), body: JSON.stringify({ model: candidate, messages, stream: true, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }), signal: controller.signal }); } finally { clearTimeout(timer); } if (!response.ok) { const raw = await response.text(); const error = new Error(`OmniRoute HTTP ${response.status}: ${raw.slice(0, 1200)}`); error.status = response.status; throw error; } if (!response.body) throw new Error('OmniRoute streaming response has no body.'); const decoder = new TextDecoder(); let buffer = ''; let fullText = ''; let toolCalls = []; let finishReason = null; let gotDelta = false; const consume = (block) => { const event = parseSseBlock(block); if (!event || event === '[DONE]') return; let data; try { data = JSON.parse(event); } catch { return; } const choice = data?.choices?.[0] || {}; const delta = choice?.delta || {}; const text = textFromContent(delta.content || delta.text || delta.reasoning_content || choice.text || data?.output_text || data?.text || ''); if (text) { gotDelta = true; fullText += text; onDelta(text, { model: data?.model || candidate, finishReason: choice?.finish_reason || null }); } if (Array.isArray(delta.tool_calls)) toolCalls.push(...delta.tool_calls); if (choice?.finish_reason) finishReason = choice.finish_reason; }; for await (const chunk of response.body) { buffer += decoder.decode(chunk, { stream: true }); let boundary; while ((boundary = findSseBoundary(buffer)) >= 0) { const separatorLength = sseBoundaryLength(buffer, boundary); const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + separatorLength); consume(block); } } buffer += decoder.decode(); if (buffer.trim()) consume(buffer); if (!gotDelta && !toolCalls.length) { const error = new Error('OmniRoute streaming returned no usable content.'); error.status = 502; throw error; } return { content: fullText, toolCalls, finishReason, model: candidate, provider: 'omniroute', requestedModel: model, taskType }; } catch (error) { lastError = error; if (!transientStatus(error?.status)) throw error; if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350)); } } } throw lastError || new Error('OmniRoute streaming failed.'); }
+
+async function streamChat({ messages, model = 'auto', taskType = 'general', tools = null, onDelta, firstTokenTimeoutMs = null } = {}) {
+  if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute streaming request requires messages.');
+  if (typeof onDelta !== 'function') throw new Error('OmniRoute streaming request requires an onDelta callback.');
+  const resolvedModel = await resolveModel(model, taskType);
+  const qualitySensitive = ['coding', 'research', 'planning'].includes(String(taskType || '').toLowerCase());
+  const configuredFirstTokenTimeout = Number(firstTokenTimeoutMs || process.env.ULTRON_STREAM_FIRST_TOKEN_TIMEOUT_MS || (qualitySensitive ? 12000 : 5000));
+  const candidates = [...new Set([resolvedModel, ...(qualitySensitive ? [] : ['auto/best-fast']), ...(resolvedModel !== 'auto' ? ['auto'] : [])])];
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let controller = null;
+      let firstTokenTimer = null;
+      let gotDelta = false;
+      try {
+        const key = await apiKey();
+        controller = new AbortController();
+        firstTokenTimer = setTimeout(() => {
+          if (!gotDelta) controller.abort();
+        }, configuredFirstTokenTimeout);
+        const response = await fetch(`${baseUrl()}/chat/completions`, {
+          method: 'POST', headers: headers(key, true),
+          body: JSON.stringify({ model: candidate, messages, stream: true, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
+          signal: controller.signal,
+        });
+        clearTimeout(firstTokenTimer); firstTokenTimer = null;
+        if (!response.ok) {
+          const raw = await response.text();
+          const error = new Error(`OmniRoute HTTP ${response.status}: ${raw.slice(0, 1200)}`);
+          error.status = response.status; throw error;
+        }
+        if (!response.body) throw new Error('OmniRoute streaming response has no body.');
+        const decoder = new TextDecoder(); let buffer = ''; let fullText = ''; let toolCalls = []; let finishReason = null;
+        const consume = (block) => {
+          const event = parseSseBlock(block); if (!event || event === '[DONE]') return;
+          let data; try { data = JSON.parse(event); } catch { return; }
+          const choice = data?.choices?.[0] || {}; const delta = choice?.delta || {};
+          const text = textFromContent(delta.content || delta.text || delta.reasoning_content || choice.text || data?.output_text || data?.text || '');
+          if (text) { gotDelta = true; fullText += text; onDelta(text, { model: data?.model || candidate, finishReason: choice?.finish_reason || null, firstTokenMs: fullText.length === text.length ? Date.now() : undefined }); }
+          if (Array.isArray(delta.tool_calls)) toolCalls.push(...delta.tool_calls);
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+        };
+        for await (const chunk of response.body) {
+          buffer += decoder.decode(chunk, { stream: true });
+          let boundary;
+          while ((boundary = findSseBoundary(buffer)) >= 0) {
+            const separatorLength = sseBoundaryLength(buffer, boundary);
+            const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + separatorLength); consume(block);
+          }
+        }
+        buffer += decoder.decode(); if (buffer.trim()) consume(buffer);
+        if (!gotDelta && !toolCalls.length) { const error = new Error('OmniRoute streaming returned no usable content.'); error.status = 502; throw error; }
+        return { content: fullText, toolCalls, finishReason, model: candidate, provider: 'omniroute', requestedModel: model, taskType };
+      } catch (error) {
+        if (firstTokenTimer) clearTimeout(firstTokenTimer);
+        lastError = error;
+        const abortedForFirstToken = error?.name === 'AbortError' && !gotDelta;
+        if (abortedForFirstToken) {
+          if (!qualitySensitive && candidate !== 'auto/best-fast') break;
+          if (qualitySensitive) throw new Error(`OmniRoute first token exceeded ${configuredFirstTokenTimeout}ms for ${candidate}.`);
+        }
+        if (!transientStatus(error?.status)) throw error;
+        if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350));
+      }
+    }
+  }
+  throw lastError || new Error('OmniRoute streaming failed.');
+}
+
 async function health() { const started = Date.now(); try { const response = await request('/models', { timeoutMs: 10000 }); const data = await parseResponse(response); const models = modelIds(data); return { ok: true, authenticated: Boolean(await apiKey()), endpoint: baseUrl(), modelCount: models.length, catalogSample: models.slice(0, 12), latencyMs: Date.now() - started }; } catch (error) { return { ok: false, authenticated: Boolean(await apiKey()), endpoint: baseUrl(), modelCount: catalogCache.models.length, latencyMs: Date.now() - started, error: error.message }; } }
 function clearCache() { catalogCache = { models: [], fetchedAt: 0 }; }
 module.exports = { listModels, hasModel, resolveModel, chat, streamChat, health, isConfigured, normalizeModelId, clearCache, extractInference };
