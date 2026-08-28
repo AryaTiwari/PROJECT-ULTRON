@@ -18,7 +18,10 @@ ULTRON Mark 2 Core (single 127.0.0.1:8787 service)
   |--- Critic
   |--- Executor
   |--- Memory Judge / Retriever
-  |--- OmniRoute model router
+  |--- OmniRoute native model router
+  |      |--- live /v1/models catalog
+  |      |--- task-aware aliases
+  |      |--- ZenMux / other OmniRoute providers
   |--- Voice / TTS
   |--- Local credential vault
   |--- Live system status
@@ -42,11 +45,23 @@ http://127.0.0.1:8787/
 
 The exact Interface1 source revision is pinned in `interface-manifest.json` so the integrated runtime is reproducible.
 
+### OmniRoute verification
+
+OmniRoute is now a native Mark 2 transport. ULTRON automatically reads `/v1/models`, caches the catalog briefly, resolves task aliases such as `auto/best-fast`, and sends inference directly to OmniRoute. The OmniRoute credential can come from the existing local credential vault or `OMNIROUTE_API_KEY`; no secret is committed to Git.
+
+Run the full core smoke test after OmniRoute and its provider are running:
+
+```powershell
+npm run core:check
+```
+
+The smoke test checks the memory judge, Guardian/Critic, OmniRoute catalog health, and then performs a real OmniRoute inference request. A successful run should contain `"omniroute_health": { "ok": true, ... }` and a non-empty `"omniroute_inference"` response.
+
 ## Current capabilities
 
 - Long-term local memory with duplicate/semantic judging and retrieval
 - Consistent ULTRON personality across model providers
-- OmniRoute-compatible model routing
+- Native OmniRoute model routing with live catalog discovery
 - Guardian → Critic → Executor decision pipeline
 - Fish Audio voice integration with the configured ULTRON voice and optional metallic post-processing
 - Laptop voice daemon / wake-word groundwork
