@@ -5,6 +5,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const voiceConfig = require('../voice/config').config;
 const credentialStore = require('../credentials/local-store');
+const omniRoute = require('../omniroute');
 
 const execFileAsync = promisify(execFile);
 
@@ -35,8 +36,17 @@ async function checkAdministrator() {
   catch (error) { return result('administrator', 'UNKNOWN', { elevated: false, platform: process.platform, error: error?.message || String(error) }); }
 }
 async function checkOmniRoute() {
-  const base = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128').replace(/\/$/, ''); const target = process.env.OMNIROUTE_STATUS_URL || `${base}/health`; const probe = await checkHttp(target, 4000);
-  return result('omniroute', probe.ok || probe.statusCode === 401 ? (probe.statusCode === 401 ? 'ONLINE_AUTH_REQUIRED' : 'ONLINE') : 'OFFLINE', { configured: true, endpoint: base, latencyMs: probe.latencyMs, httpStatus: probe.statusCode, error: probe.error });
+  const health = await omniRoute.health();
+  return result('omniroute', health.ok ? 'ONLINE' : 'OFFLINE', {
+    configured: health.authenticated,
+    endpoint: health.endpoint,
+    authenticated: health.authenticated,
+    modelCount: health.modelCount,
+    catalogSample: health.catalogSample,
+    latencyMs: health.latencyMs,
+    httpStatus: health.status,
+    error: health.error,
+  });
 }
 async function checkMemory() {
   const dataDir = path.resolve(process.env.ULTRON_DATA_DIR || '.ultron'); const memoryDir = path.join(dataDir, 'memory'); const saved = await credentials(); const supabaseConfigured = Boolean((saved.SUPABASE_URL || process.env.SUPABASE_URL) && (saved.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || saved.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY));
