@@ -7,7 +7,7 @@ const { processMetallic } = require('./metallic-postprocess');
 const credentialStore = require('../credentials/local-store');
 
 const execFileAsync = promisify(execFile);
-const REFERENCE_URL = process.env.ULTRON_VOICE_REFERENCE_URL || 'https://raw.githubusercontent.com/AryaTiwari/Interface1/main/Ultron-2026-08-27-11-05-%5Bsoft%5D-I-was-designed-to-%5Bemphasis%5D-save-the-wor.mp3';
+const REFERENCE_URL = process.env.ULTRON_VOICE_REFERENCE_URL || 'https://raw.githubusercontent.com/AryaTiwari/Interface1/main/Ultron-2026-08-27-11-05-%5Bsoft%5D-I-was-designed-to-[emphasis]-save-the-wor.mp3';
 const NVIDIA_API_URL = process.env.NVIDIA_TTS_URL || 'https://integrate.api.nvidia.com/v1/audio/synthesize';
 const NVIDIA_STREAM_URL = process.env.NVIDIA_TTS_STREAM_URL || 'https://integrate.api.nvidia.com/v1/audio/synthesize_online';
 
@@ -80,4 +80,4 @@ async function synthesize(text, options = {}) {
   };
 }
 
-module.exports = { synthesize, ensureReferenceWav, ensureReferenceSource, NVIDIA_API_URL, NVIDIA_STREAM_URL };
+module.exports = { synthesize, getApiKey, ensureReferenceWav, ensureReferenceSource, NVIDIA_API_URL, NVIDIA_STREAM_URL };
