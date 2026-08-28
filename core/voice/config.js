@@ -1,13 +1,17 @@
 const fs = require('fs');
 const path = require('path');
 
-const VOICE_CLONE_STATE = path.resolve(process.env.ULTRON_VOICE_CLONE_STATE || '.ultron/voice-clone.json');
+const VOICE_ROOT = path.resolve(process.env.ULTRON_VOICE_ROOT || '.ultron/voice/openvoice');
+const VOICE_CLONE_STATE = path.resolve(process.env.ULTRON_VOICE_CLONE_STATE || '.ultron/voice/voice-clone.json');
 
 function readVoiceState() {
   try { return JSON.parse(fs.readFileSync(VOICE_CLONE_STATE, 'utf8')); } catch { return null; }
 }
 
 const state = readVoiceState();
+const localPython = process.platform === 'win32'
+  ? path.join(VOICE_ROOT, '.venv', 'Scripts', 'python.exe')
+  : path.join(VOICE_ROOT, '.venv', 'bin', 'python');
 
 const config = {
   provider: 'openvoice-v2-local',
@@ -21,7 +25,7 @@ const config = {
   outputDir: process.env.ULTRON_TTS_OUTPUT_DIR || '.ultron/audio',
   voiceStyle: process.env.ULTRON_VOICE_STYLE || 'subtle-metallic-cinematic',
   metallicMix: Number(process.env.ULTRON_METALLIC_MIX || 0.18),
-  python: process.env.ULTRON_VOICE_PYTHON || 'python',
+  python: process.env.ULTRON_VOICE_PYTHON || localPython,
   serviceHost: process.env.ULTRON_VOICE_HOST || '127.0.0.1',
   servicePort: Number(process.env.ULTRON_VOICE_PORT || 8790),
 };
