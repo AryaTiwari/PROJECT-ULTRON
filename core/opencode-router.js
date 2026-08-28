@@ -1,25 +1,56 @@
+const http = require('http');
+
 const OPEN_CODE_BASE_URL = String(process.env.OPENCODE_BASE_URL || 'http://127.0.0.1:4096').replace(/\/$/, '');
+const OPEN_CODE_URL = new URL(OPEN_CODE_BASE_URL);
 
 let sessionId = null;
 
-async function request(path, options = {}) {
-  const url = `${OPEN_CODE_BASE_URL}${path}`;
-  let response;
-  try {
-    response = await fetch(url, {
-      ...options,
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+function nativeRequest(pathname, options = {}) {
+  const url = new URL(pathname, OPEN_CODE_BASE_URL + '/');
+  const body = options.body == null ? '' : String(options.body);
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (body) headers['Content-Length'] = Buffer.byteLength(body);
+
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port || 80,
+      method: options.method || 'GET',
+      path: `${url.pathname}${url.search}`,
+      headers,
+      agent: false,
+    }, (response) => {
+      let raw = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => { raw += chunk; });
+      response.on('end', () => resolve({
+        ok: (response.statusCode || 500) >= 200 && (response.statusCode || 500) < 300,
+        status: response.statusCode || 500,
+        statusText: response.statusMessage || '',
+        raw,
+      }));
     });
+    request.setTimeout(15000, () => request.destroy(new Error('Local OpenCode request timed out.')));
+    request.on('error', reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
+async function request(pathname, options = {}) {
+  const url = `${OPEN_CODE_BASE_URL}${pathname}`;
+  let result;
+  try {
+    result = await nativeRequest(pathname, options);
   } catch (error) {
-    const detail = error?.cause?.message ? `: ${error.cause.message}` : '';
-    throw new Error(`OpenCode connection failed (${url})${detail || `: ${error?.message || String(error)}`}`);
+    throw new Error(`OpenCode connection failed (${url}): ${error?.message || String(error)}`);
   }
-  const raw = await response.text();
   let data = {};
-  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
-  if (!response.ok) {
-    const error = new Error(`OpenCode HTTP ${response.status} ${response.statusText}: ${raw.slice(0, 1200)}`);
-    error.status = response.status;
+  try { data = result.raw ? JSON.parse(result.raw) : {}; } catch { data = { raw: result.raw }; }
+  if (!result.ok) {
+    const error = new Error(`OpenCode HTTP ${result.status} ${result.statusText}: ${result.raw.slice(0, 1200)}`);
+    error.status = result.status;
     throw error;
   }
   return data;
@@ -83,4 +114,4 @@ async function health() {
 
 function resetSession() { sessionId = null; }
 
-module.exports = { chat, health, resetSession, parseModel, OPEN_CODE_BASE_URL };
+module.exports = { chat, health, resetSession, parseModel, OPEN_CODE_BASE_URL, OPEN_CODE_URL };
