@@ -19,7 +19,7 @@ function status() {
 }
 
 async function speak(text, options = {}) {
-  if (!available()) return { ok: false, configured: false, reason: 'Local Chatterbox Turbo is not installed/configured. Run npm run core:voice-setup.' };
+  if (!available()) return { ok: false, configured: false, reason: 'ULTRON voice reference audio is not installed. Run npm run core:voice-setup.' };
   return synthesize(text, options);
 }
 
