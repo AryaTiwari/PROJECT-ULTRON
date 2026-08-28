@@ -1,5 +1,7 @@
 const assert = require('assert');
+const fs = require('fs');
 const voice = require('./index');
+const { config } = require('./config');
 
 assert.equal(voice.WAKE_WORD, 'ULTRON');
 assert.equal(voice.detectWakeWord('ULTRON'), true);
@@ -11,5 +13,15 @@ assert.equal(voice.extractCommand('ULTRON open GitHub'), 'OPEN GITHUB');
 const status = voice.status();
 assert.equal(status.wakeWord, 'ULTRON');
 assert.equal(status.wakeWordPolicy, 'exact-first-word-only');
+assert.equal(config.provider, 'nvidia-magpie-zeroshot');
+assert.ok(fs.existsSync(config.referencePath), `Missing voice reference: ${config.referencePath}`);
 
-console.log(JSON.stringify({ ok: true, wakeWord: voice.WAKE_WORD, status }, null, 2));
+console.log(JSON.stringify({
+  ok: true,
+  wakeWord: voice.WAKE_WORD,
+  provider: config.provider,
+  model: config.model,
+  referenceExists: true,
+  referencePath: config.referencePath,
+  status,
+}, null, 2));
