@@ -1,4 +1,4 @@
-const { synthesize } = require('./fish-tts');
+const { synthesize } = require('./local-tts');
 const { available, config } = require('./config');
 const { VoiceState, STATES } = require('./voice-state');
 const { VoicePipeline } = require('./voice-pipeline');
@@ -9,7 +9,9 @@ function status() {
     provider: config.provider,
     configured: available(),
     model: config.model,
-    referenceId: config.referenceId,
+    referencePath: config.referencePath,
+    referenceSource: config.referenceSource,
+    cloned: config.cloned,
     wakeWord: WAKE_WORD,
     wakeWordPolicy: 'exact-first-word-only',
     states: STATES,
@@ -17,7 +19,7 @@ function status() {
 }
 
 async function speak(text, options = {}) {
-  if (!available()) return { ok: false, configured: false, reason: 'Fish Audio TTS is not configured.' };
+  if (!available()) return { ok: false, configured: false, reason: 'Local OpenVoice V2 reference audio is not installed. Run npm run core:voice-setup.' };
   return synthesize(text, options);
 }
 
