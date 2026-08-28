@@ -35,14 +35,6 @@ function extractMemoryCandidates(message) {
   return candidates;
 }
 
-function modelToOpenCode(model) {
-  const value = String(model || '').trim();
-  if (!value) return value;
-  if (value.startsWith('omniroute/')) return value;
-  if (value === 'big-pickle') return value;
-  return value;
-}
-
 class UltronCore {
   constructor() {
     registerBuiltinTools();
@@ -109,7 +101,7 @@ class UltronCore {
     if (!userMessage) return { ok: false, error: 'Message is required.' };
     const timestamp = new Date().toISOString();
     const task = classify(userMessage);
-    const selectedModel = modelToOpenCode(selectModel(userMessage, options.model));
+    const selectedModel = selectModel(userMessage, options.model);
     const guardian = assess({ message: userMessage, action: options.action || null });
     const critic = analyze({ message: userMessage, plannedAction: options.action || null }, guardian);
 
@@ -132,7 +124,7 @@ class UltronCore {
     const started = Date.now();
     let result;
     try {
-      result = await chat({ messages, model: selectedModel });
+      result = await chat({ messages, model: selectedModel, taskType: task.taskType });
       await telemetry.recordModelResult({ model: result.model, taskType: task.taskType, success: true, latencyMs: Date.now() - started });
     } catch (error) {
       await telemetry.recordModelResult({ model: selectedModel, taskType: task.taskType, success: false, latencyMs: Date.now() - started, errorType: error?.name || 'model_error', metadata: { message: String(error?.message || error).slice(0, 500) } });
