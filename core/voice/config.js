@@ -1,26 +1,19 @@
 const fs = require('fs');
 const path = require('path');
 
-const VOICE_ROOT = path.resolve(process.env.ULTRON_VOICE_ROOT || '.ultron/voice/openvoice');
+const VOICE_ROOT = path.resolve(process.env.ULTRON_VOICE_ROOT || '.ultron/voice/chatterbox');
 const VOICE_CLONE_STATE = path.resolve(process.env.ULTRON_VOICE_CLONE_STATE || '.ultron/voice/voice-clone.json');
-
-function readVoiceState() {
-  try { return JSON.parse(fs.readFileSync(VOICE_CLONE_STATE, 'utf8')); } catch { return null; }
-}
-
+function readVoiceState() { try { return JSON.parse(fs.readFileSync(VOICE_CLONE_STATE, 'utf8')); } catch { return null; } }
 const state = readVoiceState();
-const localPython = process.platform === 'win32'
-  ? path.join(VOICE_ROOT, '.venv', 'Scripts', 'python.exe')
-  : path.join(VOICE_ROOT, '.venv', 'bin', 'python');
-
+const localPython = process.platform === 'win32' ? path.join(VOICE_ROOT, '.venv', 'Scripts', 'python.exe') : path.join(VOICE_ROOT, '.venv', 'bin', 'python');
 const config = {
-  provider: 'openvoice-v2-local',
-  model: process.env.ULTRON_VOICE_MODEL || 'OpenVoiceV2',
-  engine: process.env.ULTRON_VOICE_ENGINE || 'openvoice-v2',
+  provider: 'chatterbox-turbo-local',
+  model: process.env.ULTRON_VOICE_MODEL || 'ResembleAI/chatterbox-turbo',
+  engine: process.env.ULTRON_VOICE_ENGINE || 'chatterbox-turbo',
   referencePath: process.env.ULTRON_VOICE_REFERENCE_PATH || path.resolve('.ultron/voice/ultron-reference.mp3'),
   referenceSource: 'AryaTiwari/Interface1/Ultron-2026-08-27-11-05-[soft]-I-was-designed-to-[emphasis]-save-the-wor.mp3',
   cloneState: VOICE_CLONE_STATE,
-  cloned: Boolean(state?.voiceEmbedding || state?.referencePath),
+  cloned: Boolean(state?.referencePath || state?.voiceProfileReady),
   format: process.env.ULTRON_TTS_FORMAT || 'wav',
   outputDir: process.env.ULTRON_TTS_OUTPUT_DIR || '.ultron/audio',
   voiceStyle: process.env.ULTRON_VOICE_STYLE || 'subtle-metallic-cinematic',
@@ -29,9 +22,5 @@ const config = {
   serviceHost: process.env.ULTRON_VOICE_HOST || '127.0.0.1',
   servicePort: Number(process.env.ULTRON_VOICE_PORT || 8790),
 };
-
-function available() {
-  return config.provider === 'openvoice-v2-local' && Boolean(fs.existsSync(config.referencePath));
-}
-
+function available() { return config.provider === 'chatterbox-turbo-local' && fs.existsSync(config.referencePath); }
 module.exports = { config, available, VOICE_CLONE_STATE, readVoiceState };
