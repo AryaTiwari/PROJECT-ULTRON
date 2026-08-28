@@ -8,11 +8,14 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { load: loadCredentials } = require('../core/credentials/local-store');
 
-const enabled = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_ENABLE_OPENCODE ?? '1'));
 const openCodePort = Number(process.env.OPENCODE_PORT || 4096);
 const openCodeHost = process.env.OPENCODE_HOST || '127.0.0.1';
 const omniPort = Number(process.env.OMNIROUTE_PORT || 20128);
 const omniHost = process.env.OMNIROUTE_HOST || '127.0.0.1';
+const providerMode = String(process.env.ULTRON_MODEL_PROVIDER || 'omniroute').toLowerCase();
+const openCodeEnabled = /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_ENABLE_OPENCODE || '0'))
+  || providerMode === 'opencode'
+  || providerMode === 'opencode-server';
 const omniDir = process.env.OMNIROUTE_DIR || (process.platform === 'win32' && process.env.USERPROFILE
   ? path.join(process.env.USERPROFILE, 'Downloads', 'OmniRoute-release-v3.8.51', 'OmniRoute-release-v3.8.51') : '');
 const configPath = path.resolve(process.env.ULTRON_OPENCODE_CONFIG || path.join(process.cwd(), '.ultron', 'opencode-omniroute.json'));
@@ -155,7 +158,7 @@ async function ensureOmniRoute() {
     return;
   }
   const resolved = resolveOmniCommand();
-  if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing with OpenCode existing providers.'); return; }
+  if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing without local gateway startup.'); return; }
   console.log(`[OmniRoute] Starting gateway from ${resolved.cwd}`);
   if (process.platform === 'win32') {
     const omniLog = path.join(logDir, 'omniroute.log');
@@ -202,12 +205,19 @@ async function ensureOpenCode() {
 }
 
 async function main() {
-  if (!enabled) { console.log('[OpenCode] Disabled for unified Mark 2 startup.'); return; }
   process.once('SIGINT', cleanup);
   process.once('SIGTERM', cleanup);
   await ensureOmniRoute();
-  try { await configureOmniRoute(); } catch (error) { console.warn(`[OmniRoute] Catalog configuration skipped: ${error.message}`); }
-  await ensureOpenCode();
+  if (openCodeEnabled) {
+    try {
+      await configureOmniRoute();
+    } catch (error) {
+      console.warn(`[OmniRoute] OpenCode catalog configuration skipped: ${error.message}`);
+    }
+    await ensureOpenCode();
+  } else {
+    console.log('[OpenCode] Skipped; OmniRoute is the primary Mark 2 transport. Set ULTRON_ENABLE_OPENCODE=1 to enable the optional OpenCode server.');
+  }
 }
 
 main().catch((error) => { console.error(`[Unified Start] ${error.message}`); process.exit(1); });
