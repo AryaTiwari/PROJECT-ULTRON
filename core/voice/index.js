@@ -19,18 +19,8 @@ function status() {
 }
 
 async function speak(text, options = {}) {
-  if (!available()) return { ok: false, configured: false, reason: 'Local OpenVoice V2 reference audio is not installed. Run npm run core:voice-setup.' };
+  if (!available()) return { ok: false, configured: false, reason: 'Local Chatterbox Turbo is not installed/configured. Run npm run core:voice-setup.' };
   return synthesize(text, options);
 }
 
-module.exports = {
-  speak,
-  synthesize,
-  available,
-  status,
-  VoiceState,
-  VoicePipeline,
-  WAKE_WORD,
-  detectWakeWord: detect,
-  extractCommand,
-};
+module.exports = { speak, synthesize, available, status, VoiceState, VoicePipeline, WAKE_WORD, detectWakeWord: detect, extractCommand };
