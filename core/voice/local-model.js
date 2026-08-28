@@ -5,12 +5,14 @@ async function getVoiceModel() {
   const exists = fs.existsSync(config.referencePath);
   return {
     _id: 'nvidia-magpie-zeroshot',
-    title: 'ULTRON NVIDIA Magpie Zero-Shot Voice',
+    title: 'ULTRON NVIDIA Magpie ZeroShot',
     type: 'voice-clone',
-    state: exists ? 'reference-ready' : 'not-installed',
+    state: exists ? 'ready' : 'not-installed',
     visibility: 'remote',
     author: { nickname: 'NVIDIA' },
-    description: exists ? 'Remote NVIDIA Magpie zero-shot TTS using the configured ULTRON reference recording.' : 'Install/configure the ULTRON reference recording before using voice cloning.'
+    description: exists
+      ? 'Remote NVIDIA Magpie TTS Zeroshot voice cloning using the configured ULTRON reference recording.'
+      : 'Prepare the ULTRON reference recording with npm run core:voice-setup.',
   };
 }
 
