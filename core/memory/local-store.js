@@ -55,8 +55,14 @@ function appendConversation(message) {
   return message;
 }
 
-function getRecentMessages(limit = config.recentMessageLimit) {
-  return readJson(config.conversationFile, { messages: [] }).messages.slice(-limit);
+function getRecentMessages(limit = config.recentMessageLimit, options = {}) {
+  const messages = readJson(config.conversationFile, { messages: [] }).messages;
+  const excludeCurrent = options?.excludeCurrentUserMessage === true;
+  const sliced = messages.slice(-limit);
+  if (!excludeCurrent) return sliced;
+  const last = sliced[sliced.length - 1];
+  if (last?.role === 'user') return sliced.slice(0, -1);
+  return sliced;
 }
 
 function appendModelPerformance(event) {
