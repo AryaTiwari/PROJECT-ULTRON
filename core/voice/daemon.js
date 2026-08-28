@@ -3,7 +3,6 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const { VoicePipeline } = require('./voice-pipeline');
 const { Mark2Runtime } = require('../mark2-runtime');
-const { synthesize } = require('./fish-tts');
 
 let child = null;
 let startWaiter = null;
@@ -16,6 +15,15 @@ function resolveStart(result) {
   startWaiter = null;
   clearTimeout(waiter.timer);
   result.ok ? waiter.resolve(result) : waiter.reject(new Error(result.error || 'Voice listener failed to start.'));
+}
+
+function playAudioFile(audioPath) {
+  const resolved = path.resolve(audioPath || '');
+  if (!resolved || !fs.existsSync(resolved)) return false;
+  if (process.platform !== 'win32') return false;
+  const escaped = resolved.replace(/'/g, "''");
+  spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Start-Process -FilePath '${escaped}'`], { windowsHide: true, detached: true, stdio: 'ignore' }).unref();
+  return true;
 }
 
 function startVoiceDaemon() {
@@ -55,14 +63,10 @@ function startVoiceDaemon() {
       if (event.type === 'hypothesis') { state.lastHypothesis = event.text; continue; }
       if (event.type !== 'transcript') continue;
       state.lastTranscript = event.text;
-      pipeline.processTranscript(event.text, message => core.handleMessage(message)).then(async result => {
+      pipeline.processTranscript(event.text, message => core.handleMessage(message)).then(result => {
         if (result?.result?.response) state.lastResponse = result.result.response;
-        if (result?.result?.response && process.env.ULTRON_VOICE_AUTOPLAY !== 'false') {
-          try {
-            const audio = await synthesize(result.result.response);
-            const escaped = String(audio.path).replace(/'/g, "''");
-            spawn('powershell.exe', ['-NoProfile', '-Command', `Start-Process -FilePath '${escaped}'`], { windowsHide: true, detached: true, stdio: 'ignore' }).unref();
-          } catch (error) { state.lastError = error.message; }
+        if (result?.result?.response && process.env.ULTRON_VOICE_AUTOPLAY !== 'false' && result?.audio?.path) {
+          if (!playAudioFile(result.audio.path)) state.lastError = 'Generated voice audio could not be played.';
         }
         state.lastError = result?.error || state.lastError;
       }).catch(error => { state.lastError = error.message; });
@@ -74,7 +78,7 @@ function startVoiceDaemon() {
   child.on('exit', (code, signal) => {
     state.running = false; state.ready = false; state.pid = null;
     if (code && code !== 0) state.lastError = `Listener exited with code ${code}${signal ? ` (${signal})` : ''}.`;
-    resolveStart({ ok: false, error: state.lastError || 'Voice listener exited before becoming ready.' });
+    resolveStart({ ok: false, error: state.lastError || 'Listener exited before becoming ready.' });
     child = null;
   });
   return startup;
