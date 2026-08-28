@@ -8,8 +8,22 @@ const credentialStore = require('../credentials/local-store');
 
 const execFileAsync = promisify(execFile);
 const REFERENCE_URL = process.env.ULTRON_VOICE_REFERENCE_URL || 'https://raw.githubusercontent.com/AryaTiwari/Interface1/main/Ultron-2026-08-27-11-05-%5Bsoft%5D-I-was-designed-to-[emphasis]-save-the-wor.mp3';
-const NVIDIA_API_URL = process.env.NVIDIA_TTS_URL || 'https://integrate.api.nvidia.com/v1/audio/synthesize';
-const NVIDIA_STREAM_URL = process.env.NVIDIA_TTS_STREAM_URL || 'https://integrate.api.nvidia.com/v1/audio/synthesize_online';
+
+function nvidiaTtsBaseUrl() {
+  const explicit = String(process.env.NVIDIA_TTS_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  const functionId = String(process.env.NVIDIA_TTS_FUNCTION_ID || '').trim();
+  if (functionId) return `https://${functionId}.invocation.api.nvcf.nvidia.com/v1/audio/synthesize`;
+  return '';
+}
+
+function nvidiaTtsStreamUrl() {
+  const explicit = String(process.env.NVIDIA_TTS_STREAM_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  const functionId = String(process.env.NVIDIA_TTS_FUNCTION_ID || '').trim();
+  if (functionId) return `https://${functionId}.invocation.api.nvcf.nvidia.com/v1/audio/synthesize_online`;
+  return '';
+}
 
 async function getApiKey() {
   const envKey = String(process.env.NVIDIA_API_KEY || '').trim();
@@ -42,7 +56,7 @@ function buildForm(text, reference, options = {}) {
   form.append('text', String(text).slice(0, 2000));
   form.append('voice', options.voice || 'Magpie-ZeroShot-Multilingual');
   form.append('sample_rate_hz', String(options.sampleRate || 22050));
-  form.append('prompt_quality', String(options.quality || process.env.ULTRON_VOICE_QUALITY || 20));
+  form.append('prompt_quality', String(options.quality || process.env.ULTRON_VOICE_QUALITY || 25));
   form.append('audio_prompt', new Blob([fs.readFileSync(reference)], { type: 'audio/wav' }), 'ultron-reference-magpie.wav');
   return form;
 }
@@ -51,14 +65,12 @@ async function synthesize(text, options = {}) {
   const input = String(text || '').trim();
   if (!input) throw new Error('TTS requires text.');
   const apiKey = await getApiKey();
-  if (!apiKey) throw new Error('NVIDIA API key is not configured. Add NVIDIA_API_KEY to .env or ULTRON credentials.');
+  if (!apiKey) throw new Error('NVIDIA API key is not configured.');
+  const endpoint = nvidiaTtsBaseUrl();
+  if (!endpoint) throw new Error('NVIDIA TTS endpoint is not configured. Set NVIDIA_TTS_FUNCTION_ID or NVIDIA_TTS_URL. The NVIDIA LLM endpoint cannot serve Magpie TTS.');
 
   const reference = await ensureReferenceWav();
-  const response = await fetch(NVIDIA_API_URL, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: buildForm(input, reference, options),
-  });
+  const response = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: buildForm(input, reference, options) });
   if (!response.ok) throw new Error(`NVIDIA Magpie TTS HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
 
   const audio = Buffer.from(await response.arrayBuffer());
@@ -68,16 +80,7 @@ async function synthesize(text, options = {}) {
   fs.writeFileSync(outputPath, audio);
   const processed = await processMetallic(outputPath, outputPath);
   const finalPath = processed.path || outputPath;
-  return {
-    ok: true,
-    provider: 'nvidia-magpie-zeroshot',
-    model: 'nvidia/magpie-tts-zeroshot',
-    referencePath: config.referencePath,
-    path: finalPath,
-    bytes: fs.statSync(finalPath).size,
-    metallicApplied: processed.applied,
-    metallicMix: config.metallicMix,
-  };
+  return { ok: true, provider: 'nvidia-magpie-zeroshot', model: 'nvidia/magpie-tts-zeroshot', endpoint, referencePath: config.referencePath, path: finalPath, bytes: fs.statSync(finalPath).size, metallicApplied: processed.applied, metallicMix: config.metallicMix };
 }
 
-module.exports = { synthesize, getApiKey, ensureReferenceWav, ensureReferenceSource, NVIDIA_API_URL, NVIDIA_STREAM_URL };
+module.exports = { synthesize, getApiKey, ensureReferenceWav, ensureReferenceSource, nvidiaTtsBaseUrl, nvidiaTtsStreamUrl };
