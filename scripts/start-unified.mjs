@@ -127,25 +127,18 @@ async function ensureOmniRoute() {
   if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing with OpenCode existing providers.'); return; }
   console.log(`[OmniRoute] Starting gateway from ${resolved.cwd}`);
   if (process.platform === 'win32') {
-    omniChild = spawn('cmd.exe', ['/d', '/c', 'npm.cmd', 'run', 'dev'], {
-      cwd: resolved.cwd,
-      stdio: 'inherit',
-      detached: true,
-      windowsHide: false,
-      shell: false,
-    });
+    const logDir = path.resolve(process.cwd(), '.ultron');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logFile = path.join(logDir, 'omniroute.log');
+    const psCommand = `$ErrorActionPreference='Continue'; Set-Location -LiteralPath '${resolved.cwd.replace(/'/g, "''")}'; & npm.cmd run dev *> '${logFile.replace(/'/g, "''")}'`;
+    omniChild = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',${JSON.stringify(psCommand)} -WorkingDirectory '${resolved.cwd.replace(/'/g, "''")}'`], { stdio: 'ignore', windowsHide: true, shell: false });
   } else {
-    omniChild = spawn('npm', ['run', 'dev'], {
-      cwd: resolved.cwd,
-      stdio: 'inherit',
-      detached: true,
-      shell: false,
-    });
+    omniChild = spawn('npm', ['run', 'dev'], { cwd: resolved.cwd, stdio: 'ignore', detached: true, shell: false });
   }
   omniChild.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
   omniChild.unref();
   if (await waitForPort(omniHost, omniPort)) console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`);
-  else throw new Error(`[OmniRoute] Gateway did not become reachable at http://${omniHost}:${omniPort}.`);
+  else throw new Error(`[OmniRoute] Gateway did not become reachable at http://${omniHost}:${omniPort}. Check .ultron\\omniroute.log.`);
 }
 
 async function ensureOpenCode() {
