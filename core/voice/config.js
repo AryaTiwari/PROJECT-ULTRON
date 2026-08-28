@@ -6,9 +6,9 @@ const VOICE_CLONE_STATE = path.resolve(process.env.ULTRON_VOICE_CLONE_STATE || p
 function readVoiceState() { try { return JSON.parse(fs.readFileSync(VOICE_CLONE_STATE, 'utf8')); } catch { return null; } }
 const state = readVoiceState();
 
-const configuredProvider = String(process.env.ULTRON_TTS_PROVIDER || '').trim().toLowerCase();
-const hasNvidiaKey = Boolean(String(process.env.NVIDIA_API_KEY || '').trim());
-const provider = configuredProvider === 'fish' && hasNvidiaKey ? 'nvidia-magpie-zeroshot' : (configuredProvider || 'nvidia-magpie-zeroshot');
+const requestedProvider = String(process.env.ULTRON_TTS_PROVIDER || '').trim().toLowerCase();
+// Fish was retired from Mark 2. Keep old .env files harmless by treating fish as legacy.
+const provider = requestedProvider === 'fish' ? 'nvidia-magpie-zeroshot' : (requestedProvider || 'nvidia-magpie-zeroshot');
 
 const config = {
   provider,
