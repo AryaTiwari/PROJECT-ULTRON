@@ -4,7 +4,8 @@ const { analyze } = require('./critic');
 const { listTools } = require('./executor');
 const { lexicalSimilarity, judge } = require('./memory/judge');
 const { loadPersonality } = require('./personality');
-const { health } = require('./model-router');
+const { health, chat } = require('./model-router');
+const omniRoute = require('./omniroute');
 
 (async () => {
   const personality = loadPersonality();
@@ -13,7 +14,25 @@ const { health } = require('./model-router');
   const safeCritic = analyze({ message: 'Explain how ULTRON works.' }, safeGuardian);
   const riskyGuardian = assess({ message: 'disable windows defender' });
   const duplicate = await judge({ content: 'My father is Pawan' }, [{ content: 'my father is pawan', active: true }]);
+  const omniHealth = await omniRoute.health();
 
+  let inference = null;
+  if (omniHealth.ok) {
+    try {
+      inference = await chat({
+        messages: [
+          { role: 'system', content: 'You are ULTRON. Reply briefly for this connectivity test.' },
+          { role: 'user', content: 'Reply with exactly: ULTRON OMNIROUTE ONLINE' },
+        ],
+        model: 'auto',
+        taskType: 'simple_qa',
+      });
+    } catch (error) {
+      inference = { ok: false, error: error.message };
+    }
+  }
+
+  const inferenceOk = Boolean(inference?.content?.trim());
   console.log(JSON.stringify({
     ok: true,
     status: core.status(),
@@ -24,8 +43,13 @@ const { health } = require('./model-router');
     memory_duplicate_test: duplicate,
     lexical_similarity_test: lexicalSimilarity('my father is pawan', 'pawan is my father'),
     registered_tools: listTools(),
+    omniroute_health: omniHealth,
+    omniroute_inference: inference ? { ok: inferenceOk, model: inference.model, provider: inference.provider, response: inference.content || inference.error } : { skipped: true, reason: 'OmniRoute catalog is offline or unauthenticated' },
     model_router_health: await health(),
   }, null, 2));
+
+  if (!omniHealth.ok) process.exitCode = 2;
+  if (omniHealth.ok && !inferenceOk) process.exitCode = 3;
 })().catch(error => {
   console.error(error);
   process.exit(1);
