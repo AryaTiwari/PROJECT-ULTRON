@@ -28,13 +28,15 @@ const omniRoute = require('./omniroute');
         taskType: 'simple_qa',
       });
     } catch (error) {
-      inference = { ok: false, error: error.message };
+      inference = { ok: false, error: error.message, status: error.status || null };
     }
   }
 
   const inferenceOk = Boolean(inference?.content?.trim());
+  const routerHealth = await health();
+  const checksPassed = omniHealth.ok && inferenceOk;
   console.log(JSON.stringify({
-    ok: true,
+    ok: checksPassed,
     status: core.status(),
     system_prompt_loaded: buildSystemPrompt(personality).length > 0,
     safe_guardian: safeGuardian,
@@ -44,12 +46,12 @@ const omniRoute = require('./omniroute');
     lexical_similarity_test: lexicalSimilarity('my father is pawan', 'pawan is my father'),
     registered_tools: listTools(),
     omniroute_health: omniHealth,
-    omniroute_inference: inference ? { ok: inferenceOk, model: inference.model, provider: inference.provider, response: inference.content || inference.error } : { skipped: true, reason: 'OmniRoute catalog is offline or unauthenticated' },
-    model_router_health: await health(),
+    omniroute_inference: inference ? { ok: inferenceOk, model: inference.model, provider: inference.provider, response: inference.content || inference.error, status: inference.status || null } : { skipped: true, reason: 'OmniRoute catalog is offline or unauthenticated' },
+    model_router_health: routerHealth,
   }, null, 2));
 
   if (!omniHealth.ok) process.exitCode = 2;
-  if (omniHealth.ok && !inferenceOk) process.exitCode = 3;
+  else if (!inferenceOk) process.exitCode = 3;
 })().catch(error => {
   console.error(error);
   process.exit(1);
