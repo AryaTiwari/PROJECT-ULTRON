@@ -50,13 +50,28 @@ export type UltronStreamEvent = { type: 'meta' | 'delta' | 'final' | 'error'; te
 
 export async function sendUltronQueryStream(prompt: string, conversationHistory: { role: 'user' | 'model'; content: string }[] = [], activeMood = 'CALM', userDirectives = '', onEvent: (event: UltronStreamEvent) => void = () => {}) {
   let sawDelta = false;
+  let controller: AbortController | null = null;
+  let firstTokenTimer: ReturnType<typeof setTimeout> | null = null;
   try {
-    const res = await fetch(\`${'${CORE_URL}'}/api/chat/stream\`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' }, body: JSON.stringify({ message: prompt, source: 'interface', conversationHistory, userDirectives }) });
+    controller = new AbortController();
+    const firstTokenTimeoutMs = Number(import.meta.env.VITE_ULTRON_FIRST_TOKEN_TIMEOUT_MS || 6500);
+    firstTokenTimer = setTimeout(() => {
+      if (!sawDelta) controller?.abort();
+    }, firstTokenTimeoutMs);
+
+    const res = await fetch(\`${'${CORE_URL}'}/api/chat/stream\`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify({ message: prompt, source: 'interface', conversationHistory, userDirectives }),
+      signal: controller.signal,
+    });
     if (!res.ok || !res.body) throw new Error(\`ULTRON streaming request failed (\${res.status})\`);
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let finalResult: any = null;
+
     const consume = (block: string) => {
       const lines = block.replace(/\\r/g, '').split('\\n');
       let type = 'message';
@@ -69,27 +84,42 @@ export async function sendUltronQueryStream(prompt: string, conversationHistory:
       let payload: any = {};
       try { payload = JSON.parse(data.join('\\n')); } catch { payload = { text: data.join('\\n') }; }
       payload.type = payload.type || type;
-      if (payload.type === 'delta') sawDelta = true;
+      if (payload.type === 'delta') {
+        sawDelta = true;
+        if (firstTokenTimer) clearTimeout(firstTokenTimer);
+      }
       if (payload.type === 'final') finalResult = payload.result || payload;
       onEvent(payload);
     };
+
+    const findBoundary = (value: string) => {
+      const lf = value.indexOf('\\n\\n');
+      const crlf = value.indexOf('\\r\\n\\r\\n');
+      if (lf < 0) return { index: crlf, length: crlf >= 0 ? 4 : 0 };
+      if (crlf < 0) return { index: lf, length: 2 };
+      return lf <= crlf ? { index: lf, length: 2 } : { index: crlf, length: 4 };
+    };
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      let boundary;
-      while ((boundary = buffer.indexOf('\\r\\n\\r\\n')) >= 0 || (boundary = buffer.indexOf('\\n\\n')) >= 0) {
-        const separatorLength = buffer.slice(boundary, boundary + 4) === '\\r\\n\\r\\n' ? 4 : 2;
-        const block = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + separatorLength);
+      while (true) {
+        const boundary = findBoundary(buffer);
+        if (boundary.index < 0) break;
+        const block = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.length);
         consume(block);
       }
     }
     buffer += decoder.decode();
     if (buffer.trim()) consume(buffer);
+
+    if (firstTokenTimer) clearTimeout(firstTokenTimer);
     if (finalResult) return normalizeStreamResult(finalResult, activeMood, conversationHistory, userDirectives);
     throw new Error('ULTRON streaming ended without a final response.');
   } catch (error: any) {
+    if (firstTokenTimer) clearTimeout(firstTokenTimer);
     if (!sawDelta) return sendUltronQuery(prompt, conversationHistory, activeMood, userDirectives);
     throw error;
   }
@@ -108,7 +138,9 @@ async function patchIntegratedInterface(targetRoot) {
   const servicePath = path.join(targetRoot, 'src', 'services', 'ultronApi.ts');
   const contextPath = path.join(targetRoot, 'src', 'core', 'ultronContext.tsx');
   let service = await fs.readFile(servicePath, 'utf8');
-  if (!service.includes(STREAM_SERVICE_MARKER)) service += streamServiceCode;
+  const start = service.indexOf(STREAM_SERVICE_MARKER);
+  if (start >= 0) service = service.slice(0, start) + streamServiceCode;
+  else service += streamServiceCode;
 
   let context = await fs.readFile(contextPath, 'utf8');
   const fallbackPattern = /const result = await api\.sendUltronQuery\(text\.trim\(\), historyForApi, mood, userRequirements\);/;
@@ -126,14 +158,12 @@ async function patchIntegratedInterface(targetRoot) {
         };
         const result = await api.sendUltronQueryStream(text.trim(), historyForApi, mood, userRequirements, streamEventHandler);`;
   if (fallbackPattern.test(context)) context = context.replace(fallbackPattern, streamingCall);
-
-  const messageNeedle = "        setMessages((prev) => [...prev, ultronMsg]);";
+  const messageNeedle = `        setMessages((prev) => [...prev, ultronMsg]);`;
   const messageReplacement = `        setMessages((prev) => {
           if (streamingMessageId) return prev.map((m) => m.id === streamingMessageId ? ultronMsg : m);
           return [...prev, ultronMsg];
         });`;
   if (context.includes(messageNeedle)) context = context.replace(messageNeedle, messageReplacement);
-
   await fs.writeFile(servicePath, service, 'utf8');
   await fs.writeFile(contextPath, context, 'utf8');
   console.log('[Interface] ULTRON Mark 2 streaming bridge applied.');
