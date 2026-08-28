@@ -4,13 +4,13 @@ const { config } = require('./config');
 async function getVoiceModel() {
   const exists = fs.existsSync(config.referencePath);
   return {
-    _id: 'local-chatterbox-turbo',
-    title: 'ULTRON Local Chatterbox Turbo',
+    _id: 'nvidia-magpie-zeroshot',
+    title: 'ULTRON NVIDIA Magpie Zero-Shot Voice',
     type: 'voice-clone',
-    state: exists ? 'ready' : 'not-installed',
-    visibility: 'local',
-    author: { nickname: 'ULTRON' },
-    description: exists ? 'Local Chatterbox Turbo zero-shot voice cloning using the configured ULTRON reference recording.' : 'Install the local Chatterbox Turbo voice engine and reference recording.'
+    state: exists ? 'reference-ready' : 'not-installed',
+    visibility: 'remote',
+    author: { nickname: 'NVIDIA' },
+    description: exists ? 'Remote NVIDIA Magpie zero-shot TTS using the configured ULTRON reference recording.' : 'Install/configure the ULTRON reference recording before using voice cloning.'
   };
 }
 
