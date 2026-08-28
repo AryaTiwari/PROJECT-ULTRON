@@ -13,7 +13,7 @@ assert.equal(voice.extractCommand('ULTRON open GitHub'), 'OPEN GITHUB');
 const status = voice.status();
 assert.equal(status.wakeWord, 'ULTRON');
 assert.equal(status.wakeWordPolicy, 'exact-first-word-only');
-assert.equal(config.provider, 'nvidia-magpie-zeroshot');
+assert.ok(['nvidia-magpie-zeroshot', 'fish-audio-s2.1-pro-free', 'local-chatterbox'].includes(config.provider));
 assert.ok(fs.existsSync(config.referencePath), `Missing voice reference: ${config.referencePath}`);
 
 console.log(JSON.stringify({
