@@ -1,5 +1,4 @@
 const { synthesize: synthesizeNvidia } = require('./nvidia-tts');
-const { synthesize: synthesizeLocal } = require('./local-chatterbox');
 const { config } = require('./config');
 
 async function synthesize(text, options = {}) {
@@ -8,6 +7,7 @@ async function synthesize(text, options = {}) {
     return synthesizeNvidia(text, options);
   }
   if (provider === 'local-chatterbox') {
+    const { synthesize: synthesizeLocal } = require('./local-chatterbox');
     return synthesizeLocal(text, options);
   }
   throw new Error(`Unsupported ULTRON TTS provider: ${provider}`);
