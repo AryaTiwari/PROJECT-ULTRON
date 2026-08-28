@@ -1,6 +1,6 @@
 const { VoiceState } = require('./voice-state');
 const wakeWord = require('./wake-word');
-const { synthesize } = require('./fish-tts');
+const { synthesize } = require('./local-tts');
 
 class VoicePipeline {
   constructor({ transcribe } = {}) {
