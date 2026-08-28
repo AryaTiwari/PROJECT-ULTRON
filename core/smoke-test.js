@@ -28,7 +28,12 @@ const omniRoute = require('./omniroute');
         taskType: 'simple_qa',
       });
     } catch (error) {
-      inference = { ok: false, error: error.message, status: error.status || null };
+      inference = {
+        ok: false,
+        error: error.message,
+        status: error.status || null,
+        responseShape: error.responseShape || null,
+      };
     }
   }
 
@@ -46,7 +51,7 @@ const omniRoute = require('./omniroute');
     lexical_similarity_test: lexicalSimilarity('my father is pawan', 'pawan is my father'),
     registered_tools: listTools(),
     omniroute_health: omniHealth,
-    omniroute_inference: inference ? { ok: inferenceOk, model: inference.model, provider: inference.provider, response: inference.content || inference.error, status: inference.status || null } : { skipped: true, reason: 'OmniRoute catalog is offline or unauthenticated' },
+    omniroute_inference: inference ? { ok: inferenceOk, model: inference.model || null, provider: inference.provider || null, response: inference.content || inference.error, status: inference.status || null, responseShape: inference.responseShape || null } : { skipped: true, reason: 'OmniRoute catalog is offline or unauthenticated' },
     model_router_health: routerHealth,
   }, null, 2));
 
