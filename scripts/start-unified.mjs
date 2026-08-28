@@ -16,6 +16,8 @@ const omniHost = process.env.OMNIROUTE_HOST || '127.0.0.1';
 const omniDir = process.env.OMNIROUTE_DIR || (process.platform === 'win32' && process.env.USERPROFILE
   ? path.join(process.env.USERPROFILE, 'Downloads', 'OmniRoute-release-v3.8.51', 'OmniRoute-release-v3.8.51') : '');
 const configPath = path.resolve(process.env.ULTRON_OPENCODE_CONFIG || path.join(process.cwd(), '.ultron', 'opencode-omniroute.json'));
+const logDir = path.resolve(process.env.ULTRON_RUNTIME_LOG_DIR || path.join(process.cwd(), '.ultron'));
+const openCodeLog = path.join(logDir, 'opencode.log');
 let openCodeChild = null;
 let omniChild = null;
 
@@ -36,6 +38,30 @@ async function waitForPort(host, port, timeoutMs = 120000) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;
+}
+
+async function waitForOpenCodeHealth(timeoutMs = 120000) {
+  const started = Date.now();
+  const url = `http://${openCodeHost}:${openCodePort}/global/health`;
+  let lastError = '';
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      const raw = await response.text();
+      if (response.ok) {
+        let data = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch {}
+        if (data?.healthy !== false) return data;
+        lastError = `HTTP ${response.status}: ${raw.slice(0, 800)}`;
+      } else {
+        lastError = `HTTP ${response.status}: ${raw.slice(0, 800)}`;
+      }
+    } catch (error) {
+      lastError = error?.cause?.message || error?.message || String(error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 700));
+  }
+  throw new Error(`OpenCode health check failed at ${url}: ${lastError || 'server unavailable'}. Check ${openCodeLog}.`);
 }
 
 function killChild(child) {
@@ -71,7 +97,12 @@ function resolveOpenCodeCommand() {
     } catch {}
   } else candidates.push({ kind: 'direct', command: 'opencode' });
   const seen = new Set();
-  return candidates.find((candidate) => { const key = `${candidate.kind}:${candidate.command}`; if (seen.has(key)) return false; seen.add(key); return true; }) || null;
+  return candidates.find((candidate) => {
+    const key = `${candidate.kind}:${candidate.command}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }) || null;
 }
 
 function resolveOmniCommand() {
@@ -127,11 +158,10 @@ async function ensureOmniRoute() {
   if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing with OpenCode existing providers.'); return; }
   console.log(`[OmniRoute] Starting gateway from ${resolved.cwd}`);
   if (process.platform === 'win32') {
-    const logDir = path.resolve(process.cwd(), '.ultron');
-    fs.mkdirSync(logDir, { recursive: true });
-    const logFile = path.join(logDir, 'omniroute.log');
-    const psCommand = `$ErrorActionPreference='Continue'; Set-Location -LiteralPath '${resolved.cwd.replace(/'/g, "''")}'; & npm.cmd run dev *> '${logFile.replace(/'/g, "''")}'`;
-    omniChild = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',${JSON.stringify(psCommand)} -WorkingDirectory '${resolved.cwd.replace(/'/g, "''")}'`], { stdio: 'ignore', windowsHide: true, shell: false });
+    const omniLog = path.join(logDir, 'omniroute.log');
+    const psCommand = `$ErrorActionPreference='Continue'; Set-Location -LiteralPath '${resolved.cwd.replace(/'/g, "''")}'; & npm.cmd run dev *> '${omniLog.replace(/'/g, "''")}'`;
+    const outer = `Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',${JSON.stringify(psCommand)} -WorkingDirectory '${resolved.cwd.replace(/'/g, "''")}'`;
+    omniChild = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', outer], { stdio: 'ignore', windowsHide: true, shell: false });
   } else {
     omniChild = spawn('npm', ['run', 'dev'], { cwd: resolved.cwd, stdio: 'ignore', detached: true, shell: false });
   }
@@ -144,22 +174,31 @@ async function ensureOmniRoute() {
 async function ensureOpenCode() {
   if (await isPortOpen(openCodeHost, openCodePort)) {
     console.log(`[OpenCode] Existing local server detected at http://${openCodeHost}:${openCodePort}.`);
+    await waitForOpenCodeHealth();
     return;
   }
   const resolved = resolveOpenCodeCommand();
   if (!resolved) throw new Error('OpenCode executable could not be resolved.');
   let apiKey = '';
   try { const credentials = await loadCredentials(); apiKey = String(credentials.OMNIROUTE_API_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim(); } catch {}
+  fs.mkdirSync(logDir, { recursive: true });
+  try { fs.writeFileSync(openCodeLog, '', 'utf8'); } catch {}
   const env = { ...process.env, OPENCODE_CONFIG: configPath };
   if (apiKey) env.OMNIROUTE_API_KEY = apiKey;
   console.log(`[OpenCode] Starting local model server at http://${openCodeHost}:${openCodePort} using ${resolved.command}`);
   const args = ['serve', '--hostname', openCodeHost, '--port', String(openCodePort)];
-  if (resolved.kind === 'cmd') openCodeChild = spawn('cmd.exe', ['/d', '/c', resolved.command, ...args], { env, stdio: 'inherit', detached: true, windowsHide: false, shell: false });
-  else openCodeChild = spawn(resolved.command, args, { env, stdio: 'inherit', detached: true, windowsHide: false, shell: false });
+  if (process.platform === 'win32') {
+    const encodedEnv = Buffer.from(JSON.stringify({ OPENCODE_CONFIG: configPath, OMNIROUTE_API_KEY: apiKey })).toString('base64');
+    const full = `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedEnv}')) | ConvertFrom-Json | ForEach-Object { if ($_.OPENCODE_CONFIG) { $env:OPENCODE_CONFIG=$_.OPENCODE_CONFIG }; if ($_.OMNIROUTE_API_KEY) { $env:OMNIROUTE_API_KEY=$_.OMNIROUTE_API_KEY } }; $ErrorActionPreference='Continue'; & cmd.exe /d /c '${String(resolved.command).replace(/'/g, "''")}' ${args.join(' ')} *> '${openCodeLog.replace(/'/g, "''")}'`;
+    const outer = `Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',${JSON.stringify(full)} -WorkingDirectory '${process.cwd().replace(/'/g, "''")}'`;
+    openCodeChild = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', outer], { stdio: 'ignore', windowsHide: true, shell: false });
+  } else {
+    openCodeChild = spawn(resolved.command, args, { env, stdio: 'ignore', detached: true, shell: false });
+  }
   openCodeChild.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`));
   openCodeChild.unref();
-  if (!await waitForPort(openCodeHost, openCodePort)) throw new Error(`OpenCode local server did not become reachable at http://${openCodeHost}:${openCodePort}.`);
-  console.log(`[OpenCode] Local server ready at http://${openCodeHost}:${openCodePort}.`);
+  await waitForOpenCodeHealth();
+  console.log(`[OpenCode] Local server healthy at http://${openCodeHost}:${openCodePort}.`);
 }
 
 async function main() {
