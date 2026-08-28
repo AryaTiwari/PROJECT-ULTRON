@@ -126,6 +126,41 @@ function transientStatus(status) {
   return [408, 425, 429, 500, 502, 503, 504].includes(Number(status));
 }
 
+function textFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map(part => {
+    if (typeof part === 'string') return part;
+    return part?.text || part?.content || part?.value || '';
+  }).filter(Boolean).join('');
+  if (content && typeof content === 'object') return String(content.text || content.content || content.value || '');
+  return '';
+}
+
+function extractInference(data) {
+  const choice = data?.choices?.[0] || {};
+  const message = choice?.message || {};
+  const delta = choice?.delta || {};
+  const output = data?.output;
+  const candidates = [
+    message.content,
+    message.text,
+    message.reasoning_content,
+    delta.content,
+    delta.text,
+    delta.reasoning_content,
+    choice.text,
+    output?.[0]?.content,
+    data?.output_text,
+    data?.response,
+    data?.content,
+    data?.text,
+  ];
+  const content = candidates.map(textFromContent).find(value => value.trim()) || '';
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const finishReason = choice?.finish_reason || null;
+  return { content, toolCalls, finishReason };
+}
+
 async function chat({ messages, model = 'auto', taskType = 'general', tools = null } = {}) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute request requires messages.');
   const resolvedModel = await resolveModel(model, taskType);
@@ -135,17 +170,26 @@ async function chat({ messages, model = 'auto', taskType = 'general', tools = nu
 
   let lastError = null;
   for (const candidate of [...new Set(modelCandidates)]) {
-    const body = { model: candidate, messages };
+    const body = { model: candidate, messages, stream: false };
     if (Array.isArray(tools) && tools.length) body.tools = tools;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const response = await request('/chat/completions', { method: 'POST', body: JSON.stringify(body) });
         const data = await parseResponse(response);
-        const message = data?.choices?.[0]?.message || {};
-        const content = message.content ?? data?.choices?.[0]?.text ?? data?.output_text ?? '';
-        const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-        if (!String(content).trim() && !toolCalls.length) throw new Error('OmniRoute returned no response text or tool calls.');
-        return { content: String(content || ''), toolCalls, model: data?.model || candidate, provider: 'omniroute', raw: data, requestedModel: model, taskType };
+        const extracted = extractInference(data);
+        if (!extracted.content.trim() && !extracted.toolCalls.length) {
+          const error = new Error('OmniRoute returned a successful HTTP response without usable text/tool calls.');
+          error.status = 502;
+          error.responseShape = {
+            keys: Object.keys(data || {}),
+            choiceKeys: Object.keys(data?.choices?.[0] || {}),
+            messageKeys: Object.keys(data?.choices?.[0]?.message || {}),
+            finishReason: extracted.finishReason,
+            model: data?.model || candidate,
+          };
+          throw error;
+        }
+        return { content: extracted.content, toolCalls: extracted.toolCalls, finishReason: extracted.finishReason, model: data?.model || candidate, provider: 'omniroute', raw: data, requestedModel: model, taskType };
       } catch (error) {
         lastError = error;
         if (!transientStatus(error?.status)) throw error;
@@ -184,4 +228,4 @@ async function health() {
 
 function clearCache() { catalogCache = { models: [], fetchedAt: 0 }; }
 
-module.exports = { listModels, hasModel, resolveModel, chat, health, isConfigured, normalizeModelId, clearCache };
+module.exports = { listModels, hasModel, resolveModel, chat, health, isConfigured, normalizeModelId, clearCache, extractInference };
