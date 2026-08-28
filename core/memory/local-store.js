@@ -57,12 +57,11 @@ function appendConversation(message) {
 
 function getRecentMessages(limit = config.recentMessageLimit, options = {}) {
   const messages = readJson(config.conversationFile, { messages: [] }).messages;
-  const excludeCurrent = options?.excludeCurrentUserMessage === true;
   const sliced = messages.slice(-limit);
+  const excludeCurrent = options?.excludeCurrentUserMessage !== false;
   if (!excludeCurrent) return sliced;
   const last = sliced[sliced.length - 1];
-  if (last?.role === 'user') return sliced.slice(0, -1);
-  return sliced;
+  return last?.role === 'user' ? sliced.slice(0, -1) : sliced;
 }
 
 function appendModelPerformance(event) {
