@@ -107,27 +107,27 @@ async function configureOmniRoute() {
   console.log(`[OmniRoute] OpenCode catalog configured: ${models.length} models.`); return { configured: true, apiKey };
 }
 
+function openLogHandles(file) {
+  fs.mkdirSync(logDir, { recursive: true });
+  try { fs.closeSync(fs.openSync(file, 'w')); } catch {}
+  return { stdout: fs.openSync(file, 'a'), stderr: fs.openSync(file, 'a') };
+}
+
 async function ensureOmniRoute() {
   if (await isPortOpen(omniHost, omniPort)) { console.log(`[OmniRoute] Existing gateway detected at http://${omniHost}:${omniPort}.`); return; }
   const resolved = resolveOmniCommand(); if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing without local gateway startup.'); return; }
-  fs.mkdirSync(logDir, { recursive: true });
-  try { fs.writeFileSync(omniLog, '', 'utf8'); } catch {}
   console.log(`[OmniRoute] Starting gateway from ${resolved.cwd}`);
 
+  const env = { ...process.env, PORT: String(omniPort), HOST: omniHost, OMNIROUTE_USE_TURBOPACK: '0' };
+  const logs = openLogHandles(omniLog);
   if (process.platform === 'win32') {
-    const env = { ...process.env, PORT: String(omniPort), HOST: omniHost, OMNIROUTE_USE_TURBOPACK: '0' };
-    omniChild = spawn('cmd.exe', ['/d', '/s', '/c', 'npm.cmd run dev'], { cwd: resolved.cwd, env, windowsHide: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
-    const logStream = fs.createWriteStream(omniLog, { flags: 'a' });
-    omniChild.stdout?.pipe(logStream);
-    omniChild.stderr?.pipe(logStream);
+    omniChild = spawn('cmd.exe', ['/d', '/s', '/c', 'npm.cmd run dev'], { cwd: resolved.cwd, env, windowsHide: true, detached: true, stdio: ['ignore', logs.stdout, logs.stderr], shell: false });
   } else {
-    omniChild = spawn('npm', ['run', 'dev'], { cwd: resolved.cwd, env: { ...process.env, PORT: String(omniPort), HOST: omniHost, OMNIROUTE_USE_TURBOPACK: '0' }, stdio: ['ignore', 'pipe', 'pipe'], detached: true, shell: false });
-    const logStream = fs.createWriteStream(omniLog, { flags: 'a' });
-    omniChild.stdout?.pipe(logStream);
-    omniChild.stderr?.pipe(logStream);
+    omniChild = spawn('npm', ['run', 'dev'], { cwd: resolved.cwd, env, stdio: ['ignore', logs.stdout, logs.stderr], detached: true, shell: false });
   }
   omniChild.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
   omniChild.unref();
+  try { fs.closeSync(logs.stdout); fs.closeSync(logs.stderr); } catch {}
 
   if (await waitForPort(omniHost, omniPort, 30000)) {
     console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`);
@@ -146,10 +146,15 @@ async function ensureOpenCode() {
   const env = { ...process.env, OPENCODE_CONFIG: configPath }; if (apiKey) env.OMNIROUTE_API_KEY = apiKey;
   console.log(`[OpenCode] Starting local model server at http://${openCodeHost}:${openCodePort} using ${resolved.command}`); const args = ['serve', '--hostname', openCodeHost, '--port', String(openCodePort)];
   if (process.platform === 'win32') {
-    openCodeChild = spawn('cmd.exe', ['/d', '/s', '/c', `${String(resolved.command).replace(/%/g, '%%')} ${args.join(' ')}`], { cwd: process.cwd(), env, windowsHide: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
-    const logStream = fs.createWriteStream(openCodeLog, { flags: 'a' }); openCodeChild.stdout?.pipe(logStream); openCodeChild.stderr?.pipe(logStream);
-  } else openCodeChild = spawn(resolved.command, args, { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'], detached: true, shell: false });
-  openCodeChild.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`)); openCodeChild.unref(); await waitForOpenCodeHealth(); console.log(`[OpenCode] Local server healthy at http://${openCodeHost}:${openCodePort}.`);
+    const logs = openLogHandles(openCodeLog);
+    openCodeChild = spawn('cmd.exe', ['/d', '/s', '/c', `${String(resolved.command).replace(/%/g, '%%')} ${args.join(' ')}`], { cwd: process.cwd(), env, windowsHide: true, detached: true, stdio: ['ignore', logs.stdout, logs.stderr], shell: false });
+    openCodeChild.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`)); openCodeChild.unref();
+    try { fs.closeSync(logs.stdout); fs.closeSync(logs.stderr); } catch {}
+  } else {
+    openCodeChild = spawn(resolved.command, args, { cwd: process.cwd(), env, stdio: 'ignore', detached: true, shell: false });
+    openCodeChild.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`)); openCodeChild.unref();
+  }
+  await waitForOpenCodeHealth(); console.log(`[OpenCode] Local server healthy at http://${openCodeHost}:${openCodePort}.`);
 }
 
 async function main() {
