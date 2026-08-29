@@ -60,8 +60,8 @@ function registerBuiltinTools() {
     inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false },
   });
 
-  registerTool('speak_text', async (input = {}) => voice.synthesize(input.text, { filename: input.filename }), {
-    description: 'Convert text into ULTRON voice audio using the configured TTS provider.', requiresConfirmation: false, risk: 'low',
+  registerTool('speak_text', async (input = {}) => voice.speakAndPlay(input.text, { filename: input.filename }), {
+    description: 'Convert text into ULTRON cloned voice audio and play it on the local Windows machine.', requiresConfirmation: false, risk: 'low',
     inputSchema: { type: 'object', properties: { text: { type: 'string' }, filename: { type: 'string' } }, required: ['text'], additionalProperties: false },
   });
 }
