@@ -22,7 +22,7 @@ function directHttpFetch(target, options = {}) {
     const body = options.body == null ? null : Buffer.from(String(options.body));
     if (body && !reqHeaders['Content-Length'] && !reqHeaders['content-length']) reqHeaders['Content-Length'] = String(body.length);
     const req = transport.request({ protocol: url.protocol, hostname: url.hostname, port: url.port || undefined, path: `${url.pathname}${url.search}`, method, headers: reqHeaders }, (res) => {
-      resolve(new Response(res, { status: res.statusCode || 0, statusText: res.statusMessage || '', headers: res.headers }))
+      resolve(new Response(res, { status: res.statusCode || 0, statusText: res.statusMessage || '', headers: res.headers }));
     });
     req.once('error', reject);
     if (options.signal) {
@@ -46,7 +46,7 @@ async function resolveModel(requestedModel = 'auto', taskType = 'general') { con
 function transientStatus(status) { return [408, 425, 429, 500, 502, 503, 504].includes(Number(status)); }
 function textFromContent(content) { if (typeof content === 'string') return content; if (Array.isArray(content)) return content.map(part => typeof part === 'string' ? part : part?.text || part?.content || part?.value || '').filter(Boolean).join(''); if (content && typeof content === 'object') return String(content.text || content.content || content.value || ''); return ''; }
 function extractInference(data) { const choice = data?.choices?.[0] || {}, message = choice?.message || {}, delta = choice?.delta || {}, output = data?.output; const candidates = [message.content, message.text, message.reasoning_content, delta.content, delta.text, delta.reasoning_content, choice.text, output?.[0]?.content, data?.output_text, data?.response, data?.content, data?.text]; const content = candidates.map(textFromContent).find(value => value.trim()) || ''; const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []; const finishReason = choice?.finish_reason || null; return { content, toolCalls, finishReason }; }
-async function chat({ messages, model = 'auto', taskType = 'general', tools = null } = {}) { if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute request requires messages.'); const resolvedModel = await resolveModel(model, taskType); const modelCandidates = [resolvedModel]; if (resolvedModel !== 'auto' && taskType) modelCandidates.push('auto'); if (!modelCandidates.includes('auto/best-fast')) modelCandidates.push('auto/best-fast'); let lastError = null; for (const candidate of [...new Set(modelCandidates)]) { const body = { model: candidate, messages, stream: false }; if (Array.isArray(tools) && tools.length) body.tools = tools; for (let attempt = 0; attempt < 2; attempt += 1) { try { const response = await request('/chat/completions', { method: 'POST', body: JSON.stringify(body) }); const data = await parseResponse(response); const extracted = extractInference(data); if (!extracted.content.trim() && !extracted.toolCalls.length) { const error = new Error('OmniRoute returned a successful HTTP response without usable text/tool calls.'); error.status = 502; error.responseShape = { keys: Object.keys(data || {}), choiceKeys: Object.keys(data?.choices?.[0] || {}), messageKeys: Object.keys(data?.choices?.[0]?.message || {}), finishReason: extracted.finishReason, model: data?.model || candidate }; throw error; } return { content: extracted.content, toolCalls: extracted.toolCalls, finishReason: extracted.finishReason, model: data?.model || candidate, provider: 'omniroute', raw: data, requestedModel: model, taskType }; } catch (error) { lastError = error; if (!transientStatus(error?.status)) throw error; if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350)); } } } throw lastError || new Error('OmniRoute inference failed.'); }
+async function chat({ messages, model = 'auto', taskType = 'general', tools = null } = {}) { if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute request requires messages.'); const resolvedModel = await resolveModel(model, taskType); const modelCandidates = [resolvedModel]; if (resolvedModel !== 'auto' && taskType) modelCandidates.push('auto'); if (!modelCandidates.includes('auto/best-fast')) modelCandidates.push('auto/best-fast'); let lastError = null; for (const candidate of [...new Set(modelCandidates)]) { const body = { model: candidate, messages, stream: false }; if (Array.isArray(tools) && tools.length) body.tools = tools; for (let attempt = 0; attempt < 2; attempt += 1) { try { const response = await request('/chat/completions', { method: 'POST', body: JSON.stringify(body) }); const data = await parseResponse(response); const extracted = extractInference(data); if (!extracted.content.trim() && !extracted.toolCalls.length) { const error = new Error('OmniRoute returned a successful HTTP response without usable text/tool calls.'); error.status = 502; throw error; } return { content: extracted.content, toolCalls: extracted.toolCalls, finishReason: extracted.finishReason, model: data?.model || candidate, provider: 'omniroute', raw: data, requestedModel: model, taskType }; } catch (error) { lastError = error; if (!transientStatus(error?.status)) throw error; if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350)); } } } throw lastError || new Error('OmniRoute inference failed.'); }
 function parseSseBlock(block) { const dataLines = String(block || '').replace(/\r/g, '').split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()); return dataLines.length ? dataLines.join('\n') : null; }
 function findSseBoundary(buffer) { const crlf = buffer.indexOf('\r\n\r\n'); const lf = buffer.indexOf('\n\n'); if (crlf < 0) return lf; if (lf < 0) return crlf; return Math.min(crlf, lf); }
 function sseBoundaryLength(buffer, index) { return buffer.slice(index, index + 4) === '\r\n\r\n' ? 4 : 2; }
@@ -55,8 +55,8 @@ async function streamChat({ messages, model = 'auto', taskType = 'general', tool
   if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute streaming request requires messages.');
   if (typeof onDelta !== 'function') throw new Error('OmniRoute streaming request requires an onDelta callback.');
   const resolvedModel = await resolveModel(model, taskType);
+  const configuredFirstTokenTimeout = Number(firstTokenTimeoutMs || process.env.ULTRON_STREAM_FIRST_TOKEN_TIMEOUT_MS || 15000);
   const qualitySensitive = ['coding', 'research', 'planning'].includes(String(taskType || '').toLowerCase());
-  const configuredFirstTokenTimeout = Number(firstTokenTimeoutMs || process.env.ULTRON_STREAM_FIRST_TOKEN_TIMEOUT_MS || (qualitySensitive ? 12000 : 5000));
   const candidates = [...new Set([resolvedModel, ...(qualitySensitive ? [] : ['auto/best-fast']), ...(resolvedModel !== 'auto' ? ['auto'] : [])])];
   let lastError = null;
 
@@ -69,7 +69,8 @@ async function streamChat({ messages, model = 'auto', taskType = 'general', tool
         const key = await apiKey();
         controller = new AbortController();
         firstTokenTimer = setTimeout(() => { if (!gotDelta) controller.abort(); }, configuredFirstTokenTimeout);
-        const response = await ultronFetch(`${baseUrl()}/chat/completions`, {
+        const url = `${baseUrl()}/chat/completions`;
+        const response = await ultronFetch(url, {
           method: 'POST', headers: headers(key, true),
           body: JSON.stringify({ model: candidate, messages, stream: true, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
           signal: controller.signal,
@@ -99,7 +100,11 @@ async function streamChat({ messages, model = 'auto', taskType = 'general', tool
         if (firstTokenTimer) clearTimeout(firstTokenTimer);
         lastError = error;
         const abortedForFirstToken = error?.name === 'AbortError' && !gotDelta;
-        if (abortedForFirstToken) { if (!qualitySensitive && candidate !== 'auto/best-fast') break; if (qualitySensitive) throw new Error(`OmniRoute first token exceeded ${configuredFirstTokenTimeout}ms for ${candidate}.`); }
+        if (abortedForFirstToken) {
+          if (attempt === 0) { await new Promise(resolve => setTimeout(resolve, 300)); continue; }
+          if (qualitySensitive) throw new Error(`OmniRoute first token exceeded ${configuredFirstTokenTimeout}ms for ${candidate}.`);
+          break;
+        }
         if (!transientStatus(error?.status)) throw error;
         if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350));
       }
