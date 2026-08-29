@@ -129,9 +129,16 @@ async function ensureOmniRoute() {
   omniChild.unref();
   try { fs.closeSync(logHandle); } catch {}
 
-  if (await waitForPort(omniHost, omniPort, 180000)) { console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`); return; }
-  const tail = readTail(omniLog);
-  throw new Error(`[OmniRoute] Gateway did not become reachable at http://${omniHost}:${omniPort}. Check ${omniLog}.${tail ? `\nLast OmniRoute output:\n${tail}` : '\nOmniRoute produced no output before exiting.'}`);
+  // Do not block ULTRON boot on OmniRoute's Next.js cold compilation. Keep checking in the background.
+  waitForPort(omniHost, omniPort, 180000).then((ready) => {
+    if (ready) console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`);
+    else {
+      const tail = readTail(omniLog);
+      console.error(`[OmniRoute] Gateway did not become reachable within 180s. Check ${omniLog}.${tail ? `\nLast OmniRoute output:\n${tail}` : ''}`);
+    }
+  }).catch((error) => console.error(`[OmniRoute] Readiness monitor failed: ${error.message}`));
+
+  console.log('[OmniRoute] Background startup launched; continuing ULTRON boot.');
 }
 
 async function ensureOpenCode() {
