@@ -52,6 +52,35 @@ async function cloneVoice(options = {}) {
   return { ok: true, voiceId: response._id, state: response.state, title: response.title };
 }
 
+async function streamToBuffer(value) {
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  if (value && typeof value.arrayBuffer === 'function') return Buffer.from(await value.arrayBuffer());
+
+  if (value && typeof value.getReader === 'function') {
+    const reader = value.getReader();
+    const chunks = [];
+    while (true) {
+      const { done, value: chunk } = await reader.read();
+      if (done) break;
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  if (value && typeof value.on === 'function') {
+    return await new Promise((resolve, reject) => {
+      const chunks = [];
+      value.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      value.on('end', () => resolve(Buffer.concat(chunks)));
+      value.on('error', reject);
+    });
+  }
+
+  throw new TypeError(`Unsupported Fish Audio response type: ${Object.prototype.toString.call(value)}`);
+}
+
 async function synthesize(text, options = {}) {
   const input = String(text || '').trim();
   if (!input) throw new Error('TTS requires text.');
@@ -76,7 +105,7 @@ async function synthesize(text, options = {}) {
   fs.mkdirSync(outputDir, { recursive: true });
   const ext = (options.format || 'mp3').toLowerCase() === 'wav' ? 'wav' : 'mp3';
   const outputPath = path.resolve(outputDir, options.filename || `ultron-${Date.now()}.${ext}`);
-  const buffer = Buffer.isBuffer(audio) ? audio : Buffer.from(audio);
+  const buffer = await streamToBuffer(audio);
   fs.writeFileSync(outputPath, buffer);
   const processed = await processMetallic(outputPath, outputPath);
   const finalPath = processed.path || outputPath;
@@ -93,4 +122,4 @@ async function synthesize(text, options = {}) {
   };
 }
 
-module.exports = { synthesize, cloneVoice, getApiKey, readState, MODEL };
+module.exports = { synthesize, cloneVoice, getApiKey, readState, MODEL, streamToBuffer };
