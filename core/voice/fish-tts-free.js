@@ -32,6 +32,23 @@ async function client() {
   return { client: new mod.FishAudioClient({ apiKey }), apiKey, mod };
 }
 
+function cleanSpeechText(text) {
+  let value = String(text || '').normalize('NFKC');
+  value = value.replace(/```[\s\S]*?```/g, ' ');
+  value = value.replace(/https?:\/\/\S+/gi, ' link ');
+  value = value.replace(/www\.\S+/gi, ' link ');
+  value = value.replace(/&/g, ' and ');
+  value = value.replace(/%/g, ' percent ');
+  value = value.replace(/\$/g, ' dollars ');
+  value = value.replace(/#/g, ' number ');
+  value = value.replace(/\+/g, ' plus ');
+  value = value.replace(/[*_~^`|\\=[\]{}<>/]/g, ' ');
+  value = value.replace(/[^\p{L}\p{N}\s.,!?;:'"()-]/gu, ' ');
+  value = value.replace(/([.!?,;:])\1+/g, '$1');
+  value = value.replace(/\s+/g, ' ').trim();
+  return value.slice(0, 4096);
+}
+
 async function cloneVoice(options = {}) {
   const { client: fish } = await client();
   const reference = path.resolve(options.referencePath || config.referencePath);
@@ -57,18 +74,11 @@ async function streamToBuffer(value) {
   if (value instanceof Uint8Array) return Buffer.from(value);
   if (value instanceof ArrayBuffer) return Buffer.from(value);
   if (value && typeof value.arrayBuffer === 'function') return Buffer.from(await value.arrayBuffer());
-
   if (value && typeof value.getReader === 'function') {
-    const reader = value.getReader();
-    const chunks = [];
-    while (true) {
-      const { done, value: chunk } = await reader.read();
-      if (done) break;
-      if (chunk) chunks.push(Buffer.from(chunk));
-    }
+    const reader = value.getReader(); const chunks = [];
+    while (true) { const { done, value: chunk } = await reader.read(); if (done) break; if (chunk) chunks.push(Buffer.from(chunk)); }
     return Buffer.concat(chunks);
   }
-
   if (value && typeof value.on === 'function') {
     return await new Promise((resolve, reject) => {
       const chunks = [];
@@ -77,20 +87,20 @@ async function streamToBuffer(value) {
       value.on('error', reject);
     });
   }
-
   throw new TypeError(`Unsupported Fish Audio response type: ${Object.prototype.toString.call(value)}`);
 }
 
 async function synthesize(text, options = {}) {
-  const input = String(text || '').trim();
-  if (!input) throw new Error('TTS requires text.');
+  const input = cleanSpeechText(text);
+  if (!input) throw new Error('TTS text became empty after speech cleanup.');
+
   const { client: fish } = await client();
   const state = readState();
   const voiceId = String(options.referenceId || state.fishVoiceId || process.env.ULTRON_FISH_REFERENCE_ID || '').trim();
   if (!voiceId) throw new Error('ULTRON Fish voice clone is not configured. Run npm run core:voice-setup with FISH_API_KEY available.');
 
   const audio = await fish.textToSpeech.convert({
-    text: input.slice(0, 4096),
+    text: input,
     reference_id: voiceId,
     format: options.format || 'mp3',
     latency: options.latency || 'balanced',
@@ -109,17 +119,7 @@ async function synthesize(text, options = {}) {
   fs.writeFileSync(outputPath, buffer);
   const processed = await processMetallic(outputPath, outputPath);
   const finalPath = processed.path || outputPath;
-  return {
-    ok: true,
-    provider: 'fish-audio-s2.1-pro-free',
-    model: MODEL,
-    referenceId: voiceId,
-    referencePath: config.referencePath,
-    path: finalPath,
-    bytes: fs.statSync(finalPath).size,
-    metallicApplied: processed.applied,
-    metallicMix: config.metallicMix,
-  };
+  return { ok: true, provider: 'fish-audio-s2.1-pro-free', model: MODEL, referenceId: voiceId, referencePath: config.referencePath, path: finalPath, bytes: fs.statSync(finalPath).size, metallicApplied: processed.applied, metallicMix: config.metallicMix };
 }
 
-module.exports = { synthesize, cloneVoice, getApiKey, readState, MODEL, streamToBuffer };
+module.exports = { synthesize, cloneVoice, getApiKey, readState, MODEL, streamToBuffer, cleanSpeechText };
