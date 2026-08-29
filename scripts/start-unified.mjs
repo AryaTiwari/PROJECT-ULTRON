@@ -18,6 +18,7 @@ const omniDir = process.env.OMNIROUTE_DIR || (process.platform === 'win32' && pr
 const configPath = path.resolve(process.env.ULTRON_OPENCODE_CONFIG || path.join(process.cwd(), '.ultron', 'opencode-omniroute.json'));
 const logDir = path.resolve(process.env.ULTRON_RUNTIME_LOG_DIR || path.join(process.cwd(), '.ultron'));
 const openCodeLog = path.join(logDir, 'opencode.log');
+const omniLog = path.join(logDir, 'omniroute.log');
 let openCodeChild = null;
 let omniChild = null;
 
@@ -40,7 +41,7 @@ async function waitForPort(host, port, timeoutMs = 30000) {
   return false;
 }
 
-async function waitForOpenCodeHealth(timeoutMs = 30000) {
+async function waitForOpenCodeHealth(timeoutMs = 120000) {
   const started = Date.now();
   const url = `http://${openCodeHost}:${openCodePort}/global/health`;
   let lastError = '';
@@ -98,27 +99,58 @@ async function configureOmniRoute() {
 }
 
 async function ensureOmniRoute() {
-  if (await isPortOpen(omniHost, omniPort)) { console.log(`[OmniRoute] Existing gateway detected at http://${omniHost}:${omniPort}.`); return; }
+  if (await isPortOpen(omniHost, omniPort)) {
+    console.log(`[OmniRoute] Existing gateway detected at http://${omniHost}:${omniPort}.`);
+    return;
+  }
   const resolved = resolveOmniCommand();
-  if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing without local gateway startup.'); return; }
+  if (!resolved) {
+    console.warn('[OmniRoute] Gateway not found locally; continuing without local gateway startup.');
+    return;
+  }
   console.log(`[OmniRoute] Starting gateway from ${resolved.cwd}`);
   fs.mkdirSync(logDir, { recursive: true });
-  const omniLog = path.join(logDir, 'omniroute.log');
   try { fs.writeFileSync(omniLog, '', 'utf8'); } catch {}
+
   if (process.platform === 'win32') {
-    const command = `npm.cmd run dev > "${omniLog.replace(/"/g, '""')}" 2>&1`;
-    omniChild = spawn('cmd.exe', ['/d', '/c', command], { cwd: resolved.cwd, stdio: 'ignore', detached: true, windowsHide: true, shell: false });
+    const childEnv = {
+      ...process.env,
+      PORT: String(omniPort),
+      HOST: omniHost,
+      OMNIROUTE_USE_TURBOPACK: '0',
+    };
+    omniChild = spawn('cmd.exe', ['/d', '/c', `set "PORT=${childEnv.PORT}"&& set "HOST=${childEnv.HOST}"&& set "OMNIROUTE_USE_TURBOPACK=0"&& npm.cmd run dev > "${omniLog}" 2>&1`], {
+      cwd: resolved.cwd,
+      env: childEnv,
+      stdio: 'ignore',
+      detached: true,
+      windowsHide: true,
+      shell: false,
+    });
   } else {
-    omniChild = spawn('npm', ['run', 'dev'], { cwd: resolved.cwd, stdio: 'ignore', detached: true, shell: false });
+    omniChild = spawn('npm', ['run', 'dev'], {
+      cwd: resolved.cwd,
+      env: { ...process.env, PORT: String(omniPort), HOST: omniHost },
+      stdio: 'ignore',
+      detached: true,
+      shell: false,
+    });
   }
+
   omniChild.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
   omniChild.unref();
-  if (await waitForPort(omniHost, omniPort, 30000)) console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`);
-  else {
-    let tail = '';
-    try { tail = fs.readFileSync(omniLog, 'utf8').slice(-2500); } catch {}
-    throw new Error(`[OmniRoute] Gateway did not become reachable at http://${omniHost}:${omniPort}. Check .ultron\\omniroute.log.${tail ? `\nLast log output:\n${tail}` : ''}`);
+
+  if (await waitForPort(omniHost, omniPort, 30000)) {
+    console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`);
+    return;
   }
+
+  let tail = '';
+  try {
+    const raw = fs.readFileSync(omniLog, 'utf8');
+    tail = raw.slice(-4000);
+  } catch {}
+  throw new Error(`[OmniRoute] Gateway did not become reachable at http://${omniHost}:${omniPort}. Check ${omniLog}.${tail ? `\nLast OmniRoute log output:\n${tail}` : ''}`);
 }
 
 async function ensureOpenCode() {
