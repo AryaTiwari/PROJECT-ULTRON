@@ -23,12 +23,12 @@ async function processMetallic(inputPath, outputPath = inputPath) {
   const feedback = Math.min(0.2, mix * 0.75).toFixed(3);
   const wet = Math.min(0.45, mix * 1.8).toFixed(3);
   const dry = (1 - Number(wet)).toFixed(3);
-  const filter = `asplit=2[a][b];[a]adelay=${delayMs}|${delayMs},aecho=1:0.8:${delayMs}:${feedback}[wet];[b][wet]amix=inputs=2:weights=${dry} ${wet}:normalize=0`;
+  const filter = `asplit=2[a][b];[a]adelay=${delayMs}|${delayMs},aecho=1:0.8:${delayMs}:${feedback}[wet];[b][wet]amix=inputs=2:weights=${dry} ${wet}:normalize=0,volume=2.2,alimiter=limit=0.95`;
 
   try {
     await execFileAsync('ffmpeg', ['-y', '-i', inputPath, '-filter_complex', filter, '-codec:a', 'libmp3lame', '-q:a', '3', tempPath], { windowsHide: true, timeout: 120000, maxBuffer: 1024 * 1024 });
     fs.renameSync(tempPath, outputPath);
-    return { applied: true, path: outputPath, mix };
+    return { applied: true, path: outputPath, mix, loudnessBoost: 2.2 };
   } finally {
     if (fs.existsSync(tempPath) && tempPath !== outputPath) fs.rmSync(tempPath, { force: true });
   }
