@@ -32,7 +32,7 @@ function isPortOpen(host, port) {
   });
 }
 
-async function waitForPort(host, port, timeoutMs = 30000) {
+async function waitForPort(host, port, timeoutMs = 180000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (await isPortOpen(host, port)) return true;
@@ -108,6 +108,12 @@ async function configureOmniRoute() {
   console.log(`[OmniRoute] OpenCode catalog configured: ${models.length} models.`); return { configured: true, apiKey };
 }
 
+function openLogHandles(file) {
+  fs.mkdirSync(logDir, { recursive: true });
+  try { fs.closeSync(fs.openSync(file, 'w')); } catch {}
+  return { stdout: fs.openSync(file, 'a'), stderr: fs.openSync(file, 'a') };
+}
+
 async function ensureOmniRoute() {
   if (await isPortOpen(omniHost, omniPort)) { console.log(`[OmniRoute] Existing gateway detected at http://${omniHost}:${omniPort}.`); return; }
   const resolved = resolveOmniCommand(); if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing without local gateway startup.'); return; }
@@ -118,17 +124,12 @@ async function ensureOmniRoute() {
   const logHandle = fs.openSync(omniLog, 'a');
   const env = { ...process.env, PORT: String(omniPort), HOST: omniHost, OMNIROUTE_USE_TURBOPACK: '0', NEXT_TELEMETRY_DISABLED: '1' };
 
-  if (process.platform === 'win32') {
-    // Start OmniRoute's actual Node entrypoint directly. This avoids npm.cmd and prevents a visible npm console window.
-    omniChild = spawn(process.execPath, ['--max-old-space-size=8192', resolved.entry, 'dev'], { cwd: resolved.cwd, env, windowsHide: true, detached: true, stdio: ['ignore', logHandle, logHandle], shell: false });
-  } else {
-    omniChild = spawn(process.execPath, ['--max-old-space-size=8192', resolved.entry, 'dev'], { cwd: resolved.cwd, env, stdio: ['ignore', logHandle, logHandle], detached: true, shell: false });
-  }
+  omniChild = spawn(process.execPath, ['--max-old-space-size=8192', resolved.entry, 'dev'], { cwd: resolved.cwd, env, windowsHide: process.platform === 'win32', detached: true, stdio: ['ignore', logHandle, logHandle], shell: false });
   omniChild.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
   omniChild.unref();
   try { fs.closeSync(logHandle); } catch {}
 
-  if (await waitForPort(omniHost, omniPort, 45000)) { console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`); return; }
+  if (await waitForPort(omniHost, omniPort, 180000)) { console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`); return; }
   const tail = readTail(omniLog);
   throw new Error(`[OmniRoute] Gateway did not become reachable at http://${omniHost}:${omniPort}. Check ${omniLog}.${tail ? `\nLast OmniRoute output:\n${tail}` : '\nOmniRoute produced no output before exiting.'}`);
 }
