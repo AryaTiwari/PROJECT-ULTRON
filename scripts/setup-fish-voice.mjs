@@ -1,25 +1,29 @@
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
+import fs from 'node:fs';
+import path from 'node:path';
 
 const root = path.resolve(process.cwd());
 const voiceDir = path.resolve(process.env.ULTRON_VOICE_ROOT || '.ultron/voice');
 const reference = path.join(voiceDir, 'ultron-reference.mp3');
 const statePath = path.resolve(process.env.ULTRON_VOICE_CLONE_STATE || path.join(voiceDir, 'voice-clone.json'));
-const referenceUrl = process.env.ULTRON_VOICE_REFERENCE_URL || 'https://raw.githubusercontent.com/AryaTiwari/Interface1/main/Ultron-2026-08-27-11-05-%5Bsoft%5D-I-was-designed-to-%5Bemphasis%5D-save-the-wor.mp3';
+const referenceUrl = process.env.ULTRON_VOICE_REFERENCE_URL || 'https://raw.githubusercontent.com/AryaTiwari/Interface1/main/Ultron-2026-08-27-11-05-%5Bsoft%5D-I-was-designed-to-[emphasis]-save-the-wor.mp3';
 
-function getKeyFromEnv() { return String(process.env.FISH_API_KEY || '').trim(); }
+function getKeyFromEnv() {
+  return String(process.env.FISH_API_KEY || '').trim();
+}
 
 async function getStoredKey() {
   try {
-    const { load } = require('../core/credentials/local-store');
-    const stored = await load();
+    const mod = await import('../core/credentials/local-store.js');
+    const stored = await mod.load();
     return String(stored?.FISH_API_KEY || '').trim();
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
 
 async function main() {
   fs.mkdirSync(voiceDir, { recursive: true });
+
   if (!fs.existsSync(reference)) {
     const response = await fetch(referenceUrl, { headers: { 'User-Agent': 'PROJECT-ULTRON/Mark2' } });
     if (!response.ok) throw new Error(`Unable to fetch ULTRON voice reference: HTTP ${response.status}`);
@@ -37,7 +41,7 @@ async function main() {
     state.voiceProfileReady = false;
     fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf8');
     console.log('ULTRON voice reference is ready. No FISH_API_KEY found; NVIDIA remains the active fallback.');
-    console.log('Add a free Fish Audio developer key to enable the cloned S2.1 Pro Free voice.');
+    console.log('Add a Fish Audio developer key to enable the cloned S2.1 Pro Free voice.');
     return;
   }
 
@@ -64,4 +68,7 @@ async function main() {
   console.log(JSON.stringify({ ok: true, provider: state.provider, model: state.model, voiceId, referencePath: reference }, null, 2));
 }
 
-main().catch(error => { console.error(JSON.stringify({ ok: false, error: error?.message || String(error) }, null, 2)); process.exitCode = 1; });
+main().catch(error => {
+  console.error(JSON.stringify({ ok: false, error: error?.message || String(error) }, null, 2));
+  process.exitCode = 1;
+});
