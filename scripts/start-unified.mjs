@@ -31,7 +31,7 @@ function isPortOpen(host, port) {
   });
 }
 
-async function waitForPort(host, port, timeoutMs = 120000) {
+async function waitForPort(host, port, timeoutMs = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (await isPortOpen(host, port)) return true;
@@ -40,7 +40,7 @@ async function waitForPort(host, port, timeoutMs = 120000) {
   return false;
 }
 
-async function waitForOpenCodeHealth(timeoutMs = 120000) {
+async function waitForOpenCodeHealth(timeoutMs = 30000) {
   const started = Date.now();
   const url = `http://${openCodeHost}:${openCodePort}/global/health`;
   let lastError = '';
@@ -99,12 +99,26 @@ async function configureOmniRoute() {
 
 async function ensureOmniRoute() {
   if (await isPortOpen(omniHost, omniPort)) { console.log(`[OmniRoute] Existing gateway detected at http://${omniHost}:${omniPort}.`); return; }
-  const resolved = resolveOmniCommand(); if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing without local gateway startup.'); return; }
+  const resolved = resolveOmniCommand();
+  if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing without local gateway startup.'); return; }
   console.log(`[OmniRoute] Starting gateway from ${resolved.cwd}`);
-  if (process.platform === 'win32') { const omniLog = path.join(logDir, 'omniroute.log'); const psCommand = `$ErrorActionPreference='Continue'; Set-Location -LiteralPath '${resolved.cwd.replace(/'/g, "''")}'; & npm.cmd run dev *> '${omniLog.replace(/'/g, "''")}'`; const outer = `Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',${JSON.stringify(psCommand)} -WorkingDirectory '${resolved.cwd.replace(/'/g, "''")}'`; omniChild = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', outer], { stdio: 'ignore', windowsHide: true, shell: false }); }
-  else omniChild = spawn('npm', ['run', 'dev'], { cwd: resolved.cwd, stdio: 'ignore', detached: true, shell: false });
-  omniChild.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`)); omniChild.unref();
-  if (await waitForPort(omniHost, omniPort)) console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`); else throw new Error(`[OmniRoute] Gateway did not become reachable at http://${omniHost}:${omniPort}. Check .ultron\\omniroute.log.`);
+  fs.mkdirSync(logDir, { recursive: true });
+  const omniLog = path.join(logDir, 'omniroute.log');
+  try { fs.writeFileSync(omniLog, '', 'utf8'); } catch {}
+  if (process.platform === 'win32') {
+    const command = `npm.cmd run dev > "${omniLog.replace(/"/g, '""')}" 2>&1`;
+    omniChild = spawn('cmd.exe', ['/d', '/c', command], { cwd: resolved.cwd, stdio: 'ignore', detached: true, windowsHide: true, shell: false });
+  } else {
+    omniChild = spawn('npm', ['run', 'dev'], { cwd: resolved.cwd, stdio: 'ignore', detached: true, shell: false });
+  }
+  omniChild.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
+  omniChild.unref();
+  if (await waitForPort(omniHost, omniPort, 30000)) console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`);
+  else {
+    let tail = '';
+    try { tail = fs.readFileSync(omniLog, 'utf8').slice(-2500); } catch {}
+    throw new Error(`[OmniRoute] Gateway did not become reachable at http://${omniHost}:${omniPort}. Check .ultron\\omniroute.log.${tail ? `\nLast log output:\n${tail}` : ''}`);
+  }
 }
 
 async function ensureOpenCode() {
