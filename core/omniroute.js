@@ -1,3 +1,6 @@
+const http = require('node:http');
+const https = require('node:https');
+const { URL } = require('node:url');
 const { config } = require('./config');
 const { load: loadCredentials } = require('./credentials/local-store');
 
@@ -9,7 +12,29 @@ let catalogCache = { models: [], fetchedAt: 0 };
 function baseUrl() { return String(config.router.baseUrl || 'http://127.0.0.1:20128/v1').replace(/\/$/, ''); }
 async function apiKey() { if (config.router.apiKey) return config.router.apiKey; try { const saved = await loadCredentials(); return String(saved.OMNIROUTE_API_KEY || saved.ULTRON_OMNIROUTE_API_KEY || '').trim(); } catch { return ''; } }
 function headers(key, includeJson = false) { const out = includeJson ? { 'Content-Type': 'application/json' } : {}; if (key) out.Authorization = `Bearer ${key}`; return out; }
-async function request(pathname, options = {}) { const key = await apiKey(); const controller = new AbortController(); const timeoutMs = Number(options.timeoutMs || config.router.timeoutMs || 120000); const timer = setTimeout(() => controller.abort(), timeoutMs); try { return await fetch(`${baseUrl()}${pathname}`, { method: options.method || 'GET', headers: { ...headers(key, options.body != null), ...(options.headers || {}) }, body: options.body, signal: controller.signal }); } catch (error) { if (error?.name === 'AbortError') throw new Error(`OmniRoute request timed out after ${timeoutMs}ms.`); throw new Error(`OmniRoute connection failed: ${error?.message || String(error)}`); } finally { clearTimeout(timer); } }
+function isLoopbackUrl(target) { try { const host = new URL(target).hostname.toLowerCase(); return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'; } catch { return false; } }
+function directHttpFetch(target, options = {}) {
+  return new Promise((resolve, reject) => {
+    let url; try { url = new URL(target); } catch (error) { reject(error); return; }
+    const transport = url.protocol === 'https:' ? https : http;
+    const method = options.method || 'GET';
+    const reqHeaders = { ...(options.headers || {}) };
+    const body = options.body == null ? null : Buffer.from(String(options.body));
+    if (body && !reqHeaders['Content-Length'] && !reqHeaders['content-length']) reqHeaders['Content-Length'] = String(body.length);
+    const req = transport.request({ protocol: url.protocol, hostname: url.hostname, port: url.port || undefined, path: `${url.pathname}${url.search}`, method, headers: reqHeaders }, (res) => {
+      resolve(new Response(res, { status: res.statusCode || 0, statusText: res.statusMessage || '', headers: res.headers }))
+    });
+    req.once('error', reject);
+    if (options.signal) {
+      const abort = () => { try { req.destroy(new Error('The operation was aborted.')); } catch {} };
+      if (options.signal.aborted) abort(); else options.signal.addEventListener('abort', abort, { once: true });
+    }
+    if (body) req.write(body);
+    req.end();
+  });
+}
+async function ultronFetch(target, options = {}) { return isLoopbackUrl(target) ? directHttpFetch(target, options) : fetch(target, options); }
+async function request(pathname, options = {}) { const key = await apiKey(); const controller = new AbortController(); const timeoutMs = Number(options.timeoutMs || config.router.timeoutMs || 120000); const timer = setTimeout(() => controller.abort(), timeoutMs); try { const target = `${baseUrl()}${pathname}`; return await ultronFetch(target, { method: options.method || 'GET', headers: { ...headers(key, options.body != null), ...(options.headers || {}) }, body: options.body, signal: controller.signal }); } catch (error) { if (error?.name === 'AbortError') throw new Error(`OmniRoute request timed out after ${timeoutMs}ms.`); throw new Error(`OmniRoute connection failed: ${error?.cause?.message || error?.message || String(error)}`); } finally { clearTimeout(timer); } }
 async function parseResponse(response) { const raw = await response.text(); let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; } if (!response.ok) { const error = new Error(`OmniRoute HTTP ${response.status}: ${raw.slice(0, 1200)}`); error.status = response.status; error.raw = raw; throw error; } return data; }
 function normalizeModelId(value) { const model = String(value || '').trim(); return model.toLowerCase().startsWith('omniroute/') ? model.slice('omniroute/'.length) : model; }
 function modelIds(payload) { const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : []; return raw.map(item => typeof item === 'string' ? item : item?.id || item?.model || item?.name || '').map(String).map(s => s.trim()).filter(Boolean); }
@@ -43,20 +68,14 @@ async function streamChat({ messages, model = 'auto', taskType = 'general', tool
       try {
         const key = await apiKey();
         controller = new AbortController();
-        firstTokenTimer = setTimeout(() => {
-          if (!gotDelta) controller.abort();
-        }, configuredFirstTokenTimeout);
-        const response = await fetch(`${baseUrl()}/chat/completions`, {
+        firstTokenTimer = setTimeout(() => { if (!gotDelta) controller.abort(); }, configuredFirstTokenTimeout);
+        const response = await ultronFetch(`${baseUrl()}/chat/completions`, {
           method: 'POST', headers: headers(key, true),
           body: JSON.stringify({ model: candidate, messages, stream: true, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
           signal: controller.signal,
         });
         clearTimeout(firstTokenTimer); firstTokenTimer = null;
-        if (!response.ok) {
-          const raw = await response.text();
-          const error = new Error(`OmniRoute HTTP ${response.status}: ${raw.slice(0, 1200)}`);
-          error.status = response.status; throw error;
-        }
+        if (!response.ok) { const raw = await response.text(); const error = new Error(`OmniRoute HTTP ${response.status}: ${raw.slice(0, 1200)}`); error.status = response.status; throw error; }
         if (!response.body) throw new Error('OmniRoute streaming response has no body.');
         const decoder = new TextDecoder(); let buffer = ''; let fullText = ''; let toolCalls = []; let finishReason = null;
         const consume = (block) => {
@@ -71,10 +90,7 @@ async function streamChat({ messages, model = 'auto', taskType = 'general', tool
         for await (const chunk of response.body) {
           buffer += decoder.decode(chunk, { stream: true });
           let boundary;
-          while ((boundary = findSseBoundary(buffer)) >= 0) {
-            const separatorLength = sseBoundaryLength(buffer, boundary);
-            const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + separatorLength); consume(block);
-          }
+          while ((boundary = findSseBoundary(buffer)) >= 0) { const separatorLength = sseBoundaryLength(buffer, boundary); const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + separatorLength); consume(block); }
         }
         buffer += decoder.decode(); if (buffer.trim()) consume(buffer);
         if (!gotDelta && !toolCalls.length) { const error = new Error('OmniRoute streaming returned no usable content.'); error.status = 502; throw error; }
@@ -83,10 +99,7 @@ async function streamChat({ messages, model = 'auto', taskType = 'general', tool
         if (firstTokenTimer) clearTimeout(firstTokenTimer);
         lastError = error;
         const abortedForFirstToken = error?.name === 'AbortError' && !gotDelta;
-        if (abortedForFirstToken) {
-          if (!qualitySensitive && candidate !== 'auto/best-fast') break;
-          if (qualitySensitive) throw new Error(`OmniRoute first token exceeded ${configuredFirstTokenTimeout}ms for ${candidate}.`);
-        }
+        if (abortedForFirstToken) { if (!qualitySensitive && candidate !== 'auto/best-fast') break; if (qualitySensitive) throw new Error(`OmniRoute first token exceeded ${configuredFirstTokenTimeout}ms for ${candidate}.`); }
         if (!transientStatus(error?.status)) throw error;
         if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350));
       }
