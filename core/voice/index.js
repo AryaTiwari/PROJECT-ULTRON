@@ -5,6 +5,10 @@ const { VoicePipeline } = require('./voice-pipeline');
 const { playLocalAudio } = require('./playback');
 const { WAKE_WORD, detect, extractCommand } = require('./wake-word');
 
+let lastPlaybackKey = '';
+let lastPlaybackAt = 0;
+const DUPLICATE_WINDOW_MS = 8000;
+
 function status() {
   return {
     provider: config.provider,
@@ -25,8 +29,16 @@ async function speak(text, options = {}) {
 }
 
 async function speakAndPlay(text, options = {}) {
+  const normalized = String(text || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const now = Date.now();
+  const dedupeKey = normalized;
+  if (dedupeKey && dedupeKey === lastPlaybackKey && now - lastPlaybackAt < DUPLICATE_WINDOW_MS) {
+    return { ok: true, deduplicated: true, reason: 'duplicate_voice_request', text: normalized };
+  }
   const audio = await speak(text, options);
   if (!audio?.path) return audio;
+  lastPlaybackKey = dedupeKey;
+  lastPlaybackAt = Date.now();
   const playback = await playLocalAudio(audio.path, config.outputDir);
   return { ...audio, playback };
 }
