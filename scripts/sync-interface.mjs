@@ -25,21 +25,14 @@ function httpsGet(url, headers = {}) {
 }
 
 async function fetchText(url) {
-  const response = await httpsGet(url, {
-    'User-Agent': 'PROJECT-ULTRON-interface-sync',
-    'Accept': '*/*',
-  });
+  const response = await httpsGet(url, { 'User-Agent': 'PROJECT-ULTRON-interface-sync', 'Accept': '*/*' });
   if (response.statusCode !== 200) throw new Error(`Interface source download failed: HTTP ${response.statusCode} for ${url}`);
   return response.body;
 }
 
 async function fetchGithubContents(repository, ref, relativePath) {
   const apiUrl = `https://api.github.com/repos/${repository}/contents/${relativePath.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(ref)}`;
-  const response = await httpsGet(apiUrl, {
-    'User-Agent': 'PROJECT-ULTRON-interface-sync',
-    'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  });
+  const response = await httpsGet(apiUrl, { 'User-Agent': 'PROJECT-ULTRON-interface-sync', 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' });
   if (response.statusCode !== 200) throw new Error(`GitHub Contents API failed: HTTP ${response.statusCode} for ${apiUrl}`);
   let data;
   try { data = JSON.parse(response.body); } catch { throw new Error(`GitHub Contents API returned non-JSON data for ${relativePath}.`); }
@@ -49,15 +42,11 @@ async function fetchGithubContents(repository, ref, relativePath) {
 
 async function fetchInterfaceFile(repository, ref, relativePath) {
   const rawUrl = `https://raw.githubusercontent.com/${repository}/${ref}/${relativePath}`;
-  try {
-    return await fetchText(rawUrl);
-  } catch (rawError) {
+  try { return await fetchText(rawUrl); }
+  catch (rawError) {
     console.warn(`[Interface] Raw download failed for ${relativePath}; using GitHub Contents API fallback.`);
-    try {
-      return await fetchGithubContents(repository, ref, relativePath);
-    } catch (apiError) {
-      throw new Error(`${rawError.message} | API fallback failed: ${apiError.message}`);
-    }
+    try { return await fetchGithubContents(repository, ref, relativePath); }
+    catch (apiError) { throw new Error(`${rawError.message} | API fallback failed: ${apiError.message}`); }
   }
 }
 
@@ -75,128 +64,8 @@ export default defineConfig({
 });
 `;
 
-const STREAM_SERVICE_MARKER = '// ULTRON_MARK2_STREAMING_BRIDGE';
-const streamServiceCode = `
-${STREAM_SERVICE_MARKER}
-export type UltronStreamEvent = { type: 'meta' | 'delta' | 'final' | 'error'; text?: string; result?: any; error?: string; status?: number | null; partial?: boolean; [key: string]: any };
-
-export async function sendUltronQueryStream(prompt: string, conversationHistory: { role: 'user' | 'model'; content: string }[] = [], activeMood = 'CALM', userDirectives = '', onEvent: (event: UltronStreamEvent) => void = () => {}) {
-  let sawDelta = false;
-  let controller: AbortController | null = null;
-  let firstTokenTimer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    controller = new AbortController();
-    const firstTokenTimeoutMs = Number(import.meta.env.VITE_ULTRON_FIRST_TOKEN_TIMEOUT_MS || 6500);
-    firstTokenTimer = setTimeout(() => {
-      if (!sawDelta) controller?.abort();
-    }, firstTokenTimeoutMs);
-
-    const res = await fetch(\`${'${CORE_URL}'}/api/chat/stream\`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-      body: JSON.stringify({ message: prompt, source: 'interface', conversationHistory, userDirectives }),
-      signal: controller.signal,
-    });
-    if (!res.ok || !res.body) throw new Error(\`ULTRON streaming request failed (\${res.status})\`);
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let finalResult: any = null;
-
-    const consume = (block: string) => {
-      const lines = block.replace(/\\r/g, '').split('\\n');
-      let type = 'message';
-      const data: string[] = [];
-      for (const line of lines) {
-        if (line.startsWith('event:')) type = line.slice(6).trim();
-        else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
-      }
-      if (!data.length) return;
-      let payload: any = {};
-      try { payload = JSON.parse(data.join('\\n')); } catch { payload = { text: data.join('\\n') }; }
-      payload.type = payload.type || type;
-      if (payload.type === 'delta') { sawDelta = true; if (firstTokenTimer) clearTimeout(firstTokenTimer); }
-      if (payload.type === 'final') finalResult = payload.result || payload;
-      onEvent(payload);
-    };
-
-    const findBoundary = (value: string) => {
-      const lf = value.indexOf('\\n\\n');
-      const crlf = value.indexOf('\\r\\n\\r\\n');
-      if (lf < 0) return { index: crlf, length: crlf >= 0 ? 4 : 0 };
-      if (crlf < 0) return { index: lf, length: 2 };
-      return lf <= crlf ? { index: lf, length: 2 } : { index: crlf, length: 4 };
-    };
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      while (true) {
-        const boundary = findBoundary(buffer);
-        if (boundary.index < 0) break;
-        consume(buffer.slice(0, boundary.index));
-        buffer = buffer.slice(boundary.index + boundary.length);
-      }
-    }
-    buffer += decoder.decode();
-    if (buffer.trim()) consume(buffer);
-    if (firstTokenTimer) clearTimeout(firstTokenTimer);
-    if (finalResult) return normalizeStreamResult(finalResult, activeMood, conversationHistory, userDirectives);
-    throw new Error('ULTRON streaming ended without a final response.');
-  } catch (error: any) {
-    if (firstTokenTimer) clearTimeout(firstTokenTimer);
-    if (!sawDelta) return sendUltronQuery(prompt, conversationHistory, activeMood, userDirectives);
-    throw error;
-  }
-}
-
-function normalizeStreamResult(result: any, activeMood: string, conversationHistory: { role: 'user' | 'model'; content: string }[], userDirectives: string) {
-  const fallbackMood = normalizeMood(activeMood, 'CALM');
-  const mood = normalizeMood(result?.mood, fallbackMood);
-  const responseText = String(result?.response ?? result?.text ?? result?.error ?? '').trim();
-  const pipeline = normalizePipeline(result);
-  return { ...result, text: responseText || 'ULTRON returned no displayable response.', response: responseText || 'ULTRON returned no displayable response.', mood, conversationHistory, userDirectives, pipeline, toolUsed: result?.toolUsed || result?.tool_result?.tool || null };
-}
-`;
-
-async function patchIntegratedInterface(targetRoot) {
-  const servicePath = path.join(targetRoot, 'src', 'services', 'ultronApi.ts');
-  const contextPath = path.join(targetRoot, 'src', 'core', 'ultronContext.tsx');
-  let service = await fs.readFile(servicePath, 'utf8');
-  const start = service.indexOf(STREAM_SERVICE_MARKER);
-  if (start >= 0) service = service.slice(0, start) + streamServiceCode;
-  else service += streamServiceCode;
-  let context = await fs.readFile(contextPath, 'utf8');
-  const fallbackPattern = /const result = await api\.sendUltronQuery\(text\.trim\(\), historyForApi, mood, userRequirements\);/;
-  const streamingCall = `let streamingMessageId: string | null = null;
-        const streamEventHandler = (event: any) => {
-          if (event?.type === 'delta' && event.text) {
-            if (!streamingMessageId) {
-              streamingMessageId = \`stream-\${Date.now()}\`;
-              setMessages((prev) => [...prev, { id: streamingMessageId!, sender: 'ULTRON', text: event.text, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }), mood }]);
-            } else {
-              setMessages((prev) => prev.map((m) => m.id === streamingMessageId ? { ...m, text: \`\${m.text}\${event.text}\` } : m));
-            }
-          }
-          if (event?.type === 'meta' && event.task?.taskType) setPipeline((prev) => ({ ...prev, critic: { ...prev.critic, intent: event.task.taskType } }));
-        };
-        const result = await api.sendUltronQueryStream(text.trim(), historyForApi, mood, userRequirements, streamEventHandler);`;
-  if (fallbackPattern.test(context)) context = context.replace(fallbackPattern, streamingCall);
-  const messageNeedle = `        setMessages((prev) => [...prev, ultronMsg]);`;
-  const messageReplacement = `        setMessages((prev) => {
-          if (streamingMessageId) return prev.map((m) => m.id === streamingMessageId ? ultronMsg : m);
-          return [...prev, ultronMsg];
-        });`;
-  if (context.includes(messageNeedle)) context = context.replace(messageNeedle, messageReplacement);
-  await fs.writeFile(servicePath, service, 'utf8');
-  await fs.writeFile(contextPath, context, 'utf8');
-  console.log('[Interface] ULTRON Mark 2 streaming bridge applied.');
-}
-
 async function syncInterfaceFiles(manifest, targetRoot) {
-  console.log(`[Interface] Syncing Interface1 ${manifest.repository}@${manifest.ref} ...`);
+  console.log(`[Interface] Syncing canonical Interface1 ${manifest.repository}@${manifest.ref} ...`);
   await fs.mkdir(targetRoot, { recursive: true });
   for (const relativePath of manifest.files) {
     const destination = path.join(targetRoot, relativePath);
@@ -208,8 +77,7 @@ async function syncInterfaceFiles(manifest, targetRoot) {
   await fs.writeFile(path.join(targetRoot, 'vite.config.ts'), localViteConfig, 'utf8');
   await fs.writeFile(path.join(targetRoot, '.source-ref'), `${manifest.ref}\n`, 'utf8');
   await fs.writeFile(path.join(targetRoot, '.interface-sync-version'), `${manifest.syncVersion || '1'}\n`, 'utf8');
-  await patchIntegratedInterface(targetRoot);
-  console.log(`[Interface] Interface1 source ready at ${targetRoot}.`);
+  console.log(`[Interface] Canonical Interface1 source ready at ${targetRoot}.`);
 }
 
 async function main() {
@@ -223,7 +91,7 @@ async function main() {
   const expectedSyncVersion = String(manifest.syncVersion || '1');
   if (currentRef.trim() === manifest.ref && currentSyncVersion.trim() === expectedSyncVersion && entryExists) {
     await fs.writeFile(path.join(targetRoot, 'vite.config.ts'), localViteConfig, 'utf8');
-    await patchIntegratedInterface(targetRoot);
+    console.log(`[Interface] Canonical Interface1 already current (${manifest.ref}).`);
     return;
   }
   await syncInterfaceFiles(manifest, targetRoot);
