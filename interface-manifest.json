@@ -2,7 +2,7 @@
   "repository": "AryaTiwari/Interface1",
   "ref": "main",
   "root": "interface",
-  "syncVersion": "2026-08-31-interface1-canonical-globe-2",
+  "syncVersion": "2026-08-31-interface1-canonical-globe-3",
   "files": [
     "index.html",
     "vite.config.ts",
@@ -25,6 +25,7 @@
     "src/components/UltronCore.tsx",
     "src/components/ChatErrorBoundary.tsx",
     "src/components/AgentActivity.tsx",
+    "src/components/StreamingResponseOverlay.tsx",
     "src/core/RuntimeBridge.tsx",
     "src/core/ultronContext.tsx",
     "src/services/ultronApi.ts",
