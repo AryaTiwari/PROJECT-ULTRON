@@ -52,7 +52,7 @@ async function fetchContents(repository, ref, relativePath) {
   const url = `https://api.github.com/repos/${repository}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`;
   const result = await httpsGet(url, {
     'User-Agent': 'PROJECT-ULTRON-interface-sync',
-    'Accept': 'application/vnd.github.raw+json, application/vnd.github+json',
+    'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   });
   if (result.statusCode !== 200) throw new Error(`GitHub Contents API HTTP ${result.statusCode} for ${relativePath}`);
@@ -101,11 +101,11 @@ function emitActivity(event: any) {
 
 function cleanForSpeech(value: string) {
   return String(value || '')
-    .replace(/```[\\s\\S]*?```/g, ' ')
+    .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/https?:\\/\\/[^\\s]+/gi, ' link ')
-    .replace(/[{}<>\\[\\]_*#~|^=+\\\\]/g, ' ')
-    .replace(/\\s+/g, ' ')
+    .replace(/https?:\/\/[^\s]+/gi, ' link ')
+    .replace(/[{}<>\[\]_*#~|^=+\\]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -138,7 +138,7 @@ async function speakSequentially(text: string) {
         const parts = splitSpeech(nextText);
         for (let i = 0; i < parts.length; i += 1) {
           emitActivity({ type: 'speaking', state: 'speaking', label: `Speaking ${i + 1}/${parts.length}` });
-          const response = await fetch('http://127.0.0.1:8787/api/tts/play', {
+          const response = await fetch(`${CORE_URL}/api/tts/play`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: parts[i] }),
@@ -163,19 +163,19 @@ export async function sendUltronQueryStream(prompt: string, conversationHistory:
     controller = new AbortController();
     const timeout = Number(import.meta.env.VITE_ULTRON_FIRST_TOKEN_TIMEOUT_MS || 12000);
     firstTokenTimer = setTimeout(() => { if (!sawDelta) controller?.abort(); }, timeout);
-    const res = await fetch(\`${'${CORE_URL}'}/api/chat/stream\`, {
+    const res = await fetch(`${CORE_URL}/api/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
       body: JSON.stringify({ message: prompt, source: 'interface', conversationHistory, userDirectives }),
       signal: controller.signal,
     });
-    if (!res.ok || !res.body) throw new Error(\`ULTRON streaming request failed (\${res.status})\`);
+    if (!res.ok || !res.body) throw new Error(`ULTRON streaming request failed (${res.status})`);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let finalResult: any = null;
     const consume = (block: string) => {
-      const lines = block.replace(/\\r/g, '').split('\\n');
+      const lines = block.replace(/\r/g, '').split('\n');
       let type = 'message';
       const data: string[] = [];
       for (const line of lines) {
@@ -184,7 +184,7 @@ export async function sendUltronQueryStream(prompt: string, conversationHistory:
       }
       if (!data.length) return;
       let payload: any = {};
-      try { payload = JSON.parse(data.join('\\n')); } catch { payload = { text: data.join('\\n') }; }
+      try { payload = JSON.parse(data.join('\n')); } catch { payload = { text: data.join('\n') }; }
       payload.type = payload.type || type;
       if (payload.type === 'meta') emit({ ...payload, state: payload.state || 'thinking' });
       else if (payload.type === 'delta') { sawDelta = true; if (firstTokenTimer) clearTimeout(firstTokenTimer); emit({ ...payload, state: 'responding' }); }
@@ -198,13 +198,14 @@ export async function sendUltronQueryStream(prompt: string, conversationHistory:
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let boundary;
-      while ((boundary = buffer.indexOf('\\n\\n')) >= 0) { consume(buffer.slice(0, boundary)); buffer = buffer.slice(boundary + 2); }
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) { consume(buffer.slice(0, boundary)); buffer = buffer.slice(boundary + 2); }
     }
     buffer += decoder.decode(); if (buffer.trim()) consume(buffer);
     if (firstTokenTimer) clearTimeout(firstTokenTimer);
     if (!finalResult) throw new Error('ULTRON streaming ended without a final response.');
     const normalized = normalizeStreamResult(finalResult, activeMood, conversationHistory, userDirectives);
-    if (normalized.response) void speakSequentially(normalized.response);
+    if (normalized.response) await speakSequentially(normalized.response);
+    emitActivity({ type: 'complete', state: 'complete', label: 'Task complete.' });
     return normalized;
   } catch (error: any) {
     if (firstTokenTimer) clearTimeout(firstTokenTimer);
