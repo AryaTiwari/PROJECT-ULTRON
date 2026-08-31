@@ -55,7 +55,7 @@ class UltronCore {
   async getRelevantMemories(userMessage, limit = 8) { return memoryRetriever.retrieve(userMessage, await this.getMemories(), limit); }
   buildMessages(userMessage, memories, recent) { const memoryText = memories.map(m => `- [${m.memory_type || 'fact'}] ${m.content}`).join('\n') || 'No relevant stored memories.'; const conversationText = recent.map(m => `${m.role}: ${m.content}`).join('\n') || 'No previous conversation.'; const context = ['RELEVANT LONG-TERM MEMORY:', memoryText, '', 'RECENT CONVERSATION:', conversationText].join('\n'); return [{ role: 'system', content: `${buildSystemPrompt(this.personality)}\n\n${context}` }, { role: 'user', content: userMessage }]; }
 
-  async runToolLoop(messages, model, taskType, maxRounds = 4) {
+  async runToolLoop(messages, model, taskType, maxRounds = 4, confirmed = false) {
     let working = [...messages];
     const tools = openAITools();
     let last = null;
@@ -65,7 +65,7 @@ class UltronCore {
       working.push({ role: 'assistant', content: last.content || '', tool_calls: last.toolCalls });
       for (const call of last.toolCalls) {
         const { name, input } = toolCallInput(call);
-        const result = await execute(name, input, { confirmed: true, source: 'model' });
+        const result = await execute(name, input, { confirmed: confirmed === true, source: 'model' });
         working.push({ role: 'tool', tool_call_id: call?.id || `${name}-${round}`, name, content: JSON.stringify(result) });
       }
     }
@@ -81,7 +81,7 @@ class UltronCore {
     if (critic.status === 'blocked') return { ok: true, requires_confirmation: true, response: 'The request needs a safer approach before execution.', guardian, critic, task };
     const memoryCandidates = extractMemoryCandidates(userMessage); const memoryResults = []; for (const candidate of memoryCandidates) memoryResults.push(await this.rememberCandidate(candidate));
     const relevantMemories = await this.getRelevantMemories(userMessage, 8); const recent = local.getRecentMessages(); const messages = this.buildMessages(userMessage, relevantMemories, recent); const started = Date.now(); let result;
-    try { result = await this.runToolLoop(messages, selectedModel, task.taskType); await telemetry.recordModelResult({ model: result.model, taskType: task.taskType, success: true, latencyMs: Date.now() - started }); }
+    try { result = await this.runToolLoop(messages, selectedModel, task.taskType, 4, options.confirmed === true); await telemetry.recordModelResult({ model: result.model, taskType: task.taskType, success: true, latencyMs: Date.now() - started }); }
     catch (error) { await telemetry.recordModelResult({ model: selectedModel, taskType: task.taskType, success: false, latencyMs: Date.now() - started, errorType: error?.name || 'model_error', metadata: { message: String(error?.message || error).slice(0, 500) } }); return { ok: false, error: error.message, guardian, critic, task, model: selectedModel, memory: memoryResults }; }
     const createdAt = new Date().toISOString(); local.appendConversation({ id: id(), role: 'assistant', content: result.content, model: result.model, task_type: task.taskType, created_at: createdAt }); if (supabase.available()) { try { await supabase.insertConversationMessage({ role: 'assistant', content: result.content, model: result.model, metadata: { task_type: task.taskType }, created_at: createdAt }); } catch {} }
     return { ok: true, response: result.content, model: result.model, task, guardian, critic, memory: memoryResults, relevant_memories: relevantMemories, tools: listTools(), tool_calls: result.toolCalls || [] };
