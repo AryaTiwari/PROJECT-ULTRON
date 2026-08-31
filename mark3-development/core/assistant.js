@@ -6,6 +6,7 @@ const planner = require('./planner');
 const verifier = require('./verifier');
 const integrations = require('./integrations');
 const voice = require('./voice-orchestrator');
+const intent = require('./intent');
 const { emit } = require('./events');
 
 const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity with projects, commitments, decisions and recent context.`;
@@ -19,6 +20,8 @@ async function handle(message,options={}){
   const taskType=options.taskType||'general';
   const retrieved=memory.retrieve(userMessage,{limit:config.maxContextItems});
   const commitments=workspace.listCommitments({status:'open'}), decisions=workspace.listDecisions(), projects=workspace.listProjects();
+  const captured=intent.extractCommitment(userMessage);
+  if(captured){ const commitment=workspace.createCommitment({title:captured.title,priority:captured.priority,project:intent.extractProject(userMessage)}); emit('commitment_created',{commitment}); }
   let intelligence={live:{models:[],count:0},observed:[]}; try{intelligence=await models.intelligence(taskType);}catch(error){emit('model_catalog_unavailable',{error:error.message});}
   const plan=planner.createPlan(userMessage,taskType); emit('context_ready',{memoryCount:retrieved.length,commitments:commitments.length,projectCount:projects.length});
   const githubPath=explicitGitHubPrompt(userMessage);
