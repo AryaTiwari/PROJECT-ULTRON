@@ -11,6 +11,7 @@ function mergeToolCalls(toolCalls = []) { const merged = new Map(); for (const c
 async function executeToolCalls(toolCalls, options = {}) { const results = []; for (const toolCall of mergeToolCalls(toolCalls)) { let input = {}; try { input = typeof toolCall.function.arguments === 'string' ? JSON.parse(toolCall.function.arguments || '{}') : (toolCall.function.arguments || {}); } catch { results.push({ toolCall, result: { ok: false, error: `Invalid tool arguments for ${toolCall.function.name}.` } }); continue; } const result = await execute(toolCall.function.name, input, { confirmed: options.confirmed === true, source: options.source || 'model' }); results.push({ toolCall, result }); } return results; }
 function toolConversationMessages(toolResults) { return toolResults.map(({ toolCall, result }) => ({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })); }
 function toolSummary(toolResults) { return (toolResults || []).map(({ toolCall }) => toolCall?.function?.name).filter(Boolean); }
+function usableText(value) { if (typeof value === 'string' && value.trim()) return value.trim(); if (Array.isArray(value)) return value.map(item => typeof item === 'string' ? item : item?.text || item?.content || '').filter(Boolean).join('').trim(); if (value && typeof value === 'object') return String(value.text || value.content || value.value || '').trim(); return ''; }
 class Mark2Runtime extends UltronCore{
   async handleMessage(message,options={}){
     const intent=parseToolIntent(message);
@@ -43,7 +44,17 @@ class Mark2Runtime extends UltronCore{
       try { streamResult=await router.streamChat({messages,model:selectedModel,taskType:task.taskType,tools,onDelta:(text,meta)=>{full+=text;onEvent({type:'delta',state:'responding',text,...meta});}}); }
       catch(error){ await require('./telemetry').recordModelResult({model:selectedModel,taskType:task.taskType,success:false,latencyMs:Date.now()-started,errorType:error?.name||'model_error',metadata:{message:String(error?.message||error).slice(0,500),streamedChars:full.length}}); onEvent({type:'error',state:'error',label:'ULTRON request failed.',error:error.message,status:error.status||null,partial:Boolean(full)}); return; }
       const toolCalls=mergeToolCalls(streamResult.toolCalls);
-      if(!toolCalls.length){ onEvent({type:'meta',state:'synthesizing',label:'Synthesizing final response.'}); finalResult={ok:true,response:streamResult.content,model:streamResult.model,task,guardian,critic,memory:memoryResults,relevant_memories:relevantMemories,tools:listTools()}; break; }
+      const streamText=usableText(streamResult?.content || streamResult?.response || streamResult?.text || full);
+      if(!toolCalls.length && streamText){ onEvent({type:'meta',state:'synthesizing',label:'Synthesizing final response.'}); finalResult={ok:true,response:streamText,model:streamResult.model,task,guardian,critic,memory:memoryResults,relevant_memories:relevantMemories,tools:listTools()}; break; }
+      if(!toolCalls.length && !streamText){
+        onEvent({type:'meta',state:'synthesizing',label:'Stream returned no usable text. Recovering through the standard execution path.'});
+        try {
+          const fallback=await this.handleMessage(userMessage,options);
+          const fallbackText=usableText(fallback?.response || fallback?.text || fallback?.content);
+          if(fallbackText){ finalResult={...fallback,response:fallbackText,text:fallbackText,model:fallback.model || streamResult?.model,task:fallback.task || task,guardian:fallback.guardian || guardian,critic:fallback.critic || critic}; onEvent({type:'delta',state:'responding',text:fallbackText,fallback:true}); break; }
+        } catch(error){ onEvent({type:'error',state:'error',label:'Recovery failed.',error:error?.message||String(error),partial:false}); return; }
+        onEvent({type:'error',state:'error',label:'ULTRON produced no usable response.',error:'No displayable text was produced by the model or fallback tool loop.',partial:false}); return;
+      }
       onEvent({type:'meta',state:'executing',label:`Executing ${toolCalls.length} tool ${toolCalls.length===1?'call':'calls'}.`,toolCalls});
       const toolResults=await executeToolCalls(toolCalls,options);
       onEvent({type:'tool',state:'executing',label:'Tool execution complete.',toolCalls,toolResults,tools:toolSummary(toolResults)});
