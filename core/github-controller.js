@@ -1,16 +1,30 @@
 const https = require('https');
+const { load: loadCredentials } = require('./credentials/local-store');
 
 const REPO = process.env.GITHUB_REPOSITORY || 'AryaTiwari/PROJECT-ULTRON';
 const DEFAULT_BRANCH = process.env.GITHUB_BRANCH || 'mark2-development';
 
-function token() {
-  const value = String(process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '').trim();
-  if (!value) throw new Error('GITHUB_TOKEN is not configured in the ULTRON environment.');
-  return value;
+async function token() {
+  const envCandidates = [process.env.GITHUB_TOKEN, process.env.GH_TOKEN]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+
+  if (envCandidates.length) return envCandidates[0].replace(/^['"]|['"]$/g, '');
+
+  try {
+    const stored = await loadCredentials();
+    const storedToken = String(stored.GITHUB_TOKEN || stored.GH_TOKEN || '').trim();
+    if (storedToken) return storedToken.replace(/^['"]|['"]$/g, '');
+  } catch {}
+
+  throw new Error('GITHUB_TOKEN is not configured in the ULTRON environment or credential store.');
 }
 
 function request(method, urlPath, body = null) {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
+    let authToken;
+    try { authToken = await token(); } catch (error) { reject(error); return; }
+
     const bodyText = body == null ? null : JSON.stringify(body);
     const req = https.request({
       hostname: 'api.github.com',
@@ -20,7 +34,7 @@ function request(method, urlPath, body = null) {
         'User-Agent': 'Project-Ultron',
         'Accept': 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
-        'Authorization': `Bearer ${token()}`,
+        'Authorization': `Bearer ${authToken}`,
         ...(bodyText ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyText) } : {}),
       },
     }, res => {
@@ -31,7 +45,18 @@ function request(method, urlPath, body = null) {
         let data = {};
         try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
         if (res.statusCode >= 200 && res.statusCode < 300) return resolve(data);
-        const message = data?.message || `GitHub API HTTP ${res.statusCode}`;
+
+        const status = Number(res.statusCode || 0);
+        if (status === 401) {
+          reject(new Error('GitHub authentication failed (401 Bad credentials). Verify GITHUB_TOKEN is a valid, unexpired token and restart ULTRON after changing .env.'));
+          return;
+        }
+        if (status === 403) {
+          const message = data?.message || 'Forbidden';
+          reject(new Error(`GitHub authorization failed (403): ${message}. For fine-grained tokens, verify repository access and required permissions.`));
+          return;
+        }
+        const message = data?.message || `GitHub API HTTP ${status}`;
         reject(new Error(message));
       });
     });
