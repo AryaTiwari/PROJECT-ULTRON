@@ -169,19 +169,7 @@ async function patchIntegratedInterface(targetRoot) {
   console.log('[Interface] ULTRON Mark 2 streaming bridge applied.');
 }
 
-async function main() {
-  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-  const targetRoot = path.join(projectRoot, manifest.root);
-  const versionFile = path.join(targetRoot, '.source-ref');
-  const currentRef = await fs.readFile(versionFile, 'utf8').catch(() => '');
-  const entryExists = await fs.stat(path.join(targetRoot, 'src', 'main.tsx')).then(() => true).catch(() => false);
-
-  if (currentRef.trim() === manifest.ref && entryExists) {
-    await fs.writeFile(path.join(targetRoot, 'vite.config.ts'), localViteConfig, 'utf8');
-    await patchIntegratedInterface(targetRoot);
-    return;
-  }
-
+async function syncInterfaceFiles(manifest, targetRoot) {
   console.log(`[Interface] Syncing Interface1 ${manifest.repository}@${manifest.ref} ...`);
   await fs.mkdir(targetRoot, { recursive: true });
   for (const relativePath of manifest.files) {
@@ -193,9 +181,29 @@ async function main() {
     console.log(`[Interface] synced ${relativePath}`);
   }
   await fs.writeFile(path.join(targetRoot, 'vite.config.ts'), localViteConfig, 'utf8');
-  await fs.writeFile(versionFile, `${manifest.ref}\n`, 'utf8');
+  await fs.writeFile(path.join(targetRoot, '.source-ref'), `${manifest.ref}\n`, 'utf8');
+  await fs.writeFile(path.join(targetRoot, '.interface-sync-version'), `${manifest.syncVersion || '1'}\n`, 'utf8');
   await patchIntegratedInterface(targetRoot);
   console.log(`[Interface] Interface1 source ready at ${targetRoot}.`);
+}
+
+async function main() {
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+  const targetRoot = path.join(projectRoot, manifest.root);
+  const versionFile = path.join(targetRoot, '.source-ref');
+  const syncVersionFile = path.join(targetRoot, '.interface-sync-version');
+  const currentRef = await fs.readFile(versionFile, 'utf8').catch(() => '');
+  const currentSyncVersion = await fs.readFile(syncVersionFile, 'utf8').catch(() => '');
+  const entryExists = await fs.stat(path.join(targetRoot, 'src', 'main.tsx')).then(() => true).catch(() => false);
+  const expectedSyncVersion = String(manifest.syncVersion || '1');
+
+  if (currentRef.trim() === manifest.ref && currentSyncVersion.trim() === expectedSyncVersion && entryExists) {
+    await fs.writeFile(path.join(targetRoot, 'vite.config.ts'), localViteConfig, 'utf8');
+    await patchIntegratedInterface(targetRoot);
+    return;
+  }
+
+  await syncInterfaceFiles(manifest, targetRoot);
 }
 
 main().catch((error) => { console.error(`[Interface] ${error.message}`); process.exitCode = 1; });
