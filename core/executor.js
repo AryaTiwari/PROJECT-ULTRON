@@ -9,6 +9,21 @@ function listTools() {
   return [...tools.entries()].map(([name, tool]) => ({ name, ...tool.metadata }));
 }
 
+function openAITools() {
+  return [...tools.entries()].map(([name, tool]) => ({
+    type: 'function',
+    function: {
+      name,
+      description: String(tool.metadata.description || `Execute ${name}.`),
+      parameters: tool.metadata.inputSchema || {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+  }));
+}
+
 async function execute(name, input = {}, context = {}) {
   const tool = tools.get(name);
   if (!tool) return { ok: false, error: `Tool '${name}' is not registered.` };
@@ -25,4 +40,4 @@ async function execute(name, input = {}, context = {}) {
   }
 }
 
-module.exports = { registerTool, listTools, execute };
+module.exports = { registerTool, listTools, openAITools, execute };
