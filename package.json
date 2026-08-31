@@ -1,11 +1,12 @@
 {
   "name": "project-ultron",
-  "version": "0.5.0-mark2-unified",
+  "version": "0.5.0-mark2-unified.1",
   "private": true,
   "description": "ULTRON Mark 2 local-first personal AI assistant core with integrated Interface1 UI",
   "scripts": {
     "interface:runtime": "node scripts/ensure-interface-runtime.mjs",
     "interface:sync": "npm run interface:runtime && node scripts/sync-interface-cached.mjs",
+    "interface:sync:canonical": "npm run interface:runtime && node scripts/sync-interface-canonical.mjs",
     "interface:build": "npm run interface:sync && vite build --config interface/vite.config.ts",
     "interface:check": "npm run interface:sync && tsc --noEmit -p interface/tsconfig.json",
     "core:start": "npm run interface:build && node --env-file=.env core/server.js",
