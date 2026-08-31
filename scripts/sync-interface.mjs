@@ -9,7 +9,7 @@ const manifestPath = path.join(projectRoot, 'interface-manifest.json');
 
 function fetchText(url) {
   return new Promise((resolve, reject) => {
-    const request = https.get(url, { headers: { 'User-Agent': 'PROJECT-ULTRON-interface-sync' } }, (response) => {
+    const request = https.get(url, { headers: { 'User-Agent': 'PROJECT-ULTRON-interface-sync', 'Accept': 'text/plain' } }, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
         fetchText(response.headers.location).then(resolve, reject);
@@ -27,6 +27,29 @@ function fetchText(url) {
     });
     request.on('error', reject);
   });
+}
+
+async function fetchGithubContents(repository, ref, relativePath) {
+  const apiUrl = `https://api.github.com/repos/${repository}/contents/${relativePath.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(ref)}`;
+  const body = await fetchText(apiUrl);
+  let data;
+  try { data = JSON.parse(body); } catch { throw new Error(`GitHub Contents API returned non-JSON data for ${relativePath}.`); }
+  if (!data?.content) throw new Error(`GitHub Contents API returned no content for ${relativePath}.`);
+  return Buffer.from(String(data.content).replace(/\n/g, ''), 'base64').toString('utf8');
+}
+
+async function fetchInterfaceFile(repository, ref, relativePath) {
+  const rawUrl = `https://raw.githubusercontent.com/${repository}/${ref}/${relativePath}`;
+  try {
+    return await fetchText(rawUrl);
+  } catch (rawError) {
+    console.warn(`[Interface] Raw download failed for ${relativePath}; using GitHub Contents API fallback.`);
+    try {
+      return await fetchGithubContents(repository, ref, relativePath);
+    } catch (apiError) {
+      throw new Error(`${rawError.message} | API fallback failed: ${apiError.message}`);
+    }
+  }
 }
 
 const localViteConfig = `import tailwindcss from '@tailwindcss/vite';
@@ -173,10 +196,9 @@ async function syncInterfaceFiles(manifest, targetRoot) {
   console.log(`[Interface] Syncing Interface1 ${manifest.repository}@${manifest.ref} ...`);
   await fs.mkdir(targetRoot, { recursive: true });
   for (const relativePath of manifest.files) {
-    const url = `https://raw.githubusercontent.com/${manifest.repository}/${manifest.ref}/${relativePath}`;
     const destination = path.join(targetRoot, relativePath);
     await fs.mkdir(path.dirname(destination), { recursive: true });
-    const content = await fetchText(url);
+    const content = await fetchInterfaceFile(manifest.repository, manifest.ref, relativePath);
     await fs.writeFile(destination, content, 'utf8');
     console.log(`[Interface] synced ${relativePath}`);
   }
