@@ -1,6 +1,10 @@
+const fs = require('fs');
+const path = require('path');
 const https = require('https');
 const { load: loadCredentials } = require('./credentials/local-store');
 
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const PROJECT_ENV = path.join(PROJECT_ROOT, '.env');
 const REPO = String(process.env.GITHUB_REPOSITORY || 'AryaTiwari/PROJECT-ULTRON').replace(/^['"]|['"]$/g, '').trim();
 const DEFAULT_BRANCH = String(process.env.GITHUB_BRANCH || 'mark2-development').replace(/^['"]|['"]$/g, '').trim();
 
@@ -8,15 +12,39 @@ function cleanSecret(value) {
   return String(value || '').replace(/^\uFEFF/, '').trim().replace(/^['"]|['"]$/g, '').trim();
 }
 
+function readProjectEnvValue(name) {
+  try {
+    const raw = fs.readFileSync(PROJECT_ENV, 'utf8').replace(/^\uFEFF/, '');
+    const lines = raw.split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (!match || match[1] !== name) continue;
+      return cleanSecret(match[2]);
+    }
+  } catch {}
+  return '';
+}
+
 async function token() {
-  const envCandidates = [process.env.GITHUB_TOKEN, process.env.GH_TOKEN].map(cleanSecret).filter(Boolean);
+  // Prefer the project's .env file so a stale Windows/system GITHUB_TOKEN
+  // cannot silently override the token the user just configured for ULTRON.
+  const projectToken = readProjectEnvValue('GITHUB_TOKEN');
+  if (projectToken) return projectToken;
+
+  const envCandidates = [process.env.GITHUB_TOKEN, process.env.GH_TOKEN]
+    .map(cleanSecret)
+    .filter(Boolean);
   if (envCandidates.length) return envCandidates[0];
+
   try {
     const stored = await loadCredentials();
     const storedToken = cleanSecret(stored.GITHUB_TOKEN || stored.GH_TOKEN);
     if (storedToken) return storedToken;
   } catch {}
-  throw new Error('GITHUB_TOKEN is not configured in the ULTRON environment or credential store.');
+
+  throw new Error('GITHUB_TOKEN is not configured in the ULTRON project environment or credential store.');
 }
 
 function request(method, urlPath, body = null) {
@@ -38,7 +66,7 @@ function request(method, urlPath, body = null) {
         let data = {}; try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
         if (res.statusCode >= 200 && res.statusCode < 300) return resolve(data);
         const status = Number(res.statusCode || 0);
-        if (status === 401) return reject(new Error('GitHub authentication failed (401 Bad credentials). The token reaching GitHub is not accepted.')); 
+        if (status === 401) return reject(new Error('GitHub authentication failed (401 Bad credentials). The token from the ULTRON project environment was not accepted.'));
         if (status === 403) return reject(new Error(`GitHub authorization failed (403): ${data?.message || 'Forbidden'}. Verify repository access and fine-grained permissions.`));
         reject(new Error(data?.message || `GitHub API HTTP ${status}`));
       });
