@@ -149,3 +149,156 @@ button:disabled { opacity: .45; cursor: wait; transform: none; }
   .system-status { margin-left: 0; }
   .footer { height: auto; min-height: 54px; padding: 12px 0; }
 }
+
+/* ============================================================
+   MARKDOWN CONTENT — assistant messages
+   ============================================================ */
+.message.assistant h1,
+.message.assistant h2,
+.message.assistant h3,
+.message.assistant h4 {
+  margin: 16px 0 8px;
+  line-height: 1.3;
+  white-space: normal;
+}
+.message.assistant h1:first-child,
+.message.assistant h2:first-child,
+.message.assistant h3:first-child { margin-top: 0; }
+.message.assistant h1 { font-size: 1.3em; }
+.message.assistant h2 { font-size: 1.15em; }
+.message.assistant h3 { font-size: 1.05em; }
+.message.assistant p { margin: 8px 0; white-space: normal; }
+.message.assistant p:first-child { margin-top: 0; }
+.message.assistant p:last-child { margin-bottom: 0; }
+.message.assistant ul,
+.message.assistant ol {
+  margin: 8px 0;
+  padding-left: 22px;
+  white-space: normal;
+}
+.message.assistant li { margin: 4px 0; }
+.message.assistant code {
+  background: rgba(121,160,255,.1);
+  border: 1px solid rgba(121,160,255,.15);
+  border-radius: 5px;
+  padding: 2px 6px;
+  font-size: 0.9em;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+}
+.message.assistant pre {
+  background: rgba(0,0,0,.35);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 10px 0;
+  overflow-x: auto;
+  position: relative;
+  white-space: pre;
+}
+.message.assistant pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.message.assistant blockquote {
+  border-left: 3px solid rgba(121,160,255,.4);
+  margin: 10px 0;
+  padding: 4px 14px;
+  color: #98a4b8;
+  white-space: normal;
+}
+.message.assistant a {
+  color: #79a0ff;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(121,160,255,.3);
+}
+.message.assistant a:hover { border-bottom-color: #79a0ff; }
+.message.assistant table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+  white-space: normal;
+}
+.message.assistant th,
+.message.assistant td {
+  border: 1px solid rgba(255,255,255,.1);
+  padding: 8px 12px;
+  text-align: left;
+}
+.message.assistant th {
+  background: rgba(121,160,255,.08);
+  font-weight: 700;
+}
+.message.assistant strong { font-weight: 700; color: #d4dcf0; }
+.message.assistant em { font-style: italic; color: #b0bcd0; }
+.message.assistant hr {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,.08);
+  margin: 14px 0;
+}
+
+/* ============================================================
+   TYPING INDICATOR
+   ============================================================ */
+.typing-indicator {
+  display: inline-flex;
+  gap: 5px;
+  padding: 4px 2px;
+  align-items: center;
+}
+.typing-indicator span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #79a0ff;
+  opacity: .4;
+  animation: typingBounce 1.2s ease-in-out infinite;
+}
+.typing-indicator span:nth-child(2) { animation-delay: .15s; }
+.typing-indicator span:nth-child(3) { animation-delay: .3s; }
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .4; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ============================================================
+   CODE BLOCK COPY BUTTON
+   ============================================================ */
+.code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 7px;
+  background: rgba(255,255,255,.06);
+  color: #69758a;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.message.assistant pre:hover .code-copy-btn { opacity: 1; }
+.code-copy-btn:hover { color: #dce6ff; border-color: rgba(121,160,255,.25); }
+
+/* ============================================================
+   MESSAGE COPY BUTTON — hidden until hover
+   ============================================================ */
+.copy-btn {
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.message-row:hover .copy-btn { opacity: 1; }
+
+/* ============================================================
+   NEW CHAT BUTTON
+   ============================================================ */
+#newChat { white-space: nowrap; }
