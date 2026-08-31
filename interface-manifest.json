@@ -1,8 +1,8 @@
 {
   "repository": "AryaTiwari/Interface1",
-  "ref": "7b9587aec706c2eb4c6b1eddf9e59a0541ab0a36",
+  "ref": "d82734e7a29948e722014e85e0e3d79240eb9afe",
   "root": "interface",
-  "syncVersion": "2026-08-31-interface1-reliable-chat-1",
+  "syncVersion": "2026-08-31-interface1-performance-model-voice-1",
   "files": [
     "index.html",
     "vite.config.ts",
@@ -18,6 +18,7 @@
     "src/components/FormattedMessage.tsx",
     "src/components/GuardianPipeline.tsx",
     "src/components/NetworkMesh.tsx",
+    "src/components/PerformanceGovernor.tsx",
     "src/components/PersonalityModal.tsx",
     "src/components/TopHeader.tsx",
     "src/components/Ultron3DGlobe.tsx",
