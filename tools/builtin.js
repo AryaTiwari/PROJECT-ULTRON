@@ -5,6 +5,7 @@ const { execFile } = require('child_process');
 const { registerTool } = require('../core/executor');
 const voice = require('../core/voice');
 const github = require('../core/github-controller');
+const modelIntelligence = require('../core/model-intelligence');
 
 function registerBuiltinTools() {
   registerTool('system_info', async () => ({ platform: process.platform, arch: process.arch, hostname: os.hostname(), release: os.release(), cpus: os.cpus().length, memory_gb: Number((os.totalmem() / 1024 ** 3).toFixed(2)), free_memory_gb: Number((os.freemem() / 1024 ** 3).toFixed(2)), uptime_seconds: os.uptime(), username: os.userInfo().username }), {
@@ -85,6 +86,13 @@ function registerBuiltinTools() {
   registerTool('github_update_file', async input => github.updateFile(input), {
     description: 'Update an existing UTF-8 file in the ULTRON GitHub repository automatically. Reads the current SHA when one is not supplied.', requiresConfirmation: false, risk: 'medium',
     inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, message: { type: 'string' }, branch: { type: 'string' }, sha: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false },
+  });
+
+  registerTool('model_catalog', async input => modelIntelligence.catalog(input), {
+    description: 'Inspect ULTRON model intelligence: current configured model, accessible model catalog, provider counts, and recent performance history. Use before rating or comparing models.',
+    requiresConfirmation: false,
+    risk: 'low',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' }, taskType: { type: 'string' }, refresh: { type: 'boolean' } }, additionalProperties: false },
   });
 }
 
