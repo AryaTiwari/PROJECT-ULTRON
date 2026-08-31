@@ -10,12 +10,12 @@ const versionFile = path.join(root, '.interface-sync-version');
 const entryFile = path.join(root, 'src', 'main.tsx');
 const currentRef = await fs.readFile(refFile, 'utf8').catch(() => '');
 const currentVersion = await fs.readFile(versionFile, 'utf8').catch(() => '');
-const ready = currentRef.trim() === String(manifest.ref).trim() && currentVersion.trim() === String(manifest.syncVersion || 'ultron-agent-ui-v2').trim() && await fs.stat(entryFile).then(() => true).catch(() => false);
+const ready = currentRef.trim() === String(manifest.ref).trim() && currentVersion.trim() === String(manifest.syncVersion || 'canonical-interface1').trim() && await fs.stat(entryFile).then(() => true).catch(() => false);
 
 if (ready) {
-  console.log(`[Interface] Cache valid for Interface1 ${manifest.repository}@${manifest.ref}.`);
+  console.log(`[Interface] Cache valid for canonical Interface1 ${manifest.repository}@${manifest.ref}.`);
   process.exit(0);
 }
 
-const child = spawn(process.execPath, [path.join(projectRoot, 'scripts', 'sync-interface-v2.mjs')], { stdio: 'inherit' });
+const child = spawn(process.execPath, [path.join(projectRoot, 'scripts', 'sync-interface-canonical.mjs')], { stdio: 'inherit' });
 child.on('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });
