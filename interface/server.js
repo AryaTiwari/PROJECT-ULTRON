@@ -2,8 +2,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 3000;
-const N8N_WEBHOOK = 'http://localhost:5678/webhook/ultron';
+const PORT = parseInt(process.env.ULTRON_PORT || '3000', 10);
+const N8N_WEBHOOK = process.env.ULTRON_N8N_WEBHOOK || 'http://localhost:5678/webhook/ultron';
 const ROOT = __dirname;
 
 const MIME_TYPES = {
