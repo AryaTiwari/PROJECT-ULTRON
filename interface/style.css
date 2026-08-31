@@ -39,10 +39,11 @@ body::before {
 }
 
 .topbar {
-  height: 82px;
+  min-height: 82px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 20px;
   border-bottom: 1px solid rgba(255,255,255,.08);
 }
 
@@ -55,24 +56,73 @@ body::before {
 .brand-name { font-size: 14px; font-weight: 800; letter-spacing: .18em; }
 .brand-subtitle { margin-top: 3px; font-size: 9px; letter-spacing: .16em; color: #667085; }
 
-.system-status { display: flex; gap: 8px; align-items: center; font-size: 9px; letter-spacing: .14em; color: #7e899c; }
+.topbar-controls { display: flex; align-items: center; gap: 8px; }
+.status-pill {
+  width: auto;
+  min-width: 84px;
+  height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 999px;
+  background: rgba(255,255,255,.025);
+  color: #7f8ba1;
+  font-size: 8px;
+  letter-spacing: .12em;
+  font-weight: 700;
+  cursor: pointer;
+}
+.status-pill:hover { transform: none; border-color: rgba(121,160,255,.25); }
+.status-pill.is-active { color: #dce6ff; border-color: rgba(121,160,255,.28); background: rgba(121,160,255,.08); }
+.pill-indicator { width: 5px; height: 5px; border-radius: 50%; background: #4e586b; }
+.status-pill.is-active .pill-indicator { background: #79a0ff; box-shadow: 0 0 10px rgba(121,160,255,.7); }
+
+.system-status { display: flex; gap: 8px; align-items: center; font-size: 9px; letter-spacing: .14em; color: #7e899c; white-space: nowrap; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #79a0ff; box-shadow: 0 0 12px rgba(121,160,255,.75); }
 
 .hero { flex: 1; min-height: 500px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 50px 0 30px; }
-.orb-wrap { width: 150px; height: 150px; position: relative; display: grid; place-items: center; margin-bottom: 34px; }
+.orb-wrap { width: 150px; height: 150px; position: relative; display: grid; place-items: center; margin-bottom: 34px; transition: filter .3s ease, transform .3s ease; }
 .orb-ring { position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(111,151,255,.18); }
 .ring-one { animation: spin 14s linear infinite; border-top-color: rgba(135,171,255,.65); }
 .ring-two { inset: 15px; animation: spin 9s linear infinite reverse; border-right-color: rgba(160,126,255,.55); }
 .orb-core { width: 76px; height: 76px; display: grid; place-items: center; border-radius: 50%; border: 1px solid rgba(135,171,255,.5); background: radial-gradient(circle at 35% 30%, #304c83, #111827 65%, #080b12); box-shadow: 0 0 45px rgba(65,104,190,.2), inset 0 0 25px rgba(100,130,255,.12); }
 .orb-core span { font-size: 25px; font-weight: 800; letter-spacing: .08em; }
+.orb-wrap.is-listening { filter: drop-shadow(0 0 18px rgba(121,160,255,.35)); transform: scale(1.035); }
+.orb-wrap.is-thinking { filter: drop-shadow(0 0 20px rgba(160,126,255,.32)); }
+.orb-wrap.is-speaking { filter: drop-shadow(0 0 26px rgba(121,160,255,.45)); transform: scale(1.025); }
+.orb-wrap.is-speaking .orb-core { animation: pulse 1.05s ease-in-out infinite; }
+.orb-wrap.is-error { filter: grayscale(.3) drop-shadow(0 0 14px rgba(255,110,110,.25)); }
+
 .eyebrow { margin: 0 0 9px; color: #7282a3; font-size: 10px; letter-spacing: .28em; font-weight: 700; }
 h1 { margin: 0; font-size: clamp(30px, 5vw, 48px); letter-spacing: -.035em; }
 .hero-copy { max-width: 480px; margin: 15px auto 0; color: #727d91; line-height: 1.6; font-size: 14px; }
+.voice-meta { display: flex; align-items: center; gap: 8px; margin-top: 18px; color: #525d70; font-size: 8px; letter-spacing: .16em; }
+.meta-separator { color: #303747; }
 
 .conversation { width: min(720px, 100%); margin: 0 auto 20px; display: flex; flex-direction: column; gap: 12px; }
+.message-row { display: flex; align-items: flex-end; gap: 7px; width: 100%; }
+.message-row.user { justify-content: flex-end; }
+.message-row.assistant { justify-content: flex-start; }
 .message { max-width: 82%; padding: 13px 16px; border: 1px solid rgba(255,255,255,.08); border-radius: 16px; line-height: 1.55; font-size: 14px; white-space: pre-wrap; }
-.message.user { align-self: flex-end; background: rgba(74,96,146,.15); }
-.message.assistant { align-self: flex-start; background: rgba(255,255,255,.035); }
+.message.user { background: rgba(74,96,146,.15); }
+.message.assistant { background: rgba(255,255,255,.035); }
+.message-action {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 9px;
+  background: rgba(255,255,255,.025);
+  color: #69758a;
+  font-size: 13px;
+}
+.message-action:hover { color: #dce6ff; transform: none; border-color: rgba(121,160,255,.22); }
 
 .composer { width: min(720px, 100%); margin: 0 auto; display: flex; gap: 10px; padding: 8px; border: 1px solid rgba(255,255,255,.10); border-radius: 18px; background: rgba(12,16,24,.88); box-shadow: 0 20px 70px rgba(0,0,0,.25); }
 textarea { flex: 1; resize: none; border: 0; outline: 0; background: transparent; color: #e8edf7; padding: 12px 10px; font: inherit; font-size: 14px; max-height: 150px; }
@@ -81,12 +131,21 @@ button { width: 42px; height: 42px; align-self: flex-end; border: 0; border-radi
 button:hover { transform: translateY(-1px); }
 button:disabled { opacity: .45; cursor: wait; transform: none; }
 
-.footer { height: 54px; display: flex; justify-content: center; align-items: center; gap: 10px; color: #485163; font-size: 8px; letter-spacing: .16em; }
+.footer { height: 54px; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 10px; color: #485163; font-size: 8px; letter-spacing: .16em; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
+
+@media (max-width: 760px) {
+  .topbar { align-items: flex-start; padding: 18px 0; flex-direction: column; }
+  .topbar-controls { width: 100%; flex-wrap: wrap; }
+  .system-status { margin-left: auto; }
+}
 
 @media (max-width: 620px) {
   .app-shell { width: min(100% - 20px, 980px); }
   .hero { min-height: 430px; }
   .message { max-width: 92%; }
+  .system-status { margin-left: 0; }
+  .footer { height: auto; min-height: 54px; padding: 12px 0; }
 }
