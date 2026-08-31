@@ -7,35 +7,44 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const manifestPath = path.join(projectRoot, 'interface-manifest.json');
 
-function fetchText(url) {
+function httpsGet(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    const request = https.get(url, { headers: { 'User-Agent': 'PROJECT-ULTRON-interface-sync', 'Accept': 'text/plain' } }, (response) => {
+    const request = https.get(url, { headers }, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
-        fetchText(response.headers.location).then(resolve, reject);
-        return;
-      }
-      if (response.statusCode !== 200) {
-        response.resume();
-        reject(new Error(`Interface source download failed: HTTP ${response.statusCode} for ${url}`));
+        httpsGet(response.headers.location, headers).then(resolve, reject);
         return;
       }
       let body = '';
       response.setEncoding('utf8');
       response.on('data', (chunk) => { body += chunk; });
-      response.on('end', () => resolve(body));
+      response.on('end', () => resolve({ statusCode: response.statusCode || 0, body }));
     });
     request.on('error', reject);
   });
 }
 
+async function fetchText(url) {
+  const response = await httpsGet(url, {
+    'User-Agent': 'PROJECT-ULTRON-interface-sync',
+    'Accept': '*/*',
+  });
+  if (response.statusCode !== 200) throw new Error(`Interface source download failed: HTTP ${response.statusCode} for ${url}`);
+  return response.body;
+}
+
 async function fetchGithubContents(repository, ref, relativePath) {
   const apiUrl = `https://api.github.com/repos/${repository}/contents/${relativePath.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(ref)}`;
-  const body = await fetchText(apiUrl);
+  const response = await httpsGet(apiUrl, {
+    'User-Agent': 'PROJECT-ULTRON-interface-sync',
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  });
+  if (response.statusCode !== 200) throw new Error(`GitHub Contents API failed: HTTP ${response.statusCode} for ${apiUrl}`);
   let data;
-  try { data = JSON.parse(body); } catch { throw new Error(`GitHub Contents API returned non-JSON data for ${relativePath}.`); }
+  try { data = JSON.parse(response.body); } catch { throw new Error(`GitHub Contents API returned non-JSON data for ${relativePath}.`); }
   if (!data?.content) throw new Error(`GitHub Contents API returned no content for ${relativePath}.`);
-  return Buffer.from(String(data.content).replace(/\n/g, ''), 'base64').toString('utf8');
+  return Buffer.from(String(data.content).replace(/\n/g, ''), data.encoding === 'base64' ? 'base64' : 'utf8').toString('utf8');
 }
 
 async function fetchInterfaceFile(repository, ref, relativePath) {
@@ -107,10 +116,7 @@ export async function sendUltronQueryStream(prompt: string, conversationHistory:
       let payload: any = {};
       try { payload = JSON.parse(data.join('\\n')); } catch { payload = { text: data.join('\\n') }; }
       payload.type = payload.type || type;
-      if (payload.type === 'delta') {
-        sawDelta = true;
-        if (firstTokenTimer) clearTimeout(firstTokenTimer);
-      }
+      if (payload.type === 'delta') { sawDelta = true; if (firstTokenTimer) clearTimeout(firstTokenTimer); }
       if (payload.type === 'final') finalResult = payload.result || payload;
       onEvent(payload);
     };
@@ -130,14 +136,12 @@ export async function sendUltronQueryStream(prompt: string, conversationHistory:
       while (true) {
         const boundary = findBoundary(buffer);
         if (boundary.index < 0) break;
-        const block = buffer.slice(0, boundary.index);
+        consume(buffer.slice(0, boundary.index));
         buffer = buffer.slice(boundary.index + boundary.length);
-        consume(block);
       }
     }
     buffer += decoder.decode();
     if (buffer.trim()) consume(buffer);
-
     if (firstTokenTimer) clearTimeout(firstTokenTimer);
     if (finalResult) return normalizeStreamResult(finalResult, activeMood, conversationHistory, userDirectives);
     throw new Error('ULTRON streaming ended without a final response.');
@@ -164,7 +168,6 @@ async function patchIntegratedInterface(targetRoot) {
   const start = service.indexOf(STREAM_SERVICE_MARKER);
   if (start >= 0) service = service.slice(0, start) + streamServiceCode;
   else service += streamServiceCode;
-
   let context = await fs.readFile(contextPath, 'utf8');
   const fallbackPattern = /const result = await api\.sendUltronQuery\(text\.trim\(\), historyForApi, mood, userRequirements\);/;
   const streamingCall = `let streamingMessageId: string | null = null;
@@ -218,13 +221,11 @@ async function main() {
   const currentSyncVersion = await fs.readFile(syncVersionFile, 'utf8').catch(() => '');
   const entryExists = await fs.stat(path.join(targetRoot, 'src', 'main.tsx')).then(() => true).catch(() => false);
   const expectedSyncVersion = String(manifest.syncVersion || '1');
-
   if (currentRef.trim() === manifest.ref && currentSyncVersion.trim() === expectedSyncVersion && entryExists) {
     await fs.writeFile(path.join(targetRoot, 'vite.config.ts'), localViteConfig, 'utf8');
     await patchIntegratedInterface(targetRoot);
     return;
   }
-
   await syncInterfaceFiles(manifest, targetRoot);
 }
 
