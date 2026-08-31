@@ -4,6 +4,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { registerTool } = require('../core/executor');
 const voice = require('../core/voice');
+const github = require('../core/github-controller');
 
 function registerBuiltinTools() {
   registerTool('system_info', async () => ({ platform: process.platform, arch: process.arch, hostname: os.hostname(), release: os.release(), cpus: os.cpus().length, memory_gb: Number((os.totalmem() / 1024 ** 3).toFixed(2)), free_memory_gb: Number((os.freemem() / 1024 ** 3).toFixed(2)), uptime_seconds: os.uptime(), username: os.userInfo().username }), {
@@ -15,7 +16,7 @@ function registerBuiltinTools() {
     return fs.readdirSync(resolved, { withFileTypes: true }).map(entry => ({ name: entry.name, type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other' }));
   }, {
     description: 'List files and folders in a requested local directory.', requiresConfirmation: false, risk: 'low',
-    inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'Directory path.' } }, additionalProperties: false },
+    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, additionalProperties: false },
   });
 
   registerTool('read_file', async (input = {}) => {
@@ -24,7 +25,7 @@ function registerBuiltinTools() {
     return { path: resolved, content: fs.readFileSync(resolved, 'utf8').slice(0, 200000) };
   }, {
     description: 'Read a local UTF-8 text file.', requiresConfirmation: false, risk: 'low',
-    inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'File path.' } }, required: ['path'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
   });
 
   registerTool('write_file', async (input = {}) => {
@@ -63,6 +64,27 @@ function registerBuiltinTools() {
   registerTool('speak_text', async (input = {}) => voice.speakAndPlay(input.text, { filename: input.filename }), {
     description: 'Convert text into ULTRON cloned voice audio and play it on the local Windows machine.', requiresConfirmation: false, risk: 'low',
     inputSchema: { type: 'object', properties: { text: { type: 'string' }, filename: { type: 'string' } }, required: ['text'], additionalProperties: false },
+  });
+
+  registerTool('github_repo_info', async input => github.getRepo(input), {
+    description: 'Read ULTRON GitHub repository metadata.', requiresConfirmation: false, risk: 'low',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  });
+  registerTool('github_list_files', async input => github.listFiles(input), {
+    description: 'List files and directories in the ULTRON GitHub repository.', requiresConfirmation: false, risk: 'low',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, ref: { type: 'string' } }, additionalProperties: false },
+  });
+  registerTool('github_read_file', async input => github.readFile(input), {
+    description: 'Read a UTF-8 file from the ULTRON GitHub repository.', requiresConfirmation: false, risk: 'low',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, ref: { type: 'string' } }, required: ['path'], additionalProperties: false },
+  });
+  registerTool('github_create_file', async input => github.createFile(input), {
+    description: 'Create a UTF-8 file in the ULTRON GitHub repository automatically.', requiresConfirmation: false, risk: 'medium',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, message: { type: 'string' }, branch: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false },
+  });
+  registerTool('github_update_file', async input => github.updateFile(input), {
+    description: 'Update an existing UTF-8 file in the ULTRON GitHub repository automatically. Reads the current SHA when one is not supplied.', requiresConfirmation: false, risk: 'medium',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, message: { type: 'string' }, branch: { type: 'string' }, sha: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false },
   });
 }
 
