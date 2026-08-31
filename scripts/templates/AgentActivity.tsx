@@ -5,6 +5,7 @@ const LABELS: Record<string, string> = { thinking: 'THINKING', planning: 'PLANNI
 const DOTS: Record<string, string> = { thinking: '◌', planning: '◌', researching: '⌁', inspecting: '⌕', executing: '⚙', synthesizing: '◇', responding: '→', speaking: '◉', complete: '✓', error: '!' };
 function normalizeState(event: ActivityEvent) { const raw = String(event.state || event.type || '').toLowerCase(); if (raw === 'meta') return 'thinking'; if (raw === 'tool') return 'executing'; if (raw === 'delta') return 'responding'; if (raw === 'final') return 'complete'; return LABELS[raw] ? raw : 'thinking'; }
 function formatDuration(ms: number) { return Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)}s` : '0.0s'; }
+function toolName(event?: ActivityEvent | null) { return event?.tool || event?.toolCalls?.[0]?.function?.name || event?.toolResults?.[0]?.toolCall?.function?.name || ''; }
 export const AgentActivity: React.FC = () => {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [active, setActive] = useState<ActivityEvent | null>(null);
@@ -13,7 +14,7 @@ export const AgentActivity: React.FC = () => {
   useEffect(() => {
     const handler = (customEvent: Event) => {
       const detail = (customEvent as CustomEvent<ActivityEvent>).detail || {};
-      const event = { ...detail, at: detail.at || Date.now() };
+      const event = { ...detail, tool: toolName(detail), at: detail.at || Date.now() };
       const state = normalizeState(event);
       const normalized = { ...event, state };
       if (state === 'complete' || state === 'error') { setActive(null); setEvents((prev) => [...prev, normalized].slice(-10)); }
