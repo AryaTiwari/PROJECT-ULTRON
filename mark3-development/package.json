@@ -1,15 +1,15 @@
 {
   "name": "ultron-mark3",
-  "version": "3.0.0-beta.3",
+  "version": "3.0.0-beta.2",
   "private": true,
   "type": "commonjs",
   "description": "ULTRON Mark 3 personal operating assistant",
   "scripts": {
-    "start": "node --env-file=../.env server.js",
-    "check": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/smoke-test.js",
+    "start": "node --env-file=../.env scripts/ensure-omniroute.mjs && node --env-file=../.env server.js",
+    "check": "node --env-file=../.env scripts/ensure-omniroute.mjs && node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/smoke-test.js",
     "check:memory": "node scripts/memory-test.js",
-    "check:providers": "node --env-file=../.env scripts/openrouter-test.js",
-    "check:models": "node --env-file=../.env scripts/openrouter-test.js && node --env-file=../.env scripts/model-test.js",
+    "check:providers": "node --env-file=../.env scripts/ensure-omniroute.mjs && node --env-file=../.env scripts/provider-test.js",
+    "check:models": "node --env-file=../.env scripts/ensure-omniroute.mjs && node --env-file=../.env scripts/provider-test.js && node --env-file=../.env scripts/model-test.js",
     "check:voice": "node --env-file=../.env scripts/voice-test.js",
     "preflight": "node scripts/preflight.js"
   }
