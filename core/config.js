@@ -10,6 +10,7 @@ function normalizeBaseUrl(value) {
 }
 
 const omniRouteBase = normalizeBaseUrl(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1');
+const omniRouteEndpointKey = process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '';
 
 const config = {
   name: process.env.ULTRON_NAME || 'ULTRON',
@@ -24,7 +25,7 @@ const config = {
   router: {
     baseUrl: omniRouteBase,
     endpoint: process.env.OMNIROUTE_CHAT_URL || `${omniRouteBase}/chat/completions`,
-    apiKey: process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '',
+    apiKey: omniRouteEndpointKey,
     model: process.env.ULTRON_MODEL || 'auto',
     timeoutMs: numberEnv('ULTRON_MODEL_TIMEOUT_MS', 120000),
   },
