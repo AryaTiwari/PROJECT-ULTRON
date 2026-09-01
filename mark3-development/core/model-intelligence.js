@@ -40,16 +40,29 @@ function summarize(taskType = null) {
   }));
 }
 
+function isRoutingAlias(id) {
+  const value = String(id || '').trim().toLowerCase();
+  if (!value) return true;
+  if (/^auto(?:\/|$)/i.test(value)) return true;
+  if (/^omniroute\//i.test(value)) return true;
+  if (/^no-think(?:\/|$)/i.test(value)) return true;
+  if (/^(?:oc|opencode)(?:\/|$)/i.test(value)) return true;
+  return false;
+}
+
+function isBridgeModelId(id) {
+  const value = String(id || '').trim().toLowerCase();
+  if (!value) return false;
+  const segments = value.split(/[\\/_-]+/).filter(Boolean);
+  return segments.includes('dva') || segments.includes('devin') || segments.includes('agentic');
+}
+
+function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
+
 function isAssistantEligibleModel(id) {
   const value = String(id || '').trim();
-  if (!value) return false;
-  const segments = value.toLowerCase().split(/[\/_-]+/).filter(Boolean);
-  const first = segments[0] || '';
-  const blockedNamespaces = new Set(['auto', 'omniroute', 'big', 'pickle', 'dva', 'devin', 'agentic', 'bridge', 'oc', 'opencode', 'no', 'think']);
-  if (blockedNamespaces.has(first)) return false;
-  if (blockedNamespaces.has(segments[1] || '')) return false;
-  if (segments.includes('dva') || segments.includes('devin') || segments.includes('agentic') || segments.includes('bridge')) return false;
-  if (/big[-_ ]?pickle/i.test(value)) return false;
+  if (!value || isRoutingAlias(value) || isBigPickle(value)) return false;
+  if (isBridgeModelId(value)) return config.agenticBridgeEnabled;
   return true;
 }
 
@@ -58,13 +71,18 @@ async function catalog() {
   try {
     const models = await parentRouter.listModels({ force: true });
     const raw = [...new Set((models || []).map(String).map(value => value.trim()).filter(Boolean))];
-    const eligible = raw.filter(isAssistantEligibleModel);
-    if (!eligible.length) throw new Error('OmniRoute catalog returned no direct-provider assistant models.');
+    const direct = raw.filter(id => isAssistantEligibleModel(id) && !isBridgeModelId(id));
+    const agentic = config.agenticBridgeEnabled ? raw.filter(id => isAssistantEligibleModel(id) && isBridgeModelId(id)) : [];
+    const all = [...direct, ...agentic];
+    if (!all.length) throw new Error('OmniRoute catalog returned no assistant-eligible models.');
     return {
-      models: eligible,
-      count: eligible.length,
+      models: all,
+      count: all.length,
       rawCount: raw.length,
-      source: 'shared-omniroute-router-direct-providers',
+      directModels: direct,
+      agenticModels: agentic,
+      bridgeEnabled: config.agenticBridgeEnabled,
+      source: 'shared-omniroute-router-policy-catalog',
     };
   } catch (error) {
     const diagnostic = error instanceof Error ? error.message : String(error);
@@ -74,7 +92,18 @@ async function catalog() {
 
 async function intelligence(taskType = null) {
   const live = await catalog();
-  return { live, observed: summarize(taskType), generatedAt: new Date().toISOString() };
+  const observed = summarize(taskType);
+  return { live, observed, generatedAt: new Date().toISOString() };
 }
 
-module.exports = { record, history, summarize, catalog, intelligence, isAssistantEligibleModel };
+module.exports = {
+  record,
+  history,
+  summarize,
+  catalog,
+  intelligence,
+  isRoutingAlias,
+  isBridgeModelId,
+  isBigPickle,
+  isAssistantEligibleModel,
+};
