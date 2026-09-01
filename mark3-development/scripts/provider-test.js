@@ -28,14 +28,22 @@ const PRIORITY = ['opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vert
       const failures = [];
       for (const model of candidates) {
         try {
-          const result = await integrations.chat(
+          // Provider diagnostics must test THIS provider/model only.
+          // Do not use integrations.chat(), because its deliberate runtime fallback can
+          // make an unhealthy provider appear healthy by succeeding through another one.
+          const result = await integrations.chatExact(
             [{ role: 'system', content: 'Reply with exactly: PROVIDER_OK' }, { role: 'user', content: 'Reply with exactly: PROVIDER_OK' }],
             model,
             null,
           );
           const text = result?.choices?.[0]?.message?.content || result?.response || result?.text || '';
+          const actualProvider = result?.__ultron?.actualProvider || provider;
+          if (actualProvider !== provider) {
+            failures.push(`${model}: provider mismatch (returned ${actualProvider})`);
+            continue;
+          }
           if (String(text).trim()) {
-            passed = { model: result?.model || model };
+            passed = { model: result?.__ultron?.actualModel || result?.model || model };
             break;
           }
           failures.push(`${model}: empty response`);
