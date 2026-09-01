@@ -1,11 +1,25 @@
 const integrations = require('../core/integrations');
 
-const PRIORITY = ['opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex'];
+const PRIORITY = integrations.PROVIDER_PRIORITY || [
+  'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot',
+  'opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex',
+];
 const MAX_CANDIDATES_PER_PROVIDER = Math.max(6, Number(process.env.ULTRON_M3_PROVIDER_PROBE_CANDIDATES || 18));
 
+function canonicalPrefixes(provider) {
+  const prefixes = {
+    'gemini-cli': ['gemini-cli/'],
+    kiro: ['kr/', 'kiro/'],
+    qoder: ['if/', 'qoder/'],
+    qwen: ['qw/', 'qwen/'],
+    'github-copilot': ['gh/', 'github-copilot/'],
+  };
+  return prefixes[provider] || [`${provider}/`];
+}
+
 function canonicalCandidates(provider, models) {
-  const prefix = `${provider}/`;
-  const canonical = models.filter((model) => String(model).toLowerCase().startsWith(prefix));
+  const prefixes = canonicalPrefixes(provider).map((x) => x.toLowerCase());
+  const canonical = models.filter((model) => prefixes.some((prefix) => String(model).toLowerCase().startsWith(prefix)));
   const aliases = models.filter((model) => !canonical.includes(model));
   return [...canonical, ...aliases].slice(0, MAX_CANDIDATES_PER_PROVIDER);
 }
@@ -17,26 +31,21 @@ function classifyFailure(error) {
   if (status === 402 || /payment_required|requires an opencode api key|billing_error|requires .* api key|paid model/.test(lower)) return 'PAID_MODEL';
   if ([401, 403].includes(status) || /missing api key|invalid_api_key|no active credentials|authentication failed|provider authentication|you have no permission to access this resource/.test(lower)) return 'CREDENTIALS_OR_ACCESS';
   if (status === 429 || /quota|rate limit|exhausted/.test(lower)) return 'QUOTA_OR_RATE_LIMIT';
-  if (status === 404 || /model does not exist|model_not_found|not available in the active live catalog/.test(lower)) return 'MODEL_UNAVAILABLE';
+  if (status === 404 || /model does not exist|model_not_found|not available in the active live catalog|invalid model or alias/.test(lower)) return 'MODEL_UNAVAILABLE';
   if (status >= 500 || /endpoint is unavailable|upstream request failed|timed out|fetch failed|econnrefused|connect/.test(lower)) return 'UPSTREAM_OR_NETWORK';
   return 'UNKNOWN';
 }
 
 function diagnosisFor(provider, failures) {
   const classes = failures.map((item) => item.kind);
-  if (classes.includes('PAID_MODEL') && classes.every((kind) => kind === 'PAID_MODEL')) return 'All probed models require paid/provider credentials. They are skipped; no paid model is selected.';
-  if (classes.includes('CREDENTIALS_OR_ACCESS')) {
-    if (provider === 'opencode') return 'OpenCode is listed, but the probed free/paid candidates are not usable without valid OpenCode provider credentials.';
-    if (provider === 'pollinations') return 'Pollinations is reachable, but usable candidates require a valid Pollinations API key.';
-    if (provider === 'nvidia') return 'NVIDIA is listed, but the tested routes require a valid NVIDIA credential.';
-    if (provider === 'zenmux') return 'ZenMux is reachable, but the current account/key has no permission for the tested models.';
-    if (provider === 'bytez') return 'Bytez is reachable, but its current authentication/connection is invalid or expired.';
-    if (provider === 'vertex') return 'Vertex is listed, but no active usable Vertex credential is available.';
+  if (classes.includes('PAID_MODEL') && !classes.some((kind) => ['CREDENTIALS_OR_ACCESS', 'QUOTA_OR_RATE_LIMIT', 'MODEL_UNAVAILABLE', 'UPSTREAM_OR_NETWORK', 'UNKNOWN'].includes(kind))) {
+    return 'All tested models are paid-only; skipped without selecting any paid model.';
   }
-  if (classes.includes('QUOTA_OR_RATE_LIMIT')) return 'Provider is configured but currently quota/rate-limit constrained.';
-  if (classes.includes('MODEL_UNAVAILABLE')) return 'OmniRoute contains catalog entries that the provider currently does not expose; stale candidates are skipped.';
-  if (classes.includes('UPSTREAM_OR_NETWORK')) return 'OmniRoute or the provider upstream endpoint is temporarily unavailable.';
-  return 'Provider failed without a recognized diagnostic classification.';
+  if (classes.includes('CREDENTIALS_OR_ACCESS')) return `${provider}: authentication or account access is required for the currently probed candidates.`;
+  if (classes.includes('QUOTA_OR_RATE_LIMIT')) return `${provider}: configured, but currently quota/rate-limit constrained.`;
+  if (classes.includes('MODEL_UNAVAILABLE')) return `${provider}: some catalog entries are stale/unavailable upstream; those candidates are skipped.`;
+  if (classes.includes('UPSTREAM_OR_NETWORK')) return `${provider}: provider/upstream endpoint is temporarily unavailable.`;
+  return `${provider}: no usable model found in the tested candidate set.`;
 }
 
 (async () => {
@@ -53,7 +62,8 @@ function diagnosisFor(provider, failures) {
     }
 
     console.log(`OmniRoute catalog: ${ids.length} direct-provider models.`);
-    console.log(`Provider probe depth: ${MAX_CANDIDATES_PER_PROVIDER} candidates/provider (paid models are skipped, not selected).`);
+    console.log(`Free/OAuth-first provider order: ${PRIORITY.join(' -> ')}`);
+    console.log(`Provider probe depth: ${MAX_CANDIDATES_PER_PROVIDER} candidates/provider (paid models are skipped).`);
 
     for (const provider of PRIORITY) {
       const candidates = canonicalCandidates(provider, groups.get(provider) || []);
