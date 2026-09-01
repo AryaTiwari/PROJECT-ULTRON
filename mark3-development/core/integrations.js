@@ -36,6 +36,12 @@ function stringifyError(value) {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
+function extractUpstreamTarget(text) {
+  const value = String(text || '');
+  const match = value.match(/\[(?<provider>[a-z0-9_-]+)\/(?<model>[^\]]+)\]/i);
+  return match?.groups ? { provider: String(match.groups.provider).toLowerCase(), model: String(match.groups.model) } : null;
+}
+
 async function requestJson(url, options, timeoutMs = 30000) {
   const timeout = withTimeout(timeoutMs);
   try {
@@ -48,6 +54,7 @@ async function requestJson(url, options, timeoutMs = 30000) {
       const error = new Error(`HTTP ${response.status}: ${stringifyError(detail).slice(0, 2000)}`);
       error.status = response.status;
       error.body = data;
+      error.upstream = extractUpstreamTarget(String(detail));
       throw error;
     }
     return data;
@@ -95,7 +102,7 @@ function payloadModels(payload) {
 
 function isRoutingAlias(id) {
   const value = String(id || '').trim().toLowerCase();
-  return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value);
+  return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value) || /^oc(?:\/|$)/.test(value);
 }
 
 function isDevinModel(id) {
@@ -135,6 +142,11 @@ function isProviderCredentialError(error) {
   return /no active credentials for provider|api keys are not supported|expected oauth2|oauth2 access token|oauth 2|provider authentication|authentication credentials that assert a principal|invalid_api_key|credentials.*provider|you have no permission to access this resource/.test(text);
 }
 
+function isRetryableCandidateError(error) {
+  const status = Number(error?.status || 0);
+  return status === 401 || status === 403 || status === 404 || status === 409 || status === 429 || (status >= 500 && status <= 599);
+}
+
 const PROVIDER_PRIORITY = ['opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex'];
 const providerHealth = new Map();
 
@@ -145,6 +157,8 @@ function providerPriority(modelId) {
   const healthPenalty = health?.healthy === false ? 50 : 0;
   return (index === -1 ? 100 : index) * 100 + healthPenalty;
 }
+
+function canonicalProviderPrefix(provider) { return `${String(provider || '').toLowerCase()}/`; }
 
 function diversifyCandidates(modelIds, limit) {
   const groups = new Map();
@@ -157,7 +171,9 @@ function diversifyCandidates(modelIds, limit) {
   const out = [];
   for (const provider of orderedProviders) {
     const group = groups.get(provider) || [];
-    for (const id of group.slice(0, 3)) out.push(id);
+    const canonical = group.filter((id) => String(id).toLowerCase().startsWith(canonicalProviderPrefix(provider)));
+    const fallback = group.filter((id) => !canonical.includes(id));
+    for (const id of [...canonical, ...fallback].slice(0, 3)) out.push(id);
   }
   return out.slice(0, Math.max(1, Number(limit) || 12));
 }
@@ -172,6 +188,33 @@ async function concreteModels(limit = 12) {
 
 async function concreteModel() { return (await concreteModels(1))[0]; }
 
+async function chatExact(messages, model, tools) {
+  const key = await resolveOmniRouteApiKey();
+  if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
+  const selected = String(model || '').trim();
+  if (!selected || !isDirectProviderModel(selected)) throw new Error(`Invalid direct provider model: ${selected || '(empty)'}`);
+  const provider = providerFromModel(selected);
+  const data = await requestJson(config.omnirouteBase + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+    body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
+  }, 120000);
+  const actualModel = String(data?.model || '').trim();
+  const actualProvider = actualModel ? providerFromModel(actualModel) : provider;
+  if (actualProvider && actualProvider !== provider && actualProvider !== 'unknown') {
+    const mismatch = new Error(`Provider mismatch: requested ${provider}/${selected.split('/').slice(1).join('/')} but OmniRoute returned ${actualProvider}/${actualModel.split('/').slice(1).join('/') || actualModel}.`);
+    mismatch.status = 502;
+    mismatch.requestedProvider = provider;
+    mismatch.requestedModel = selected;
+    mismatch.actualProvider = actualProvider;
+    mismatch.actualModel = actualModel;
+    throw mismatch;
+  }
+  data.__ultron = { provider, model: selected, actualProvider, actualModel: actualModel || selected, exact: true };
+  providerHealth.set(provider, { healthy: true, checkedAt: Date.now(), model: selected });
+  return data;
+}
+
 async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
@@ -180,26 +223,36 @@ async function chat(messages, model, tools) {
   if (requested && isDirectProviderModel(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
 
   const failures = [];
+  const exhaustedProviders = new Set();
   for (const selected of [...new Set(candidates)]) {
     const provider = providerFromModel(selected);
+    if (exhaustedProviders.has(provider)) continue;
     try {
-      const data = await requestJson(config.omnirouteBase + '/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-        body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
-      }, 120000);
-      data.__ultron = { provider, model: selected };
-      providerHealth.set(provider, { healthy: true, checkedAt: Date.now(), model: selected });
-      return data;
+      return await chatExact(messages, selected, tools);
     } catch (error) {
       error.model = selected;
       error.provider = provider;
       const credentialFailure = isProviderCredentialError(error);
-      failures.push({ model: selected, provider, status: error.status || null, message: error.message, credentialFailure });
-      if (credentialFailure) providerHealth.set(provider, { healthy: false, checkedAt: Date.now(), error: error.message });
-      if (!credentialFailure && !(Number(error?.status) >= 500 && Number(error?.status) <= 599)) throw error;
+      const upstream = error.upstream?.provider || error.actualProvider || null;
+      failures.push({ model: selected, provider, status: error.status || null, message: error.message, credentialFailure, upstreamProvider: upstream });
+
+      if (credentialFailure) {
+        providerHealth.set(provider, { healthy: false, checkedAt: Date.now(), error: error.message });
+        exhaustedProviders.add(provider);
+        continue;
+      }
+
+      if (upstream && upstream !== provider) {
+        providerHealth.set(provider, { healthy: false, checkedAt: Date.now(), error: error.message, upstreamProvider: upstream });
+        exhaustedProviders.add(provider);
+        continue;
+      }
+
+      if (isRetryableCandidateError(error)) continue;
+      throw error;
     }
   }
+
   const summary = failures.map((x) => `${x.provider}/${x.model}: ${x.status || 'ERR'} ${x.message}`).join(' | ');
   const error = new Error(`OmniRoute could not find a working enabled-provider model. Tried ${failures.length} candidates. ${summary}`);
   error.status = failures.at(-1)?.status || 503;
@@ -213,4 +266,4 @@ async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, isProviderCredentialError, concreteModels, concreteModel, chat, providerHealthSnapshot, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, isProviderCredentialError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, providerHealthSnapshot, speak };
