@@ -95,7 +95,7 @@ function payloadModels(payload) {
 
 function isRoutingAlias(id) {
   const value = String(id || '').trim().toLowerCase();
-  return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value) || /^oc(?:\/|$)/.test(value);
+  return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value);
 }
 
 function isDevinModel(id) {
@@ -114,16 +114,25 @@ function isDirectProviderModel(id) {
 
 function providerFromModel(id) {
   const first = String(id || '').split('/')[0].trim().toLowerCase();
-  if (!first) return 'unknown';
-  const map = { vertex: 'vertex', nvidia: 'nvidia', pollinations: 'pollinations', opencode: 'opencode', zenmux: 'zenmux', bytez: 'bytez' };
-  return map[first] || first;
+  const map = {
+    vertex: 'vertex',
+    nvidia: 'nvidia',
+    pollinations: 'pollinations',
+    pol: 'pollinations',
+    opencode: 'opencode',
+    oc: 'opencode',
+    zenmux: 'zenmux',
+    zm: 'zenmux',
+    bytez: 'bytez',
+  };
+  return map[first] || first || 'unknown';
 }
 
 function isProviderCredentialError(error) {
   const status = Number(error?.status || 0);
   if (![401, 403, 404].includes(status)) return false;
   const text = `${error?.message || ''} ${stringifyError(error?.body || '')}`.toLowerCase();
-  return /no active credentials for provider|api keys are not supported|expected oauth2|oauth2 access token|oauth 2|provider authentication|authentication credentials that assert a principal|invalid_api_key|credentials.*provider/.test(text);
+  return /no active credentials for provider|api keys are not supported|expected oauth2|oauth2 access token|oauth 2|provider authentication|authentication credentials that assert a principal|invalid_api_key|credentials.*provider|you have no permission to access this resource/.test(text);
 }
 
 const PROVIDER_PRIORITY = ['opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex'];
@@ -137,9 +146,9 @@ function providerPriority(modelId) {
   return (index === -1 ? 100 : index) * 100 + healthPenalty;
 }
 
-function diversifyCandidates(models, limit) {
+function diversifyCandidates(modelIds, limit) {
   const groups = new Map();
-  for (const id of models) {
+  for (const id of modelIds) {
     const provider = providerFromModel(id);
     if (!groups.has(provider)) groups.set(provider, []);
     groups.get(provider).push(id);
@@ -148,18 +157,17 @@ function diversifyCandidates(models, limit) {
   const out = [];
   for (const provider of orderedProviders) {
     const group = groups.get(provider) || [];
-    for (const id of group.slice(0, 2)) out.push(id);
+    for (const id of group.slice(0, 3)) out.push(id);
   }
-  for (const id of models) if (!out.includes(id)) out.push(id);
   return out.slice(0, Math.max(1, Number(limit) || 12));
 }
 
 async function concreteModels(limit = 12) {
   const available = payloadModels(await models()).filter(isDirectProviderModel);
   available.sort((a, b) => providerPriority(a) - providerPriority(b));
-  const usable = diversifyCandidates(available, Math.max(8, Number(limit) || 12));
-  if (!usable.length) throw new Error('OmniRoute /models returned no enabled-provider models after removing routing aliases, Devin, and Big Pickle.');
-  return usable;
+  const diversified = diversifyCandidates(available, Math.max(12, Number(limit) || 12));
+  if (!diversified.length) throw new Error('OmniRoute /models returned no enabled-provider models after removing routing aliases, Devin, and Big Pickle.');
+  return diversified;
 }
 
 async function concreteModel() { return (await concreteModels(1))[0]; }
@@ -168,9 +176,7 @@ async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
   const requested = String(model || '').trim();
-  let candidates = requested && isDirectProviderModel(requested) && !config.omniRouteStrict
-    ? [requested]
-    : await concreteModels(Math.max(10, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 16)));
+  let candidates = await concreteModels(Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 18));
   if (requested && isDirectProviderModel(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
 
   const failures = [];
@@ -201,9 +207,7 @@ async function chat(messages, model, tools) {
   throw error;
 }
 
-function providerHealthSnapshot() {
-  return [...providerHealth.entries()].map(([provider, state]) => ({ provider, ...state }));
-}
+function providerHealthSnapshot() { return [...providerHealth.entries()].map(([provider, state]) => ({ provider, ...state })); }
 
 async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
