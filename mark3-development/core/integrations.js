@@ -12,11 +12,15 @@ function readParentEnv(name) {
   } catch { return ''; }
 }
 
-async function resolveOpenRouterApiKey() {
-  if (config.openRouterApiKey) return config.openRouterApiKey;
-  const env = readParentEnv('OPENROUTER_API_KEY');
+async function resolveOmniRouteApiKey() {
+  const direct = String(config.omnirouteEndpointKey || process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim();
+  if (direct) return direct;
+  const env = readParentEnv('OMNIROUTE_ENDPOINT_KEY');
   if (env) return env;
-  try { return String((await loadCredentials()).OPENROUTER_API_KEY || '').trim(); } catch { return ''; }
+  try {
+    const saved = await loadCredentials();
+    return String(saved.OMNIROUTE_ENDPOINT_KEY || saved.OMNIROUTE_API_KEY || saved.ULTRON_OMNIROUTE_API_KEY || '').trim();
+  } catch { return ''; }
 }
 
 function withTimeout(timeoutMs) {
@@ -25,9 +29,80 @@ function withTimeout(timeoutMs) {
   return { controller, clear: () => clearTimeout(timer) };
 }
 
-function stringifyError(value) { if (value == null) return ''; if (typeof value === 'string') return value; try { return JSON.stringify(value); } catch { return String(value); } }
+function stringifyError(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
 
-async function requestJson(url, options, timeoutMs = 30000) {
+function extractUpstreamTarget(text) {
+  const match = String(text || '').match(/\[(?<provider>[a-z0-9_-]+)\/(?<model>[^\]]+)\]/i);
+  return match?.groups ? { provider: match.groups.provider.toLowerCase(), model: match.groups.model } : null;
+}
+
+function classifyProviderError(error) {
+  const status = Number(error?.status || 0);
+  const text = `${error?.message || ''} ${stringifyError(error?.body || '')}`.toLowerCase();
+  if (status === 402 || /payment_required|payment required|billing_error|requires .* api key|paid model/.test(text)) return 'PAID_MODEL';
+  if ([401, 403].includes(status) || /missing api key|invalid_api_key|no active credentials|authentication failed|permission|forbidden/.test(text)) return 'CREDENTIALS_OR_ACCESS';
+  if (status === 404 || /model.*not.*found|model.*does not exist|not available/.test(text)) return 'MODEL_UNAVAILABLE';
+  if (status === 429 || /quota|rate limit|exhausted|anti-abuse|too many requests/.test(text)) return 'QUOTA_OR_RATE_LIMIT';
+  if (status >= 500 || /endpoint is unavailable|upstream request failed|gateway|timed out|fetch failed|econnrefused|blocked by/.test(text)) return 'UPSTREAM_OR_NETWORK';
+  return 'UNKNOWN';
+}
+
+function isProviderCredentialError(error) { return classifyProviderError(error) === 'CREDENTIALS_OR_ACCESS'; }
+function isPaidModelError(error) { return classifyProviderError(error) === 'PAID_MODEL'; }
+function isRetryableCandidateError(error) { return classifyProviderError(error) !== 'UNKNOWN'; }
+
+function isRoutingAlias(id) {
+  const value = String(id || '').trim().toLowerCase();
+  return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value);
+}
+function isDevinModel(id) {
+  const value = String(id || '').trim().toLowerCase();
+  return /(^|[\\/_-])(dva|devin|agentic|bridge)([\\/_-]|$)/i.test(value);
+}
+function isBigPickle(id) { return config.disableBigPickle !== false && /big[-_ ]?pickle/i.test(String(id || '')); }
+function isDirectProviderModel(id) { const value = String(id || '').trim(); return Boolean(value && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value)); }
+
+const PROVIDER_PRIORITY = ['nvidia','chipotle','duckduckgo-web','felo-web','theoldllm','uncloseai','cloudflare-playground','codex-app-server','auggie','zcode','gemini-cli','kiro','qoder','qwen','github-copilot','opencode','pollinations','zenmux','bytez','vertex'];
+const PROVIDER_PREFIXES = {
+  nvidia:['nvidia/'], chipotle:['pepper/','chipotle/'], 'duckduckgo-web':['ddgw/'], 'felo-web':['felo/'], theoldllm:['tllm/'], uncloseai:['unc/'],
+  'cloudflare-playground':['cfp/'], 'codex-app-server':['cxa/'], auggie:['aug/'], zcode:['zc/'], 'gemini-cli':['gemini-cli/'], kiro:['kr/','kiro/'],
+  qoder:['if/','qoder/'], qwen:['qw/','qwen/'], 'github-copilot':['gh/','github-copilot/'], opencode:['opencode/','oc/'], pollinations:['pollinations/','pol/'], zenmux:['zenmux/','zm/'], bytez:['bytez/'], vertex:['vertex/']
+};
+const providerHealth = new Map();
+
+function providerFromModel(id) {
+  const first = String(id || '').split('/')[0].trim().toLowerCase();
+  const aliases = { pepper:'chipotle', chipotle:'chipotle', ddgw:'duckduckgo-web', felo:'felo-web', tllm:'theoldllm', unc:'uncloseai', cfp:'cloudflare-playground', cxa:'codex-app-server', aug:'auggie', zc:'zcode', kr:'kiro', kiro:'kiro', if:'qoder', qoder:'qoder', qw:'qwen', qwen:'qwen', gh:'github-copilot', 'github-copilot':'github-copilot', oc:'opencode', opencode:'opencode', pol:'pollinations', pollinations:'pollinations', zm:'zenmux', zenmux:'zenmux' };
+  return aliases[first] || first || 'unknown';
+}
+function providerPrefixes(provider) { return PROVIDER_PREFIXES[provider] || [`${provider}/`]; }
+
+function healthFile() { return config.providerHealthPath; }
+function loadHealth() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(healthFile(), 'utf8'));
+    for (const item of Array.isArray(raw) ? raw : []) if (item?.provider) providerHealth.set(String(item.provider), item);
+  } catch {}
+}
+function saveHealth() {
+  try {
+    fs.mkdirSync(path.dirname(healthFile()), { recursive: true });
+    fs.writeFileSync(healthFile(), JSON.stringify([...providerHealth.values()], null, 2), 'utf8');
+  } catch {}
+}
+loadHealth();
+
+function markProvider(provider, patch) {
+  providerHealth.set(provider, { provider, ...(providerHealth.get(provider) || {}), ...patch, checkedAt: Date.now() });
+  saveHealth();
+}
+function isFresh(item) { return item && Date.now() - Number(item.checkedAt || 0) < Number(config.providerHealthTtlMs || 1800000); }
+
+async function requestJson(url, options = {}, timeoutMs = 30000) {
   const timeout = withTimeout(timeoutMs);
   try {
     const response = await fetch(url, { ...(options || {}), signal: timeout.controller.signal });
@@ -37,141 +112,104 @@ async function requestJson(url, options, timeoutMs = 30000) {
     if (!response.ok) {
       const detail = data?.error || data?.message || data?.detail || data?.raw || text;
       const error = new Error(`HTTP ${response.status}: ${stringifyError(detail).slice(0, 2500)}`);
-      error.status = response.status; error.body = data;
+      error.status = response.status; error.body = data; error.upstream = extractUpstreamTarget(String(detail));
       throw error;
     }
     return data;
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error(`OpenRouter request timed out after ${timeoutMs}ms.`);
+    if (error?.name === 'AbortError') throw new Error(`OmniRoute request timed out after ${timeoutMs}ms.`);
     throw error;
   } finally { timeout.clear(); }
 }
 
-function githubHeaders() {
-  const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
-  if (config.githubToken) headers.Authorization = 'Bearer ' + config.githubToken;
-  return headers;
-}
-function githubPath(value) { return String(value || '').split('/').filter(Boolean).map(encodeURIComponent).join('/'); }
-async function githubReadFile(pathname, ref) {
-  if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
-  const useRef = ref || config.githubBranch;
-  const url = `https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents/${githubPath(pathname)}?ref=${encodeURIComponent(useRef)}`;
-  const data = await requestJson(url, { headers: githubHeaders() }, 20000);
-  if (data.type !== 'file' || !data.content) throw new Error(`GitHub path is not a readable file: ${pathname}`);
-  return { path: pathname, ref: useRef, sha: data.sha, content: Buffer.from(String(data.content).replace(/\r?\n/g, ''), 'base64').toString('utf8'), size: Number(data.size) || 0 };
-}
-async function githubList(pathname = '', ref) {
-  if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
-  const useRef = ref || config.githubBranch;
-  const suffix = pathname ? '/' + githubPath(pathname) : '';
-  return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: githubHeaders() }, 20000);
-}
-
 async function models() {
-  const key = await resolveOpenRouterApiKey();
-  if (!key) throw new Error('OpenRouter API key is not configured.');
-  return requestJson(config.openRouterBase + '/models', { headers: { Authorization: 'Bearer ' + key } }, 20000);
+  const key = await resolveOmniRouteApiKey();
+  if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
+  return requestJson(`${String(config.omnirouteBase).replace(/\/$/, '')}/models`, { headers: { Authorization: `Bearer ${key}` } }, 15000);
 }
-
 function payloadModelEntries(payload) {
-  const raw = Array.isArray(payload?.data) ? payload.data : [];
-  return raw.map((item) => typeof item === 'string' ? { id: item.trim(), raw: { id: item.trim() } } : { id: String(item?.id || '').trim(), raw: item }).filter((item) => item.id);
+  const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+  return raw.map((item) => typeof item === 'string' ? { id: item.trim(), raw: { id: item.trim() } } : { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item }).filter((item) => item.id);
 }
-function payloadModels(payload) { return payloadModelEntries(payload).map((item) => item.id); }
-function modelPricing(entry) {
-  const p = entry?.raw?.pricing || {};
-  return { prompt: Number(p.prompt || 0), completion: Number(p.completion || 0), request: Number(p.request || 0), image: Number(p.image || 0), webSearch: Number(p.web_search || 0), reasoning: Number(p.internal_reasoning || 0) };
-}
-function isFreeModelEntry(entry) { const p = modelPricing(entry); return [p.prompt, p.completion, p.request].every((v) => Number.isFinite(v) && v === 0); }
-function isRoutingAlias(id) { const value = String(id || '').trim().toLowerCase(); return value === 'openrouter/free' || value === 'openrouter/auto'; }
-function isDevinModel(id) { return /(^|[\\/_-])(dva|devin|agentic|bridge)([\\/_-]|$)/i.test(String(id || '')); }
-function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
-function isDirectProviderModel(id) { const value = String(id || '').trim(); return Boolean(value.includes('/') && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value)); }
-function providerFromModel(id) { const value = String(id || '').trim(); return value.includes('/') ? value.split('/')[0].toLowerCase() : 'unknown'; }
-function classifyProviderError(error) {
-  const status = Number(error?.status || 0); const text = `${error?.message || ''} ${stringifyError(error?.body || '')}`.toLowerCase();
-  if (status === 402 || /payment_required|insufficient credits|billing/.test(text)) return 'PAID_OR_BILLING';
-  if ([401,403].includes(status) || /invalid api key|authentication|unauthorized|forbidden/.test(text)) return 'CREDENTIALS_OR_ACCESS';
-  if (status === 404 || /model.*not.*found|model.*does not exist|unknown model/.test(text)) return 'MODEL_UNAVAILABLE';
-  if (status === 429 || /quota|rate limit|too many requests/.test(text)) return 'QUOTA_OR_RATE_LIMIT';
-  if (status >= 500 || /upstream|gateway|timed out|fetch failed|connect/.test(text)) return 'UPSTREAM_OR_NETWORK';
-  return 'UNKNOWN';
-}
-function isProviderCredentialError(error) { return classifyProviderError(error) === 'CREDENTIALS_OR_ACCESS'; }
-function isPaidModelError(error) { return classifyProviderError(error) === 'PAID_OR_BILLING'; }
-function isRetryableCandidateError(error) { return ['PAID_OR_BILLING','MODEL_UNAVAILABLE','QUOTA_OR_RATE_LIMIT','UPSTREAM_OR_NETWORK'].includes(classifyProviderError(error)); }
+function payloadModels(payload) { return [...new Set(payloadModelEntries(payload).map((item) => item.id))]; }
 
-const PROVIDER_PRIORITY = ['nvidia','openai','anthropic','google','qwen','deepseek','meta-llama','mistralai','z-ai','moonshotai'];
-const providerHealth = new Map();
-
-function modelScore(entry, taskType = 'general') {
-  const id = entry.id.toLowerCase(); const free = isFreeModelEntry(entry); let score = free ? 1000 : 100;
-  if (taskType === 'coding' && /(coder|code|devstral|qwen|deepseek|gpt)/.test(id)) score += 80;
-  if (taskType === 'research' && /(deepseek|qwen|gemini|claude|gpt)/.test(id)) score += 70;
-  if (taskType === 'planning' && /(reason|thinking|deepseek|qwen|claude|gpt)/.test(id)) score += 70;
-  if (taskType === 'simple_qa' && /(mini|flash|small|haiku)/.test(id)) score += 50;
-  if (Array.isArray(entry.raw?.supported_parameters) && entry.raw.supported_parameters.includes('tools')) score += 30;
-  if (Number(entry.raw?.context_length) >= 100000) score += 20;
-  const p = PROVIDER_PRIORITY.indexOf(providerFromModel(entry.id)); if (p >= 0) score += Math.max(0, 40 - p * 4);
-  return score;
+function candidateScore(entry, taskType = 'general') {
+  const id = entry.id.toLowerCase();
+  let score = 0;
+  const provider = providerFromModel(entry.id);
+  const health = providerHealth.get(provider);
+  if (isFresh(health) && health.healthy === true) score += 10000;
+  if (isFresh(health) && health.healthy === false) score -= 1000;
+  if (provider === 'nvidia') score += 500;
+  if (taskType === 'coding' && /(coder|code|devstral|qwen|deepseek|nemotron|gpt)/.test(id)) score += 100;
+  if (taskType === 'research' && /(deepseek|qwen|gemini|claude|gpt|nemotron)/.test(id)) score += 90;
+  if (taskType === 'planning' && /(thinking|reason|deepseek|qwen|claude|gpt|nemotron)/.test(id)) score += 90;
+  if (taskType === 'simple_qa' && /(mini|flash|small|haiku)/.test(id)) score += 60;
+  return score - PROVIDER_PRIORITY.indexOf(provider);
 }
 
-async function concreteModels(limit = 24, options = {}) {
+async function concreteModels(limit = 36, options = {}) {
   const entries = payloadModelEntries(await models()).filter((entry) => isDirectProviderModel(entry.id));
-  const eligible = config.freeOnly ? entries.filter(isFreeModelEntry) : entries;
-  eligible.sort((a,b) => modelScore(b, options.taskType || 'general') - modelScore(a, options.taskType || 'general'));
-  return eligible.slice(0, Math.max(1, Number(limit) || 24));
+  entries.sort((a, b) => candidateScore(b, options.taskType || 'general') - candidateScore(a, options.taskType || 'general'));
+  return entries.slice(0, Math.max(1, Number(limit) || 36));
 }
-async function concreteModel(options = {}) { return (await concreteModels(1, options))[0]?.id || 'openrouter/free'; }
+async function concreteModel(options = {}) { return (await concreteModels(1, options))[0]?.id || ''; }
 
 async function chatExact(messages, model, tools) {
-  const key = await resolveOpenRouterApiKey(); if (!key) throw new Error('OpenRouter API key is not configured.');
-  const selected = String(model || '').trim() || (config.freeOnly ? 'openrouter/free' : 'openrouter/free');
-  const body = { model: selected, messages, stream: false }; if (Array.isArray(tools) && tools.length) body.tools = tools;
-  const data = await requestJson(config.openRouterBase + '/chat/completions', { method:'POST', headers:{'Content-Type':'application/json',Authorization:'Bearer '+key}, body:JSON.stringify(body) }, 120000);
-  data.__ultron = { provider:'openrouter', model:selected, actualModel:data?.model || selected, exact:true }; return data;
+  const key = await resolveOmniRouteApiKey();
+  if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
+  const selected = String(model || '').trim();
+  if (!isDirectProviderModel(selected)) throw new Error(`Invalid direct provider model: ${selected || '(empty)'}`);
+  const provider = providerFromModel(selected);
+  const data = await requestJson(`${String(config.omnirouteBase).replace(/\/$/, '')}/chat/completions`, {
+    method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${key}`},
+    body:JSON.stringify({ model:selected, messages, stream:false, ...(Array.isArray(tools) && tools.length ? {tools} : {}) })
+  }, Number(config.omnirouteTimeoutMs || 120000));
+  const text = data?.choices?.[0]?.message?.content || data?.response || data?.text || '';
+  const actualModel = String(data?.model || selected);
+  const actualProvider = providerFromModel(actualModel);
+  if (actualProvider !== provider && actualProvider !== 'unknown') {
+    const mismatch = new Error(`OmniRoute provider mismatch: requested ${provider}/${selected} but response identified ${actualProvider}/${actualModel}.`);
+    mismatch.status = 502; mismatch.requestedProvider = provider; mismatch.requestedModel = selected; mismatch.actualProvider = actualProvider; mismatch.actualModel = actualModel;
+    throw mismatch;
+  }
+  if (!String(text).trim() && !Array.isArray(data?.choices?.[0]?.message?.tool_calls)) throw new Error('OmniRoute returned no usable content.');
+  markProvider(provider, { healthy:true, model:selected, actualModel });
+  data.__ultron = { provider, model:selected, actualProvider, actualModel, exact:true };
+  return data;
 }
 
 async function chat(messages, model, tools, options = {}) {
-  const key = await resolveOpenRouterApiKey(); if (!key) throw new Error('OpenRouter API key is not configured.');
   const requested = String(model || '').trim();
+  let candidates;
   if (requested && isDirectProviderModel(requested)) {
-    try { return await chatExact(messages, requested, tools); } catch (error) { if (!isRetryableCandidateError(error)) throw error; }
+    candidates = [requested, ...(await concreteModels(Number(config.modelCandidateLimit || 36), options)).map((entry) => entry.id).filter((id) => id !== requested)];
+  } else {
+    candidates = (await concreteModels(Number(config.modelCandidateLimit || 36), options)).map((entry) => entry.id);
   }
-  const candidates = await concreteModels(Math.max(12, config.modelCandidateLimit || 12), options);
-  if (!candidates.length) throw new Error('OpenRouter returned no eligible models.');
-  const ids = candidates.map((entry) => entry.id); const failures = [];
-  try {
-    const body = { model: ids[0], models: ids, messages, stream:false }; if (Array.isArray(tools) && tools.length) body.tools = tools;
-    const data = await requestJson(config.openRouterBase + '/chat/completions', { method:'POST', headers:{'Content-Type':'application/json',Authorization:'Bearer '+key}, body:JSON.stringify(body) }, 120000);
-    data.__ultron = { provider:'openrouter', model:ids[0], actualModel:data?.model || ids[0], fallbackChain:ids }; return data;
-  } catch (error) {
-    failures.push({model:ids[0],kind:classifyProviderError(error),message:error.message});
-    for (const entry of candidates.slice(1)) {
-      try { return await chatExact(messages, entry.id, tools); }
-      catch (candidateError) { failures.push({model:entry.id,kind:classifyProviderError(candidateError),message:candidateError.message}); }
+  const failures = [];
+  const exhausted = new Set();
+  for (const selected of [...new Set(candidates)]) {
+    const provider = providerFromModel(selected);
+    if (exhausted.has(provider)) continue;
+    try { return await chatExact(messages, selected, tools); }
+    catch (error) {
+      const kind = classifyProviderError(error);
+      failures.push({ provider, model:selected, kind, status:error?.status || null, message:error?.message || String(error) });
+      if (kind === 'CREDENTIALS_OR_ACCESS') { markProvider(provider, { healthy:false, error:error.message }); exhausted.add(provider); continue; }
+      if (kind === 'UPSTREAM_OR_NETWORK') continue;
+      if (kind === 'MODEL_UNAVAILABLE') continue;
+      if (kind === 'QUOTA_OR_RATE_LIMIT') { markProvider(provider, { healthy:false, error:error.message }); exhausted.add(provider); continue; }
+      if (kind === 'PAID_MODEL') continue;
+      if (error?.requestedProvider && error?.actualProvider && error.requestedProvider !== error.actualProvider) { markProvider(provider, { healthy:false, error:error.message, actualProvider:error.actualProvider }); exhausted.add(provider); continue; }
+      if (!isRetryableCandidateError(error)) throw error;
     }
-    const finalError = new Error(`OpenRouter could not produce a response after ${failures.length} model attempts.`); finalError.status=error?.status||503; finalError.failures=failures; throw finalError;
   }
+  const finalError = new Error(`OmniRoute could not produce a response after ${failures.length} candidate attempts.`);
+  finalError.status = failures.at(-1)?.status || 503; finalError.failures = failures; throw finalError;
 }
 
-async function streamChat(messages, model, tools, onDelta, options = {}) {
-  const key = await resolveOpenRouterApiKey(); if (!key) throw new Error('OpenRouter API key is not configured.');
-  const selected = String(model || '').trim() || 'openrouter/free';
-  const body = { model:selected, messages, stream:true }; if (Array.isArray(tools) && tools.length) body.tools=tools;
-  const timeout=withTimeout(120000);
-  try {
-    const response=await fetch(config.openRouterBase+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body),signal:timeout.controller.signal});
-    if(!response.ok){const text=await response.text();const error=new Error(`HTTP ${response.status}: ${text.slice(0,2000)}`);error.status=response.status;throw error;}
-    if(!response.body)throw new Error('OpenRouter streaming response has no body.');
-    const reader=response.body.getReader();const decoder=new TextDecoder();let buffer='';let final='';let actualModel=selected;
-    while(true){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split('\n');buffer=lines.pop()||'';for(const line of lines){const trimmed=line.trim();if(!trimmed.startsWith('data:'))continue;const payload=trimmed.slice(5).trim();if(payload==='[DONE]')continue;try{const json=JSON.parse(payload);actualModel=json?.model||actualModel;const delta=json?.choices?.[0]?.delta?.content;if(typeof delta==='string'&&delta){final+=delta;onDelta(delta,{model:actualModel,provider:'openrouter'});}}catch{}}}
-    return {choices:[{message:{role:'assistant',content:final}}],model:actualModel,__ultron:{provider:'openrouter',model:selected,actualModel}};
-  } finally { timeout.clear(); }
-}
+function providerHealthSnapshot() { return [...providerHealth.values()]; }
+async function speak(text) { return requestJson(`${config.parentCore}/api/tts`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,provider:'fish-audio-s2.1-pro-free',format:'mp3',volume:2})},120000); }
 
-function providerHealthSnapshot(){return [...providerHealth.entries()].map(([provider,state])=>({provider,...state}));}
-async function speak(text){return requestJson(config.parentCore+'/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,provider:'fish-audio-s2.1-pro-free',format:'mp3',volume:2})},120000);}
-
-module.exports={requestJson,resolveOpenRouterApiKey,githubReadFile,githubList,models,payloadModels,payloadModelEntries,modelPricing,isFreeModelEntry,isRoutingAlias,isDevinModel,isBigPickle,isDirectProviderModel,providerFromModel,classifyProviderError,isProviderCredentialError,isPaidModelError,isRetryableCandidateError,concreteModels,concreteModel,chatExact,chat,streamChat,providerHealthSnapshot,speak,PROVIDER_PRIORITY};
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile: async (...args) => { const [pathname, ref] = args; if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.'); const useRef=ref||config.githubBranch; const url=`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents/${String(pathname||'').split('/').filter(Boolean).map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(useRef)}`; const data=await requestJson(url,{headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',Authorization:`Bearer ${config.githubToken}`}},20000); if(data.type!=='file'||!data.content)throw new Error(`GitHub path is not a readable file: ${pathname}`); return {path:pathname,ref:useRef,sha:data.sha,content:Buffer.from(String(data.content).replace(/\r?\n/g,''),'base64').toString('utf8'),size:Number(data.size)||0}; }, githubList: async (...args) => { const [pathname, ref] = args; if(!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.'); const useRef=ref||config.githubBranch; const suffix=pathname?'/'+String(pathname).split('/').filter(Boolean).map(encodeURIComponent).join('/'):''; return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`,{headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',Authorization:`Bearer ${config.githubToken}`}},20000); }, models, payloadModels, payloadModelEntries, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, providerHealthSnapshot, speak, PROVIDER_PRIORITY };
