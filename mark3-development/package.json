@@ -1,4 +1,15 @@
 {
-  "name":"ultron-mark3","version":"3.0.0-alpha.1","private":true,"type":"commonjs","description":"ULTRON Mark 3 personal operating assistant",
-  "scripts":{"start":"node server.js","check":"node scripts/preflight.js && node scripts/smoke-test.js","check:memory":"node scripts/memory-test.js","check:models":"node scripts/model-test.js","check:voice":"node scripts/voice-test.js","preflight":"node scripts/preflight.js"}
+  "name":"ultron-mark3",
+  "version":"3.0.0-alpha.2",
+  "private":true,
+  "type":"commonjs",
+  "description":"ULTRON Mark 3 personal operating assistant",
+  "scripts":{
+    "start":"node --env-file=../.env server.js",
+    "check":"node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/smoke-test.js",
+    "check:memory":"node scripts/memory-test.js",
+    "check:models":"node --env-file=../.env scripts/model-test.js",
+    "check:voice":"node --env-file=../.env scripts/voice-test.js",
+    "preflight":"node scripts/preflight.js"
+  }
 }
