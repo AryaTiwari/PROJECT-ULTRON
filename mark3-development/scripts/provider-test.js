@@ -1,24 +1,35 @@
 const integrations = require('../core/integrations');
 
 const PRIORITY = integrations.PROVIDER_PRIORITY || [
+  'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai',
+  'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode',
   'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot',
   'opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex',
 ];
 const MAX_CANDIDATES_PER_PROVIDER = Math.max(6, Number(process.env.ULTRON_M3_PROVIDER_PROBE_CANDIDATES || 18));
 
-function canonicalPrefixes(provider) {
+function canonicalProviderPrefixes(provider) {
   const prefixes = {
+    chipotle: ['pepper/', 'chipotle/'],
+    'duckduckgo-web': ['ddgw/'],
+    'felo-web': ['felo/'],
+    theoldllm: ['tllm/'],
+    uncloseai: ['unc/'],
+    'cloudflare-playground': ['cfp/'],
+    'codex-app-server': ['cxa/'],
+    auggie: ['aug/'],
+    zcode: ['zc/'],
     'gemini-cli': ['gemini-cli/'],
     kiro: ['kr/', 'kiro/'],
     qoder: ['if/', 'qoder/'],
     qwen: ['qw/', 'qwen/'],
     'github-copilot': ['gh/', 'github-copilot/'],
   };
-  return prefixes[provider] || [`${provider}/`];
+  return prefixes[provider] || [`${String(provider || '').toLowerCase()}/`];
 }
 
 function canonicalCandidates(provider, models) {
-  const prefixes = canonicalPrefixes(provider).map((x) => x.toLowerCase());
+  const prefixes = canonicalProviderPrefixes(provider);
   const canonical = models.filter((model) => prefixes.some((prefix) => String(model).toLowerCase().startsWith(prefix)));
   const aliases = models.filter((model) => !canonical.includes(model));
   return [...canonical, ...aliases].slice(0, MAX_CANDIDATES_PER_PROVIDER);
@@ -28,24 +39,22 @@ function classifyFailure(error) {
   const status = Number(error?.status || 0);
   const message = String(error?.message || error || 'Unknown error');
   const lower = message.toLowerCase();
-  if (status === 402 || /payment_required|requires an opencode api key|billing_error|requires .* api key|paid model/.test(lower)) return 'PAID_MODEL';
-  if ([401, 403].includes(status) || /missing api key|invalid_api_key|no active credentials|authentication failed|provider authentication|you have no permission to access this resource/.test(lower)) return 'CREDENTIALS_OR_ACCESS';
+  if (status === 402 || /payment_required|requires .* api key|billing_error|payment required|paid model/.test(lower)) return 'PAID_MODEL';
+  if ([401, 403].includes(status) || /missing api key|invalid_api_key|no active credentials|authentication failed|provider authentication|you have no permission/.test(lower)) return 'CREDENTIALS_OR_ACCESS';
   if (status === 429 || /quota|rate limit|exhausted/.test(lower)) return 'QUOTA_OR_RATE_LIMIT';
-  if (status === 404 || /model does not exist|model_not_found|not available in the active live catalog|invalid model or alias/.test(lower)) return 'MODEL_UNAVAILABLE';
+  if (status === 404 || /model does not exist|model_not_found|not available in the active live catalog/.test(lower)) return 'MODEL_UNAVAILABLE';
   if (status >= 500 || /endpoint is unavailable|upstream request failed|timed out|fetch failed|econnrefused|connect/.test(lower)) return 'UPSTREAM_OR_NETWORK';
   return 'UNKNOWN';
 }
 
 function diagnosisFor(provider, failures) {
   const classes = failures.map((item) => item.kind);
-  if (classes.includes('PAID_MODEL') && !classes.some((kind) => ['CREDENTIALS_OR_ACCESS', 'QUOTA_OR_RATE_LIMIT', 'MODEL_UNAVAILABLE', 'UPSTREAM_OR_NETWORK', 'UNKNOWN'].includes(kind))) {
-    return 'All tested models are paid-only; skipped without selecting any paid model.';
-  }
-  if (classes.includes('CREDENTIALS_OR_ACCESS')) return `${provider}: authentication or account access is required for the currently probed candidates.`;
-  if (classes.includes('QUOTA_OR_RATE_LIMIT')) return `${provider}: configured, but currently quota/rate-limit constrained.`;
-  if (classes.includes('MODEL_UNAVAILABLE')) return `${provider}: some catalog entries are stale/unavailable upstream; those candidates are skipped.`;
-  if (classes.includes('UPSTREAM_OR_NETWORK')) return `${provider}: provider/upstream endpoint is temporarily unavailable.`;
-  return `${provider}: no usable model found in the tested candidate set.`;
+  if (classes.length && classes.every((kind) => kind === 'PAID_MODEL')) return 'All probed models are paid-only; Mark 3 will skip them and continue to other providers.';
+  if (classes.includes('CREDENTIALS_OR_ACCESS')) return `${provider} is listed, but its currently tested routes require unavailable credentials or access.`;
+  if (classes.includes('QUOTA_OR_RATE_LIMIT')) return `${provider} is configured but currently quota/rate-limit constrained.`;
+  if (classes.includes('MODEL_UNAVAILABLE')) return `${provider} has catalog entries that are stale/unavailable upstream; those candidates are skipped.`;
+  if (classes.includes('UPSTREAM_OR_NETWORK')) return `${provider} or its upstream endpoint is temporarily unavailable.`;
+  return `${provider} failed without a recognized diagnostic classification.`;
 }
 
 (async () => {
@@ -62,13 +71,13 @@ function diagnosisFor(provider, failures) {
     }
 
     console.log(`OmniRoute catalog: ${ids.length} direct-provider models.`);
-    console.log(`Free/OAuth-first provider order: ${PRIORITY.join(' -> ')}`);
-    console.log(`Provider probe depth: ${MAX_CANDIDATES_PER_PROVIDER} candidates/provider (paid models are skipped).`);
+    console.log(`Free/no-auth-first provider order: ${PRIORITY.join(' -> ')}`);
+    console.log(`Provider probe depth: ${MAX_CANDIDATES_PER_PROVIDER} candidates/provider.`);
 
     for (const provider of PRIORITY) {
       const candidates = canonicalCandidates(provider, groups.get(provider) || []);
       if (!candidates.length) {
-        results.push({ provider, ok: false, reason: 'no catalog models', diagnosis: 'No models published for this provider.' });
+        results.push({ provider, ok: false, reason: 'no catalog models', diagnosis: 'No catalog models published for this provider.' });
         console.log(`${provider}: SKIP (no catalog models)`);
         continue;
       }
@@ -117,7 +126,7 @@ function diagnosisFor(provider, failures) {
 
     if (!working.length) {
       console.error('No configured provider produced a usable response through OmniRoute.');
-      console.error('Provider remediation is required before Mark 3 can pass end-to-end inference.');
+      console.error('Mark 3 requires at least one accessible provider lane for inference.');
       process.exitCode = 1;
       return;
     }
@@ -127,7 +136,6 @@ function diagnosisFor(provider, failures) {
     const kind = classifyFailure(error);
     console.error(`Provider health test: FAIL [${kind}]`);
     console.error(`  ${error?.message || String(error)}`);
-    console.error('  Ensure OmniRoute is running before provider diagnostics.');
     process.exitCode = 1;
   }
 })();
