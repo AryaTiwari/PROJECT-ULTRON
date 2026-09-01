@@ -115,7 +115,7 @@ function isDirectProviderModel(id) {
 function providerFromModel(id) {
   const first = String(id || '').split('/')[0].trim().toLowerCase();
   if (!first) return 'unknown';
-  const map = { vertex: 'vertex', nvidia: 'nvidia', pollinations: 'pollinations', opencode: 'opencode', zenmux: 'zenmux', bytez: 'bytez', ddgw: 'ddgw', cfp: 'cfp', pepper: 'pepper' };
+  const map = { vertex: 'vertex', nvidia: 'nvidia', pollinations: 'pollinations', opencode: 'opencode', zenmux: 'zenmux', bytez: 'bytez' };
   return map[first] || first;
 }
 
@@ -126,10 +126,18 @@ function isProviderCredentialError(error) {
   return /no active credentials for provider|api keys are not supported|expected oauth2|oauth2 access token|oauth 2|provider authentication|authentication credentials that assert a principal|invalid_api_key|credentials.*provider/.test(text);
 }
 
+function providerPriority(modelId) {
+  const provider = providerFromModel(modelId);
+  const order = ['nvidia', 'pollinations', 'opencode', 'zenmux', 'bytez', 'vertex'];
+  const index = order.indexOf(provider);
+  return index === -1 ? 100 : index;
+}
+
 async function concreteModels(limit = 12) {
-  const available = payloadModels(await models());
-  const usable = available.filter(isDirectProviderModel).slice(0, Math.max(1, Number(limit) || 12));
-  if (!usable.length) throw new Error('OmniRoute /models returned no direct-provider models after removing routing aliases, Devin, and Big Pickle.');
+  const available = payloadModels(await models()).filter(isDirectProviderModel);
+  available.sort((a, b) => providerPriority(a) - providerPriority(b));
+  const usable = available.slice(0, Math.max(1, Number(limit) || 12));
+  if (!usable.length) throw new Error('OmniRoute /models returned no enabled-provider models after removing routing aliases, Devin, and Big Pickle.');
   return usable;
 }
 
@@ -139,9 +147,7 @@ async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
   const requested = String(model || '').trim();
-  let candidates = requested && isDirectProviderModel(requested) && !config.omniRouteStrict
-    ? [requested]
-    : await concreteModels(Math.max(8, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 12)));
+  let candidates = requested && isDirectProviderModel(requested) && !config.omniRouteStrict ? [requested] : await concreteModels(Math.max(8, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 12)));
   if (requested && isDirectProviderModel(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
 
   const failures = [];
@@ -152,7 +158,7 @@ async function chat(messages, model, tools) {
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
         body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
       }, 120000);
-      data.__ultron = { provider: 'omniroute', model: selected };
+      data.__ultron = { provider: providerFromModel(selected), model: selected };
       return data;
     } catch (error) {
       error.model = selected;
@@ -162,7 +168,7 @@ async function chat(messages, model, tools) {
     }
   }
   const summary = failures.map((x) => `${x.provider}/${x.model}: ${x.status || 'ERR'} ${x.message}`).join(' | ');
-  const error = new Error(`OmniRoute could not find a working provider model. Tried ${failures.length} candidates. ${summary}`);
+  const error = new Error(`OmniRoute could not find a working enabled-provider model. Tried ${failures.length} candidates. ${summary}`);
   error.status = failures.at(-1)?.status || 503;
   error.failures = failures;
   throw error;
