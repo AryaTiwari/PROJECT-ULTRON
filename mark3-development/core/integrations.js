@@ -88,88 +88,49 @@ async function models() {
   return requestJson(config.omnirouteBase + '/models', { headers: { Authorization: 'Bearer ' + key } }, 15000);
 }
 
-function isBridgeModelId(id) {
-  const value = String(id || '').trim().toLowerCase();
-  if (!value) return false;
-  const segments = value.split(/[\\/_-]+/).filter(Boolean);
-  return segments.includes('dva') || segments.includes('devin') || segments.includes('agentic');
-}
-
-function isRoutingAlias(id) {
-  const value = String(id || '').trim().toLowerCase();
-  if (!value) return true;
-  if (/^auto(?:\/|$)/i.test(value)) return true;
-  if (/^omniroute\//i.test(value)) return true;
-  // A no-think wrapper around a bridge model is still an explicit agentic model.
-  if (/^no-think(?:\/|$)/i.test(value) && !isBridgeModelId(value)) return true;
-  if (/^(?:oc|opencode)(?:\/|$)/i.test(value)) return true;
-  return false;
-}
-
-function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
-
-function isConcreteModelId(id) {
-  const value = String(id || '').trim();
-  return Boolean(value && !isRoutingAlias(value) && !isBigPickle(value) && !isBridgeModelId(value));
-}
-
-function isBridgeCapableModelId(id) {
-  const value = String(id || '').trim();
-  return Boolean(value && !isRoutingAlias(value) && !isBigPickle(value) && isBridgeModelId(value));
-}
-
-function isBridgeInfrastructureError(error) {
-  const body = stringifyError(error?.body || '');
-  const text = `${error?.message || ''} ${body}`.toLowerCase();
-  return /devin_agentic_home|unknown_devin_model|devin[_ -]?agentic|acp|bridge sandbox|agentic bridge/.test(text);
-}
-
-async function concreteModels(limit = 12) {
-  const payload = await models();
-  const available = payloadModels(payload).filter(isConcreteModelId);
-  if (!available.length) throw new Error('OmniRoute /models returned no direct-provider models.');
-  return available.slice(0, Math.max(1, Number(limit) || 12));
-}
-
-async function bridgeModels(limit = 12) {
-  const payload = await models();
-  const available = payloadModels(payload).filter(isBridgeCapableModelId);
-  if (!available.length) throw new Error('OmniRoute /models returned no Devin agentic bridge models.');
-  return available.slice(0, Math.max(1, Number(limit) || 12));
-}
-
 function payloadModels(payload) {
   const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
   return [...new Set(raw.map((item) => typeof item === 'string' ? item : item?.id || item?.model || item?.name || '').map(String).map((value) => value.trim()).filter(Boolean))];
 }
 
-async function concreteModel() { return (await concreteModels(1))[0]; }
-
-async function bridgeModel() {
-  const preferred = String(config.agenticBridgeModel || '').trim();
-  const available = await bridgeModels(Math.max(12, Number(process.env.ULTRON_M3_BRIDGE_MODEL_CANDIDATES || 12)));
-  return preferred && available.includes(preferred) ? preferred : available[0];
+function isRoutingAlias(id) {
+  const value = String(id || '').trim().toLowerCase();
+  return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value) || /^(?:oc|opencode)(?:\/|$)/.test(value);
 }
+
+function isDevinModel(id) {
+  const value = String(id || '').trim().toLowerCase();
+  if (!value) return false;
+  const segments = value.split(/[\\/_-]+/).filter(Boolean);
+  return segments.includes('dva') || segments.includes('devin') || segments.includes('agentic') || segments.includes('bridge');
+}
+
+function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
+
+function isDirectProviderModel(id) {
+  const value = String(id || '').trim();
+  return Boolean(value) && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value);
+}
+
+async function concreteModels(limit = 12) {
+  const available = payloadModels(await models());
+  const usable = available.filter(isDirectProviderModel).slice(0, Math.max(1, Number(limit) || 12));
+  if (!usable.length) throw new Error('OmniRoute /models returned no direct-provider models after removing routing aliases, Devin, and Big Pickle.');
+  return usable;
+}
+
+async function concreteModel() { return (await concreteModels(1))[0]; }
 
 async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
-
   const requested = String(model || '').trim();
-  const bridgeRequested = isBridgeCapableModelId(requested);
-  let candidates;
-  if (bridgeRequested && config.agenticBridgeEnabled) {
-    const alternates = await bridgeModels(Number(process.env.ULTRON_M3_BRIDGE_MODEL_CANDIDATES || 6)).catch(() => []);
-    candidates = [requested, ...alternates.filter((id) => id !== requested)];
-  } else if (bridgeRequested) {
-    throw new Error(`Agentic bridge model requested while Devin bridge support is disabled: ${requested}`);
-  } else if (requested && isConcreteModelId(requested) && !config.omniRouteStrict) {
-    candidates = [requested];
-  } else {
-    candidates = await concreteModels(Math.max(5, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 8)));
-    if (requested && isConcreteModelId(requested)) candidates.unshift(requested);
+  const candidates = requested && isDirectProviderModel(requested) && !config.omniRouteStrict
+    ? [requested]
+    : await concreteModels(Math.max(5, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 8)));
+  if (requested && !isDirectProviderModel(requested) && requested !== 'auto') {
+    throw new Error(`Mark 3 refuses non-provider/Devin model in provider-only mode: ${requested}`);
   }
-
   let lastError = null;
   for (const selected of [...new Set(candidates)]) {
     try {
@@ -177,21 +138,19 @@ async function chat(messages, model, tools) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
         body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
-      }, bridgeRequested ? config.agenticBridgeTimeoutMs : 120000);
+      }, 120000);
     } catch (error) {
       error.model = selected;
-      error.provider = isBridgeCapableModelId(selected) ? 'devin-agentic-bridge' : 'omniroute';
+      error.provider = 'omniroute';
       lastError = error;
-      if (bridgeRequested && isBridgeInfrastructureError(error)) continue;
       if (!Number(error?.status) || error.status < 500 || error.status > 599) throw error;
     }
   }
-
-  throw lastError || new Error(`OmniRoute: all ${bridgeRequested ? 'agentic bridge' : 'direct-provider'} candidates failed.`);
+  throw lastError || new Error('OmniRoute: all direct-provider model candidates failed.');
 }
 
 async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isConcreteModelId, isBridgeModelId, isBridgeCapableModelId, concreteModels, bridgeModels, concreteModel, bridgeModel, chat, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, concreteModels, concreteModel, chat, speak };
