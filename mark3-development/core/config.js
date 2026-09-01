@@ -7,7 +7,7 @@ function num(name, fallback) {
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.join(ROOT, 'data');
-const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1').replace(/\/$/, '');
+const openRouterBase = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
 
 module.exports = {
   root: ROOT,
@@ -15,15 +15,11 @@ module.exports = {
   workspaceDir: path.join(ROOT, 'workspace'),
   host: process.env.ULTRON_M3_HOST || '127.0.0.1',
   port: num('ULTRON_M3_PORT', 8790),
-  omnirouteBase: omniRouteBase,
-  omnirouteEndpointKey: String(
-    process.env.OMNIROUTE_ENDPOINT_KEY ||
-    process.env.OMNIROUTE_API_KEY ||
-    process.env.ULTRON_OMNIROUTE_API_KEY ||
-    ''
-  ).trim(),
-  omniRouteStrict: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_OMNIROUTE_STRICT || '1')),
-  disableBigPickle: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DISABLE_BIG_PICKLE || '1')),
+  openRouterBase,
+  openRouterApiKey: String(process.env.OPENROUTER_API_KEY || '').trim(),
+  openRouterStrict: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_OPENROUTER_STRICT || '1')),
+  freeOnly: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_FREE_ONLY || '0')),
+  modelCandidateLimit: num('ULTRON_M3_MODEL_CANDIDATES', 12),
   agenticBridgeEnabled: false,
   agenticBridgeModel: '',
   agenticBridgeTimeoutMs: 0,
