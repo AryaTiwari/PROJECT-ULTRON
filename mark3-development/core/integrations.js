@@ -1,9 +1,20 @@
 const config = require('./config');
+const { load: loadCredentials } = require('../../core/credentials/local-store');
 
 function withTimeout(timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(function () { controller.abort(); }, timeoutMs);
   return { controller, clear: function () { clearTimeout(timer); } };
+}
+
+async function resolveOmniRouteApiKey() {
+  if (config.omnirouteApiKey) return String(config.omnirouteApiKey).trim();
+  try {
+    const saved = await loadCredentials();
+    return String(saved.OMNIROUTE_API_KEY || saved.ULTRON_OMNIROUTE_API_KEY || '').trim();
+  } catch (_) {
+    return '';
+  }
 }
 
 async function requestJson(url, options, timeoutMs) {
@@ -13,11 +24,7 @@ async function requestJson(url, options, timeoutMs) {
     const response = await fetch(url, Object.assign({}, opts, { signal: timeout.controller.signal }));
     const text = await response.text();
     let data = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch (_) {
-      data = { raw: text };
-    }
+    try { data = text ? JSON.parse(text) : {}; } catch (_) { data = { raw: text }; }
     if (!response.ok) {
       throw new Error(String(response.status) + ': ' + String(data.message || data.error || text).slice(0, 500));
     }
@@ -28,10 +35,7 @@ async function requestJson(url, options, timeoutMs) {
 }
 
 function githubHeaders() {
-  const headers = {
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28'
-  };
+  const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   if (config.githubToken) headers.Authorization = 'Bearer ' + config.githubToken;
   return headers;
 }
@@ -46,8 +50,13 @@ async function githubReadFile(pathname, ref) {
   const url = 'https://api.github.com/repos/' + encodeURIComponent(config.githubOwner) + '/' + encodeURIComponent(config.githubRepo) + '/contents/' + githubPath(pathname) + '?ref=' + encodeURIComponent(useRef);
   const data = await requestJson(url, { headers: githubHeaders() }, 20000);
   if (data.type !== 'file' || !data.content) throw new Error('GitHub path is not a readable file: ' + pathname);
-  const content = Buffer.from(String(data.content).replace(/\r?\n/g, ''), 'base64').toString('utf8');
-  return { path: pathname, ref: useRef, sha: data.sha, content: content, size: Number(data.size) || 0 };
+  return {
+    path: pathname,
+    ref: useRef,
+    sha: data.sha,
+    content: Buffer.from(String(data.content).replace(/\r?\n/g, ''), 'base64').toString('utf8'),
+    size: Number(data.size) || 0
+  };
 }
 
 async function githubList(pathname, ref) {
@@ -59,17 +68,22 @@ async function githubList(pathname, ref) {
 }
 
 async function models() {
+  const key = await resolveOmniRouteApiKey();
   const headers = {};
-  if (config.omnirouteApiKey) headers.Authorization = 'Bearer ' + config.omnirouteApiKey;
+  if (key) headers.Authorization = 'Bearer ' + key;
   return requestJson(config.omnirouteBase + '/models', { headers: headers }, 15000);
 }
 
 async function chat(messages, model, tools) {
+  const key = await resolveOmniRouteApiKey();
+  if (!key) throw new Error('OmniRoute API key is not configured.');
   const payload = { model: model || 'auto', messages: messages, stream: false };
   if (Array.isArray(tools) && tools.length) payload.tools = tools;
-  const headers = { 'Content-Type': 'application/json' };
-  if (config.omnirouteApiKey) headers.Authorization = 'Bearer ' + config.omnirouteApiKey;
-  return requestJson(config.omnirouteBase + '/chat/completions', { method: 'POST', headers: headers, body: JSON.stringify(payload) }, 120000);
+  return requestJson(config.omnirouteBase + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+    body: JSON.stringify(payload)
+  }, 120000);
 }
 
 async function speak(text) {
@@ -90,4 +104,4 @@ async function speak(text) {
   }, 120000);
 }
 
-module.exports = { requestJson, githubReadFile, githubList, models, chat, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, chat, speak };
