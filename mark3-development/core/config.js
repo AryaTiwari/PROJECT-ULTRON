@@ -26,6 +26,10 @@ module.exports = {
     process.env.ULTRON_OMNIROUTE_API_KEY ||
     ''
   ).trim(),
+  // Temporary Mark 3 diagnostic mode: use only concrete model IDs from /v1/models.
+  // No auto aliases or Big Pickle fallback while validating OmniRoute.
+  omniRouteStrict: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_OMNIROUTE_STRICT || '1')),
+  disableBigPickle: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DISABLE_BIG_PICKLE || '1')),
   parentCore: String(process.env.ULTRON_PARENT_CORE_URL || 'http://127.0.0.1:8787').replace(/\/$/, ''),
   githubToken: String(process.env.GITHUB_TOKEN || '').trim(),
   githubOwner: process.env.ULTRON_GITHUB_OWNER || 'AryaTiwari',
