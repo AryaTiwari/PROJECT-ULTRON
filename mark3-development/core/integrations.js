@@ -100,6 +100,14 @@ function payloadModels(payload) {
   return [...new Set(raw.map((item) => typeof item === 'string' ? item : item?.id || item?.model || item?.name || '').map(String).map((value) => value.trim()).filter(Boolean))];
 }
 
+function payloadModelEntries(payload) {
+  const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+  return raw.map((item) => {
+    if (typeof item === 'string') return { id: item.trim(), raw: item };
+    return { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item };
+  }).filter((item) => item.id);
+}
+
 function isRoutingAlias(id) {
   const value = String(id || '').trim().toLowerCase();
   return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value) || /^oc(?:\/|$)/.test(value);
@@ -134,7 +142,7 @@ function classifyProviderError(error) {
   const status = Number(error?.status || 0);
   const text = `${error?.message || ''} ${stringifyError(error?.body || '')}`.toLowerCase();
   if (status === 402 || /payment_required|requires an opencode api key|billing_error|requires .* api key|paid model/.test(text)) return 'PAID_MODEL';
-  if ([401, 403].includes(status) || /no active credentials|invalid_api_key|authentication failed|provider authentication|you have no permission/.test(text)) return 'CREDENTIALS_OR_ACCESS';
+  if ([401, 403].includes(status) || /missing api key|invalid_api_key|no active credentials|authentication failed|provider authentication|you have no permission/.test(text)) return 'CREDENTIALS_OR_ACCESS';
   if (status === 404 || /model does not exist|model_not_found|not available in the active live catalog/.test(text)) return 'MODEL_UNAVAILABLE';
   if (status === 429 || /quota|rate limit|exhausted/.test(text)) return 'QUOTA_OR_RATE_LIMIT';
   if (status >= 500 || /endpoint is unavailable|upstream request failed|timed out|fetch failed/.test(text)) return 'UPSTREAM_OR_NETWORK';
@@ -143,12 +151,8 @@ function classifyProviderError(error) {
 
 function isProviderCredentialError(error) { return classifyProviderError(error) === 'CREDENTIALS_OR_ACCESS'; }
 function isPaidModelError(error) { return classifyProviderError(error) === 'PAID_MODEL'; }
-function isRetryableCandidateError(error) {
-  const kind = classifyProviderError(error);
-  return kind !== 'UNKNOWN';
-}
+function isRetryableCandidateError(error) { return classifyProviderError(error) !== 'UNKNOWN'; }
 
-// Prefer providers that OmniRoute documents as free/OAuth before paid API-key providers.
 const PROVIDER_PRIORITY = [
   'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot',
   'opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex',
@@ -265,7 +269,6 @@ async function chat(messages, model, tools) {
       throw error;
     }
   }
-
   const summary = failures.map((x) => `${x.provider}/${x.model}: [${x.kind}] ${x.message}`).join(' | ');
   const paidSummary = paidModels.length ? ` Paid-only models skipped: ${paidModels.length}.` : '';
   const error = new Error(`OmniRoute could not find a working enabled-provider model. Tried ${failures.length} candidates.${paidSummary} ${summary}`);
