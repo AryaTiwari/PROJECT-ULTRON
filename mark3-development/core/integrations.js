@@ -100,6 +100,14 @@ function payloadModels(payload) {
   return [...new Set(raw.map((item) => typeof item === 'string' ? item : item?.id || item?.model || item?.name || '').map(String).map((value) => value.trim()).filter(Boolean))];
 }
 
+function payloadModelEntries(payload) {
+  const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+  return raw.map((item) => {
+    if (typeof item === 'string') return { id: item.trim(), raw: item };
+    return { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item };
+  }).filter((item) => item.id);
+}
+
 function isRoutingAlias(id) {
   const value = String(id || '').trim().toLowerCase();
   return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value) || /^oc(?:\/|$)/.test(value);
@@ -135,16 +143,22 @@ function providerFromModel(id) {
   return map[first] || first || 'unknown';
 }
 
-function isProviderCredentialError(error) {
+function classifyProviderError(error) {
   const status = Number(error?.status || 0);
-  if (![401, 403, 404].includes(status)) return false;
   const text = `${error?.message || ''} ${stringifyError(error?.body || '')}`.toLowerCase();
-  return /no active credentials for provider|api keys are not supported|expected oauth2|oauth2 access token|oauth 2|provider authentication|authentication credentials that assert a principal|invalid_api_key|credentials.*provider|you have no permission to access this resource/.test(text);
+  if (status === 402 || /payment_required|requires an opencode api key|billing_error|requires .* api key|paid model/.test(text)) return 'PAID_MODEL';
+  if ([401, 403].includes(status) || /no active credentials|invalid_api_key|authentication failed|provider authentication|you have no permission/.test(text)) return 'CREDENTIALS_OR_ACCESS';
+  if (status === 404 || /model does not exist|model_not_found|not available in the active live catalog/.test(text)) return 'MODEL_UNAVAILABLE';
+  if (status === 429 || /quota|rate limit|exhausted/.test(text)) return 'QUOTA_OR_RATE_LIMIT';
+  if (status >= 500 || /endpoint is unavailable|upstream request failed|timed out|fetch failed/.test(text)) return 'UPSTREAM_OR_NETWORK';
+  return 'UNKNOWN';
 }
 
+function isProviderCredentialError(error) { return classifyProviderError(error) === 'CREDENTIALS_OR_ACCESS'; }
+function isPaidModelError(error) { return classifyProviderError(error) === 'PAID_MODEL'; }
 function isRetryableCandidateError(error) {
-  const status = Number(error?.status || 0);
-  return status === 401 || status === 403 || status === 404 || status === 409 || status === 429 || (status >= 500 && status <= 599);
+  const kind = classifyProviderError(error);
+  return kind === 'PAID_MODEL' || kind === 'CREDENTIALS_OR_ACCESS' || kind === 'MODEL_UNAVAILABLE' || kind === 'QUOTA_OR_RATE_LIMIT' || kind === 'UPSTREAM_OR_NETWORK';
 }
 
 const PROVIDER_PRIORITY = ['opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex'];
@@ -173,9 +187,12 @@ function diversifyCandidates(modelIds, limit) {
     const group = groups.get(provider) || [];
     const canonical = group.filter((id) => String(id).toLowerCase().startsWith(canonicalProviderPrefix(provider)));
     const fallback = group.filter((id) => !canonical.includes(id));
-    for (const id of [...canonical, ...fallback].slice(0, 3)) out.push(id);
+    for (const id of [...canonical, ...fallback]) {
+      out.push(id);
+      if (out.length >= Math.max(1, Number(limit) || 12)) return out;
+    }
   }
-  return out.slice(0, Math.max(1, Number(limit) || 12));
+  return out;
 }
 
 async function concreteModels(limit = 12) {
@@ -219,11 +236,12 @@ async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
   const requested = String(model || '').trim();
-  let candidates = await concreteModels(Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 18));
+  let candidates = await concreteModels(Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 36));
   if (requested && isDirectProviderModel(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
 
   const failures = [];
   const exhaustedProviders = new Set();
+  const paidModels = [];
   for (const selected of [...new Set(candidates)]) {
     const provider = providerFromModel(selected);
     if (exhaustedProviders.has(provider)) continue;
@@ -232,29 +250,32 @@ async function chat(messages, model, tools) {
     } catch (error) {
       error.model = selected;
       error.provider = provider;
-      const credentialFailure = isProviderCredentialError(error);
+      const kind = classifyProviderError(error);
       const upstream = error.upstream?.provider || error.actualProvider || null;
-      failures.push({ model: selected, provider, status: error.status || null, message: error.message, credentialFailure, upstreamProvider: upstream });
+      failures.push({ model: selected, provider, status: error.status || null, message: error.message, kind, upstreamProvider: upstream });
 
-      if (credentialFailure) {
+      if (kind === 'PAID_MODEL') {
+        paidModels.push(selected);
+        continue;
+      }
+      if (kind === 'CREDENTIALS_OR_ACCESS') {
         providerHealth.set(provider, { healthy: false, checkedAt: Date.now(), error: error.message });
         exhaustedProviders.add(provider);
         continue;
       }
-
       if (upstream && upstream !== provider) {
         providerHealth.set(provider, { healthy: false, checkedAt: Date.now(), error: error.message, upstreamProvider: upstream });
         exhaustedProviders.add(provider);
         continue;
       }
-
       if (isRetryableCandidateError(error)) continue;
       throw error;
     }
   }
 
-  const summary = failures.map((x) => `${x.provider}/${x.model}: ${x.status || 'ERR'} ${x.message}`).join(' | ');
-  const error = new Error(`OmniRoute could not find a working enabled-provider model. Tried ${failures.length} candidates. ${summary}`);
+  const summary = failures.map((x) => `${x.provider}/${x.model}: [${x.kind}] ${x.message}`).join(' | ');
+  const paidSummary = paidModels.length ? ` Paid-only models skipped: ${paidModels.length}.` : '';
+  const error = new Error(`OmniRoute could not find a working enabled-provider model. Tried ${failures.length} candidates.${paidSummary} ${summary}`);
   error.status = failures.at(-1)?.status || 503;
   error.failures = failures;
   throw error;
@@ -266,4 +287,4 @@ async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, isProviderCredentialError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, providerHealthSnapshot, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, providerHealthSnapshot, speak };
