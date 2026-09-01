@@ -43,30 +43,28 @@ function summarize(taskType = null) {
 function isAssistantEligibleModel(id) {
   const value = String(id || '').trim();
   if (!value) return false;
-  if (/^auto(?:\/|$)/i.test(value)) return false;
-  if (/^omniroute\//i.test(value)) return false;
+  const segments = value.toLowerCase().split(/[\/_-]+/).filter(Boolean);
+  const first = segments[0] || '';
+  const blockedNamespaces = new Set(['auto', 'omniroute', 'big', 'pickle', 'dva', 'devin', 'agentic', 'bridge', 'oc', 'opencode', 'no', 'think']);
+  if (blockedNamespaces.has(first)) return false;
+  if (blockedNamespaces.has(segments[1] || '')) return false;
+  if (segments.includes('dva') || segments.includes('devin') || segments.includes('agentic') || segments.includes('bridge')) return false;
   if (/big[-_ ]?pickle/i.test(value)) return false;
-  if (/(?:^|[/_-])dva(?:[/_-]|$)/i.test(value)) return false;
-  if (/(?:^|[/_-])devin(?:[/_-]|$)/i.test(value)) return false;
-  if (/(?:^|[/_-])agentic(?:[/_-]|$)/i.test(value)) return false;
-  if (/(?:^|[/_-])bridge(?:[/_-]|$)/i.test(value)) return false;
   return true;
 }
 
 async function catalog() {
-  if (!parentRouter || typeof parentRouter.listModels !== 'function') {
-    throw new Error('Shared OmniRoute router is unavailable.');
-  }
+  if (!parentRouter || typeof parentRouter.listModels !== 'function') throw new Error('Shared OmniRoute router is unavailable.');
   try {
     const models = await parentRouter.listModels({ force: true });
     const raw = [...new Set((models || []).map(String).map(value => value.trim()).filter(Boolean))];
     const eligible = raw.filter(isAssistantEligibleModel);
-    if (!eligible.length) throw new Error('OmniRoute catalog returned no assistant-eligible models.');
+    if (!eligible.length) throw new Error('OmniRoute catalog returned no direct-provider assistant models.');
     return {
       models: eligible,
       count: eligible.length,
       rawCount: raw.length,
-      source: 'shared-omniroute-router-filtered',
+      source: 'shared-omniroute-router-direct-providers',
     };
   } catch (error) {
     const diagnostic = error instanceof Error ? error.message : String(error);
