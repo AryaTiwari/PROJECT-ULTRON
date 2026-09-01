@@ -107,35 +107,64 @@ function isConcreteModelId(id) {
   if (/^auto(?:\/|$)/i.test(value)) return false;
   if (/^omniroute\//i.test(value)) return false;
   if (/big[-_ ]?pickle/i.test(value)) return false;
+  if (/^(?:dva|devin)(?:\/|[-_]|$)/i.test(value)) return false;
+  if (/(?:^|[/_-])agentic(?:[/_-]|$)/i.test(value)) return false;
   return true;
 }
 
-async function concreteModel() {
+async function concreteModels(limit = 12) {
   const payload = await models();
   const available = normalizeModelIds(payload);
-  const usable = available.filter(isConcreteModelId);
-  if (!usable.length) throw new Error('OmniRoute /models returned no usable concrete models after excluding routing aliases and Big Pickle.');
-  return usable[0];
+  const usable = available.filter(isConcreteModelId).slice(0, Math.max(1, Number(limit) || 12));
+  if (!usable.length) throw new Error('OmniRoute /models returned no usable non-agentic concrete models.');
+  return usable;
+}
+
+async function concreteModel() {
+  const candidates = await concreteModels(1);
+  return candidates[0];
+}
+
+function shouldRotateModel(error) {
+  const status = Number(error?.status || 0);
+  return status >= 500 && status <= 599;
 }
 
 async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
-  let selected = String(model || '').trim();
-  if (config.omniRouteStrict || !isConcreteModelId(selected)) selected = await concreteModel();
-  if (config.disableBigPickle && /big[-_ ]?pickle/i.test(selected)) selected = await concreteModel();
-  if (!isConcreteModelId(selected)) throw new Error(`Refusing non-concrete OmniRoute model ID: ${selected}`);
-  try {
-    return await requestJson(config.omnirouteBase + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }) }, 120000);
-  } catch (error) {
-    error.model = selected;
-    error.provider = 'omniroute';
-    throw error;
+
+  let requested = String(model || '').trim();
+  let candidates;
+  if (requested && isConcreteModelId(requested) && !config.omniRouteStrict) {
+    candidates = [requested];
+  } else {
+    candidates = await concreteModels(Math.max(5, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 8)));
+    if (requested && isConcreteModelId(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
   }
+
+  let lastError = null;
+  for (const selected of candidates) {
+    try {
+      const data = await requestJson(config.omnirouteBase + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+        body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
+      }, 120000);
+      return data;
+    } catch (error) {
+      error.model = selected;
+      error.provider = 'omniroute';
+      lastError = error;
+      if (!shouldRotateModel(error)) throw error;
+    }
+  }
+
+  throw lastError || new Error('OmniRoute: all concrete non-agentic model candidates failed.');
 }
 
 async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, normalizeModelIds, isConcreteModelId, concreteModel, chat, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, normalizeModelIds, isConcreteModelId, concreteModels, concreteModel, chat, speak };
