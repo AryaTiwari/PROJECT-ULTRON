@@ -67,8 +67,9 @@ function isRoutingAlias(id) {
   if (!value) return true;
   if (/^auto(?:\/|$)/i.test(value)) return true;
   if (/^omniroute\//i.test(value)) return true;
-  if (/^(?:oc|opencode)(?:\/|$)/i.test(value)) return true;
   if (/^no-think(?:\/|$)/i.test(value)) return true;
+  // OpenCode provider models are real provider endpoints, not routing aliases.
+  if (/^oc(?:\/|$)/i.test(value)) return true;
   return false;
 }
 
@@ -78,6 +79,13 @@ function isAssistantEligibleModel(id) {
   const value = String(id || '').trim();
   if (!value || isDevinModel(value) || isBigPickle(value) || isRoutingAlias(value)) return false;
   return true;
+}
+
+function providerFromModel(modelId) {
+  const first = String(modelId || '').split('/')[0].trim().toLowerCase();
+  if (!first) return 'unknown';
+  const aliases = { opencode: 'opencode', pollinations: 'pollinations', nvidia: 'nvidia', zenmux: 'zenmux', bytez: 'bytez', vertex: 'vertex' };
+  return aliases[first] || first;
 }
 
 function knowledgeFor(modelId) {
@@ -114,14 +122,16 @@ async function catalog() {
     const enriched = eligible.map(model => {
       const profile = knowledgeFor(model);
       const fit = suitability(model, 'general');
-      return profile ? { model, ...profile, suitability: fit.score } : { model, suitability: fit.score };
+      return profile ? { model, provider: providerFromModel(model), ...profile, suitability: fit.score } : { model, provider: providerFromModel(model), suitability: fit.score };
     });
+    const providerCounts = enriched.reduce((acc, item) => { acc[item.provider] = (acc[item.provider] || 0) + 1; return acc; }, {});
     return {
       models: eligible,
       enriched,
       count: eligible.length,
       rawCount: raw.length,
       devinExcludedCount: raw.filter(isDevinModel).length,
+      providerCounts,
       knowledgeProfilesMatched: enriched.filter(item => item.speciality).length,
       source: 'shared-omniroute-router-provider-catalog',
     };
@@ -155,4 +165,5 @@ module.exports = {
   isDevinModel,
   isBigPickle,
   isAssistantEligibleModel,
+  providerFromModel,
 };
