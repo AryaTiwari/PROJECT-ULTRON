@@ -16,13 +16,13 @@ function readParentEnv(name) {
 }
 
 async function resolveOmniRouteApiKey() {
-  const direct = String(config.omnirouteApiKey || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim();
+  const direct = String(config.omnirouteEndpointKey || process.env.OMNIROUTE_ENDPOINT_KEY || '').trim();
   if (direct) return direct;
-  const parent = readParentEnv('OMNIROUTE_API_KEY') || readParentEnv('ULTRON_OMNIROUTE_API_KEY');
+  const parent = readParentEnv('OMNIROUTE_ENDPOINT_KEY');
   if (parent) return parent;
   try {
     const saved = await loadCredentials();
-    return String(saved.OMNIROUTE_API_KEY || saved.ULTRON_OMNIROUTE_API_KEY || '').trim();
+    return String(saved.OMNIROUTE_ENDPOINT_KEY || saved.OMNIROUTE_API_KEY || saved.ULTRON_OMNIROUTE_API_KEY || '').trim();
   } catch {
     return '';
   }
@@ -82,22 +82,14 @@ async function models() {
 
 async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
-  if (!key) throw new Error('OmniRoute API key is not configured.');
+  if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
   const payload = { model: model || 'auto', messages, stream: false };
   if (Array.isArray(tools) && tools.length) payload.tools = tools;
-  return requestJson(config.omnirouteBase + '/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-    body: JSON.stringify(payload),
-  }, 120000);
+  return requestJson(config.omnirouteBase + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify(payload) }, 120000);
 }
 
 async function speak(text) {
-  return requestJson(config.parentCore + '/api/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }),
-  }, 120000);
+  return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
 module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, chat, speak };
