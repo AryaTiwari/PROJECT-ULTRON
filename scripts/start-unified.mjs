@@ -53,26 +53,6 @@ function readTail(file, lines = 80) {
 function killChild(child) { if (child && !child.killed) { try { child.kill(); } catch {} } }
 function cleanup() { killChild(openCodeChild); killChild(omniChild); }
 
-async function waitForOpenCodeHealth(timeoutMs = 120000) {
-  const started = Date.now();
-  const url = `http://${openCodeHost}:${openCodePort}/global/health`;
-  let lastError = '';
-  while (Date.now() - started < timeoutMs) {
-    try {
-      const response = await fetch(url);
-      const raw = await response.text();
-      if (response.ok) {
-        let data = {};
-        try { data = raw ? JSON.parse(raw) : {}; } catch {}
-        if (data?.healthy !== false) return data;
-        lastError = `HTTP ${response.status}: ${raw.slice(0, 800)}`;
-      } else lastError = `HTTP ${response.status}: ${raw.slice(0, 800)}`;
-    } catch (error) { lastError = error?.cause?.message || error?.message || String(error); }
-    await new Promise((resolve) => setTimeout(resolve, 700));
-  }
-  throw new Error(`OpenCode health check failed at ${url}: ${lastError || 'server unavailable'}. Check ${openCodeLog}.`);
-}
-
 function resolveOpenCodeCommand() {
   const candidates = [];
   const explicit = process.env.OPENCODE_BIN;
@@ -94,75 +74,50 @@ function resolveOmniCommand() {
   return { cwd: omniDir, entry };
 }
 
-async function configureOmniRoute() {
-  const credentials = await loadCredentials();
-  const apiKey = String(credentials.OMNIROUTE_API_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim();
-  if (!apiKey) return { configured: false, apiKey: '' };
-  const response = await fetch(`http://${omniHost}:${omniPort}/v1/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
-  const raw = await response.text(); if (!response.ok) throw new Error(`OmniRoute model catalog HTTP ${response.status}: ${raw.slice(0, 800)}`);
-  const data = raw ? JSON.parse(raw) : {}; const models = Array.isArray(data?.data) ? data.data : []; if (!models.length) throw new Error('OmniRoute model catalog returned no models.');
-  const modelMap = {};
-  for (const model of models) { const id = String(model?.id || '').trim(); if (!id) continue; const entry = { name: String(model?.name || id) }; const context = Number(model?.context_length || model?.contextWindow || model?.context_length_tokens || 0); const output = Number(model?.max_output_tokens || model?.outputTokenLimit || 0); if (context || output) { entry.limit = {}; if (context) entry.limit.context = context; if (output) entry.limit.output = output; } modelMap[id] = entry; }
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { omniroute: { npm: '@ai-sdk/openai-compatible', name: 'OmniRoute — ULTRON Fabric', options: { baseURL: `http://${omniHost}:${omniPort}/v1`, apiKey: '{env:OMNIROUTE_API_KEY}' }, models: modelMap } } }, null, 2), 'utf8');
-  console.log(`[OmniRoute] OpenCode catalog configured: ${models.length} models.`); return { configured: true, apiKey };
-}
-
-function openLogHandles(file) {
-  fs.mkdirSync(logDir, { recursive: true });
-  try { fs.closeSync(fs.openSync(file, 'w')); } catch {}
-  return { stdout: fs.openSync(file, 'a'), stderr: fs.openSync(file, 'a') };
-}
-
 async function ensureOmniRoute() {
   if (await isPortOpen(omniHost, omniPort)) { console.log(`[OmniRoute] Existing gateway detected at http://${omniHost}:${omniPort}.`); return; }
   const resolved = resolveOmniCommand(); if (!resolved) { console.warn('[OmniRoute] Gateway not found locally; continuing without local gateway startup.'); return; }
   console.log(`[OmniRoute] Starting gateway from ${resolved.cwd}`);
-
   fs.mkdirSync(logDir, { recursive: true });
   try { fs.writeFileSync(omniLog, '', 'utf8'); } catch {}
   const logHandle = fs.openSync(omniLog, 'a');
-  const env = { ...process.env, PORT: String(omniPort), HOST: omniHost, OMNIROUTE_USE_TURBOPACK: '0', NEXT_TELEMETRY_DISABLED: '1' };
-
-  omniChild = spawn(process.execPath, ['--max-old-space-size=8192', resolved.entry, 'dev'], { cwd: resolved.cwd, env, windowsHide: process.platform === 'win32', detached: true, stdio: ['ignore', logHandle, logHandle], shell: false });
+  const env = {
+    ...process.env,
+    PORT: String(omniPort),
+    HOST: omniHost,
+    OMNIROUTE_USE_TURBOPACK: process.env.OMNIROUTE_USE_TURBOPACK || '1',
+    OMNIROUTE_MEMORY_MB: process.env.OMNIROUTE_MEMORY_MB || '4096',
+    OMNIROUTE_SKIP_DB_HEALTHCHECK: process.env.OMNIROUTE_SKIP_DB_HEALTHCHECK || '1',
+    NEXT_TELEMETRY_DISABLED: '1',
+  };
+  console.log(`[OmniRoute] Fast-start config: ${env.OMNIROUTE_USE_TURBOPACK === '1' ? 'Turbopack' : 'Webpack'}; V8 heap: ${env.OMNIROUTE_MEMORY_MB}MB; DB health check: ${env.OMNIROUTE_SKIP_DB_HEALTHCHECK === '1' ? 'skipped' : 'enabled'}.`);
+  omniChild = spawn(process.execPath, [`--max-old-space-size=${env.OMNIROUTE_MEMORY_MB}`, resolved.entry, 'dev'], { cwd: resolved.cwd, env, windowsHide: process.platform === 'win32', detached: true, stdio: ['ignore', logHandle, logHandle], shell: false });
   omniChild.once('error', (error) => console.error(`[OmniRoute] Process error: ${error.message}`));
   omniChild.unref();
   try { fs.closeSync(logHandle); } catch {}
-
-  // Do not block ULTRON boot on OmniRoute's Next.js cold compilation. Keep checking in the background.
   waitForPort(omniHost, omniPort, 180000).then((ready) => {
     if (ready) console.log(`[OmniRoute] Gateway ready at http://${omniHost}:${omniPort}.`);
-    else {
-      const tail = readTail(omniLog);
-      console.error(`[OmniRoute] Gateway did not become reachable within 180s. Check ${omniLog}.${tail ? `\nLast OmniRoute output:\n${tail}` : ''}`);
-    }
+    else { const tail = readTail(omniLog); console.error(`[OmniRoute] Gateway did not become reachable within 180s. Check ${omniLog}.${tail ? `\nLast OmniRoute output:\n${tail}` : ''}`); }
   }).catch((error) => console.error(`[OmniRoute] Readiness monitor failed: ${error.message}`));
-
   console.log('[OmniRoute] Background startup launched; continuing ULTRON boot.');
 }
 
 async function ensureOpenCode() {
-  if (await isPortOpen(openCodeHost, openCodePort)) { console.log(`[OpenCode] Existing local server detected at http://${openCodeHost}:${openCodePort}.`); await waitForOpenCodeHealth(); return; }
+  if (await isPortOpen(openCodeHost, openCodePort)) return;
   const resolved = resolveOpenCodeCommand(); if (!resolved) throw new Error('OpenCode executable could not be resolved.');
   let apiKey = ''; try { const credentials = await loadCredentials(); apiKey = String(credentials.OMNIROUTE_API_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim(); } catch {}
   fs.mkdirSync(logDir, { recursive: true }); try { fs.writeFileSync(openCodeLog, '', 'utf8'); } catch {}
   const env = { ...process.env, OPENCODE_CONFIG: configPath }; if (apiKey) env.OMNIROUTE_API_KEY = apiKey;
-  console.log(`[OpenCode] Starting local model server at http://${openCodeHost}:${openCodePort} using ${resolved.command}`); const args = ['serve', '--hostname', openCodeHost, '--port', String(openCodePort)];
+  const args = ['serve', '--hostname', openCodeHost, '--port', String(openCodePort)];
   if (process.platform === 'win32') {
-    const logs = { stdout: fs.openSync(openCodeLog, 'a'), stderr: fs.openSync(openCodeLog, 'a') };
-    openCodeChild = spawn('cmd.exe', ['/d', '/s', '/c', `${String(resolved.command).replace(/%/g, '%%')} ${args.join(' ')}`], { cwd: process.cwd(), env, windowsHide: true, detached: true, stdio: ['ignore', logs.stdout, logs.stderr], shell: false });
-    openCodeChild.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`)); openCodeChild.unref();
-    try { fs.closeSync(logs.stdout); fs.closeSync(logs.stderr); } catch {}
-  } else {
-    openCodeChild = spawn(resolved.command, args, { cwd: process.cwd(), env, stdio: 'ignore', detached: true, shell: false });
-    openCodeChild.once('error', (error) => console.error(`[OpenCode] Process error: ${error.message}`)); openCodeChild.unref();
-  }
-  await waitForOpenCodeHealth(); console.log(`[OpenCode] Local server healthy at http://${openCodeHost}:${openCodePort}.`);
+    const out = fs.openSync(openCodeLog, 'a');
+    openCodeChild = spawn('cmd.exe', ['/d', '/s', '/c', `${String(resolved.command).replace(/%/g, '%%')} ${args.join(' ')}`], { cwd: process.cwd(), env, windowsHide: true, detached: true, stdio: ['ignore', out, out], shell: false });
+    openCodeChild.unref(); try { fs.closeSync(out); } catch {}
+  } else { openCodeChild = spawn(resolved.command, args, { cwd: process.cwd(), env, stdio: 'ignore', detached: true, shell: false }); openCodeChild.unref(); }
 }
 
 async function main() {
   process.once('SIGINT', cleanup); process.once('SIGTERM', cleanup); await ensureOmniRoute();
-  if (openCodeEnabled) { try { await configureOmniRoute(); } catch (error) { console.warn(`[OmniRoute] OpenCode catalog configuration skipped: ${error.message}`); } await ensureOpenCode(); }
-  else console.log('[OpenCode] Skipped; OmniRoute is the primary Mark 2 transport. Set ULTRON_ENABLE_OPENCODE=1 to enable the optional OpenCode server.');
+  if (openCodeEnabled) { await ensureOpenCode(); } else console.log('[OpenCode] Skipped; OmniRoute is the primary Mark 2 transport.');
 }
 main().catch((error) => { console.error(`[Unified Start] ${error.message}`); process.exit(1); });
