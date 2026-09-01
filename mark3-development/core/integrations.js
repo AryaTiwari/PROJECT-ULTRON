@@ -86,23 +86,29 @@ function normalizeModelIds(payload) {
   return [...new Set(raw.map((item) => typeof item === 'string' ? item : item?.id || item?.model || item?.name || '').map(String).map((value) => value.trim()).filter(Boolean))];
 }
 
+function isConcreteModelId(id) {
+  const value = String(id || '').trim();
+  if (!value) return false;
+  if (/^auto(?:\/|$)/i.test(value)) return false;
+  if (/big[-_ ]?pickle/i.test(value)) return false;
+  return true;
+}
+
 async function concreteModel() {
   const payload = await models();
   const available = normalizeModelIds(payload);
-  const filtered = config.disableBigPickle ? available.filter((id) => !/big[-_ ]?pickle/i.test(id)) : available;
-  if (!filtered.length) {
-    const suffix = config.disableBigPickle ? ' after excluding Big Pickle.' : '.';
-    throw new Error(`OmniRoute /models returned no usable concrete models${suffix}`);
-  }
-  return filtered[0];
+  const usable = available.filter(isConcreteModelId);
+  if (!usable.length) throw new Error('OmniRoute /models returned no usable concrete models after excluding aliases and Big Pickle.');
+  return usable[0];
 }
 
 async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
   let selected = String(model || '').trim();
-  if (config.omniRouteStrict || !selected || selected === 'auto' || selected.includes('auto/')) selected = await concreteModel();
+  if (config.omniRouteStrict || !isConcreteModelId(selected)) selected = await concreteModel();
   if (config.disableBigPickle && /big[-_ ]?pickle/i.test(selected)) selected = await concreteModel();
+  if (!isConcreteModelId(selected)) throw new Error(`Refusing non-concrete OmniRoute model ID: ${selected}`);
   const payload = { model: selected, messages, stream: false };
   if (Array.isArray(tools) && tools.length) payload.tools = tools;
   return requestJson(config.omnirouteBase + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify(payload) }, 120000);
@@ -112,4 +118,4 @@ async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, concreteModel, chat, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, normalizeModelIds, isConcreteModelId, concreteModel, chat, speak };
