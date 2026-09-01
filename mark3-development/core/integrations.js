@@ -10,9 +10,7 @@ function readParentEnv(name) {
     const line = fs.readFileSync(envPath, 'utf8').split(/\r?\n/).find((entry) => entry.trim().startsWith(name + '='));
     if (!line) return '';
     return line.slice(line.indexOf('=') + 1).trim().replace(/^['"]|['"]$/g, '');
-  } catch {
-    return '';
-  }
+  } catch { return ''; }
 }
 
 async function resolveOmniRouteApiKey() {
@@ -23,9 +21,7 @@ async function resolveOmniRouteApiKey() {
   try {
     const saved = await loadCredentials();
     return String(saved.OMNIROUTE_ENDPOINT_KEY || saved.OMNIROUTE_API_KEY || saved.ULTRON_OMNIROUTE_API_KEY || '').trim();
-  } catch {
-    return '';
-  }
+  } catch { return ''; }
 }
 
 function withTimeout(timeoutMs) {
@@ -58,9 +54,7 @@ async function requestJson(url, options, timeoutMs = 30000) {
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error(`OmniRoute request timed out after ${timeoutMs}ms.`);
     throw error;
-  } finally {
-    timeout.clear();
-  }
+  } finally { timeout.clear(); }
 }
 
 function githubHeaders() {
@@ -104,11 +98,11 @@ function normalizeModelIds(payload) {
 function isConcreteModelId(id) {
   const value = String(id || '').trim();
   if (!value) return false;
-  if (/^auto(?:\/|$)/i.test(value)) return false;
-  if (/^omniroute\//i.test(value)) return false;
+  const segments = value.toLowerCase().split(/[\\/_-]+/).filter(Boolean);
+  const blocked = new Set(['auto', 'omniroute', 'big', 'pickle', 'dva', 'devin', 'agentic', 'bridge', 'oc', 'opencode', 'no', 'think']);
+  if (blocked.has(segments[0]) || blocked.has(segments[1])) return false;
+  if (segments.includes('dva') || segments.includes('devin') || segments.includes('agentic') || segments.includes('bridge')) return false;
   if (/big[-_ ]?pickle/i.test(value)) return false;
-  if (/^(?:dva|devin)(?:\/|[-_]|$)/i.test(value)) return false;
-  if (/(?:^|[/_-])agentic(?:[/_-]|$)/i.test(value)) return false;
   return true;
 }
 
@@ -116,55 +110,39 @@ async function concreteModels(limit = 12) {
   const payload = await models();
   const available = normalizeModelIds(payload);
   const usable = available.filter(isConcreteModelId).slice(0, Math.max(1, Number(limit) || 12));
-  if (!usable.length) throw new Error('OmniRoute /models returned no usable non-agentic concrete models.');
+  if (!usable.length) throw new Error('OmniRoute /models returned no usable direct-provider models.');
   return usable;
-}
-
-async function concreteModel() {
-  const candidates = await concreteModels(1);
-  return candidates[0];
-}
-
-function shouldRotateModel(error) {
-  const status = Number(error?.status || 0);
-  return status >= 500 && status <= 599;
 }
 
 async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
-
   let requested = String(model || '').trim();
-  let candidates;
-  if (requested && isConcreteModelId(requested) && !config.omniRouteStrict) {
-    candidates = [requested];
-  } else {
-    candidates = await concreteModels(Math.max(5, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 8)));
-    if (requested && isConcreteModelId(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
-  }
-
+  const candidates = requested && isConcreteModelId(requested) && !config.omniRouteStrict
+    ? [requested]
+    : await concreteModels(Math.max(5, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 8)));
+  if (requested && isConcreteModelId(requested) && config.omniRouteStrict && !candidates.includes(requested)) candidates.unshift(requested);
   let lastError = null;
   for (const selected of candidates) {
+    if (!isConcreteModelId(selected)) continue;
     try {
-      const data = await requestJson(config.omnirouteBase + '/chat/completions', {
+      return await requestJson(config.omnirouteBase + '/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
         body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
       }, 120000);
-      return data;
     } catch (error) {
       error.model = selected;
       error.provider = 'omniroute';
       lastError = error;
-      if (!shouldRotateModel(error)) throw error;
+      if (!Number(error?.status) || error.status < 500 || error.status > 599) throw error;
     }
   }
-
-  throw lastError || new Error('OmniRoute: all concrete non-agentic model candidates failed.');
+  throw lastError || new Error('OmniRoute: all direct-provider model candidates failed.');
 }
 
 async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, normalizeModelIds, isConcreteModelId, concreteModels, concreteModel, chat, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, normalizeModelIds, isConcreteModelId, concreteModels, chat, speak };
