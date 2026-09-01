@@ -34,6 +34,12 @@ function withTimeout(timeoutMs) {
   return { controller, clear: () => clearTimeout(timer) };
 }
 
+function stringifyError(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
 async function requestJson(url, options, timeoutMs = 30000) {
   const timeout = withTimeout(timeoutMs);
   try {
@@ -41,8 +47,17 @@ async function requestJson(url, options, timeoutMs = 30000) {
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
-    if (!response.ok) throw new Error(`${response.status}: ${data.message || data.error || text.slice(0, 500)}`);
+    if (!response.ok) {
+      const detail = data?.error || data?.message || data?.detail || data?.raw || text;
+      const error = new Error(`HTTP ${response.status}: ${stringifyError(detail).slice(0, 2000)}`);
+      error.status = response.status;
+      error.body = data;
+      throw error;
+    }
     return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`OmniRoute request timed out after ${timeoutMs}ms.`);
+    throw error;
   } finally {
     timeout.clear();
   }
@@ -90,6 +105,7 @@ function isConcreteModelId(id) {
   const value = String(id || '').trim();
   if (!value) return false;
   if (/^auto(?:\/|$)/i.test(value)) return false;
+  if (/^omniroute\//i.test(value)) return false;
   if (/big[-_ ]?pickle/i.test(value)) return false;
   return true;
 }
@@ -98,7 +114,7 @@ async function concreteModel() {
   const payload = await models();
   const available = normalizeModelIds(payload);
   const usable = available.filter(isConcreteModelId);
-  if (!usable.length) throw new Error('OmniRoute /models returned no usable concrete models after excluding aliases and Big Pickle.');
+  if (!usable.length) throw new Error('OmniRoute /models returned no usable concrete models after excluding routing aliases and Big Pickle.');
   return usable[0];
 }
 
@@ -109,9 +125,13 @@ async function chat(messages, model, tools) {
   if (config.omniRouteStrict || !isConcreteModelId(selected)) selected = await concreteModel();
   if (config.disableBigPickle && /big[-_ ]?pickle/i.test(selected)) selected = await concreteModel();
   if (!isConcreteModelId(selected)) throw new Error(`Refusing non-concrete OmniRoute model ID: ${selected}`);
-  const payload = { model: selected, messages, stream: false };
-  if (Array.isArray(tools) && tools.length) payload.tools = tools;
-  return requestJson(config.omnirouteBase + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify(payload) }, 120000);
+  try {
+    return await requestJson(config.omnirouteBase + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }) }, 120000);
+  } catch (error) {
+    error.model = selected;
+    error.provider = 'omniroute';
+    throw error;
+  }
 }
 
 async function speak(text) {
