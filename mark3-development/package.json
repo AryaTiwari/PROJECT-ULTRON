@@ -1,6 +1,6 @@
 {
   "name":"ultron-mark3",
-  "version":"3.0.0-alpha.3",
+  "version":"3.0.0-alpha.4",
   "private":true,
   "type":"commonjs",
   "description":"ULTRON Mark 3 personal operating assistant",
@@ -9,6 +9,7 @@
     "check":"node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/smoke-test.js",
     "check:memory":"node scripts/memory-test.js",
     "check:models":"node --env-file=../.env scripts/model-test.js",
+    "check:bridge":"node --env-file=../.env scripts/bridge-test.js",
     "check:voice":"node --env-file=../.env scripts/voice-test.js",
     "preflight":"node scripts/preflight.js"
   }
