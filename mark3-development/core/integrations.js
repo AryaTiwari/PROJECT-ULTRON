@@ -112,6 +112,13 @@ function isDirectProviderModel(id) {
   return Boolean(value) && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value);
 }
 
+function isProviderAuthError(error) {
+  const status = Number(error?.status || 0);
+  if (![401, 403].includes(status)) return false;
+  const text = `${error?.message || ''} ${stringifyError(error?.body || '')}`.toLowerCase();
+  return /api keys are not supported|expected oauth2|oauth2 access token|oauth 2|google cloud|vertex|provider authentication|authentication credentials that assert a principal/.test(text);
+}
+
 async function concreteModels(limit = 12) {
   const available = payloadModels(await models());
   const usable = available.filter(isDirectProviderModel).slice(0, Math.max(1, Number(limit) || 12));
@@ -125,24 +132,33 @@ async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
   const requested = String(model || '').trim();
-  const candidates = requested && isDirectProviderModel(requested) && !config.omniRouteStrict
-    ? [requested]
-    : await concreteModels(Math.max(5, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 8)));
-  if (requested && !isDirectProviderModel(requested) && requested !== 'auto') {
-    throw new Error(`Mark 3 refuses non-provider/Devin model in provider-only mode: ${requested}`);
+  let candidates;
+  if (requested && isDirectProviderModel(requested) && !config.omniRouteStrict) {
+    candidates = [requested];
+  } else {
+    candidates = await concreteModels(Math.max(8, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 12)));
   }
+  if (requested && isDirectProviderModel(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
+
   let lastError = null;
   for (const selected of [...new Set(candidates)]) {
     try {
-      return await requestJson(config.omnirouteBase + '/chat/completions', {
+      const data = await requestJson(config.omnirouteBase + '/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
         body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
       }, 120000);
+      data.__ultron = { provider: 'omniroute', model: selected };
+      return data;
     } catch (error) {
       error.model = selected;
       error.provider = 'omniroute';
       lastError = error;
+      // A provider-specific 401/403 (for example Vertex requiring OAuth2)
+      // is recoverable by trying the next provider. The OmniRoute endpoint
+      // key itself was already proven against /v1/models, so don't mislabel
+      // this as gateway authentication failure.
+      if (isProviderAuthError(error)) continue;
       if (!Number(error?.status) || error.status < 500 || error.status > 599) throw error;
     }
   }
@@ -153,4 +169,4 @@ async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, concreteModels, concreteModel, chat, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, isProviderAuthError, concreteModels, concreteModel, chat, speak };
