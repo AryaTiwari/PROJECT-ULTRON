@@ -13,12 +13,10 @@ function classifyFailure(error) {
   const status = Number(error?.status || 0);
   const message = String(error?.message || error || 'Unknown error');
   const lower = message.toLowerCase();
-  if (/missing api key|invalid_api_key|no active credentials|authentication failed|provider authentication|you have no permission to access this resource/.test(lower)) {
-    return 'CREDENTIALS_OR_ACCESS';
-  }
+  if (/missing api key|invalid_api_key|no active credentials|authentication failed|provider authentication|you have no permission to access this resource/.test(lower)) return 'CREDENTIALS_OR_ACCESS';
   if (status === 429 || /quota|rate limit|exhausted/.test(lower)) return 'QUOTA_OR_RATE_LIMIT';
   if (status === 404 || /model does not exist|model_not_found/.test(lower)) return 'MODEL_UNAVAILABLE';
-  if (status >= 500 || /endpoint is unavailable|upstream request failed|timed out|fetch failed/.test(lower)) return 'UPSTREAM_OR_NETWORK';
+  if (status >= 500 || /endpoint is unavailable|upstream request failed|timed out|fetch failed|econnrefused|connect/.test(lower)) return 'UPSTREAM_OR_NETWORK';
   return 'UNKNOWN';
 }
 
@@ -33,13 +31,14 @@ function diagnosisFor(provider, failures) {
   }
   if (classes.includes('QUOTA_OR_RATE_LIMIT')) return 'Provider is configured but currently quota/rate-limit constrained.';
   if (classes.includes('MODEL_UNAVAILABLE')) return 'Provider responded, but the catalog model is stale/unavailable upstream.';
-  if (classes.includes('UPSTREAM_OR_NETWORK')) return 'Provider or upstream endpoint is temporarily unavailable.';
+  if (classes.includes('UPSTREAM_OR_NETWORK')) return 'OmniRoute is not reachable or its upstream gateway failed before provider-level diagnostics could run.';
   return 'Provider failed without a recognized diagnostic classification.';
 }
 
 (async () => {
   const results = [];
   try {
+    console.log(`OmniRoute endpoint: ${process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1'}`);
     const payload = await integrations.models();
     const ids = integrations.payloadModels(payload).filter(integrations.isDirectProviderModel);
     const groups = new Map(PRIORITY.map((provider) => [provider, []]));
@@ -107,7 +106,10 @@ function diagnosisFor(provider, failures) {
 
     console.log('Provider health test: PASS.');
   } catch (error) {
-    console.error(`Provider health test: FAIL: ${error?.message || String(error)}`);
+    const kind = classifyFailure(error);
+    console.error(`Provider health test: FAIL [${kind}]`);
+    console.error(`  ${error?.message || String(error)}`);
+    console.error('  Ensure OmniRoute is running before provider diagnostics.');
     process.exitCode = 1;
   }
 })();
