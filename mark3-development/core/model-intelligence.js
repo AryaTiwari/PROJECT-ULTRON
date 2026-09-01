@@ -40,11 +40,12 @@ function summarize(taskType = null) {
   }));
 }
 
-function isBridgeModelId(id) {
+// Devin/DVA agentic bridge models are intentionally removed from Mark 3.
+function isDevinModel(id) {
   const value = String(id || '').trim().toLowerCase();
   if (!value) return false;
   const segments = value.split(/[\\/_-]+/).filter(Boolean);
-  return segments.includes('dva') || segments.includes('devin') || segments.includes('agentic');
+  return segments.includes('dva') || segments.includes('devin') || segments.includes('agentic') || segments.includes('bridge');
 }
 
 function isRoutingAlias(id) {
@@ -53,8 +54,7 @@ function isRoutingAlias(id) {
   if (/^auto(?:\/|$)/i.test(value)) return true;
   if (/^omniroute\//i.test(value)) return true;
   if (/^(?:oc|opencode)(?:\/|$)/i.test(value)) return true;
-  // no-think is an alias only when it is not carrying a Devin/agentic model.
-  if (/^no-think(?:\/|$)/i.test(value) && !isBridgeModelId(value)) return true;
+  if (/^no-think(?:\/|$)/i.test(value)) return true;
   return false;
 }
 
@@ -62,9 +62,8 @@ function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
 
 function isAssistantEligibleModel(id) {
   const value = String(id || '').trim();
-  if (!value || isBigPickle(value)) return false;
-  if (isBridgeModelId(value)) return config.agenticBridgeEnabled;
-  return !isRoutingAlias(value);
+  if (!value || isDevinModel(value) || isBigPickle(value) || isRoutingAlias(value)) return false;
+  return true;
 }
 
 async function catalog() {
@@ -72,18 +71,14 @@ async function catalog() {
   try {
     const models = await parentRouter.listModels({ force: true });
     const raw = [...new Set((models || []).map(String).map(value => value.trim()).filter(Boolean))];
-    const direct = raw.filter(id => isAssistantEligibleModel(id) && !isBridgeModelId(id));
-    const agentic = config.agenticBridgeEnabled ? raw.filter(id => isAssistantEligibleModel(id) && isBridgeModelId(id)) : [];
-    const all = [...direct, ...agentic];
-    if (!all.length) throw new Error('OmniRoute catalog returned no assistant-eligible models.');
+    const eligible = raw.filter(isAssistantEligibleModel);
+    if (!eligible.length) throw new Error('OmniRoute catalog returned no non-Devin provider models.');
     return {
-      models: all,
-      count: all.length,
+      models: eligible,
+      count: eligible.length,
       rawCount: raw.length,
-      directModels: direct,
-      agenticModels: agentic,
-      bridgeEnabled: config.agenticBridgeEnabled,
-      source: 'shared-omniroute-router-policy-catalog',
+      devinExcludedCount: raw.filter(isDevinModel).length,
+      source: 'shared-omniroute-router-provider-catalog',
     };
   } catch (error) {
     const diagnostic = error instanceof Error ? error.message : String(error);
@@ -104,7 +99,7 @@ module.exports = {
   catalog,
   intelligence,
   isRoutingAlias,
-  isBridgeModelId,
+  isDevinModel,
   isBigPickle,
   isAssistantEligibleModel,
 };
