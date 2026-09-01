@@ -112,11 +112,18 @@ function isDirectProviderModel(id) {
   return Boolean(value) && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value);
 }
 
-function isProviderAuthError(error) {
+function providerFromModel(id) {
+  const first = String(id || '').split('/')[0].trim().toLowerCase();
+  if (!first) return 'unknown';
+  const map = { vertex: 'vertex', nvidia: 'nvidia', pollinations: 'pollinations', opencode: 'opencode', zenmux: 'zenmux', bytez: 'bytez', ddgw: 'ddgw', cfp: 'cfp', pepper: 'pepper' };
+  return map[first] || first;
+}
+
+function isProviderCredentialError(error) {
   const status = Number(error?.status || 0);
-  if (![401, 403].includes(status)) return false;
+  if (![401, 403, 404].includes(status)) return false;
   const text = `${error?.message || ''} ${stringifyError(error?.body || '')}`.toLowerCase();
-  return /api keys are not supported|expected oauth2|oauth2 access token|oauth 2|google cloud|vertex|provider authentication|authentication credentials that assert a principal/.test(text);
+  return /no active credentials for provider|api keys are not supported|expected oauth2|oauth2 access token|oauth 2|provider authentication|authentication credentials that assert a principal|invalid_api_key|credentials.*provider/.test(text);
 }
 
 async function concreteModels(limit = 12) {
@@ -132,15 +139,12 @@ async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
   const requested = String(model || '').trim();
-  let candidates;
-  if (requested && isDirectProviderModel(requested) && !config.omniRouteStrict) {
-    candidates = [requested];
-  } else {
-    candidates = await concreteModels(Math.max(8, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 12)));
-  }
+  let candidates = requested && isDirectProviderModel(requested) && !config.omniRouteStrict
+    ? [requested]
+    : await concreteModels(Math.max(8, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 12)));
   if (requested && isDirectProviderModel(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
 
-  let lastError = null;
+  const failures = [];
   for (const selected of [...new Set(candidates)]) {
     try {
       const data = await requestJson(config.omnirouteBase + '/chat/completions', {
@@ -152,21 +156,20 @@ async function chat(messages, model, tools) {
       return data;
     } catch (error) {
       error.model = selected;
-      error.provider = 'omniroute';
-      lastError = error;
-      // A provider-specific 401/403 (for example Vertex requiring OAuth2)
-      // is recoverable by trying the next provider. The OmniRoute endpoint
-      // key itself was already proven against /v1/models, so don't mislabel
-      // this as gateway authentication failure.
-      if (isProviderAuthError(error)) continue;
-      if (!Number(error?.status) || error.status < 500 || error.status > 599) throw error;
+      error.provider = providerFromModel(selected);
+      failures.push({ model: selected, provider: error.provider, status: error.status || null, message: error.message });
+      if (!isProviderCredentialError(error) && !(Number(error?.status) >= 500 && Number(error?.status) <= 599)) throw error;
     }
   }
-  throw lastError || new Error('OmniRoute: all direct-provider model candidates failed.');
+  const summary = failures.map((x) => `${x.provider}/${x.model}: ${x.status || 'ERR'} ${x.message}`).join(' | ');
+  const error = new Error(`OmniRoute could not find a working provider model. Tried ${failures.length} candidates. ${summary}`);
+  error.status = failures.at(-1)?.status || 503;
+  error.failures = failures;
+  throw error;
 }
 
 async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, isProviderAuthError, concreteModels, concreteModel, chat, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, isProviderCredentialError, concreteModels, concreteModel, chat, speak };
