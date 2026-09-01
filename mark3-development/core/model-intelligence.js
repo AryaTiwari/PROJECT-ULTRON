@@ -40,15 +40,16 @@ function summarize(taskType = null) {
   }));
 }
 
-function isUsableAssistantModel(id) {
+function isAssistantEligibleModel(id) {
   const value = String(id || '').trim();
   if (!value) return false;
   if (/^auto(?:\/|$)/i.test(value)) return false;
   if (/^omniroute\//i.test(value)) return false;
   if (/big[-_ ]?pickle/i.test(value)) return false;
-  if (/(?:^|[\\/])dva(?:[\\/]|$)/i.test(value)) return false;
-  if (/(?:^|[\\/])devin(?:[\\/]|$)/i.test(value)) return false;
-  if (/(?:^|[\\/])agentic(?:[\\/]|$)/i.test(value)) return false;
+  if (/(?:^|[/_-])dva(?:[/_-]|$)/i.test(value)) return false;
+  if (/(?:^|[/_-])devin(?:[/_-]|$)/i.test(value)) return false;
+  if (/(?:^|[/_-])agentic(?:[/_-]|$)/i.test(value)) return false;
+  if (/(?:^|[/_-])bridge(?:[/_-]|$)/i.test(value)) return false;
   return true;
 }
 
@@ -58,9 +59,15 @@ async function catalog() {
   }
   try {
     const models = await parentRouter.listModels({ force: true });
-    const normalized = [...new Set((models || []).map(String).map(value => value.trim()).filter(isUsableAssistantModel))];
-    if (!normalized.length) throw new Error('OmniRoute returned no usable assistant models after filtering aliases, Devin/agentic models, and Big Pickle.');
-    return { models: normalized, count: normalized.length, source: 'shared-omniroute-router', rawCount: Array.isArray(models) ? models.length : 0 };
+    const raw = [...new Set((models || []).map(String).map(value => value.trim()).filter(Boolean))];
+    const eligible = raw.filter(isAssistantEligibleModel);
+    if (!eligible.length) throw new Error('OmniRoute catalog returned no assistant-eligible models.');
+    return {
+      models: eligible,
+      count: eligible.length,
+      rawCount: raw.length,
+      source: 'shared-omniroute-router-filtered',
+    };
   } catch (error) {
     const diagnostic = error instanceof Error ? error.message : String(error);
     throw new Error(`OmniRoute model catalog unavailable: ${diagnostic}`);
@@ -72,4 +79,4 @@ async function intelligence(taskType = null) {
   return { live, observed: summarize(taskType), generatedAt: new Date().toISOString() };
 }
 
-module.exports = { record, history, summarize, catalog, intelligence, isUsableAssistantModel };
+module.exports = { record, history, summarize, catalog, intelligence, isAssistantEligibleModel };
