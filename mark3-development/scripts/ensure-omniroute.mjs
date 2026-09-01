@@ -10,6 +10,7 @@ const ROOT = path.resolve(process.cwd(), '..', '..');
 const OMNI_DIR = process.env.OMNIROUTE_DIR || path.join(ROOT, 'Downloads', 'OmniRoute-release-v3.8.51', 'OmniRoute-release-v3.8.51');
 const LOG_DIR = path.resolve(process.env.ULTRON_RUNTIME_LOG_DIR || path.join(ROOT, '.ultron'));
 const LOG_FILE = path.join(LOG_DIR, 'mark3-omniroute.log');
+const LOCK_FILE = path.join(LOG_DIR, 'mark3-omniroute.lock');
 const ENTRY = path.join(OMNI_DIR, 'scripts', 'dev', 'run-next.mjs');
 const MEMORY_MB = Number(process.env.OMNIROUTE_MEMORY_MB || 4096);
 const TURBOPACK = process.env.OMNIROUTE_USE_TURBOPACK || '1';
@@ -37,6 +38,22 @@ function tail(file, lines = 80) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).slice(-lines).join('\n').trim(); } catch { return ''; }
 }
 
+function readLock() {
+  try { return JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8')); } catch { return null; }
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function clearStaleLock() {
+  const lock = readLock();
+  if (!lock) return;
+  if (pidAlive(Number(lock.pid))) return;
+  try { fs.unlinkSync(LOCK_FILE); } catch {}
+}
+
 if (await isOpen(HOST, PORT)) {
   console.log(`[Mark 3] OmniRoute already listening at http://${HOST}:${PORT}.`);
   process.exit(0);
@@ -49,6 +66,28 @@ if (!fs.existsSync(ENTRY)) {
 }
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
+clearStaleLock();
+
+const existingLock = readLock();
+if (existingLock && pidAlive(Number(existingLock.pid))) {
+  console.log(`[Mark 3] OmniRoute launcher already active (pid=${existingLock.pid}); waiting for ${HOST}:${PORT}.`);
+  const ready = await waitForGateway();
+  if (ready) {
+    console.log(`[Mark 3] OmniRoute ready at http://${HOST}:${PORT}.`);
+    process.exit(0);
+  }
+  console.error(`[Mark 3] Existing OmniRoute launcher process ${existingLock.pid} did not make the gateway ready.`);
+  process.exit(1);
+}
+
+const tempLock = `${LOCK_FILE}.${process.pid}.tmp`;
+try {
+  fs.writeFileSync(tempLock, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), host: HOST, port: PORT }, null, 2), 'utf8');
+  fs.renameSync(tempLock, LOCK_FILE);
+} catch {
+  try { fs.unlinkSync(tempLock); } catch {}
+}
+
 try { fs.writeFileSync(LOG_FILE, '', 'utf8'); } catch {}
 const log = fs.openSync(LOG_FILE, 'a');
 const env = {
@@ -68,15 +107,25 @@ console.log(`[Mark 3] OmniRoute mode: ${TURBOPACK === '1' ? 'Turbopack' : 'Webpa
 console.log(`[Mark 3] Devin bridge sandbox home: ${env.DEVIN_AGENTIC_HOME}.`);
 console.log(`[Mark 3] OmniRoute logs: ${LOG_FILE}`);
 
-const child = spawn(process.execPath, [`--max-old-space-size=${MEMORY_MB}`, ENTRY, 'dev'], {
-  cwd: OMNI_DIR,
-  env,
-  windowsHide: process.platform === 'win32',
-  detached: true,
-  shell: false,
-  stdio: ['ignore', log, log],
-});
-child.unref();
+let child;
+try {
+  const childOptions = {
+    cwd: OMNI_DIR,
+    env,
+    detached: true,
+    windowsHide: true,
+    shell: false,
+    stdio: ['ignore', log, log],
+  };
+  child = spawn(process.execPath, [`--max-old-space-size=${MEMORY_MB}`, ENTRY, 'dev'], childOptions);
+  child.unref();
+} catch (error) {
+  try { fs.unlinkSync(LOCK_FILE); } catch {}
+  try { fs.closeSync(log); } catch {}
+  console.error(`[Mark 3] Failed to spawn OmniRoute: ${error?.message || String(error)}`);
+  process.exit(1);
+}
+try { fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: child.pid, startedAt: new Date().toISOString(), host: HOST, port: PORT }, null, 2), 'utf8'); } catch {}
 try { fs.closeSync(log); } catch {}
 
 const ready = await waitForGateway();
