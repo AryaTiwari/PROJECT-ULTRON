@@ -100,14 +100,6 @@ function payloadModels(payload) {
   return [...new Set(raw.map((item) => typeof item === 'string' ? item : item?.id || item?.model || item?.name || '').map(String).map((value) => value.trim()).filter(Boolean))];
 }
 
-function payloadModelEntries(payload) {
-  const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-  return raw.map((item) => {
-    if (typeof item === 'string') return { id: item.trim(), raw: item };
-    return { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item };
-  }).filter((item) => item.id);
-}
-
 function isRoutingAlias(id) {
   const value = String(id || '').trim().toLowerCase();
   return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value) || /^oc(?:\/|$)/.test(value);
@@ -130,15 +122,10 @@ function isDirectProviderModel(id) {
 function providerFromModel(id) {
   const first = String(id || '').split('/')[0].trim().toLowerCase();
   const map = {
-    vertex: 'vertex',
-    nvidia: 'nvidia',
-    pollinations: 'pollinations',
-    pol: 'pollinations',
-    opencode: 'opencode',
-    oc: 'opencode',
-    zenmux: 'zenmux',
-    zm: 'zenmux',
-    bytez: 'bytez',
+    vertex: 'vertex', nvidia: 'nvidia', pollinations: 'pollinations', pol: 'pollinations',
+    opencode: 'opencode', oc: 'opencode', zenmux: 'zenmux', zm: 'zenmux', bytez: 'bytez',
+    'gemini-cli': 'gemini-cli', kr: 'kiro', kiro: 'kiro', if: 'qoder', qoder: 'qoder',
+    qw: 'qwen', qwen: 'qwen', gh: 'github-copilot', 'github-copilot': 'github-copilot',
   };
   return map[first] || first || 'unknown';
 }
@@ -158,10 +145,14 @@ function isProviderCredentialError(error) { return classifyProviderError(error) 
 function isPaidModelError(error) { return classifyProviderError(error) === 'PAID_MODEL'; }
 function isRetryableCandidateError(error) {
   const kind = classifyProviderError(error);
-  return kind === 'PAID_MODEL' || kind === 'CREDENTIALS_OR_ACCESS' || kind === 'MODEL_UNAVAILABLE' || kind === 'QUOTA_OR_RATE_LIMIT' || kind === 'UPSTREAM_OR_NETWORK';
+  return kind !== 'UNKNOWN';
 }
 
-const PROVIDER_PRIORITY = ['opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex'];
+// Prefer providers that OmniRoute documents as free/OAuth before paid API-key providers.
+const PROVIDER_PRIORITY = [
+  'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot',
+  'opencode', 'pollinations', 'nvidia', 'zenmux', 'bytez', 'vertex',
+];
 const providerHealth = new Map();
 
 function providerPriority(modelId) {
@@ -172,7 +163,16 @@ function providerPriority(modelId) {
   return (index === -1 ? 100 : index) * 100 + healthPenalty;
 }
 
-function canonicalProviderPrefix(provider) { return `${String(provider || '').toLowerCase()}/`; }
+function canonicalProviderPrefixes(provider) {
+  const prefixes = {
+    'gemini-cli': ['gemini-cli/'],
+    kiro: ['kr/', 'kiro/'],
+    qoder: ['if/', 'qoder/'],
+    qwen: ['qw/', 'qwen/'],
+    'github-copilot': ['gh/', 'github-copilot/'],
+  };
+  return prefixes[provider] || [`${String(provider || '').toLowerCase()}/`];
+}
 
 function diversifyCandidates(modelIds, limit) {
   const groups = new Map();
@@ -185,21 +185,19 @@ function diversifyCandidates(modelIds, limit) {
   const out = [];
   for (const provider of orderedProviders) {
     const group = groups.get(provider) || [];
-    const canonical = group.filter((id) => String(id).toLowerCase().startsWith(canonicalProviderPrefix(provider)));
-    const fallback = group.filter((id) => !canonical.includes(id));
-    for (const id of [...canonical, ...fallback]) {
-      out.push(id);
-      if (out.length >= Math.max(1, Number(limit) || 12)) return out;
-    }
+    const prefixes = canonicalProviderPrefixes(provider);
+    const canonical = group.filter((id) => prefixes.some((prefix) => String(id).toLowerCase().startsWith(prefix)));
+    const aliases = group.filter((id) => !canonical.includes(id));
+    for (const id of [...canonical, ...aliases].slice(0, 6)) out.push(id);
   }
-  return out;
+  return out.slice(0, Math.max(1, Number(limit) || 12));
 }
 
-async function concreteModels(limit = 12) {
+async function concreteModels(limit = 36) {
   const available = payloadModels(await models()).filter(isDirectProviderModel);
   available.sort((a, b) => providerPriority(a) - providerPriority(b));
-  const diversified = diversifyCandidates(available, Math.max(12, Number(limit) || 12));
-  if (!diversified.length) throw new Error('OmniRoute /models returned no enabled-provider models after removing routing aliases, Devin, and Big Pickle.');
+  const diversified = diversifyCandidates(available, Math.max(24, Number(limit) || 36));
+  if (!diversified.length) throw new Error('OmniRoute /models returned no eligible models.');
   return diversified;
 }
 
@@ -212,8 +210,7 @@ async function chatExact(messages, model, tools) {
   if (!selected || !isDirectProviderModel(selected)) throw new Error(`Invalid direct provider model: ${selected || '(empty)'}`);
   const provider = providerFromModel(selected);
   const data = await requestJson(config.omnirouteBase + '/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
     body: JSON.stringify({ model: selected, messages, stream: false, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
   }, 120000);
   const actualModel = String(data?.model || '').trim();
@@ -236,7 +233,8 @@ async function chat(messages, model, tools) {
   const key = await resolveOmniRouteApiKey();
   if (!key) throw new Error('OmniRoute Endpoint API key is not configured.');
   const requested = String(model || '').trim();
-  let candidates = await concreteModels(Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 36));
+  const limit = Math.max(24, Number(process.env.ULTRON_M3_MODEL_CANDIDATES || 36));
+  let candidates = await concreteModels(limit);
   if (requested && isDirectProviderModel(requested)) candidates = [requested, ...candidates.filter((id) => id !== requested)];
 
   const failures = [];
@@ -248,16 +246,11 @@ async function chat(messages, model, tools) {
     try {
       return await chatExact(messages, selected, tools);
     } catch (error) {
-      error.model = selected;
-      error.provider = provider;
+      error.model = selected; error.provider = provider;
       const kind = classifyProviderError(error);
       const upstream = error.upstream?.provider || error.actualProvider || null;
       failures.push({ model: selected, provider, status: error.status || null, message: error.message, kind, upstreamProvider: upstream });
-
-      if (kind === 'PAID_MODEL') {
-        paidModels.push(selected);
-        continue;
-      }
+      if (kind === 'PAID_MODEL') { paidModels.push(selected); continue; }
       if (kind === 'CREDENTIALS_OR_ACCESS') {
         providerHealth.set(provider, { healthy: false, checkedAt: Date.now(), error: error.message });
         exhaustedProviders.add(provider);
@@ -287,4 +280,4 @@ async function speak(text) {
   return requestJson(config.parentCore + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2, temperature: 0.70, topP: 0.76, prosody: { speed: 1, volume: 2, normalize_loudness: true }, chunkLength: 240, conditionOnPreviousChunks: true }) }, 120000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, providerHealthSnapshot, speak };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, providerHealthSnapshot, speak, PROVIDER_PRIORITY };
