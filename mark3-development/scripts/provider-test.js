@@ -13,9 +13,9 @@ function classifyFailure(error) {
   const status = Number(error?.status || 0);
   const message = String(error?.message || error || 'Unknown error');
   const lower = message.toLowerCase();
-  if (/missing api key|invalid_api_key|no active credentials|authentication failed|provider authentication|you have no permission to access this resource/.test(lower)) return 'CREDENTIALS_OR_ACCESS';
+  if (/missing api key|invalid_api_key|no active credentials|authentication failed|provider authentication|you have no permission to access this resource|requires an opencode api key|requires an api key|billing_error|payment_required/.test(lower) || status === 402) return 'CREDENTIALS_OR_ACCESS';
   if (status === 429 || /quota|rate limit|exhausted/.test(lower)) return 'QUOTA_OR_RATE_LIMIT';
-  if (status === 404 || /model does not exist|model_not_found/.test(lower)) return 'MODEL_UNAVAILABLE';
+  if (status === 404 || /model does not exist|model_not_found|not available in the active live catalog/.test(lower)) return 'MODEL_UNAVAILABLE';
   if (status >= 500 || /endpoint is unavailable|upstream request failed|timed out|fetch failed|econnrefused|connect/.test(lower)) return 'UPSTREAM_OR_NETWORK';
   return 'UNKNOWN';
 }
@@ -23,15 +23,16 @@ function classifyFailure(error) {
 function diagnosisFor(provider, failures) {
   const classes = failures.map((item) => item.kind);
   if (classes.includes('CREDENTIALS_OR_ACCESS')) {
-    if (provider === 'opencode') return 'OpenCode is listed but OmniRoute has no valid OpenCode provider credential.';
-    if (provider === 'pollinations') return 'Pollinations is reachable but requires a valid Pollinations API key.';
-    if (provider === 'nvidia') return 'NVIDIA is listed but OmniRoute has no valid NVIDIA credential for the tested route.';
+    if (provider === 'opencode') return 'OpenCode is listed but OmniRoute needs a valid OpenCode API key for the tested paid models.';
+    if (provider === 'pollinations') return 'Pollinations is reachable but the tested routes require a valid Pollinations API key.';
+    if (provider === 'nvidia') return 'NVIDIA is listed but the tested routes require a valid NVIDIA credential.';
     if (provider === 'zenmux') return 'ZenMux is reachable but the current account/key has no permission for the tested models.';
-    if (provider === 'vertex') return 'Vertex is listed but OmniRoute has no active usable Vertex credential for the tested route.';
+    if (provider === 'bytez') return 'Bytez is reachable but its current authentication/connection is invalid or expired.';
+    if (provider === 'vertex') return 'Vertex is listed but no active usable Vertex credential is available.';
   }
   if (classes.includes('QUOTA_OR_RATE_LIMIT')) return 'Provider is configured but currently quota/rate-limit constrained.';
-  if (classes.includes('MODEL_UNAVAILABLE')) return 'Provider responded, but the catalog model is stale/unavailable upstream.';
-  if (classes.includes('UPSTREAM_OR_NETWORK')) return 'OmniRoute is not reachable or its upstream gateway failed before provider-level diagnostics could run.';
+  if (classes.includes('MODEL_UNAVAILABLE')) return 'OmniRoute contains catalog entries that the provider currently does not expose; stale candidates must be skipped.';
+  if (classes.includes('UPSTREAM_OR_NETWORK')) return 'OmniRoute or the provider upstream endpoint is temporarily unavailable.';
   return 'Provider failed without a recognized diagnostic classification.';
 }
 
