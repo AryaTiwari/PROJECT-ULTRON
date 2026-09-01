@@ -40,16 +40,6 @@ function summarize(taskType = null) {
   }));
 }
 
-function isRoutingAlias(id) {
-  const value = String(id || '').trim().toLowerCase();
-  if (!value) return true;
-  if (/^auto(?:\/|$)/i.test(value)) return true;
-  if (/^omniroute\//i.test(value)) return true;
-  if (/^no-think(?:\/|$)/i.test(value)) return true;
-  if (/^(?:oc|opencode)(?:\/|$)/i.test(value)) return true;
-  return false;
-}
-
 function isBridgeModelId(id) {
   const value = String(id || '').trim().toLowerCase();
   if (!value) return false;
@@ -57,13 +47,24 @@ function isBridgeModelId(id) {
   return segments.includes('dva') || segments.includes('devin') || segments.includes('agentic');
 }
 
+function isRoutingAlias(id) {
+  const value = String(id || '').trim().toLowerCase();
+  if (!value) return true;
+  if (/^auto(?:\/|$)/i.test(value)) return true;
+  if (/^omniroute\//i.test(value)) return true;
+  if (/^(?:oc|opencode)(?:\/|$)/i.test(value)) return true;
+  // no-think is an alias only when it is not carrying a Devin/agentic model.
+  if (/^no-think(?:\/|$)/i.test(value) && !isBridgeModelId(value)) return true;
+  return false;
+}
+
 function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
 
 function isAssistantEligibleModel(id) {
   const value = String(id || '').trim();
-  if (!value || isRoutingAlias(value) || isBigPickle(value)) return false;
+  if (!value || isBigPickle(value)) return false;
   if (isBridgeModelId(value)) return config.agenticBridgeEnabled;
-  return true;
+  return !isRoutingAlias(value);
 }
 
 async function catalog() {
