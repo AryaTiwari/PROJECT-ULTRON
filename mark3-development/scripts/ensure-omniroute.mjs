@@ -33,7 +33,7 @@ async function waitForGateway(timeoutMs = 180000) {
   return false;
 }
 
-function tail(file, lines = 60) {
+function tail(file, lines = 80) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).slice(-lines).join('\n').trim(); } catch { return ''; }
 }
 
@@ -59,10 +59,13 @@ const env = {
   OMNIROUTE_MEMORY_MB: String(MEMORY_MB),
   OMNIROUTE_SKIP_DB_HEALTHCHECK: process.env.OMNIROUTE_SKIP_DB_HEALTHCHECK || '1',
   NEXT_TELEMETRY_DISABLED: '1',
+  DEVIN_AGENTIC_HOME: process.env.DEVIN_AGENTIC_HOME || '/home/bridge',
+  DEVIN_AGENTIC_ACP_TIMEOUT_MS: process.env.DEVIN_AGENTIC_ACP_TIMEOUT_MS || '120000',
 };
 
 console.log(`[Mark 3] Starting OmniRoute at http://${HOST}:${PORT}.`);
 console.log(`[Mark 3] OmniRoute mode: ${TURBOPACK === '1' ? 'Turbopack' : 'Webpack'}; V8 heap: ${MEMORY_MB} MB.`);
+console.log(`[Mark 3] Devin bridge sandbox home: ${env.DEVIN_AGENTIC_HOME}.`);
 console.log(`[Mark 3] OmniRoute logs: ${LOG_FILE}`);
 
 const child = spawn(process.execPath, [`--max-old-space-size=${MEMORY_MB}`, ENTRY, 'dev'], {
