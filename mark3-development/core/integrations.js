@@ -63,9 +63,7 @@ function githubHeaders() {
   return headers;
 }
 
-function githubPath(value) {
-  return String(value || '').split('/').filter(Boolean).map(encodeURIComponent).join('/');
-}
+function githubPath(value) { return String(value || '').split('/').filter(Boolean).map(encodeURIComponent).join('/'); }
 
 async function githubReadFile(pathname, ref) {
   if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
@@ -90,16 +88,6 @@ async function models() {
   return requestJson(config.omnirouteBase + '/models', { headers: { Authorization: 'Bearer ' + key } }, 15000);
 }
 
-function isRoutingAlias(id) {
-  const value = String(id || '').trim().toLowerCase();
-  if (!value) return true;
-  if (/^auto(?:\/|$)/i.test(value)) return true;
-  if (/^omniroute\//i.test(value)) return true;
-  if (/^no-think(?:\/|$)/i.test(value)) return true;
-  if (/^(?:oc|opencode)(?:\/|$)/i.test(value)) return true;
-  return false;
-}
-
 function isBridgeModelId(id) {
   const value = String(id || '').trim().toLowerCase();
   if (!value) return false;
@@ -107,12 +95,22 @@ function isBridgeModelId(id) {
   return segments.includes('dva') || segments.includes('devin') || segments.includes('agentic');
 }
 
+function isRoutingAlias(id) {
+  const value = String(id || '').trim().toLowerCase();
+  if (!value) return true;
+  if (/^auto(?:\/|$)/i.test(value)) return true;
+  if (/^omniroute\//i.test(value)) return true;
+  // A no-think wrapper around a bridge model is still an explicit agentic model.
+  if (/^no-think(?:\/|$)/i.test(value) && !isBridgeModelId(value)) return true;
+  if (/^(?:oc|opencode)(?:\/|$)/i.test(value)) return true;
+  return false;
+}
+
 function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
 
 function isConcreteModelId(id) {
   const value = String(id || '').trim();
-  if (!value || isRoutingAlias(value) || isBigPickle(value) || isBridgeModelId(value)) return false;
-  return true;
+  return Boolean(value && !isRoutingAlias(value) && !isBigPickle(value) && !isBridgeModelId(value));
 }
 
 function isBridgeCapableModelId(id) {
@@ -146,6 +144,7 @@ function payloadModels(payload) {
 }
 
 async function concreteModel() { return (await concreteModels(1))[0]; }
+
 async function bridgeModel() {
   const preferred = String(config.agenticBridgeModel || '').trim();
   const available = await bridgeModels(Math.max(12, Number(process.env.ULTRON_M3_BRIDGE_MODEL_CANDIDATES || 12)));
