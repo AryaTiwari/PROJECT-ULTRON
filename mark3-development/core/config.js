@@ -24,12 +24,12 @@ module.exports = {
     process.env.ULTRON_OMNIROUTE_API_KEY ||
     ''
   ).trim(),
+  // Provider-only Mark 3 runtime. Big Pickle and Devin/DVA are excluded.
   omniRouteStrict: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_OMNIROUTE_STRICT || '1')),
   disableBigPickle: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DISABLE_BIG_PICKLE || '1')),
-  // Devin / DVA bridge disabled: Mark 3 uses ordinary provider APIs only.
   agenticBridgeEnabled: false,
   agenticBridgeModel: '',
-  agenticBridgeTimeoutMs: num('ULTRON_M3_DEVIN_BRIDGE_TIMEOUT_MS', 180000),
+  agenticBridgeTimeoutMs: 0,
   parentCore: String(process.env.ULTRON_PARENT_CORE_URL || 'http://127.0.0.1:8787').replace(/\/$/, ''),
   githubToken: String(process.env.GITHUB_TOKEN || '').trim(),
   githubOwner: process.env.ULTRON_GITHUB_OWNER || 'AryaTiwari',
