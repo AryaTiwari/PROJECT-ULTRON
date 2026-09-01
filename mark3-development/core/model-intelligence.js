@@ -42,38 +42,22 @@ function summarize(taskType = null) {
 
 async function catalog() {
   if (!parentRouter || typeof parentRouter.listModels !== 'function') {
-    throw new Error('Parent OmniRoute router is unavailable; refusing unauthenticated direct catalog fallback.');
+    throw new Error('Shared OmniRoute router is unavailable.');
   }
   try {
     const models = await parentRouter.listModels({ force: true });
     const normalized = [...new Set((models || []).map(String).map(value => value.trim()).filter(Boolean))];
-    return {
-      models: normalized,
-      count: normalized.length,
-      source: 'parent-omniroute-router',
-    };
+    if (!normalized.length) throw new Error('OmniRoute catalog returned no models.');
+    return { models: normalized, count: normalized.length, source: 'shared-omniroute-router' };
   } catch (error) {
     const diagnostic = error instanceof Error ? error.message : String(error);
-    let health = null;
-    try {
-      if (typeof parentRouter.health === 'function') health = await parentRouter.health();
-    } catch (_) {}
-    if (health?.ok && Array.isArray(health.catalogSample)) {
-      return {
-        models: [...new Set(health.catalogSample.map(String).map(value => value.trim()).filter(Boolean))],
-        count: Number(health.modelCount) || health.catalogSample.length,
-        source: 'parent-omniroute-health-sample',
-        degraded: true,
-      };
-    }
-    throw new Error(`Parent OmniRoute router catalog failed: ${diagnostic}`);
+    throw new Error(`OmniRoute model catalog unavailable: ${diagnostic}`);
   }
 }
 
 async function intelligence(taskType = null) {
   const live = await catalog();
-  const observed = summarize(taskType);
-  return { live, observed, generatedAt: new Date().toISOString() };
+  return { live, observed: summarize(taskType), generatedAt: new Date().toISOString() };
 }
 
 module.exports = { record, history, summarize, catalog, intelligence };
