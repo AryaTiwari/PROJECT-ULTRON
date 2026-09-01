@@ -26,8 +26,9 @@ module.exports = {
   ).trim(),
   omniRouteStrict: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_OMNIROUTE_STRICT || '1')),
   disableBigPickle: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DISABLE_BIG_PICKLE || '1')),
-  agenticBridgeEnabled: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DEVIN_BRIDGE_ENABLED || '1')),
-  agenticBridgeModel: String(process.env.ULTRON_M3_DEVIN_BRIDGE_MODEL || 'dva/swe-1-7-lightning').trim(),
+  // Devin / DVA bridge disabled: Mark 3 uses ordinary provider APIs only.
+  agenticBridgeEnabled: false,
+  agenticBridgeModel: '',
   agenticBridgeTimeoutMs: num('ULTRON_M3_DEVIN_BRIDGE_TIMEOUT_MS', 180000),
   parentCore: String(process.env.ULTRON_PARENT_CORE_URL || 'http://127.0.0.1:8787').replace(/\/$/, ''),
   githubToken: String(process.env.GITHUB_TOKEN || '').trim(),
