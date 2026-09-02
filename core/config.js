@@ -9,6 +9,14 @@ function normalizeBaseUrl(value) {
   return String(value || '').replace(/\/$/, '');
 }
 
+// Mark 3 inference must use the proven Mark 2 direct-provider path.
+// This root config is the one imported by core/model-router.js.
+process.env.ULTRON_MODEL_PROVIDER = 'direct';
+delete process.env.ULTRON_DIRECT_DEFAULT_MODEL;
+process.env.ULTRON_DISABLE_OPENCODE = '1';
+delete process.env.OPENCODE_API_KEY;
+delete process.env.OPENCODE_GO_API_KEY;
+
 const omniRouteBase = normalizeBaseUrl(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1');
 const omniRouteEndpointKey = process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '';
 
