@@ -12,12 +12,12 @@ const conversation = require('./conversation');
 const intent = require('./intent');
 const { emit } = require('./events');
 
-const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity only from context deliberately supplied for the current request; never resurrect an unrelated previous task. If fetched web-page content is supplied, use it directly and never claim that you cannot access that page.`;
+const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity only from context deliberately supplied for the current request; never resurrect an unrelated previous task. If fetched web-page or live-search content is supplied, use it directly and never claim that you cannot access that material. Never expose hidden chain-of-thought, scratchpad, internal reasoning, or analysis; provide only the useful conclusion and concise rationale.`;
 
 function textFromResponse(data) {
   const direct = data?.content ?? data?.response ?? data?.text ?? data?.output_text
-    ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.message?.reasoning_content
-    ?? data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.delta?.reasoning_content
+    ?? data?.choices?.[0]?.message?.content
+    ?? data?.choices?.[0]?.delta?.content
     ?? data?.choices?.[0]?.text ?? data?.choices?.[0]?.message?.text
     ?? data?.raw?.choices?.[0]?.message?.content ?? data?.raw?.response ?? data?.raw?.text ?? '';
   if (typeof direct === 'string') return direct.trim();
@@ -69,14 +69,10 @@ function workspaceContext(userMessage) {
   };
 }
 
-function contextBlock(retrieved, workspaceData, recent, page) {
+function contextBlock(retrieved, workspaceData, recent, page, searchEvidence) {
   const blocks = [];
-  if (recent.length) {
-    blocks.push('RELEVANT RECENT CONVERSATION:', JSON.stringify(recent.slice(-6)));
-  }
-  if (retrieved.length) {
-    blocks.push('RELEVANT LONG-TERM MEMORY:', JSON.stringify(retrieved.slice(0, 6)));
-  }
+  if (recent.length) blocks.push('RELEVANT RECENT CONVERSATION:', JSON.stringify(recent.slice(-6)));
+  if (retrieved.length) blocks.push('RELEVANT LONG-TERM MEMORY:', JSON.stringify(retrieved.slice(0, 6)));
   if (workspaceData.commitments.length || workspaceData.decisions.length || workspaceData.projects.length) {
     blocks.push('RELEVANT WORKSPACE STATE:', JSON.stringify({
       openCommitments: workspaceData.commitments,
@@ -87,10 +83,29 @@ function contextBlock(retrieved, workspaceData, recent, page) {
   if (page) {
     blocks.push(
       'FETCHED WEB PAGE:',
-      JSON.stringify({ url: page.url, title: page.title, status: page.status, truncated: page.truncated }),
+      JSON.stringify({ url: page.url, title: page.title, status: page.status, truncated: page.truncated, provider: page.provider }),
       page.text,
       'The page above was fetched successfully by ULTRON. Analyze it directly when relevant.'
     );
+  }
+  if (searchEvidence) {
+    blocks.push(
+      'LIVE WEB SEARCH:',
+      JSON.stringify({
+        query: searchEvidence.query,
+        provider: searchEvidence.provider,
+        results: searchEvidence.results,
+      })
+    );
+    const readablePages = (searchEvidence.pages || []).filter((item) => item?.text);
+    for (const evidencePage of readablePages.slice(0, 3)) {
+      blocks.push(
+        `SEARCH RESULT PAGE: ${evidencePage.url}`,
+        JSON.stringify({ title: evidencePage.title || evidencePage.searchTitle || '', provider: evidencePage.provider, truncated: evidencePage.truncated }),
+        String(evidencePage.text || '').slice(0, 8000)
+      );
+    }
+    blocks.push('Use the live search results and fetched pages above as evidence. Do not pretend you lack web access.');
   }
   if (!blocks.length) blocks.push('No prior context is required for this request. Answer from the current user message only.');
   return blocks.join('\n\n');
@@ -100,8 +115,6 @@ async function modelToolLoop(messages, model, taskType, toolSchemas = null) {
   let working = [...messages];
   const schemas = Array.isArray(toolSchemas) && toolSchemas.length ? toolSchemas : null;
 
-  // Ordinary conversation uses the streaming path. Tool-calling requests stay on
-  // non-streaming chat because tool-call deltas differ across providers.
   if (!schemas) {
     let streamed = '';
     let emitted = false;
@@ -165,6 +178,11 @@ function fastGreeting(userMessage) {
   return 'Hey Arya. I’m here. What are we building?';
 }
 
+function deterministicWebFailure(kind, target, error) {
+  const label = kind === 'search' ? 'search the live web' : `fetch ${target}`;
+  return `I couldn't ${label}. The web layer returned: ${error.message}`;
+}
+
 async function handle(message, options = {}) {
   const userMessage = String(message || '').trim();
   if (!userMessage) throw new Error('Message is required.');
@@ -219,14 +237,33 @@ async function handle(message, options = {}) {
   }
 
   let fetchedPage = null;
+  let searchEvidence = null;
   const suppliedUrl = web.extractFirstUrl(userMessage);
   if (suppliedUrl && !/^(?:https?:\/\/)?(?:www\.)?github\.com\b/i.test(suppliedUrl)) {
-    emit('tool_started', { tool: 'web_fetch', input: { url: suppliedUrl } });
+    emit('tool_started', { tool: 'web_fetch', input: { url: suppliedUrl, primary: 'tinyfish' } });
     try {
       fetchedPage = await web.fetchPage(suppliedUrl);
-      emit('tool_completed', { tool: 'web_fetch', result: { url: fetchedPage.url, title: fetchedPage.title, status: fetchedPage.status, chars: fetchedPage.text.length } });
+      emit('tool_completed', { tool: 'web_fetch', result: { url: fetchedPage.url, title: fetchedPage.title, status: fetchedPage.status, chars: fetchedPage.text.length, provider: fetchedPage.provider, primaryError: fetchedPage.primaryError || null } });
     } catch (error) {
       emit('tool_failed', { tool: 'web_fetch', url: suppliedUrl, error: error.message });
+      const response = deterministicWebFailure('fetch', suppliedUrl, error);
+      conversation.append('assistant', response, { model: 'deterministic-web-error', provider: 'web', taskType });
+      emit('response_ready', { model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error' });
+      emit('task_completed', { durationMs: Date.now() - started });
+      return { ok: true, response, text: response, model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', plan, webError: error.message };
+    }
+  } else if (web.shouldSearch(userMessage)) {
+    emit('tool_started', { tool: 'web_search', input: { query: userMessage, primary: 'tinyfish' } });
+    try {
+      searchEvidence = await web.searchAndFetch(userMessage, { searchLimit: 5, fetchTop: 3 });
+      emit('tool_completed', { tool: 'web_search', result: { query: searchEvidence.query, resultCount: searchEvidence.results.length, fetchedPages: searchEvidence.pages.filter((item) => item.text).length, provider: searchEvidence.provider } });
+    } catch (error) {
+      emit('tool_failed', { tool: 'web_search', query: userMessage, error: error.message });
+      const response = deterministicWebFailure('search', userMessage, error);
+      conversation.append('assistant', response, { model: 'deterministic-web-error', provider: 'web', taskType });
+      emit('response_ready', { model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error' });
+      emit('task_completed', { durationMs: Date.now() - started });
+      return { ok: true, response, text: response, model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', plan, webError: error.message };
     }
   }
 
@@ -235,12 +272,19 @@ async function handle(message, options = {}) {
   const selectedProvider = integrations.providerFromModel(selectedModel);
   const repositoryToolsEnabled = needsRepositoryTools(userMessage, taskType);
   const toolSchemas = tools.schemasFor({ github: repositoryToolsEnabled, web: false });
-  emit('model_selection', { selectedModel, mode: selection.mode, provider: selectedProvider, repositoryToolsEnabled, webFetched: Boolean(fetchedPage) });
+  emit('model_selection', {
+    selectedModel,
+    mode: selection.mode,
+    provider: selectedProvider,
+    repositoryToolsEnabled,
+    webFetched: Boolean(fetchedPage),
+    webSearched: Boolean(searchEvidence),
+  });
 
   const messages = [
     {
       role: 'system',
-      content: `${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage)}`,
+      content: `${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
     },
     ...previousConversation.map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
     { role: 'user', content: userMessage },
@@ -280,7 +324,11 @@ async function handle(message, options = {}) {
     plan,
     toolRounds: loop.rounds,
     streamed: Boolean(loop.streamed),
-    web: fetchedPage ? { url: fetchedPage.url, title: fetchedPage.title, status: fetchedPage.status } : null,
+    web: fetchedPage
+      ? { mode: 'fetch', url: fetchedPage.url, title: fetchedPage.title, status: fetchedPage.status, provider: fetchedPage.provider }
+      : searchEvidence
+        ? { mode: 'search', query: searchEvidence.query, resultCount: searchEvidence.results.length, provider: searchEvidence.provider }
+        : null,
   };
 }
 
