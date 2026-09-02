@@ -1,50 +1,125 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 const mark3Dir = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-const host = process.env.OMNIROUTE_HOST || '127.0.0.1';
-const port = Number(process.env.OMNIROUTE_PORT || 20128);
-const omniDir = process.env.OMNIROUTE_DIR || (process.platform === 'win32' && process.env.USERPROFILE
-  ? path.join(process.env.USERPROFILE, 'Downloads', 'OmniRoute-release-v3.8.51', 'OmniRoute-release-v3.8.51')
-  : '');
-const logDir = path.resolve(process.env.ULTRON_RUNTIME_LOG_DIR || path.join(mark3Dir, '.ultron'));
-const logFile = path.join(logDir, 'omniroute.log');
-let omniChild = null;
+const projectRoot = path.resolve(mark3Dir, '..');
+const require = createRequire(import.meta.url);
+const credentialStore = require('../../core/credentials/local-store');
 
 process.env.ULTRON_MODEL_PROVIDER = 'omniroute';
 process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
 process.env.ULTRON_DISABLE_OPENCODE = '1';
 process.env.ULTRON_ENABLE_OPENCODE = '0';
 
+const baseUrl = new URL(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1');
+const host = process.env.OMNIROUTE_HOST || baseUrl.hostname || '127.0.0.1';
+const port = Number(process.env.OMNIROUTE_PORT || baseUrl.port || 20128);
+const logDir = path.resolve(process.env.ULTRON_RUNTIME_LOG_DIR || path.join(projectRoot, '.ultron'));
+const logFile = path.join(logDir, 'omniroute.log');
+const readyTimeoutMs = Math.max(15000, Number(process.env.ULTRON_M3_OMNIROUTE_READY_TIMEOUT_MS || 120000));
+const maxOldSpaceMb = Math.max(1024, Number(process.env.ULTRON_OMNIROUTE_MAX_OLD_SPACE_MB || 3072));
+
+function isLoopback() {
+  const value = String(host).toLowerCase();
+  return value === '127.0.0.1' || value === 'localhost' || value === '::1' || value === '[::1]';
+}
+
 function isPortOpen() {
   return new Promise((resolve) => {
     const socket = net.createConnection({ host, port });
-    const done = (value) => { socket.destroy(); resolve(value); };
+    const done = (value) => { try { socket.destroy(); } catch {} resolve(value); };
     socket.once('connect', () => done(true));
     socket.once('error', () => done(false));
     socket.setTimeout(800, () => done(false));
   });
 }
 
-function resolveEntry() {
-  if (!omniDir) return null;
-  const entry = path.join(omniDir, 'scripts', 'dev', 'run-next.mjs');
-  return fs.existsSync(path.join(omniDir, 'package.json')) && fs.existsSync(entry) ? { cwd: omniDir, entry } : null;
+async function waitForPort(timeoutMs = readyTimeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await isPortOpen()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
 }
 
-async function main() {
-  if (await isPortOpen()) {
-    console.log(`[Mark 3] Existing OmniRoute gateway detected at http://${host}:${port}.`);
-    return;
-  }
+function validOmniDir(candidate) {
+  if (!candidate) return null;
+  const resolved = path.resolve(candidate);
+  const entry = path.join(resolved, 'scripts', 'dev', 'run-next.mjs');
+  return fs.existsSync(path.join(resolved, 'package.json')) && fs.existsSync(entry) ? { cwd: resolved, entry } : null;
+}
 
+function scanDownloads() {
+  const downloads = path.join(os.homedir(), 'Downloads');
+  if (!fs.existsSync(downloads)) return [];
+  const hits = [];
+  const firstLevel = fs.readdirSync(downloads, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /omniroute/i.test(entry.name))
+    .map((entry) => path.join(downloads, entry.name));
+  for (const folder of firstLevel) {
+    hits.push(folder);
+    try {
+      for (const nested of fs.readdirSync(folder, { withFileTypes: true })) {
+        if (nested.isDirectory()) hits.push(path.join(folder, nested.name));
+      }
+    } catch {}
+  }
+  return hits;
+}
+
+function resolveEntry() {
+  const candidates = [
+    process.env.OMNIROUTE_DIR,
+    path.join(os.homedir(), 'Downloads', 'OmniRoute-release-v3.8.51', 'OmniRoute-release-v3.8.51'),
+    ...scanDownloads(),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const resolved = validOmniDir(candidate);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+function readTail(file, lines = 60) {
+  try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).slice(-lines).join('\n').trim(); }
+  catch { return ''; }
+}
+
+async function resolveEndpointKey() {
+  const envKey = String(process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim();
+  if (envKey) return envKey;
+  try {
+    const stored = await credentialStore.load();
+    return String(stored.OMNIROUTE_ENDPOINT_KEY || stored.OMNIROUTE_API_KEY || stored.ULTRON_OMNIROUTE_API_KEY || '').trim();
+  } catch { return ''; }
+}
+
+async function verifyCatalog() {
+  const key = await resolveEndpointKey();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const headers = key ? { Authorization: `Bearer ${key}` } : {};
+    const response = await fetch(`${baseUrl.toString().replace(/\/$/, '')}/models`, { headers, signal: controller.signal });
+    const raw = await response.text();
+    if (!response.ok) throw new Error(`OmniRoute /models HTTP ${response.status}: ${raw.slice(0, 500)}`);
+    const data = raw ? JSON.parse(raw) : {};
+    const models = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : [];
+    if (!models.length) throw new Error('OmniRoute /models returned an empty catalog.');
+    console.log(`[Mark 3] OmniRoute ready: ${models.length} catalog model(s) visible.`);
+  } finally { clearTimeout(timer); }
+}
+
+async function startLocalGateway() {
   const resolved = resolveEntry();
   if (!resolved) {
-    console.warn('[Mark 3] OmniRoute gateway executable not found locally; continuing without starting it.');
-    return;
+    throw new Error('Local OmniRoute installation was not found. Set OMNIROUTE_DIR to the OmniRoute folder that contains package.json and scripts/dev/run-next.mjs.');
   }
 
   fs.mkdirSync(logDir, { recursive: true });
@@ -58,7 +133,7 @@ async function main() {
     NEXT_TELEMETRY_DISABLED: '1',
   };
 
-  omniChild = spawn(process.execPath, ['--max-old-space-size=8192', resolved.entry, 'dev'], {
+  const child = spawn(process.execPath, [`--max-old-space-size=${maxOldSpaceMb}`, resolved.entry, 'dev'], {
     cwd: resolved.cwd,
     env,
     windowsHide: process.platform === 'win32',
@@ -66,13 +141,32 @@ async function main() {
     stdio: ['ignore', handle, handle],
     shell: false,
   });
-  omniChild.once('error', (error) => console.error(`[Mark 3] OmniRoute process error: ${error.message}`));
-  omniChild.unref();
+  child.once('error', (error) => console.error(`[Mark 3] OmniRoute process error: ${error.message}`));
+  child.unref();
   try { fs.closeSync(handle); } catch {}
-  console.log(`[Mark 3] Started OmniRoute inference fabric on http://${host}:${port}.`);
+  console.log(`[Mark 3] Starting OmniRoute from ${resolved.cwd}`);
+
+  const ready = await waitForPort();
+  if (!ready) {
+    const tail = readTail(logFile);
+    throw new Error(`OmniRoute did not become reachable on ${host}:${port}.${tail ? ` Last gateway output: ${tail}` : ` Check ${logFile}.`}`);
+  }
+}
+
+async function main() {
+  if (!isLoopback()) {
+    console.log(`[Mark 3] Using configured remote OmniRoute endpoint ${baseUrl.origin}.`);
+    await verifyCatalog();
+    return;
+  }
+
+  if (await isPortOpen()) console.log(`[Mark 3] Existing OmniRoute gateway detected at http://${host}:${port}.`);
+  else await startLocalGateway();
+
+  await verifyCatalog();
 }
 
 main().catch((error) => {
-  console.error(`[Mark 3] OmniRoute bootstrap failed: ${error.message}`);
+  console.error(`[Mark 3] Startup blocked because inference is not ready: ${error.message}`);
   process.exit(1);
 });
