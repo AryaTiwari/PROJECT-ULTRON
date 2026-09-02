@@ -54,12 +54,32 @@ for (const file of js) {
   catch { throw new Error(`JavaScript syntax check failed: ${path.relative(root, file)}`); }
 }
 
+function hasRuntimeCoupling(text) {
+  const startUnified = /(?:require\s*\(|import\s+[^;]*?from\s+|spawn\s*\([^,]+,\s*\[[^\]]*)['\"](?:\.\.\/)*scripts\/start-unified\.mjs['\"]/m;
+  const parentCoreUsage = /\bconfig\.parentCore\b/;
+  return startUnified.test(text) || parentCoreUsage.test(text);
+}
+
 for (const file of js) {
   const rel = path.relative(root, file);
   const text = fs.readFileSync(file, 'utf8');
-  if (/github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}/.test(text)) throw new Error(`Possible secret embedded in source: ${rel}`);
-  if (text.includes('../scripts/start-unified.mjs') || text.includes('config.parentCore')) {
+  if (/github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}/.test(text)) {
+    throw new Error(`Possible secret embedded in source: ${rel}`);
+  }
+
+  // This file necessarily contains the detector expressions themselves.
+  // Never run the runtime-coupling detector against the detector source.
+  if (rel !== path.join('scripts', 'preflight.js') && hasRuntimeCoupling(text)) {
     throw new Error(`Mark 2 runtime coupling detected in Mark 3 source: ${rel}`);
+  }
+}
+
+const packageFile = path.join(root, 'package.json');
+if (fs.existsSync(packageFile)) {
+  const pkg = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
+  const startScript = String(pkg?.scripts?.start || '');
+  if (/start-unified\.mjs/i.test(startScript)) {
+    throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
   }
 }
 
