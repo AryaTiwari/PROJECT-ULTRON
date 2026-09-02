@@ -85,7 +85,7 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'OPTIONS') return send(res,204,'');
     if (req.method === 'GET' && req.url === '/api/health') {
       const router = await integrations.health();
-      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.9', inference:router, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
+      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.10', inference:router, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
     }
     if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
     if (req.method === 'POST' && req.url === '/api/web/fetch') {
