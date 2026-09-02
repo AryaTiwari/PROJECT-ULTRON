@@ -8,13 +8,14 @@ function num(name, fallback) {
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.join(ROOT, 'data');
 
-// Mark 3 keeps the Mark 2 inference contract: direct provider routing.
-// Do not let stale environment overrides select NVIDIA/OpenCode for chat.
-process.env.ULTRON_MODEL_PROVIDER = 'direct';
+// Mark 3 owns its runtime. OmniRoute is used only as the inference fabric.
+process.env.ULTRON_MODEL_PROVIDER = 'omniroute';
+process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
+process.env.ULTRON_DISABLE_OPENCODE = '1';
+process.env.ULTRON_ENABLE_OPENCODE = '0';
 delete process.env.ULTRON_DIRECT_DEFAULT_MODEL;
 delete process.env.OPENCODE_API_KEY;
 delete process.env.OPENCODE_GO_API_KEY;
-delete process.env.ULTRON_M3_DISABLE_OPENCODE;
 
 const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1').replace(/\/$/, '');
 
