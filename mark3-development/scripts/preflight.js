@@ -17,6 +17,7 @@ const required = [
   'core/verifier.js',
   'core/integrations.js',
   'core/tools.js',
+  'core/web.js',
   'core/assistant.js',
   'core/conversation.js',
   'core/proactive.js',
@@ -88,8 +89,12 @@ if (!/OMNIROUTE_MEMORY_MB/.test(mark3Launcher) || !/omniroute-production\.log/.t
 
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
+const conversation = require('../core/conversation');
+const web = require('../core/web');
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
 if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''))) throw new Error('Experimental browser/CLI providers must be disabled by default.');
+if (conversation.contextFor('hey ultron', [{ role:'assistant', content:'Old unrelated task' }]).length) throw new Error('Greeting context isolation invariant failed.');
+if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw new Error('Public web URL normalization invariant failed.');
 
 console.log(`ULTRON Mark 3 preflight passed: ${required.length} Mark 3 files, ${sharedTransport.length} shared transport files and ${js.length + sharedJs.length} JavaScript files validated.`);
