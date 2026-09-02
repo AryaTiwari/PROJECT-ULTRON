@@ -87,6 +87,11 @@ if (!/OMNIROUTE_MEMORY_MB/.test(mark3Launcher) || !/omniroute-production\.log/.t
   throw new Error('Mark 3 OmniRoute launcher must keep the production low-memory runtime policy.');
 }
 
+const omniTransport = fs.readFileSync(path.join(projectRoot, 'core', 'omniroute.js'), 'utf8');
+if (/message\.reasoning_content|delta\.reasoning_content/.test(omniTransport)) {
+  throw new Error('Mark 3 transport must not surface hidden reasoning_content as visible assistant text.');
+}
+
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
 const conversation = require('../core/conversation');
@@ -96,5 +101,8 @@ if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark
 if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''))) throw new Error('Experimental browser/CLI providers must be disabled by default.');
 if (conversation.contextFor('hey ultron', [{ role:'assistant', content:'Old unrelated task' }]).length) throw new Error('Greeting context isolation invariant failed.');
 if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw new Error('Public web URL normalization invariant failed.');
+if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must be the primary Mark 3 web provider.');
+if (!web.status().configured) console.warn('[Mark 3] TinyFish warning: TINYFISH_API_KEY was not detected; URL fetch will use direct fallback and live web search will be unavailable.');
+else console.log('[Mark 3] TinyFish web layer configured: Fetch + Search enabled.');
 
 console.log(`ULTRON Mark 3 preflight passed: ${required.length} Mark 3 files, ${sharedTransport.length} shared transport files and ${js.length + sharedJs.length} JavaScript files validated.`);
