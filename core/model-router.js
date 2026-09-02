@@ -4,10 +4,15 @@ const openCode = require('./opencode-router');
 const omniRoute = require('./omniroute');
 
 function isOmniRouteModel(model){return String(model||'').trim().toLowerCase().startsWith('omniroute/');}
+function isNvidiaModel(model){const value=String(model||'').trim().toLowerCase();return value.startsWith('nvidia/');}
 function qualitySensitiveTask(taskType){return ['coding','research','planning'].includes(String(taskType||'').toLowerCase());}
 async function chat({messages,model,tools=null,taskType='general'}={}){
   if(!Array.isArray(messages)||!messages.length)throw new Error('Model request requires messages.');
   const requestedModel=model||config.router.model; const mode=String(process.env.ULTRON_MODEL_PROVIDER||'omniroute').toLowerCase();
+  // NVIDIA NIM has a more current live catalog than some OmniRoute releases.
+  // Route explicit NVIDIA models directly so stale gateway catalog validation
+  // cannot reject an otherwise valid NIM model.
+  if(isNvidiaModel(requestedModel))return direct.directChat({messages,model:requestedModel,tools});
   if(isOmniRouteModel(requestedModel))return omniRoute.chat({messages,model:requestedModel,taskType,tools});
   if(mode==='omniroute')return omniRoute.chat({messages,model:requestedModel,taskType,tools});
   if(mode==='opencode-server'||mode==='opencode')return openCode.chat({messages,model:requestedModel,tools});
@@ -20,6 +25,11 @@ async function chat({messages,model,tools=null,taskType='general'}={}){
 async function streamChat({messages,model,tools=null,taskType='general',onDelta}={}){
   if(typeof onDelta!=='function')throw new Error('Streaming requires an onDelta callback.');
   const requestedModel=model||config.router.model; const mode=String(process.env.ULTRON_MODEL_PROVIDER||'omniroute').toLowerCase();
+  if(isNvidiaModel(requestedModel)){
+    const result=await direct.directChat({messages,model:requestedModel,tools});
+    onDelta(result.content,{model:result.model,finishReason:'stop',direct:true});
+    return result;
+  }
   if(isOmniRouteModel(requestedModel)||mode==='omniroute'||mode==='auto'){
     try{
       return await omniRoute.streamChat({
@@ -42,4 +52,4 @@ async function streamChat({messages,model,tools=null,taskType='general',onDelta}
 }
 
 async function health(){const omni=await omniRoute.health();const openCodeHealth=await openCode.health();const directHealth=await direct.health();return{ok:omni.ok||openCodeHealth.ok||directHealth.anyConfigured,mode:omni.ok?'omniroute':openCodeHealth.ok?'opencode-server':directHealth.anyConfigured?'direct':'none',omniroute:omni,opencode:openCodeHealth,direct:directHealth};}
-module.exports={chat,streamChat,health,isOmniRouteModel,chatViaOmniRoute:omniRoute.chat};
+module.exports={chat,streamChat,health,isOmniRouteModel,isNvidiaModel,chatViaOmniRoute:omniRoute.chat};
