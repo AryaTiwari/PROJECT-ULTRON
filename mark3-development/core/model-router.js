@@ -5,6 +5,8 @@ const { emit } = require('./events');
 const MAX_CANDIDATES = Math.max(2, Number(process.env.ULTRON_M3_ROUTER_MAX_CANDIDATES || 6));
 const GENERAL_CANDIDATE_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_CANDIDATE_TIMEOUT_MS || 12000));
 const HEAVY_CANDIDATE_TIMEOUT_MS = Math.max(GENERAL_CANDIDATE_TIMEOUT_MS, Number(process.env.ULTRON_M3_HEAVY_CANDIDATE_TIMEOUT_MS || 22000));
+const NATIVE_ROUTE_TIMEOUT_MS = Math.max(GENERAL_CANDIDATE_TIMEOUT_MS, Number(process.env.ULTRON_M3_NATIVE_ROUTE_TIMEOUT_MS || 30000));
+const NATIVE_HEAVY_ROUTE_TIMEOUT_MS = Math.max(NATIVE_ROUTE_TIMEOUT_MS, Number(process.env.ULTRON_M3_NATIVE_HEAVY_ROUTE_TIMEOUT_MS || 45000));
 
 function normalizeModel(model) {
   return omniRoute.normalizeModelId ? omniRoute.normalizeModelId(model) : String(model || '').trim();
@@ -50,6 +52,7 @@ function providerFromModel(model) {
 function classifyProviderError(error) {
   const status = Number(error?.status || 0);
   const text = `${error?.message || ''} ${error?.raw || error?.body || ''}`.toLowerCase();
+  if (/resource_pressure|resource pressure/.test(text)) return 'RESOURCE_PRESSURE';
   if (status === 402 || /payment_required|payment required|billing_error|paid[- ]?only/.test(text)) return 'PAID_MODEL';
   if ([401, 403].includes(status) || /missing api key|invalid_api_key|authentication failed|no active credentials|forbidden|permission denied|not configured.*token/.test(text)) return 'ACCESS';
   if (status === 429 || /quota|rate limit|too many requests|exhausted|anti-abuse/.test(text)) return 'RATE_LIMIT';
@@ -67,6 +70,12 @@ function candidateTimeout(taskType) {
   return ['coding', 'research', 'planning'].includes(String(taskType || '').toLowerCase())
     ? HEAVY_CANDIDATE_TIMEOUT_MS
     : GENERAL_CANDIDATE_TIMEOUT_MS;
+}
+
+function nativeTimeout(taskType) {
+  return ['coding', 'research', 'planning'].includes(String(taskType || '').toLowerCase())
+    ? NATIVE_HEAVY_ROUTE_TIMEOUT_MS
+    : NATIVE_ROUTE_TIMEOUT_MS;
 }
 
 function nativeAliasForTask(taskType) {
@@ -104,14 +113,20 @@ function validateNativeResult(result, alias) {
     registry.recordSuccess(actual);
     return { model: actual, provider };
   }
-  // Some OmniRoute builds intentionally keep the alias in the response even after
-  // routing internally. Accept the successful response without pretending we know
-  // the hidden concrete provider/model.
   return { model: actual || alias, provider: 'omniroute-auto' };
 }
 
+function gatewayPressureError(original, failures = []) {
+  const error = new Error('OmniRoute is refusing chat requests because its gateway process is under critical resource pressure. Model/provider fallback cannot fix a process-wide admission rejection.');
+  error.status = 503;
+  error.code = 'resource_pressure';
+  error.cause = original;
+  error.failures = failures;
+  return error;
+}
+
 async function runNativeChat(messages, requestedModel, tools, taskType, failures) {
-  const timeoutMs = candidateTimeout(taskType);
+  const timeoutMs = nativeTimeout(taskType);
   let number = 0;
   for (const alias of nativeAliases(requestedModel, taskType)) {
     number += 1;
@@ -131,16 +146,18 @@ async function runNativeChat(messages, requestedModel, tools, taskType, failures
       emit('model_candidate_succeeded', { model: resolved.model, provider: resolved.provider, durationMs: Date.now() - started, candidateNumber: number, nativeRouting: true });
       return { ...result, model: resolved.model, provider: resolved.provider, transport: 'omniroute', routingMode: 'native-auto' };
     } catch (error) {
+      const kind = classifyProviderError(error);
       const failure = {
         model: alias,
         provider: 'omniroute-auto',
-        kind: classifyProviderError(error),
+        kind,
         status: Number(error?.status || 0),
         message: String(error?.message || error).slice(0, 500),
         nativeRouting: true,
       };
       failures.push(failure);
       emit('model_candidate_failed', { ...failure, durationMs: Date.now() - started, candidateNumber: number });
+      if (kind === 'RESOURCE_PRESSURE') throw gatewayPressureError(error, failures);
       if (!recoverable(error)) throw error;
     }
   }
@@ -184,9 +201,6 @@ async function chat({ messages, model = 'auto', tools = null, taskType = 'genera
   const failures = [];
   const requested = normalizeModel(model);
 
-  // Preserve the architecture that made Mark 2 reliable: OmniRoute owns provider
-  // selection first. Mark 3 validates the result, then falls back to concrete
-  // managed providers only if OmniRoute's native router cannot complete the call.
   if (!requested || isRoutingAlias(requested)) {
     const native = await runNativeChat(messages, requested || 'auto', tools, taskType, failures);
     if (native) return native;
@@ -216,10 +230,11 @@ async function chat({ messages, model = 'auto', tools = null, taskType = 'genera
         return { ...result, model: actual, provider: actualProvider, transport: 'omniroute', routingMode: 'managed-fallback' };
       } catch (error) {
         const kind = classifyProviderError(error);
-        registry.recordFailure(candidate, kind, error?.message || String(error));
         const failure = { model: candidate, provider, kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500), nativeRouting: false };
         failures.push(failure);
         emit('model_candidate_failed', { ...failure, durationMs: Date.now() - started, candidateNumber: attempted.length });
+        if (kind === 'RESOURCE_PRESSURE') throw gatewayPressureError(error, failures);
+        registry.recordFailure(candidate, kind, error?.message || String(error));
         if (!recoverable(error)) throw error;
       }
     }
@@ -234,7 +249,8 @@ async function streamChat({ messages, model = 'auto', tools = null, taskType = '
   if (typeof onDelta !== 'function') throw new Error('Mark 3 streaming requires an onDelta callback.');
   const failures = [];
   const requested = normalizeModel(model);
-  const timeoutMs = firstTokenTimeoutMs || candidateTimeout(taskType);
+  const managedTimeoutMs = firstTokenTimeoutMs || candidateTimeout(taskType);
+  const nativeFirstTokenTimeoutMs = firstTokenTimeoutMs || nativeTimeout(taskType);
 
   if (!requested || isRoutingAlias(requested)) {
     let number = 0;
@@ -242,14 +258,14 @@ async function streamChat({ messages, model = 'auto', tools = null, taskType = '
       number += 1;
       const started = Date.now();
       let emitted = false;
-      emit('model_candidate_started', { model: alias, provider: 'omniroute-auto', candidateNumber: number, timeoutMs, streaming: true, nativeRouting: true });
+      emit('model_candidate_started', { model: alias, provider: 'omniroute-auto', candidateNumber: number, timeoutMs: nativeFirstTokenTimeoutMs, streaming: true, nativeRouting: true });
       try {
         const result = await omniRoute.streamChat({
           messages,
           model: alias,
           tools,
           taskType,
-          firstTokenTimeoutMs: timeoutMs,
+          firstTokenTimeoutMs: nativeFirstTokenTimeoutMs,
           skipModelValidation: true,
           onDelta: (delta, meta) => { emitted = true; onDelta(delta, meta); },
         });
@@ -258,9 +274,11 @@ async function streamChat({ messages, model = 'auto', tools = null, taskType = '
         return { ...result, model: resolved.model, provider: resolved.provider, transport: 'omniroute', routingMode: 'native-auto' };
       } catch (error) {
         if (emitted) throw error;
-        const failure = { model: alias, provider: 'omniroute-auto', kind: classifyProviderError(error), status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500), nativeRouting: true };
+        const kind = classifyProviderError(error);
+        const failure = { model: alias, provider: 'omniroute-auto', kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500), nativeRouting: true };
         failures.push(failure);
         emit('model_candidate_failed', { ...failure, durationMs: Date.now() - started, candidateNumber: number, streaming: true });
+        if (kind === 'RESOURCE_PRESSURE') throw gatewayPressureError(error, failures);
         if (!recoverable(error)) throw error;
       }
     }
@@ -275,14 +293,14 @@ async function streamChat({ messages, model = 'auto', tools = null, taskType = '
       const provider = providerFromModel(candidate);
       const started = Date.now();
       let emitted = false;
-      emit('model_candidate_started', { model: candidate, provider, candidateNumber: attempted.length, timeoutMs, streaming: true, nativeRouting: false });
+      emit('model_candidate_started', { model: candidate, provider, candidateNumber: attempted.length, timeoutMs: managedTimeoutMs, streaming: true, nativeRouting: false });
       try {
         const result = await omniRoute.streamChat({
           messages,
           model: candidate,
           tools,
           taskType,
-          firstTokenTimeoutMs: timeoutMs,
+          firstTokenTimeoutMs: managedTimeoutMs,
           skipModelValidation: true,
           onDelta: (delta, meta) => { emitted = true; onDelta(delta, meta); },
         });
@@ -299,10 +317,11 @@ async function streamChat({ messages, model = 'auto', tools = null, taskType = '
       } catch (error) {
         if (emitted) throw error;
         const kind = classifyProviderError(error);
-        registry.recordFailure(candidate, kind, error?.message || String(error));
         const failure = { model: candidate, provider, kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500), nativeRouting: false };
         failures.push(failure);
         emit('model_candidate_failed', { ...failure, durationMs: Date.now() - started, candidateNumber: attempted.length, streaming: true });
+        if (kind === 'RESOURCE_PRESSURE') throw gatewayPressureError(error, failures);
+        registry.recordFailure(candidate, kind, error?.message || String(error));
         if (!recoverable(error)) throw error;
       }
     }
@@ -332,6 +351,8 @@ async function health() {
     catalogError,
     candidateTimeoutMs: GENERAL_CANDIDATE_TIMEOUT_MS,
     heavyCandidateTimeoutMs: HEAVY_CANDIDATE_TIMEOUT_MS,
+    nativeRouteTimeoutMs: NATIVE_ROUTE_TIMEOUT_MS,
+    nativeHeavyRouteTimeoutMs: NATIVE_HEAVY_ROUTE_TIMEOUT_MS,
     maxCandidates: MAX_CANDIDATES,
     policy,
     blocked: { openCode: true, bigPickle: true, nvidiaInference: true, devinFromAssistantChat: true, experimentalConcreteFallbacks: true, nonChatModels: true },
