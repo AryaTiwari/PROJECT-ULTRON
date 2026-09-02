@@ -78,6 +78,14 @@ if (fs.existsSync(packageFile)) {
   if (/start-unified\.mjs/i.test(String(pkg?.scripts?.start || ''))) throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
 }
 
+const mark3Launcher = fs.readFileSync(path.join(root, 'scripts', 'start-mark3.mjs'), 'utf8');
+if (/run-next\.mjs[^\n\r]*['\"]?\s*,?\s*['\"]dev['\"]?/i.test(mark3Launcher)) {
+  throw new Error('Mark 3 must not launch OmniRoute through run-next.mjs dev during normal startup. Use the packaged production runtime.');
+}
+if (!/OMNIROUTE_MEMORY_MB/.test(mark3Launcher) || !/omniroute-production\.log/.test(mark3Launcher)) {
+  throw new Error('Mark 3 OmniRoute launcher must keep the production low-memory runtime policy.');
+}
+
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
