@@ -6,12 +6,13 @@ const planner = require('./planner');
 const verifier = require('./verifier');
 const integrations = require('./integrations');
 const tools = require('./tools');
+const web = require('./web');
 const voice = require('./voice-orchestrator');
 const conversation = require('./conversation');
 const intent = require('./intent');
 const { emit } = require('./events');
 
-const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity with projects, commitments, decisions and recent context.`;
+const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity only from context deliberately supplied for the current request; never resurrect an unrelated previous task. If fetched web-page content is supplied, use it directly and never claim that you cannot access that page.`;
 
 function textFromResponse(data) {
   const direct = data?.content ?? data?.response ?? data?.text ?? data?.output_text
@@ -43,36 +44,92 @@ function needsRepositoryTools(text, taskType) {
   return /\b(github|repository|repo|codebase|branch|commit|pull request|source file|edit file|update file|create file|delete file|project[- ]ultron)\b/.test(value);
 }
 
-function contextBlock(userMessage, retrieved, commitments, decisions, projects, modelIntelligence, recent) {
-  return [
-    'WORKING CONTEXT:',
-    JSON.stringify({
-      recentConversation: recent.slice(-config.maxConversationItems),
-      recentMemories: retrieved,
-      openCommitments: commitments.slice(0, 8),
-      decisions: decisions.slice(0, 8),
-      projects: projects.slice(0, 8),
-    }),
-    '',
-    'MODEL INTELLIGENCE:',
-    JSON.stringify({
-      availableModelCount: modelIntelligence.live.count,
-      models: modelIntelligence.live.models.slice(0, 60),
-      observedPerformance: modelIntelligence.observed.slice(0, 40),
-    }),
-    '',
-    `CURRENT USER REQUEST: ${userMessage}`,
-  ].join('\n');
+function relevantRows(rows, query, fields, limit = 5) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      const haystack = fields.map((field) => String(row?.[field] || '')).join(' ');
+      return { row, score: conversation.overlap(query, haystack) };
+    })
+    .filter((entry) => entry.score >= 0.14)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((entry) => entry.row);
+}
+
+function workspaceContext(userMessage) {
+  const allCommitments = workspace.listCommitments({ status: 'open' });
+  const allDecisions = workspace.listDecisions();
+  const allProjects = workspace.listProjects();
+  const explicitWorkspaceIntent = /\b(commitment|deadline|remind|decision|project|roadmap|milestone|todo|task)\b/i.test(userMessage);
+  return {
+    commitments: explicitWorkspaceIntent ? relevantRows(allCommitments, userMessage, ['title', 'project', 'description'], 6) : [],
+    decisions: explicitWorkspaceIntent ? relevantRows(allDecisions, userMessage, ['title', 'project', 'decision', 'reason'], 5) : [],
+    projects: relevantRows(allProjects, userMessage, ['name', 'title', 'description', 'status'], 5),
+    counts: { commitments: allCommitments.length, projects: allProjects.length },
+  };
+}
+
+function contextBlock(retrieved, workspaceData, recent, page) {
+  const blocks = [];
+  if (recent.length) {
+    blocks.push('RELEVANT RECENT CONVERSATION:', JSON.stringify(recent.slice(-6)));
+  }
+  if (retrieved.length) {
+    blocks.push('RELEVANT LONG-TERM MEMORY:', JSON.stringify(retrieved.slice(0, 6)));
+  }
+  if (workspaceData.commitments.length || workspaceData.decisions.length || workspaceData.projects.length) {
+    blocks.push('RELEVANT WORKSPACE STATE:', JSON.stringify({
+      openCommitments: workspaceData.commitments,
+      decisions: workspaceData.decisions,
+      projects: workspaceData.projects,
+    }));
+  }
+  if (page) {
+    blocks.push(
+      'FETCHED WEB PAGE:',
+      JSON.stringify({ url: page.url, title: page.title, status: page.status, truncated: page.truncated }),
+      page.text,
+      'The page above was fetched successfully by ULTRON. Analyze it directly when relevant.'
+    );
+  }
+  if (!blocks.length) blocks.push('No prior context is required for this request. Answer from the current user message only.');
+  return blocks.join('\n\n');
 }
 
 async function modelToolLoop(messages, model, taskType, toolSchemas = null) {
   let working = [...messages];
   const schemas = Array.isArray(toolSchemas) && toolSchemas.length ? toolSchemas : null;
+
+  // Ordinary conversation uses the streaming path. Tool-calling requests stay on
+  // non-streaming chat because tool-call deltas differ across providers.
+  if (!schemas) {
+    let streamed = '';
+    let emitted = false;
+    try {
+      const data = await integrations.streamChat(working, model, null, {
+        taskType,
+        onDelta: (delta, meta = {}) => {
+          const text = String(delta || '');
+          if (!text) return;
+          emitted = true;
+          streamed += text;
+          emit('model_delta', { delta: text, model: meta.model || model, taskType });
+        },
+      });
+      if (!data.content && streamed) data.content = streamed;
+      return { data, rounds: 0, streamed: true };
+    } catch (error) {
+      if (emitted) throw error;
+      emit('model_stream_fallback', { model, taskType, reason: error.message });
+      const data = await integrations.chat(working, model, null, { taskType });
+      return { data, rounds: 0, streamed: false };
+    }
+  }
+
   for (let round = 0; round < 5; round += 1) {
     const data = await integrations.chat(working, model, schemas, { taskType });
     const calls = toolCallsFromResponse(data);
-    if (!calls.length) return { data, rounds: round };
-    if (!schemas) throw new Error('Model attempted a tool call when repository tools were not enabled for this request.');
+    if (!calls.length) return { data, rounds: round, streamed: false };
 
     working.push({ role: 'assistant', content: textFromResponse(data) || null, tool_calls: calls });
     for (const call of calls) {
@@ -96,10 +153,16 @@ function nativeModelForTask(taskType) {
   return 'auto/best-fast';
 }
 
-async function chooseModel(_intelligence, requested, taskType) {
+async function chooseModel(requested, taskType) {
   const wanted = String(requested || '').trim();
   if (wanted && integrations.isDirectProviderModel(wanted)) return { model: wanted, mode: 'direct' };
   return { model: nativeModelForTask(taskType), mode: 'routing' };
+}
+
+function fastGreeting(userMessage) {
+  if (/good\s+morning/i.test(userMessage)) return 'Morning, Arya. I’m online. What are we moving forward today?';
+  if (/good\s+(?:afternoon|evening)/i.test(userMessage)) return 'Hey Arya. I’m here. What are we working on?';
+  return 'Hey Arya. I’m here. What are we building?';
 }
 
 async function handle(message, options = {}) {
@@ -108,15 +171,23 @@ async function handle(message, options = {}) {
 
   const started = Date.now();
   const taskType = options.taskType || 'general';
-  const previousConversation = Array.isArray(options.history) && options.history.length ? options.history : conversation.recent();
+  const previousConversation = conversation.contextFor(userMessage, options.history);
 
   emit('task_started', { message: userMessage, taskType });
   conversation.append('user', userMessage, { taskType });
 
-  const retrieved = memory.retrieve(userMessage, { limit: config.maxContextItems });
-  const commitments = workspace.listCommitments({ status: 'open' });
-  const decisions = workspace.listDecisions();
-  const projects = workspace.listProjects();
+  if (conversation.isGreeting(userMessage)) {
+    const response = fastGreeting(userMessage);
+    conversation.append('assistant', response, { model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk' });
+    emit('context_ready', { memoryCount: 0, commitments: 0, projectCount: 0, contextMode: 'isolated-greeting' });
+    emit('response_ready', { model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk', mode: 'fastpath' });
+    void voice.enqueue(response);
+    emit('task_completed', { durationMs: Date.now() - started });
+    return { ok: true, response, text: response, model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk', mode: 'fastpath', plan: null, toolRounds: 0 };
+  }
+
+  const retrieved = memory.retrieve(userMessage, { limit: Math.min(config.maxContextItems, 6) });
+  const workspaceData = workspaceContext(userMessage);
 
   const captured = intent.extractCommitment(userMessage);
   if (captured) {
@@ -124,16 +195,13 @@ async function handle(message, options = {}) {
     emit('commitment_created', { commitment });
   }
 
-  let intelligence = { live: { models: [], count: 0 }, observed: [] };
-  try { intelligence = await models.intelligence(taskType); }
-  catch (error) {
-    emit('model_catalog_unavailable', { error: error.message });
-    if (config.omniRouteStrict) throw error;
-  }
-
   const plan = planner.createPlan(userMessage, taskType);
-  emit('plan_created', { taskType, plan });
-  emit('context_ready', { memoryCount: retrieved.length, commitments: commitments.length, projectCount: projects.length });
+  emit('context_ready', {
+    memoryCount: retrieved.length,
+    commitments: workspaceData.commitments.length,
+    projectCount: workspaceData.projects.length,
+    conversationItems: previousConversation.length,
+  });
 
   const githubPath = explicitGitHubPrompt(userMessage);
   if (githubPath) {
@@ -147,28 +215,41 @@ async function handle(message, options = {}) {
     emit('response_ready', { model: 'deterministic-github', taskType });
     void voice.enqueue(response);
     emit('task_completed', { durationMs: Date.now() - started });
-    return { ok: true, response, text: response, model: 'deterministic-github', taskType, plan, tool: 'github_read_file', sha: file.sha, modelIntelligence: intelligence };
+    return { ok: true, response, text: response, model: 'deterministic-github', taskType, plan, tool: 'github_read_file', sha: file.sha };
   }
 
-  const selection = await chooseModel(intelligence, options.model || '', taskType);
+  let fetchedPage = null;
+  const suppliedUrl = web.extractFirstUrl(userMessage);
+  if (suppliedUrl && !/^(?:https?:\/\/)?(?:www\.)?github\.com\b/i.test(suppliedUrl)) {
+    emit('tool_started', { tool: 'web_fetch', input: { url: suppliedUrl } });
+    try {
+      fetchedPage = await web.fetchPage(suppliedUrl);
+      emit('tool_completed', { tool: 'web_fetch', result: { url: fetchedPage.url, title: fetchedPage.title, status: fetchedPage.status, chars: fetchedPage.text.length } });
+    } catch (error) {
+      emit('tool_failed', { tool: 'web_fetch', url: suppliedUrl, error: error.message });
+    }
+  }
+
+  const selection = await chooseModel(options.model || '', taskType);
   const selectedModel = selection.model;
   const selectedProvider = integrations.providerFromModel(selectedModel);
   const repositoryToolsEnabled = needsRepositoryTools(userMessage, taskType);
-  emit('model_selection', { availableModels: intelligence.live.count, selectedModel, mode: selection.mode, provider: selectedProvider, repositoryToolsEnabled });
+  const toolSchemas = tools.schemasFor({ github: repositoryToolsEnabled, web: false });
+  emit('model_selection', { selectedModel, mode: selection.mode, provider: selectedProvider, repositoryToolsEnabled, webFetched: Boolean(fetchedPage) });
 
   const messages = [
     {
       role: 'system',
-      content: `${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute routing with blocked providers excluded and automatic fallback enabled.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled because this is ordinary conversation/non-repository work.'}\n\n${contextBlock(userMessage, retrieved, commitments, decisions, projects, intelligence, previousConversation)}`,
+      content: `${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage)}`,
     },
-    ...previousConversation.slice(-10).map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
+    ...previousConversation.map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
     { role: 'user', content: userMessage },
   ];
 
   emit('model_started', { taskType, model: selectedModel, mode: selection.mode, provider: selectedProvider });
   let loop;
   try {
-    loop = await modelToolLoop(messages, selectedModel, taskType, repositoryToolsEnabled ? tools.schemas : null);
+    loop = await modelToolLoop(messages, selectedModel, taskType, toolSchemas);
   } catch (error) {
     models.record({ provider: selectedProvider, model: selectedModel, taskType, success: false, latencyMs: Date.now() - started, reason: error.message });
     emit('model_failed', { taskType, model: selectedModel, provider: selectedProvider, error: error.message });
@@ -184,8 +265,7 @@ async function handle(message, options = {}) {
   const observedProvider = data?.provider || data?.raw?.provider || integrations.providerFromModel(observedModel) || selectedProvider;
   models.record({ provider: observedProvider, model: observedModel, taskType, success: true, latencyMs: Date.now() - started });
   conversation.append('assistant', text, { model: observedModel, provider: observedProvider, taskType, mode: selection.mode });
-  memory.remember({ type: 'episodic', content: `Completed ${taskType} task using ${observedModel}.`, source: 'model', project: intent.extractProject(userMessage), importance: 0.25 });
-  emit('response_ready', { model: observedModel, taskType, provider: observedProvider, mode: selection.mode });
+  emit('response_ready', { model: observedModel, taskType, provider: observedProvider, mode: selection.mode, streamed: Boolean(loop.streamed) });
   void voice.enqueue(text);
   emit('task_completed', { durationMs: Date.now() - started });
 
@@ -198,8 +278,9 @@ async function handle(message, options = {}) {
     taskType,
     mode: selection.mode,
     plan,
-    modelIntelligence: intelligence,
     toolRounds: loop.rounds,
+    streamed: Boolean(loop.streamed),
+    web: fetchedPage ? { url: fetchedPage.url, title: fetchedPage.title, status: fetchedPage.status } : null,
   };
 }
 
