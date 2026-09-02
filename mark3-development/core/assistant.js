@@ -2,6 +2,7 @@ const config = require('./config');
 const memory = require('./memory');
 const workspace = require('./workspace');
 const models = require('./model-intelligence');
+const modelLeague = require('./model-league');
 const planner = require('./planner');
 const verifier = require('./verifier');
 const integrations = require('./integrations');
@@ -117,7 +118,7 @@ function contextBlock(retrieved, workspaceData, recent, page, searchEvidence) {
   return blocks.join('\n\n');
 }
 
-async function modelToolLoop(messages, model, taskType, toolSchemas = null) {
+async function modelToolLoop(messages, model, taskType, toolSchemas = null, exact = false) {
   let working = [...messages];
   const schemas = Array.isArray(toolSchemas) && toolSchemas.length ? toolSchemas : null;
 
@@ -125,7 +126,8 @@ async function modelToolLoop(messages, model, taskType, toolSchemas = null) {
     let streamed = '';
     let emitted = false;
     try {
-      const data = await integrations.streamChat(working, model, null, {
+      const stream = exact ? integrations.streamExact : integrations.streamChat;
+      const data = await stream(working, model, null, {
         taskType,
         onDelta: (delta, meta = {}) => {
           const text = String(delta || '');
@@ -139,8 +141,10 @@ async function modelToolLoop(messages, model, taskType, toolSchemas = null) {
       return { data, rounds: 0, streamed: true };
     } catch (error) {
       if (emitted) throw error;
-      emit('model_stream_fallback', { model, taskType, reason: error.message });
-      const data = await integrations.chat(working, model, null, { taskType });
+      emit('model_stream_fallback', { model, taskType, reason: error.message, exact });
+      const data = exact
+        ? await integrations.chatExact(working, model, null, { taskType })
+        : await integrations.chat(working, model, null, { taskType });
       return { data, rounds: 0, streamed: false };
     }
   }
@@ -172,10 +176,22 @@ function nativeModelForTask(taskType) {
   return 'auto/best-fast';
 }
 
-async function chooseModel(requested, taskType) {
+async function chooseModel(requested, taskType, { allowLeague = true } = {}) {
   const wanted = String(requested || '').trim();
-  if (wanted && integrations.isDirectProviderModel(wanted)) return { model: wanted, mode: 'direct' };
-  return { model: nativeModelForTask(taskType), mode: 'routing' };
+  if (wanted && integrations.isDirectProviderModel(wanted)) return { model: wanted, mode: 'direct', candidates: [wanted] };
+  if (allowLeague) {
+    const rec = modelLeague.recommend(taskType);
+    if (rec.primary) {
+      return {
+        model: rec.primary,
+        mode: 'league',
+        candidates: [...new Set([rec.primary, ...(rec.backups || []), nativeModelForTask(taskType)])],
+        league: rec,
+      };
+    }
+  }
+  const routed = nativeModelForTask(taskType);
+  return { model: routed, mode: 'routing', candidates: [routed] };
 }
 
 function fastGreeting(userMessage) {
@@ -273,15 +289,14 @@ async function handle(message, options = {}) {
     }
   }
 
-  const selection = await chooseModel(options.model || '', taskType);
-  const selectedModel = selection.model;
-  const selectedProvider = integrations.providerFromModel(selectedModel);
   const repositoryToolsEnabled = needsRepositoryTools(userMessage, taskType);
+  const selection = await chooseModel(options.model || '', taskType, { allowLeague: !repositoryToolsEnabled });
   const toolSchemas = tools.schemasFor({ github: repositoryToolsEnabled, web: false });
   emit('model_selection', {
-    selectedModel,
+    selectedModel: selection.model,
     mode: selection.mode,
-    provider: selectedProvider,
+    provider: integrations.providerFromModel(selection.model),
+    backups: selection.mode === 'league' ? selection.candidates.slice(1) : [],
     repositoryToolsEnabled,
     webFetched: Boolean(fetchedPage),
     webSearched: Boolean(searchEvidence),
@@ -290,21 +305,45 @@ async function handle(message, options = {}) {
   const messages = [
     {
       role: 'system',
-      content: `${BASE_SYSTEM}\n\n${responseStyleInstruction(userMessage)}\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
+      content: `${BASE_SYSTEM}\n\n${responseStyleInstruction(userMessage)}\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : selection.mode === 'league' ? 'Use the adaptive Model League primary; backups are available if it fails.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
     },
     ...previousConversation.map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
     { role: 'user', content: userMessage },
   ];
 
-  emit('model_started', { taskType, model: selectedModel, mode: selection.mode, provider: selectedProvider });
-  let loop;
-  try {
-    loop = await modelToolLoop(messages, selectedModel, taskType, toolSchemas);
-  } catch (error) {
-    models.record({ provider: selectedProvider, model: selectedModel, taskType, success: false, latencyMs: Date.now() - started, reason: error.message });
-    emit('model_failed', { taskType, model: selectedModel, provider: selectedProvider, error: error.message });
-    throw error;
+  let loop = null;
+  let selectedModel = selection.model;
+  let selectedProvider = integrations.providerFromModel(selectedModel);
+  let lastError = null;
+  const candidates = selection.candidates || [selection.model];
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const candidateProvider = integrations.providerFromModel(candidate);
+    const exact = selection.mode === 'league' && integrations.isDirectProviderModel(candidate) && !integrations.isRoutingAlias(candidate);
+    const attemptStarted = Date.now();
+    emit('model_started', { taskType, model: candidate, mode: exact ? 'league-exact' : selection.mode, provider: candidateProvider, backupIndex: index });
+    try {
+      loop = await modelToolLoop(messages, candidate, taskType, toolSchemas, exact);
+      selectedModel = candidate;
+      selectedProvider = candidateProvider;
+      if (selection.mode === 'league' && exact) {
+        modelLeague.recordTrial({ model: candidate, provider: candidateProvider, taskType, success: true, latencyMs: Date.now() - attemptStarted, tournament: false });
+      }
+      break;
+    } catch (error) {
+      lastError = error;
+      const latencyMs = Date.now() - attemptStarted;
+      models.record({ provider: candidateProvider, model: candidate, taskType, success: false, latencyMs, reason: error.message });
+      if (selection.mode === 'league' && exact) {
+        modelLeague.recordTrial({ model: candidate, provider: candidateProvider, taskType, success: false, latencyMs, error: error.message, tournament: false });
+      }
+      emit('model_failed', { taskType, model: candidate, provider: candidateProvider, error: error.message, backupIndex: index });
+      if (index + 1 < candidates.length) emit('model_backup_selected', { taskType, failedModel: candidate, nextModel: candidates[index + 1], backupIndex: index + 1 });
+    }
   }
+
+  if (!loop) throw lastError || new Error('All Model League routes failed.');
 
   const data = loop.data;
   const text = textFromResponse(data);
@@ -327,6 +366,7 @@ async function handle(message, options = {}) {
     provider: observedProvider,
     taskType,
     mode: selection.mode,
+    league: selection.mode === 'league' ? { primary: selection.model, backups: selection.candidates.slice(1, -1) } : null,
     plan,
     toolRounds: loop.rounds,
     streamed: Boolean(loop.streamed),
@@ -338,4 +378,4 @@ async function handle(message, options = {}) {
   };
 }
 
-module.exports = { handle, BASE_SYSTEM, needsRepositoryTools, wantsDetailedResponse, responseStyleInstruction };
+module.exports = { handle, BASE_SYSTEM, needsRepositoryTools, wantsDetailedResponse, responseStyleInstruction, chooseModel };
