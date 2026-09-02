@@ -7,14 +7,16 @@ function num(name, fallback) {
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.join(ROOT, 'data');
-const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1').replace(/\/$/, '');
 
-// Mark 3 is intentionally running with OpenCode disabled for the current
-// routing investigation. This stays Mark-3-local and does not alter Mark 2.
-process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
-// NVIDIA remains available as an explicit provider, but Mark 3 must not force
-// an NVIDIA endpoint that can reject the local account. Automatic selection
-// must be able to fall through to another configured provider.
+// Mark 3 keeps the Mark 2 inference contract: direct provider routing.
+// Do not let stale environment overrides select NVIDIA/OpenCode for chat.
+process.env.ULTRON_MODEL_PROVIDER = 'direct';
+delete process.env.ULTRON_DIRECT_DEFAULT_MODEL;
+delete process.env.OPENCODE_API_KEY;
+delete process.env.OPENCODE_GO_API_KEY;
+delete process.env.ULTRON_M3_DISABLE_OPENCODE;
+
+const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1').replace(/\/$/, '');
 
 module.exports = {
   root: ROOT,
@@ -24,8 +26,8 @@ module.exports = {
   port: num('ULTRON_M3_PORT', 8790),
   omnirouteBase: omniRouteBase,
   omnirouteEndpointKey: String(process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim(),
-  omniRouteStrict: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_OMNIROUTE_STRICT || '1')),
-  disableBigPickle: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DISABLE_BIG_PICKLE || '1')),
+  omniRouteStrict: false,
+  disableBigPickle: true,
   disableOpenCode: true,
   agenticBridgeEnabled: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DEVIN_BRIDGE_ENABLED || '1')),
   agenticBridgeModel: process.env.ULTRON_M3_DEVIN_BRIDGE_MODEL || 'dva/swe-1-7-lightning',
