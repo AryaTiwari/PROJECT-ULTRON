@@ -52,10 +52,20 @@ async function resolveModel(requestedModel = 'auto', taskType = 'general') {
   const requested = normalizeModelId(requestedModel);
   if (requested && requested !== 'auto') {
     if (mark3OpenCodeDisabled() && (isOpenCodeModel(requested) || isNvidiaModel(requested))) throw new Error(`Disabled Mark 3 model: ${requested}`);
+    try {
+      const liveModels = await listModels({ force: true });
+      if (liveModels.length && !liveModels.includes(requested)) {
+        // Never send a stale/local model name to OmniRoute. Resolve to a model
+        // that actually exists in the gateway's current live catalog instead.
+        return resolveModel('auto', taskType);
+      }
+    } catch {
+      // Keep explicit models usable when catalog discovery itself is unavailable.
+    }
     return requested;
   }
   let models = [];
-  try { models = await listModels(); } catch {}
+  try { models = await listModels({ force: true }); } catch {}
   const candidates = candidateAliases(taskType);
   if (!mark3OpenCodeDisabled()) {
     for (const candidate of candidates) if (!models.length || models.includes(candidate)) return candidate;
