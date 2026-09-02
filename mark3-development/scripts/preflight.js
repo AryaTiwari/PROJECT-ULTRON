@@ -49,9 +49,16 @@ function walk(dir) {
 }
 walk(root);
 
-for (const file of js) {
+const sharedJs = sharedTransport
+  .filter((rel) => /\.(js|cjs|mjs)$/.test(rel))
+  .map((rel) => path.join(projectRoot, rel));
+
+for (const file of [...js, ...sharedJs]) {
   try { execFileSync(process.execPath, ['--check', file], { stdio: 'inherit' }); }
-  catch { throw new Error(`JavaScript syntax check failed: ${path.relative(root, file)}`); }
+  catch {
+    const label = file.startsWith(`${root}${path.sep}`) ? path.relative(root, file) : path.relative(projectRoot, file);
+    throw new Error(`JavaScript syntax check failed: ${label}`);
+  }
 }
 
 function hasRuntimeCoupling(text) {
@@ -68,7 +75,6 @@ for (const file of js) {
   }
 
   // This file necessarily contains the detector expressions themselves.
-  // Never run the runtime-coupling detector against the detector source.
   if (rel !== path.join('scripts', 'preflight.js') && hasRuntimeCoupling(text)) {
     throw new Error(`Mark 2 runtime coupling detected in Mark 3 source: ${rel}`);
   }
@@ -87,4 +93,4 @@ const config = require('../core/config');
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
 
-console.log(`ULTRON Mark 3 preflight passed: ${required.length} Mark 3 files, ${sharedTransport.length} shared transport files and ${js.length} JavaScript files validated.`);
+console.log(`ULTRON Mark 3 preflight passed: ${required.length} Mark 3 files, ${sharedTransport.length} shared transport files and ${js.length + sharedJs.length} JavaScript files validated.`);
