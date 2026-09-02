@@ -20,6 +20,8 @@ const memory = require('../core/memory');
 const planner = require('../core/planner');
 const voice = require('../core/voice-orchestrator');
 const router = require('../core/model-router');
+const league = require('../core/model-league');
+const arena = require('../core/model-arena');
 const registry = require('../core/provider-registry');
 const conversation = require('../core/conversation');
 const web = require('../core/web');
@@ -38,11 +40,18 @@ if (!router.isBlockedModel('nvidia/some-model')) throw new Error('NVIDIA inferen
 if (!router.isBlockedModel('opencode/big-pickle')) throw new Error('OpenCode/Big Pickle inference must be blocked in Mark 3.');
 if (!router.isBlockedModel('dva/swe-1-7-lightning')) throw new Error('Devin bridge models must not enter normal assistant chat.');
 if (router.normalizeRequestedModel('auto/best-fast') !== 'auto') throw new Error('Routing aliases must resolve through Mark 3 live routing.');
+if (typeof router.chatExact !== 'function' || typeof router.streamExact !== 'function') throw new Error('Exact model execution is required for fair league trials.');
 if (registry.providerFromModel('gemini-3.1-flash-lite') !== 'gemini') throw new Error('Bare Gemini model IDs must resolve to the Gemini provider.');
 if (registry.providerFromModel('claude-sonnet-4') !== 'anthropic') throw new Error('Bare Claude model IDs must resolve to Anthropic.');
 if (!router.nativeProviderAllowed('meta')) throw new Error('Native OmniRoute must accept legitimate providers not listed in the managed fallback registry.');
 if (!router.nativeProviderAllowed('cerebras')) throw new Error('Native OmniRoute must remain forward-compatible with new provider names.');
 if (router.nativeProviderAllowed('cloudflare-playground')) throw new Error('Known experimental browser/CLI providers must remain blocked from native assistant inference.');
+
+const strongUtility = league.utility({ attempts:4, successes:4, qualitySamples:2, qualityTotal:1.8, averageLatencyMs:5000 });
+const weakUtility = league.utility({ attempts:4, successes:2, qualitySamples:2, qualityTotal:0.8, averageLatencyMs:5000 });
+if (!(strongUtility > weakUtility)) throw new Error('Model League utility must reward answer quality and reliability.');
+if (arena.heuristicQuality('') !== 0) throw new Error('Model Arena must reject empty answers.');
+if (!(arena.heuristicQuality('1. Check the evidence. 2. Verify the metric. 3. Compare like-for-like because context matters.') > 0.5)) throw new Error('Model Arena heuristic must recognize a useful structured answer.');
 
 const fakeHistory = [
   { role: 'user', content: 'Review my Elevate website.' },
