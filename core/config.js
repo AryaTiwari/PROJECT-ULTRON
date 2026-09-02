@@ -9,15 +9,11 @@ function normalizeBaseUrl(value) {
   return String(value || '').replace(/\/$/, '');
 }
 
-// MARK 3: inference is deliberately locked to the proven Mark 2 direct path.
-// Ignore every model/provider override that could reintroduce OpenCode or OmniRoute.
-process.env.ULTRON_MODEL_PROVIDER = 'direct';
-delete process.env.ULTRON_MODEL;
-delete process.env.ULTRON_DIRECT_DEFAULT_MODEL;
-delete process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL;
+// Mark 3 keeps the proven Mark 2 inference transport: OmniRoute.
+// OpenCode/Big Pickle are disabled at the gateway selection layer.
+process.env.ULTRON_MODEL_PROVIDER = 'omniroute';
+process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
 process.env.ULTRON_DISABLE_OPENCODE = '1';
-delete process.env.OPENCODE_API_KEY;
-delete process.env.OPENCODE_GO_API_KEY;
 
 const omniRouteBase = normalizeBaseUrl(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1');
 const omniRouteEndpointKey = process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '';
@@ -25,7 +21,7 @@ const omniRouteEndpointKey = process.env.OMNIROUTE_ENDPOINT_KEY || process.env.O
 const config = {
   name: process.env.ULTRON_NAME || 'ULTRON',
   host: process.env.ULTRON_CORE_HOST || '127.0.0.1',
-  port: numberEnv('ULTRON_CORE_PORT', 8787),
+  port: numberEnv('ULTRON_M3_PORT', 8790),
   personalityFile: process.env.ULTRON_PERSONALITY_FILE || path.join(__dirname, 'personality', 'default.json'),
   memoryFile: process.env.ULTRON_LOCAL_MEMORY_FILE || path.join(process.cwd(), '.ultron', 'memory.json'),
   conversationFile: process.env.ULTRON_LOCAL_CONVERSATION_FILE || path.join(process.cwd(), '.ultron', 'conversations.json'),
