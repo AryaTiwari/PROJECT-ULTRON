@@ -5,7 +5,7 @@
   "type": "commonjs",
   "description": "ULTRON Mark 3 personal operating assistant",
   "scripts": {
-    "start": "node --env-file=../.env scripts/start-mark3.mjs && node --env-file=../.env server.js",
+    "start": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/start-mark3.mjs && node --env-file=../.env server.js",
     "check": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/smoke-test.js",
     "check:memory": "node scripts/memory-test.js",
     "check:providers": "node --env-file=../.env scripts/provider-test.js",
