@@ -1,4 +1,5 @@
 const omniRoute = require('../../core/omniroute');
+const { emit } = require('./events');
 
 const BLOCKED_FREE_MODELS = new Set([
   'big-pickle',
@@ -12,7 +13,9 @@ const BLOCKED_FREE_MODELS = new Set([
 const MODEL_COOLDOWN_MS = Number(process.env.ULTRON_M3_MODEL_COOLDOWN_MS || 10 * 60 * 1000);
 const PROVIDER_ACCESS_COOLDOWN_MS = Number(process.env.ULTRON_M3_PROVIDER_ACCESS_COOLDOWN_MS || 10 * 60 * 1000);
 const PROVIDER_RATE_COOLDOWN_MS = Number(process.env.ULTRON_M3_PROVIDER_RATE_COOLDOWN_MS || 90 * 1000);
-const MAX_CANDIDATES = Math.max(4, Number(process.env.ULTRON_M3_ROUTER_MAX_CANDIDATES || 16));
+const MAX_CANDIDATES = Math.max(3, Number(process.env.ULTRON_M3_ROUTER_MAX_CANDIDATES || 8));
+const GENERAL_CANDIDATE_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_CANDIDATE_TIMEOUT_MS || 12000));
+const HEAVY_CANDIDATE_TIMEOUT_MS = Math.max(GENERAL_CANDIDATE_TIMEOUT_MS, Number(process.env.ULTRON_M3_HEAVY_CANDIDATE_TIMEOUT_MS || 22000));
 
 const modelCooldowns = new Map();
 const providerCooldowns = new Map();
@@ -120,6 +123,12 @@ function taskOverride(taskType) {
   return normalizeRequestedModel(process.env[`ULTRON_OMNIROUTE_MODEL_${String(taskType || 'general').toUpperCase()}`] || '');
 }
 
+function candidateTimeout(taskType) {
+  return ['coding', 'research', 'planning'].includes(String(taskType || '').toLowerCase())
+    ? HEAVY_CANDIDATE_TIMEOUT_MS
+    : GENERAL_CANDIDATE_TIMEOUT_MS;
+}
+
 function orderedModels(models, requestedModel, taskType) {
   const usable = [...new Set((models || []).map(normalizeModel))]
     .filter((id) => id && !isBlockedModel(id) && modelAvailableNow(id));
@@ -138,20 +147,27 @@ function orderedModels(models, requestedModel, taskType) {
   }
 
   const providerOrder = [
-    'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai',
-    'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode',
-    'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'pollinations',
+    'cloudflare-playground', 'pollinations', 'duckduckgo-web', 'felo-web',
+    'chipotle', 'theoldllm', 'uncloseai', 'gemini-cli', 'qwen',
+    'github-copilot', 'kiro', 'qoder', 'codex-app-server', 'auggie', 'zcode',
     'zenmux', 'bytez', 'vertex', 'groq', 'mistral', 'deepseek', 'gemini',
     'openai', 'anthropic', 'xai',
   ];
-  const providers = [...providerOrder.filter((p) => byProvider.has(p)), ...[...byProvider.keys()].filter((p) => !providerOrder.includes(p))];
+  const providers = [
+    ...providerOrder.filter((provider) => byProvider.has(provider)),
+    ...[...byProvider.keys()].filter((provider) => !providerOrder.includes(provider)),
+  ];
+
   const interleaved = [];
   let index = 0;
   while (interleaved.length < usable.length) {
     let added = false;
     for (const provider of providers) {
       const model = byProvider.get(provider)?.[index];
-      if (model) { interleaved.push(model); added = true; }
+      if (model) {
+        interleaved.push(model);
+        added = true;
+      }
     }
     if (!added) break;
     index += 1;
@@ -182,21 +198,36 @@ async function chat({ messages, model = 'auto', tools = null, taskType = 'genera
   if (!Array.isArray(messages) || !messages.length) throw new Error('Mark 3 model request requires messages.');
   const attempted = [];
   const failures = [];
+  const timeoutMs = candidateTimeout(taskType);
 
   for (let pass = 0; pass < 2; pass += 1) {
     const candidates = await candidateModels(model, taskType, { force: pass === 1, exclude: attempted });
     for (const candidate of candidates) {
       attempted.push(candidate);
+      const provider = providerFromModel(candidate);
+      const started = Date.now();
+      emit('model_candidate_started', { model: candidate, provider, candidateNumber: attempted.length, timeoutMs });
       try {
-        const result = await omniRoute.chat({ messages, model: candidate, tools, taskType });
+        const result = await omniRoute.chat({
+          messages,
+          model: candidate,
+          tools,
+          taskType,
+          timeoutMs,
+          maxAttempts: 1,
+          skipModelValidation: true,
+        });
         const actual = normalizeModel(result?.model || candidate);
         if (isBlockedModel(actual)) throw Object.assign(new Error(`OmniRoute returned a blocked Mark 3 model: ${actual}`), { status: 502 });
         modelCooldowns.delete(candidate);
-        providerCooldowns.delete(providerFromModel(candidate));
+        providerCooldowns.delete(provider);
+        emit('model_candidate_succeeded', { model: actual || candidate, provider: providerFromModel(actual || candidate), durationMs: Date.now() - started, candidateNumber: attempted.length });
         return { ...result, model: actual || candidate, provider: providerFromModel(actual || candidate), transport: 'omniroute' };
       } catch (error) {
         const kind = markFailure(candidate, error);
-        failures.push({ model: candidate, provider: providerFromModel(candidate), kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500) });
+        const failure = { model: candidate, provider, kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500) };
+        failures.push(failure);
+        emit('model_candidate_failed', { ...failure, durationMs: Date.now() - started, candidateNumber: attempted.length });
         if (!recoverable(error)) throw error;
       }
     }
@@ -209,30 +240,38 @@ async function streamChat({ messages, model = 'auto', tools = null, taskType = '
   if (typeof onDelta !== 'function') throw new Error('Mark 3 streaming requires an onDelta callback.');
   const attempted = [];
   const failures = [];
+  const timeoutMs = firstTokenTimeoutMs || candidateTimeout(taskType);
 
   for (let pass = 0; pass < 2; pass += 1) {
     const candidates = await candidateModels(model, taskType, { force: pass === 1, exclude: attempted });
     for (const candidate of candidates) {
       attempted.push(candidate);
+      const provider = providerFromModel(candidate);
+      const started = Date.now();
       let emitted = false;
+      emit('model_candidate_started', { model: candidate, provider, candidateNumber: attempted.length, timeoutMs, streaming: true });
       try {
         const result = await omniRoute.streamChat({
           messages,
           model: candidate,
           tools,
           taskType,
-          firstTokenTimeoutMs,
+          firstTokenTimeoutMs: timeoutMs,
+          skipModelValidation: true,
           onDelta: (delta, meta) => { emitted = true; onDelta(delta, meta); },
         });
         const actual = normalizeModel(result?.model || candidate);
         if (isBlockedModel(actual)) throw Object.assign(new Error(`OmniRoute returned a blocked Mark 3 model: ${actual}`), { status: 502 });
         modelCooldowns.delete(candidate);
-        providerCooldowns.delete(providerFromModel(candidate));
+        providerCooldowns.delete(provider);
+        emit('model_candidate_succeeded', { model: actual || candidate, provider: providerFromModel(actual || candidate), durationMs: Date.now() - started, candidateNumber: attempted.length, streaming: true });
         return { ...result, model: actual || candidate, provider: providerFromModel(actual || candidate), transport: 'omniroute' };
       } catch (error) {
         if (emitted) throw error;
         const kind = markFailure(candidate, error);
-        failures.push({ model: candidate, provider: providerFromModel(candidate), kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500) });
+        const failure = { model: candidate, provider, kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500) };
+        failures.push(failure);
+        emit('model_candidate_failed', { ...failure, durationMs: Date.now() - started, candidateNumber: attempted.length, streaming: true });
         if (!recoverable(error)) throw error;
       }
     }
@@ -245,7 +284,8 @@ async function health() {
   const base = await omniRoute.health();
   let usable = [];
   let catalogError = null;
-  try { usable = await listUsableModels({ force: true }); } catch (error) { catalogError = error.message; }
+  try { usable = await listUsableModels({ force: true }); }
+  catch (error) { catalogError = error.message; }
   return {
     ok: Boolean(base.ok && usable.length),
     mode: 'omniroute',
@@ -256,6 +296,9 @@ async function health() {
     catalogSample: usable.slice(0, 12),
     latencyMs: base.latencyMs,
     catalogError,
+    candidateTimeoutMs: GENERAL_CANDIDATE_TIMEOUT_MS,
+    heavyCandidateTimeoutMs: HEAVY_CANDIDATE_TIMEOUT_MS,
+    maxCandidates: MAX_CANDIDATES,
     blocked: { openCode: true, bigPickle: true, nvidiaInference: true, devinFromAssistantChat: true },
     quarantinedModels: [...modelCooldowns.keys()].filter((key) => activeCooldown(modelCooldowns, key)).length,
     quarantinedProviders: [...providerCooldowns.keys()].filter((key) => activeCooldown(providerCooldowns, key)).length,
