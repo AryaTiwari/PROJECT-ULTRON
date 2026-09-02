@@ -37,13 +37,17 @@ function isDevinModel(id) {
   return /(^|[\\/_-])(dva|devin|agentic|bridge)([\\/_-]|$)/i.test(value);
 }
 function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
+function isOpenCodeModel(id) {
+  const value = String(id || '').trim().toLowerCase();
+  return value === 'opencode' || value.startsWith('opencode/') || value.startsWith('opencode-go/') || value.startsWith('oc/');
+}
 function isDirectProviderModel(id) {
   const value = String(id || '').trim();
-  return Boolean(value && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value));
+  return Boolean(value && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value) && !isOpenCodeModel(value));
 }
 function providerFromModel(id) {
   const first = String(id || '').split('/')[0].trim().toLowerCase();
-  const aliases = { pepper:'chipotle', chipotle:'chipotle', ddgw:'duckduckgo-web', felo:'felo-web', tllm:'theoldllm', unc:'uncloseai', cfp:'cloudflare-playground', cxa:'codex-app-server', aug:'auggie', zc:'zcode', kr:'kiro', kiro:'kiro', if:'qoder', qoder:'qoder', qw:'qwen', qwen:'qwen', gh:'github-copilot', 'github-copilot':'github-copilot', oc:'opencode', opencode:'opencode', pol:'pollinations', pollinations:'pollinations', zm:'zenmux', zenmux:'zenmux', nvidia:'nvidia', bytez:'bytez', vertex:'vertex' };
+  const aliases = { pepper:'chipotle', chipotle:'chipotle', ddgw:'duckduckgo-web', felo:'felo-web', tllm:'theoldllm', unc:'uncloseai', cfp:'cloudflare-playground', cxa:'codex-app-server', aug:'auggie', zc:'zcode', kr:'kiro', kiro:'kiro', if:'qoder', qoder:'qoder', qw:'qwen', qwen:'qwen', gh:'github-copilot', 'github-copilot':'github-copilot', oc:'opencode', opencode:'opencode', 'opencode-go':'opencode', pol:'pollinations', pollinations:'pollinations', zm:'zenmux', zenmux:'zenmux', nvidia:'nvidia', bytez:'bytez', vertex:'vertex' };
   return aliases[first] || first || 'unknown';
 }
 function classifyProviderError(error) {
@@ -63,14 +67,14 @@ function isRetryableCandidateError(error) { return classifyProviderError(error) 
 async function models() {
   try {
     const data = await omniRoute.listModels({ force: true });
-    return { data: data.map((id) => ({ id })) };
+    return { data: data.map((id) => ({ id })).filter((item) => !isOpenCodeModel(item.id) && !isBigPickle(item.id)) };
   } catch (error) {
     return { data: [], error: error.message };
   }
 }
 function payloadModelEntries(payload) {
   const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-  return raw.map((item) => typeof item === 'string' ? { id: item.trim(), raw: { id: item.trim() } } : { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item }).filter((item) => item.id && !isBigPickle(item.id));
+  return raw.map((item) => typeof item === 'string' ? { id: item.trim(), raw: { id: item.trim() } } : { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item }).filter((item) => item.id && !isBigPickle(item.id) && !isOpenCodeModel(item.id));
 }
 function payloadModels(payload) { return [...new Set(payloadModelEntries(payload).map((item) => item.id))]; }
 async function concreteModels(limit = 36) {
@@ -79,25 +83,61 @@ async function concreteModels(limit = 36) {
 }
 async function concreteModel() { return (await concreteModels(1))[0]?.id || ''; }
 
+function directProviderModel(provider) {
+  const defaults = {
+    gemini: process.env.ULTRON_DIRECT_GEMINI_MODEL || 'gemini-2.5-flash',
+    openai: 'gpt-5.4-mini',
+    anthropic: 'claude-sonnet-4-5',
+    deepseek: 'deepseek-chat',
+    groq: 'llama-3.3-70b-versatile',
+    mistral: 'mistral-small-latest',
+    xai: 'grok-4',
+  };
+  return defaults[provider] ? `${provider}/${defaults[provider]}` : '';
+}
+
+async function selectNonOpenCodeDirectModel() {
+  const envOverride = String(process.env.ULTRON_DIRECT_DEFAULT_MODEL || '').trim();
+  if (envOverride && !isOpenCodeModel(envOverride) && !isBigPickle(envOverride) && directRouter.providerForModel(envOverride)) {
+    const creds = await loadCredentials().catch(() => ({}));
+    const provider = directRouter.providerForModel(envOverride);
+    if (creds?.[directRouter.PROVIDERS?.[provider]?.key] || process.env[directRouter.PROVIDERS?.[provider]?.key || '']) return envOverride;
+  }
+
+  const saved = await loadCredentials().catch(() => ({}));
+  const env = process.env;
+  const candidates = ['gemini', 'openai', 'anthropic', 'deepseek', 'groq', 'mistral', 'xai'];
+  for (const provider of candidates) {
+    const key = directRouter.PROVIDERS?.[provider]?.key;
+    if (key && String(saved?.[key] || env[key] || '').trim()) return directProviderModel(provider);
+  }
+  return '';
+}
+
 async function selectMark2Model(model = 'auto', taskType = 'general') {
   const requested = String(model || 'auto').trim();
-  if (requested && requested !== 'auto' && !isRoutingAlias(requested) && !isBigPickle(requested)) return requested;
 
-  const providerMode = String(process.env.ULTRON_MODEL_PROVIDER || 'omniroute').toLowerCase();
-  if (providerMode === 'direct' || providerMode === 'auto') {
-    try {
-      const selected = await directRouter.chooseAutoModel();
-      if (selected && !isBigPickle(selected)) return selected;
-      if (isBigPickle(selected)) return 'opencode/mimo-v2.5-free';
-    } catch {}
+  // Mark 3 has OpenCode disabled for now. Routing aliases are resolved to a
+  // concrete non-OpenCode provider before they ever reach the shared router.
+  if (requested && requested !== 'auto' && !isRoutingAlias(requested) && !isBigPickle(requested) && !isOpenCodeModel(requested)) return requested;
+  if (requested && (isBigPickle(requested) || isOpenCodeModel(requested))) {
+    const replacement = await selectNonOpenCodeDirectModel();
+    if (replacement) return replacement;
+    throw new Error(`OpenCode is disabled in Mark 3 and no replacement provider is configured for ${requested}.`);
   }
+
+  const directReplacement = await selectNonOpenCodeDirectModel();
+  if (directReplacement) return directReplacement;
 
   try {
-    const selected = await omniRoute.resolveModel(requested && !isRoutingAlias(requested) ? requested : 'auto', taskType);
-    return isBigPickle(selected) ? 'opencode/mimo-v2.5-free' : selected;
-  } catch {
-    return 'opencode/mimo-v2.5-free';
-  }
+    const selected = await omniRoute.resolveModel('auto', taskType);
+    if (!isBigPickle(selected) && !isOpenCodeModel(selected)) return selected;
+  } catch {}
+
+  const fallback = await concreteModel().catch(() => '');
+  if (fallback && !isOpenCodeModel(fallback) && !isBigPickle(fallback)) return fallback;
+
+  throw new Error('No non-OpenCode model is currently available for Mark 3.');
 }
 
 async function resolveModel(requestedModel = 'auto', taskType = 'general') {
@@ -107,16 +147,19 @@ async function resolveModel(requestedModel = 'auto', taskType = 'general') {
 async function chat(messages, model = 'auto', tools = null, options = {}) {
   const taskType = options.taskType || 'general';
   const selected = await selectMark2Model(model, taskType);
+  if (isOpenCodeModel(selected) || isBigPickle(selected)) throw new Error(`Mark 3 rejected disabled model: ${selected}`);
   return parentRouter.chat({ messages, model: selected, tools, taskType });
 }
 
 async function streamChat(messages, model = 'auto', tools = null, options = {}) {
   const taskType = options.taskType || 'general';
   const selected = await selectMark2Model(model, taskType);
+  if (isOpenCodeModel(selected) || isBigPickle(selected)) throw new Error(`Mark 3 rejected disabled model: ${selected}`);
   return parentRouter.streamChat({ messages, model: selected, taskType, tools, onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
 
 async function chatExact(messages, model, tools) {
+  if (isOpenCodeModel(model) || isBigPickle(model)) throw new Error(`Disabled model: ${model}`);
   return chat(messages, model, tools, { taskType: 'general' });
 }
 
@@ -169,4 +212,4 @@ async function githubList(pathname = '', ref) {
   return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
 }
 
-module.exports = { requestJson, jsonRequest, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, resolveModel, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, streamChat, health, providerHealthSnapshot, speak, selectMark2Model, PROVIDER_PRIORITY: ['nvidia', 'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'opencode', 'pollinations', 'zenmux', 'bytez', 'vertex'] };
+module.exports = { requestJson, jsonRequest, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, resolveModel, isRoutingAlias, isDevinModel, isBigPickle, isOpenCodeModel, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, streamChat, health, providerHealthSnapshot, speak, selectMark2Model, selectNonOpenCodeDirectModel, PROVIDER_PRIORITY: ['nvidia', 'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'pollinations', 'zenmux', 'bytez', 'vertex'] };
