@@ -85,7 +85,7 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'OPTIONS') return send(res,204,'');
     if (req.method === 'GET' && req.url === '/api/health') {
       const router = await integrations.health();
-      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.11', inference:router, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
+      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.12', inference:router, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
     }
     if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
     if (req.method === 'POST' && req.url === '/api/web/fetch') {
@@ -108,7 +108,13 @@ const server = http.createServer(async (req,res) => {
       return send(res,router.ok?200:503,{ ok:Boolean(router.ok), endpoint:config.omnirouteBase, router, providers:await integrations.providerHealthSnapshot(), catalog, catalogError, credential:{ envConfigured:Boolean(config.omnirouteEndpointKey), resolved:Boolean(await integrations.resolveOmniRouteApiKey()) } });
     }
     if (req.method === 'GET' && req.url === '/api/voice/status') return send(res,200,{ok:true,...voice.status()});
+    if (req.method === 'POST' && req.url === '/api/voice/enabled') {
+      const data = await body(req);
+      if (typeof data.enabled !== 'boolean') return send(res,400,{ok:false,error:'enabled must be a boolean.'});
+      return send(res,200,{ok:true,...voice.setEnabled(data.enabled)});
+    }
     if (req.method === 'POST' && req.url === '/api/voice/test') {
+      if (!voice.isEnabled()) return send(res,409,{ok:false,error:'Voice output is muted.'});
       const data=await body(req); const audio=await integrations.speak(String(data.text||'ULTRON Mark 3 voice online.')); const filename=path.basename(String(audio.path||''));
       return send(res,200,{ok:true,...audio,audioUrl:`/api/audio?path=${encodeURIComponent(filename)}`});
     }
