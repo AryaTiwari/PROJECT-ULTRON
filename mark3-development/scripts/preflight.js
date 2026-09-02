@@ -11,6 +11,7 @@ const required = [
   'core/memory.js',
   'core/workspace.js',
   'core/model-intelligence.js',
+  'core/provider-registry.js',
   'core/model-router.js',
   'core/planner.js',
   'core/verifier.js',
@@ -49,10 +50,7 @@ function walk(dir) {
 }
 walk(root);
 
-const sharedJs = sharedTransport
-  .filter((rel) => /\.(js|cjs|mjs)$/.test(rel))
-  .map((rel) => path.join(projectRoot, rel));
-
+const sharedJs = sharedTransport.filter((rel) => /\.(js|cjs|mjs)$/.test(rel)).map((rel) => path.join(projectRoot, rel));
 for (const file of [...js, ...sharedJs]) {
   try { execFileSync(process.execPath, ['--check', file], { stdio: 'inherit' }); }
   catch {
@@ -70,27 +68,20 @@ function hasRuntimeCoupling(text) {
 for (const file of js) {
   const rel = path.relative(root, file);
   const text = fs.readFileSync(file, 'utf8');
-  if (/github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}/.test(text)) {
-    throw new Error(`Possible secret embedded in source: ${rel}`);
-  }
-
-  // This file necessarily contains the detector expressions themselves.
-  if (rel !== path.join('scripts', 'preflight.js') && hasRuntimeCoupling(text)) {
-    throw new Error(`Mark 2 runtime coupling detected in Mark 3 source: ${rel}`);
-  }
+  if (/github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}/.test(text)) throw new Error(`Possible secret embedded in source: ${rel}`);
+  if (rel !== path.join('scripts', 'preflight.js') && hasRuntimeCoupling(text)) throw new Error(`Mark 2 runtime coupling detected in Mark 3 source: ${rel}`);
 }
 
 const packageFile = path.join(root, 'package.json');
 if (fs.existsSync(packageFile)) {
   const pkg = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
-  const startScript = String(pkg?.scripts?.start || '');
-  if (/start-unified\.mjs/i.test(startScript)) {
-    throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
-  }
+  if (/start-unified\.mjs/i.test(String(pkg?.scripts?.start || ''))) throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
 }
 
 const config = require('../core/config');
+const registry = require('../core/provider-registry');
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
+if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''))) throw new Error('Experimental browser/CLI providers must be disabled by default.');
 
 console.log(`ULTRON Mark 3 preflight passed: ${required.length} Mark 3 files, ${sharedTransport.length} shared transport files and ${js.length + sharedJs.length} JavaScript files validated.`);
