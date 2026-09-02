@@ -12,7 +12,17 @@ const conversation = require('./conversation');
 const intent = require('./intent');
 const { emit } = require('./events');
 
-const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity only from context deliberately supplied for the current request; never resurrect an unrelated previous task. If fetched web-page or live-search content is supplied, use it directly and never claim that you cannot access that material. Never expose hidden chain-of-thought, scratchpad, internal reasoning, or analysis; provide only the useful conclusion and concise rationale.`;
+const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Default to brevity: answer with the minimum useful amount of information, usually 1-3 short paragraphs or a few compact bullets. Do not volunteer long explanations, exhaustive breakdowns, background theory, or large lists unless the user explicitly asks for detail, depth, step-by-step guidance, a full explanation, comprehensive analysis, or similar expansion. If more depth could help, finish the concise answer rather than automatically expanding it. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately when that distinction matters. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity only from context deliberately supplied for the current request; never resurrect an unrelated previous task. If fetched web-page or live-search content is supplied, use it directly and never claim that you cannot access that material. Never expose hidden chain-of-thought, scratchpad, internal reasoning, or analysis; provide only the useful conclusion and concise rationale.`;
+
+function wantsDetailedResponse(text) {
+  return /\b(?:in detail|detailed|deep dive|deeply|elaborate|elaborately|explain fully|full explanation|comprehensive|thorough|step[- ]by[- ]step|walk me through|break(?:\s+it)?\s+down|everything about|all details|long answer|complete guide|teach me)\b/i.test(String(text || ''));
+}
+
+function responseStyleInstruction(text) {
+  return wantsDetailedResponse(text)
+    ? 'RESPONSE DEPTH: The user explicitly requested depth. Give the necessary detail while staying structured and avoiding repetition.'
+    : 'RESPONSE DEPTH: Concise-first. Give the direct answer and only the immediately useful supporting detail. Do not elaborate unless the user asks.';
+}
 
 function textFromResponse(data) {
   const direct = data?.content ?? data?.response ?? data?.text ?? data?.output_text
@@ -91,11 +101,7 @@ function contextBlock(retrieved, workspaceData, recent, page, searchEvidence) {
   if (searchEvidence) {
     blocks.push(
       'LIVE WEB SEARCH:',
-      JSON.stringify({
-        query: searchEvidence.query,
-        provider: searchEvidence.provider,
-        results: searchEvidence.results,
-      })
+      JSON.stringify({ query: searchEvidence.query, provider: searchEvidence.provider, results: searchEvidence.results })
     );
     const readablePages = (searchEvidence.pages || []).filter((item) => item?.text);
     for (const evidencePage of readablePages.slice(0, 3)) {
@@ -284,7 +290,7 @@ async function handle(message, options = {}) {
   const messages = [
     {
       role: 'system',
-      content: `${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
+      content: `${BASE_SYSTEM}\n\n${responseStyleInstruction(userMessage)}\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
     },
     ...previousConversation.map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
     { role: 'user', content: userMessage },
@@ -332,4 +338,4 @@ async function handle(message, options = {}) {
   };
 }
 
-module.exports = { handle, BASE_SYSTEM, needsRepositoryTools };
+module.exports = { handle, BASE_SYSTEM, needsRepositoryTools, wantsDetailedResponse, responseStyleInstruction };
