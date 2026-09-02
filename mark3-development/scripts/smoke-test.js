@@ -23,12 +23,17 @@ const router = require('../core/model-router');
 const registry = require('../core/provider-registry');
 const conversation = require('../core/conversation');
 const web = require('../core/web');
+const assistant = require('../core/assistant');
 const windowsVoice = require('../core/windows-voice');
 
 if (memory.similarity('hello world', 'hello world') < 0.99) throw new Error('Memory similarity invariant failed.');
 if (!planner.createPlan('read a GitHub repository file', 'coding').steps.length) throw new Error('Planner invariant failed.');
 if (voice.splitSpeech('Hello. How are you? I am ready!').length !== 3) throw new Error('Voice sentence segmentation invariant failed.');
+if (typeof voice.setEnabled !== 'function' || typeof voice.isEnabled !== 'function') throw new Error('Persistent voice toggle API is missing.');
 if (windowsVoice.cleanSpeechText('Hello `code` https://example.com').includes('https://')) throw new Error('Windows voice cleanup invariant failed.');
+if (!assistant.wantsDetailedResponse('Explain this step-by-step in detail')) throw new Error('Explicit depth requests must enable detailed response mode.');
+if (assistant.wantsDetailedResponse('What is this?')) throw new Error('Ordinary questions must stay concise-first.');
+if (!/Concise-first/i.test(assistant.responseStyleInstruction('What is this?'))) throw new Error('Default response style must be concise-first.');
 if (!router.isBlockedModel('nvidia/some-model')) throw new Error('NVIDIA inference must be blocked in Mark 3.');
 if (!router.isBlockedModel('opencode/big-pickle')) throw new Error('OpenCode/Big Pickle inference must be blocked in Mark 3.');
 if (!router.isBlockedModel('dva/swe-1-7-lightning')) throw new Error('Devin bridge models must not enter normal assistant chat.');
