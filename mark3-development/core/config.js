@@ -6,9 +6,10 @@ function num(name, fallback) {
 }
 
 const ROOT = path.resolve(__dirname, '..');
+const PROJECT_ROOT = path.resolve(ROOT, '..');
 const DATA = path.join(ROOT, 'data');
 
-// Mark 3 owns its runtime. OmniRoute is used only as the inference fabric.
+// Mark 3 owns its runtime. OmniRoute is only the inference transport.
 process.env.ULTRON_MODEL_PROVIDER = 'omniroute';
 process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
 process.env.ULTRON_DISABLE_OPENCODE = '1';
@@ -17,10 +18,22 @@ delete process.env.ULTRON_DIRECT_DEFAULT_MODEL;
 delete process.env.OPENCODE_API_KEY;
 delete process.env.OPENCODE_GO_API_KEY;
 
+function anchorProjectPathEnv(name, fallback) {
+  const raw = String(process.env[name] || fallback).trim();
+  const resolved = path.isAbsolute(raw) ? raw : path.resolve(PROJECT_ROOT, raw);
+  process.env[name] = resolved;
+  return resolved;
+}
+
+const voiceRoot = anchorProjectPathEnv('ULTRON_VOICE_ROOT', '.ultron/voice');
+const voiceReferencePath = anchorProjectPathEnv('ULTRON_VOICE_REFERENCE_PATH', '.ultron/voice/ultron-reference.mp3');
+const voiceCloneState = anchorProjectPathEnv('ULTRON_VOICE_CLONE_STATE', '.ultron/voice/voice-clone.json');
+const voiceOutputDir = anchorProjectPathEnv('ULTRON_TTS_OUTPUT_DIR', '.ultron/audio');
 const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1').replace(/\/$/, '');
 
 module.exports = {
   root: ROOT,
+  projectRoot: PROJECT_ROOT,
   dataDir: DATA,
   workspaceDir: path.join(ROOT, 'workspace'),
   host: process.env.ULTRON_M3_HOST || '127.0.0.1',
@@ -30,10 +43,15 @@ module.exports = {
   omniRouteStrict: false,
   disableBigPickle: true,
   disableOpenCode: true,
+  disableNvidiaInference: true,
   agenticBridgeEnabled: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DEVIN_BRIDGE_ENABLED || '1')),
   agenticBridgeModel: process.env.ULTRON_M3_DEVIN_BRIDGE_MODEL || 'dva/swe-1-7-lightning',
   agenticBridgeTimeoutMs: num('ULTRON_M3_DEVIN_BRIDGE_TIMEOUT_MS', 180000),
-  parentCore: String(process.env.ULTRON_PARENT_CORE_URL || 'http://127.0.0.1:8787').replace(/\/$/, ''),
+  voiceRoot,
+  voiceReferencePath,
+  voiceCloneState,
+  voiceOutputDir,
+  voiceFallback: String(process.env.ULTRON_M3_VOICE_FALLBACK || 'windows-sapi').trim().toLowerCase(),
   githubToken: String(process.env.GITHUB_TOKEN || '').trim(),
   githubOwner: process.env.ULTRON_GITHUB_OWNER || 'AryaTiwari',
   githubRepo: process.env.ULTRON_GITHUB_REPO || 'PROJECT-ULTRON',
