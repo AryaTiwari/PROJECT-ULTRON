@@ -173,6 +173,7 @@ async function main() {
   if (!probe.ok && isLoopback() && reusedExisting && restartStaleGateway) {
     console.log('[Mark 3] Existing OmniRoute is reachable but has no working managed provider. Restarting it once with the current .env...');
     await stopLocalGatewayListener();
+    modelRouter.resetProviderHealth?.();
     modelRouter.clearRoutingCache?.();
     await startLocalGateway();
     await verifyCatalog();
