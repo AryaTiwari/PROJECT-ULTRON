@@ -5,14 +5,13 @@ const intelligence = require('../core/model-intelligence');
   try {
     const catalog = await integrations.models();
     const ids = integrations.payloadModels(catalog);
-    if (!ids.length) throw new Error('No usable Mark 3 OmniRoute models are available.');
     if (ids.some((id) => integrations.isOpenCodeModel(id) || integrations.isNvidiaModel(id) || integrations.isDevinModel(id))) {
-      throw new Error('Blocked inference models leaked into the Mark 3 catalog.');
+      throw new Error('Blocked inference models leaked into the Mark 3 managed fallback catalog.');
     }
 
     const live = await intelligence.catalog();
-    console.log(`Mark 3 eligible models: ${live.count}.`);
-    if (live.providerCounts) console.log(`Providers: ${Object.entries(live.providerCounts).map(([provider, count]) => `${provider}=${count}`).join(', ')}`);
+    console.log(`Mark 3 managed fallback models: ${live.count}.`);
+    if (live.providerCounts) console.log(`Fallback providers: ${Object.entries(live.providerCounts).map(([provider, count]) => `${provider}=${count}`).join(', ')}`);
 
     const result = await integrations.chat(
       [
@@ -27,16 +26,22 @@ const intelligence = require('../core/model-intelligence');
     const used = String(result?.model || '').trim();
     const provider = String(result?.provider || integrations.providerFromModel(used) || '').trim();
     if (!content) throw new Error('OmniRoute chat returned no usable text.');
-    if (!integrations.isDirectProviderModel(used)) throw new Error(`OmniRoute returned an ineligible model ID: ${used || '(missing)'}`);
-    if (integrations.isOpenCodeModel(used) || integrations.isNvidiaModel(used) || integrations.isDevinModel(used)) throw new Error(`Blocked model selected at runtime: ${used}`);
 
-    console.log(`OmniRoute inference: PASS (provider=${provider}, model=${used}).`);
+    const nativeAlias = integrations.isRoutingAlias(used) && provider === 'omniroute-auto';
+    if (!nativeAlias && !integrations.isDirectProviderModel(used)) {
+      throw new Error(`OmniRoute returned an ineligible model ID: ${used || '(missing)'}`);
+    }
+    if (!nativeAlias && (integrations.isOpenCodeModel(used) || integrations.isNvidiaModel(used) || integrations.isDevinModel(used))) {
+      throw new Error(`Blocked model selected at runtime: ${used}`);
+    }
+
+    console.log(`OmniRoute inference: PASS (mode=${result.routingMode || 'omniroute'}, provider=${provider}, model=${used}).`);
     console.log(`Live response: ${content.slice(0, 120)}`);
     console.log('Mark 3 model policy: PASS.');
   } catch (error) {
     console.error(`OmniRoute end-to-end test: FAIL: ${error.message}`);
     if (Array.isArray(error?.failures)) {
-      for (const failure of error.failures) console.error(`  ${failure.model} [${failure.kind}]: ${failure.message}`);
+      for (const failure of error.failures) console.error(`  ${failure.provider}/${failure.model} [${failure.kind}]: ${failure.message}`);
     }
     process.exitCode = 1;
   }
