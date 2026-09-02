@@ -44,5 +44,9 @@ if (conversation.contextFor('hey ultron', fakeHistory).length !== 0) throw new E
 if (conversation.contextFor('www.elevateos.in', fakeHistory).length !== 2) throw new Error('Bare URLs must preserve immediate continuation context.');
 if (conversation.contextFor('Explain quantum tunneling', fakeHistory).length !== 0) throw new Error('Unrelated new topics must not inherit old conversation context.');
 if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw new Error('Web URL normalization invariant failed.');
+if (web.extractFirstUrl('Review www.elevateos.in please') !== 'www.elevateos.in') throw new Error('Web URL extraction invariant failed.');
+if (!web.shouldSearch('Search the web for the latest Gemini updates')) throw new Error('Explicit live-web search intent must trigger TinyFish Search.');
+if (web.shouldSearch('Explain how transformers work')) throw new Error('Evergreen questions must not trigger unnecessary web search.');
+if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must remain the primary web provider.');
 
 console.log(`ULTRON Mark 3 smoke test passed: ${files.length} JS files checked.`);
