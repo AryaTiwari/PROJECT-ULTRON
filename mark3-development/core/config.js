@@ -64,6 +64,7 @@ module.exports = {
   performancePath: path.join(DATA, 'model-performance.jsonl'),
   eventsPath: path.join(DATA, 'events.jsonl'),
   providerHealthPath: path.join(DATA, 'provider-health.json'),
+  modelLeaguePath: path.join(DATA, 'model-league.json'),
   providerHealthTtlMs: num('ULTRON_M3_PROVIDER_HEALTH_TTL_MS', 30 * 60 * 1000),
   proactiveIntervalMs: num('ULTRON_M3_PROACTIVE_INTERVAL_MS', 120000),
   maxContextItems: num('ULTRON_M3_MAX_CONTEXT_ITEMS', 18),
