@@ -13,16 +13,33 @@ const conversation = require('./conversation');
 const intent = require('./intent');
 const { emit } = require('./events');
 
-const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Default to brevity: answer with the minimum useful amount of information, usually 1-3 short paragraphs or a few compact bullets. Do not volunteer long explanations, exhaustive breakdowns, background theory, or large lists unless the user explicitly asks for detail, depth, step-by-step guidance, a full explanation, comprehensive analysis, or similar expansion. If more depth could help, finish the concise answer rather than automatically expanding it. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately when that distinction matters. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity only from context deliberately supplied for the current request; never resurrect an unrelated previous task. If fetched web-page or live-search content is supplied, use it directly and never claim that you cannot access that material. Never expose hidden chain-of-thought, scratchpad, internal reasoning, or analysis; provide only the useful conclusion and concise rationale.`;
+const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Voice conversation is the primary experience; typed chat is the transcript and backup surface. Write for the ear by default. Use natural spoken sentences, contractions, clean pacing and conversational transitions. Prefer "first... then..." or short spoken sequences over markdown-heavy structure. Avoid robotic headings, dense bullet lists, repeated labels, excessive colons, and screen-only phrasing unless the user explicitly asks for a written, formatted, tabular, code-heavy, or highly structured deliverable. Do not read out raw URLs, long identifiers, code syntax, file paths, or telemetry unless they are directly needed. Default to brevity: answer with the minimum useful amount of information, usually a few natural sentences. Do not volunteer long explanations, exhaustive breakdowns, background theory, or large lists unless the user explicitly asks for detail, depth, step-by-step guidance, a full explanation, comprehensive analysis, or similar expansion. If more depth could help, finish the concise answer rather than automatically expanding it. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately when that distinction matters. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity only from context deliberately supplied for the current request; never resurrect an unrelated previous task. If fetched web-page or live-search content is supplied, use it directly and never claim that you cannot access that material. Never expose hidden chain-of-thought, scratchpad, internal reasoning, or analysis; provide only the useful conclusion and concise rationale.`;
 
 function wantsDetailedResponse(text) {
   return /\b(?:in detail|detailed|deep dive|deeply|elaborate|elaborately|explain fully|full explanation|comprehensive|thorough|step[- ]by[- ]step|walk me through|break(?:\s+it)?\s+down|everything about|all details|long answer|complete guide|teach me)\b/i.test(String(text || ''));
 }
 
-function responseStyleInstruction(text) {
-  return wantsDetailedResponse(text)
-    ? 'RESPONSE DEPTH: The user explicitly requested depth. Give the necessary detail while staying structured and avoiding repetition.'
-    : 'RESPONSE DEPTH: Concise-first. Give the direct answer and only the immediately useful supporting detail. Do not elaborate unless the user asks.';
+function wantsWrittenResponse(text) {
+  return /\b(?:write|draft|compose|rewrite|email|message|caption|post|prompt|table|checklist|bullet(?:s| points)?|code|script|json|markdown|format(?:ted)?|document|template|copy|bio|resume|cv|letter)\b/i.test(String(text || ''));
+}
+
+function responseStyleInstruction(text, inputMode = 'chat') {
+  const detailed = wantsDetailedResponse(text);
+  const written = wantsWrittenResponse(text);
+  const voiceInput = String(inputMode || '').toLowerCase() === 'voice';
+  if (written) {
+    return `RESPONSE DELIVERY: The user is asking for a written/structured artifact. Make the content easy to read on screen, while keeping any explanatory prose concise. ${detailed ? 'The user also requested depth, so include the necessary detail without repetition.' : ''}`;
+  }
+  if (voiceInput && detailed) {
+    return 'RESPONSE DELIVERY: Spoken conversation. The user asked for depth, so explain fully but keep it natural to hear aloud. Use short sections of thought, verbal transitions, and sentence rhythm instead of markdown-heavy formatting.';
+  }
+  if (voiceInput) {
+    return 'RESPONSE DELIVERY: Spoken conversation. Answer like you are talking directly to Arya. Use a few natural sentences, contractions, and human pacing. No headings or bullet-list cadence unless absolutely necessary.';
+  }
+  if (detailed) {
+    return 'RESPONSE DELIVERY: Speech-friendly text. The user explicitly requested depth. Explain thoroughly, but make it sound natural when read aloud and avoid unnecessary formatting.';
+  }
+  return 'RESPONSE DELIVERY: Speech-friendly and concise. Give the direct answer in a few natural sentences. Avoid headings, listicle phrasing, and text-message stiffness unless structure materially improves the answer.';
 }
 
 function textFromResponse(data) {
@@ -214,19 +231,20 @@ async function handle(message, options = {}) {
 
   const started = Date.now();
   const taskType = options.taskType || 'general';
+  const inputMode = String(options.inputMode || 'chat').toLowerCase() === 'voice' ? 'voice' : 'chat';
   const previousConversation = conversation.contextFor(userMessage, options.history);
 
-  emit('task_started', { message: userMessage, taskType });
-  conversation.append('user', userMessage, { taskType });
+  emit('task_started', { message: userMessage, taskType, inputMode });
+  conversation.append('user', userMessage, { taskType, inputMode });
 
   if (conversation.isGreeting(userMessage)) {
     const response = fastGreeting(userMessage);
-    conversation.append('assistant', response, { model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk' });
-    emit('context_ready', { memoryCount: 0, commitments: 0, projectCount: 0, contextMode: 'isolated-greeting' });
-    emit('response_ready', { model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk', mode: 'fastpath' });
+    conversation.append('assistant', response, { model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk', inputMode });
+    emit('context_ready', { memoryCount: 0, commitments: 0, projectCount: 0, contextMode: 'isolated-greeting', inputMode });
+    emit('response_ready', { model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk', mode: 'fastpath', inputMode });
     void voice.enqueue(response);
-    emit('task_completed', { durationMs: Date.now() - started });
-    return { ok: true, response, text: response, model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk', mode: 'fastpath', plan: null, toolRounds: 0 };
+    emit('task_completed', { durationMs: Date.now() - started, inputMode });
+    return { ok: true, response, text: response, model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk', mode: 'fastpath', inputMode, plan: null, toolRounds: 0 };
   }
 
   const retrieved = memory.retrieve(userMessage, { limit: Math.min(config.maxContextItems, 6) });
@@ -244,6 +262,7 @@ async function handle(message, options = {}) {
     commitments: workspaceData.commitments.length,
     projectCount: workspaceData.projects.length,
     conversationItems: previousConversation.length,
+    inputMode,
   });
 
   const githubPath = explicitGitHubPrompt(userMessage);
@@ -253,12 +272,12 @@ async function handle(message, options = {}) {
     emit('tool_completed', { tool: 'github_read_file', result: { path: file.path, sha: file.sha, size: file.size } });
     const response = `I inspected ${file.path} on GitHub (${file.sha.slice(0, 7)}).\n\n${file.content.slice(0, 12000)}`;
     verifier.report(verifier.verifyText(response), 'github-read-response');
-    conversation.append('assistant', response, { model: 'deterministic-github', taskType });
+    conversation.append('assistant', response, { model: 'deterministic-github', taskType, inputMode });
     memory.remember({ type: 'episodic', content: `GitHub file inspected: ${githubPath}`, source: 'tool', project: 'ULTRON Mark 3', importance: 0.35 });
-    emit('response_ready', { model: 'deterministic-github', taskType });
+    emit('response_ready', { model: 'deterministic-github', taskType, inputMode });
     void voice.enqueue(response);
-    emit('task_completed', { durationMs: Date.now() - started });
-    return { ok: true, response, text: response, model: 'deterministic-github', taskType, plan, tool: 'github_read_file', sha: file.sha };
+    emit('task_completed', { durationMs: Date.now() - started, inputMode });
+    return { ok: true, response, text: response, model: 'deterministic-github', taskType, inputMode, plan, tool: 'github_read_file', sha: file.sha };
   }
 
   let fetchedPage = null;
@@ -272,10 +291,10 @@ async function handle(message, options = {}) {
     } catch (error) {
       emit('tool_failed', { tool: 'web_fetch', url: suppliedUrl, error: error.message });
       const response = deterministicWebFailure('fetch', suppliedUrl, error);
-      conversation.append('assistant', response, { model: 'deterministic-web-error', provider: 'web', taskType });
-      emit('response_ready', { model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error' });
-      emit('task_completed', { durationMs: Date.now() - started });
-      return { ok: true, response, text: response, model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', plan, webError: error.message };
+      conversation.append('assistant', response, { model: 'deterministic-web-error', provider: 'web', taskType, inputMode });
+      emit('response_ready', { model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', inputMode });
+      emit('task_completed', { durationMs: Date.now() - started, inputMode });
+      return { ok: true, response, text: response, model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', inputMode, plan, webError: error.message };
     }
   } else if (web.shouldSearch(userMessage)) {
     emit('tool_started', { tool: 'web_search', input: { query: userMessage, primary: 'tinyfish' } });
@@ -285,10 +304,10 @@ async function handle(message, options = {}) {
     } catch (error) {
       emit('tool_failed', { tool: 'web_search', query: userMessage, error: error.message });
       const response = deterministicWebFailure('search', userMessage, error);
-      conversation.append('assistant', response, { model: 'deterministic-web-error', provider: 'web', taskType });
-      emit('response_ready', { model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error' });
-      emit('task_completed', { durationMs: Date.now() - started });
-      return { ok: true, response, text: response, model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', plan, webError: error.message };
+      conversation.append('assistant', response, { model: 'deterministic-web-error', provider: 'web', taskType, inputMode });
+      emit('response_ready', { model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', inputMode });
+      emit('task_completed', { durationMs: Date.now() - started, inputMode });
+      return { ok: true, response, text: response, model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', inputMode, plan, webError: error.message };
     }
   }
 
@@ -303,12 +322,13 @@ async function handle(message, options = {}) {
     repositoryToolsEnabled,
     webFetched: Boolean(fetchedPage),
     webSearched: Boolean(searchEvidence),
+    inputMode,
   });
 
   const messages = [
     {
       role: 'system',
-      content: `${BASE_SYSTEM}\n\n${responseStyleInstruction(userMessage)}\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : selection.mode === 'league' ? 'Use the adaptive Model League primary; backups are available if it fails.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
+      content: `${BASE_SYSTEM}\n\n${responseStyleInstruction(userMessage, inputMode)}\nINTERACTION MODE: ${inputMode === 'voice' ? 'VOICE-FIRST. The response will be spoken aloud automatically.' : 'CHAT BACKUP. The response may still be spoken aloud, so keep prose speech-friendly.'}\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : selection.mode === 'league' ? 'Use the adaptive Model League primary; backups are available if it fails.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
     },
     ...previousConversation.map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
     { role: 'user', content: userMessage },
@@ -326,7 +346,7 @@ async function handle(message, options = {}) {
     const candidateProvider = integrations.providerFromModel(candidate);
     const exact = selection.mode === 'league' && integrations.isDirectProviderModel(candidate) && !integrations.isRoutingAlias(candidate);
     const attemptStarted = Date.now();
-    emit('model_started', { taskType, model: candidate, mode: exact ? 'league-exact' : selection.mode, provider: candidateProvider, backupIndex: index });
+    emit('model_started', { taskType, model: candidate, mode: exact ? 'league-exact' : selection.mode, provider: candidateProvider, backupIndex: index, inputMode });
     try {
       loop = await modelToolLoop(messages, candidate, taskType, toolSchemas, exact);
       selectedModel = candidate;
@@ -342,7 +362,7 @@ async function handle(message, options = {}) {
       if (selection.mode === 'league' && exact) {
         modelLeague.recordTrial({ model: candidate, provider: candidateProvider, taskType, success: false, latencyMs, error: error.message, tournament: false });
       }
-      emit('model_failed', { taskType, model: candidate, provider: candidateProvider, error: error.message, backupIndex: index });
+      emit('model_failed', { taskType, model: candidate, provider: candidateProvider, error: error.message, backupIndex: index, inputMode });
       if (index + 1 < candidates.length) {
         if (error.partialStream) emit('model_stream_reset', { failedModel: candidate, nextModel: candidates[index + 1], taskType });
         emit('model_backup_selected', { taskType, failedModel: candidate, nextModel: candidates[index + 1], backupIndex: index + 1 });
@@ -368,10 +388,10 @@ async function handle(message, options = {}) {
   const observedModel = data?.model || data?.raw?.model || selectedModel;
   const observedProvider = data?.provider || data?.raw?.provider || integrations.providerFromModel(observedModel) || selectedProvider;
   models.record({ provider: observedProvider, model: observedModel, taskType, success: true, latencyMs: Date.now() - started });
-  conversation.append('assistant', text, { model: observedModel, provider: observedProvider, taskType, mode: selection.mode });
-  emit('response_ready', { model: observedModel, taskType, provider: observedProvider, mode: selection.mode, streamed: Boolean(loop.streamed) });
+  conversation.append('assistant', text, { model: observedModel, provider: observedProvider, taskType, mode: selection.mode, inputMode });
+  emit('response_ready', { model: observedModel, taskType, provider: observedProvider, mode: selection.mode, streamed: Boolean(loop.streamed), inputMode });
   void voice.enqueue(text);
-  emit('task_completed', { durationMs: Date.now() - started });
+  emit('task_completed', { durationMs: Date.now() - started, inputMode });
 
   return {
     ok: true,
@@ -381,6 +401,7 @@ async function handle(message, options = {}) {
     provider: observedProvider,
     taskType,
     mode: selection.mode,
+    inputMode,
     league: selection.mode === 'league' ? { primary: leagueAfterUse?.primary || selection.model, backups: leagueAfterUse?.backups || selection.candidates.slice(1, -1) } : null,
     plan,
     toolRounds: loop.rounds,
@@ -393,4 +414,4 @@ async function handle(message, options = {}) {
   };
 }
 
-module.exports = { handle, BASE_SYSTEM, needsRepositoryTools, wantsDetailedResponse, responseStyleInstruction, chooseModel };
+module.exports = { handle, BASE_SYSTEM, needsRepositoryTools, wantsDetailedResponse, wantsWrittenResponse, responseStyleInstruction, chooseModel };
