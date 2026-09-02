@@ -3,6 +3,10 @@ import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const credentialStore = require('../../core/credentials/local-store');
 
 const HOST = process.env.OMNIROUTE_HOST || '127.0.0.1';
 const PORT = Number(process.env.OMNIROUTE_PORT || 20128);
@@ -59,6 +63,28 @@ function clearStaleLock() {
   try { fs.unlinkSync(LOCK_FILE); } catch {}
 }
 
+async function resolveProviderCredentials(env) {
+  const result = { ...env };
+  try {
+    const saved = await credentialStore.load();
+    const nvidiaKey = String(
+      result.NVIDIA_API_KEY ||
+      result.NVIDIA_NIM_API_KEY ||
+      saved.NVIDIA_API_KEY ||
+      saved.NVIDIA_NIM_API_KEY ||
+      '',
+    ).trim();
+
+    if (nvidiaKey) {
+      // OmniRoute v3.8.x expects NVIDIA NIM credentials under NVIDIA_API_KEY.
+      // Bridge ULTRON's DPAPI credential store into the child process without
+      // printing or persisting the secret in source control.
+      result.NVIDIA_API_KEY = nvidiaKey;
+    }
+  } catch {}
+  return result;
+}
+
 if (await isOpen(HOST, PORT)) {
   console.log(`[Mark 3] OmniRoute already listening at http://${HOST}:${PORT}.`);
   process.exit(0);
@@ -95,7 +121,7 @@ try {
 
 try { fs.writeFileSync(LOG_FILE, '', 'utf8'); } catch {}
 const log = fs.openSync(LOG_FILE, 'a');
-const env = {
+const env = await resolveProviderCredentials({
   ...process.env,
   PORT: String(PORT),
   HOST,
@@ -105,12 +131,13 @@ const env = {
   NEXT_TELEMETRY_DISABLED: '1',
   DEVIN_AGENTIC_HOME: process.env.DEVIN_AGENTIC_HOME || '/home/bridge',
   DEVIN_AGENTIC_ACP_TIMEOUT_MS: process.env.DEVIN_AGENTIC_ACP_TIMEOUT_MS || '120000',
-};
+});
 
 console.log(`[Mark 3] Starting OmniRoute at http://${HOST}:${PORT}.`);
 console.log(`[Mark 3] OmniRoute mode: ${TURBOPACK === '1' ? 'Turbopack' : 'Webpack'}; V8 heap: ${MEMORY_MB} MB.`);
 console.log(`[Mark 3] Devin bridge sandbox home: ${env.DEVIN_AGENTIC_HOME}.`);
 console.log(`[Mark 3] OmniRoute logs: ${LOG_FILE}`);
+console.log(`[Mark 3] NVIDIA credential bridge: ${env.NVIDIA_API_KEY ? 'configured' : 'not configured'}.`);
 
 let child;
 try {
