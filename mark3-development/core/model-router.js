@@ -49,6 +49,24 @@ function providerFromModel(model) {
   return registry.providerFromModel(normalizeModel(model));
 }
 
+function csvEnv(name) {
+  return String(process.env[name] || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+}
+
+function nativeProviderAllowed(provider) {
+  const normalized = String(provider || '').trim().toLowerCase();
+  if (!normalized) return false;
+  const denylist = new Set(csvEnv('ULTRON_M3_PROVIDER_DENYLIST'));
+  if (denylist.has(normalized)) return false;
+  const allowlist = csvEnv('ULTRON_M3_PROVIDER_ALLOWLIST');
+  if (allowlist.length) return allowlist.includes(normalized);
+
+  const known = registry.PROVIDERS?.[normalized];
+  if (!known) return true; // Native OmniRoute chose it; trust unless explicitly denied.
+  if (known.tier !== 'experimental') return true;
+  return /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''));
+}
+
 function classifyProviderError(error) {
   const status = Number(error?.status || 0);
   const text = `${error?.message || ''} ${error?.raw || error?.body || ''}`.toLowerCase();
@@ -105,8 +123,8 @@ function validateNativeResult(result, alias) {
       throw error;
     }
     const provider = providerFromModel(actual);
-    if (!registry.policyAllows(provider)) {
-      const error = new Error(`OmniRoute native routing selected disabled provider '${provider}' via ${actual}.`);
+    if (!nativeProviderAllowed(provider)) {
+      const error = new Error(`OmniRoute native routing selected explicitly disabled provider '${provider}' via ${actual}.`);
       error.status = 502;
       throw error;
     }
@@ -133,28 +151,13 @@ async function runNativeChat(messages, requestedModel, tools, taskType, failures
     const started = Date.now();
     emit('model_candidate_started', { model: alias, provider: 'omniroute-auto', candidateNumber: number, timeoutMs, nativeRouting: true });
     try {
-      const result = await omniRoute.chat({
-        messages,
-        model: alias,
-        tools,
-        taskType,
-        timeoutMs,
-        maxAttempts: 1,
-        skipModelValidation: true,
-      });
+      const result = await omniRoute.chat({ messages, model: alias, tools, taskType, timeoutMs, maxAttempts: 1, skipModelValidation: true });
       const resolved = validateNativeResult(result, alias);
       emit('model_candidate_succeeded', { model: resolved.model, provider: resolved.provider, durationMs: Date.now() - started, candidateNumber: number, nativeRouting: true });
       return { ...result, model: resolved.model, provider: resolved.provider, transport: 'omniroute', routingMode: 'native-auto' };
     } catch (error) {
       const kind = classifyProviderError(error);
-      const failure = {
-        model: alias,
-        provider: 'omniroute-auto',
-        kind,
-        status: Number(error?.status || 0),
-        message: String(error?.message || error).slice(0, 500),
-        nativeRouting: true,
-      };
+      const failure = { model: alias, provider: 'omniroute-auto', kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500), nativeRouting: true };
       failures.push(failure);
       emit('model_candidate_failed', { ...failure, durationMs: Date.now() - started, candidateNumber: number });
       if (kind === 'RESOURCE_PRESSURE') throw gatewayPressureError(error, failures);
@@ -391,5 +394,6 @@ module.exports = {
   isBlockedModel,
   normalizeRequestedModel,
   providerFromModel,
+  nativeProviderAllowed,
   classifyProviderError,
 };
