@@ -34,21 +34,28 @@ function isDevinModel(id) {
   const value = String(id || '').trim().toLowerCase();
   return /(^|[\\/_-])(dva|devin|agentic|bridge)([\\/_-]|$)/i.test(value);
 }
-function isBigPickle(id) { return config.disableBigPickle !== false && /big[-_ ]?pickle/i.test(String(id || '')); }
+
+// Big Pickle is disabled completely for Mark 3 testing/runtime selection.
+function isBigPickle(id) {
+  return /big[-_ ]?pickle/i.test(String(id || ''));
+}
+
 function isDirectProviderModel(id) {
   const value = String(id || '').trim();
   return Boolean(value && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value));
 }
+
 function providerFromModel(id) {
   const first = String(id || '').split('/')[0].trim().toLowerCase();
-  const aliases = { pepper: 'chipotle', chipotle: 'chipotle', ddgw: 'duckduckgo-web', felo: 'felo-web', tllm: 'theoldllm', unc: 'uncloseai', cfp: 'cloudflare-playground', cxa: 'codex-app-server', aug: 'auggie', zc: 'zcode', kr: 'kiro', kiro: 'kiro', if: 'qoder', qoder: 'qoder', qw: 'qwen', qwen: 'qwen', gh: 'github-copilot', 'github-copilot': 'github-copilot', oc: 'opencode', opencode: 'opencode', pol: 'pollinations', pollinations: 'pollinations', zm: 'zenmux', zenmux: 'zenmux', nvidia: 'nvidia', bytez: 'bytez', vertex: 'vertex' };
+  const aliases = { pepper:'chipotle', chipotle:'chipotle', ddgw:'duckduckgo-web', felo:'felo-web', tllm:'theoldllm', unc:'uncloseai', cfp:'cloudflare-playground', cxa:'codex-app-server', aug:'auggie', zc:'zcode', kr:'kiro', kiro:'kiro', if:'qoder', qoder:'qoder', qw:'qwen', qwen:'qwen', gh:'github-copilot', 'github-copilot':'github-copilot', oc:'opencode', opencode:'opencode', pol:'pollinations', pollinations:'pollinations', zm:'zenmux', zenmux:'zenmux', nvidia:'nvidia', bytez:'bytez', vertex:'vertex' };
   return aliases[first] || first || 'unknown';
 }
+
 function classifyProviderError(error) {
   const status = Number(error?.status || 0);
   const text = `${error?.message || ''} ${error?.raw || error?.body || ''}`.toLowerCase();
   if (status === 402 || /payment_required|payment required|billing_error|paid model/.test(text)) return 'PAID_MODEL';
-  if ([401, 403].includes(status) || /missing api key|invalid_api_key|no active credentials|authentication failed|permission|forbidden/.test(text)) return 'CREDENTIALS_OR_ACCESS';
+  if ([401,403].includes(status) || /missing api key|invalid_api_key|no active credentials|authentication failed|permission|forbidden/.test(text)) return 'CREDENTIALS_OR_ACCESS';
   if (status === 404 || /model.*not.*found|model.*does not exist|not available/.test(text)) return 'MODEL_UNAVAILABLE';
   if (status === 429 || /quota|rate limit|exhausted|anti-abuse|too many requests/.test(text)) return 'QUOTA_OR_RATE_LIMIT';
   if (status >= 500 || /gateway|timed out|fetch failed|econnrefused|blocked by/.test(text)) return 'UPSTREAM_OR_NETWORK';
@@ -64,35 +71,51 @@ async function models() {
 }
 function payloadModelEntries(payload) {
   const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-  return raw.map((item) => typeof item === 'string' ? { id: item.trim(), raw: { id: item.trim() } } : { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item }).filter((item) => item.id);
+  return raw.map((item) => typeof item === 'string' ? { id: item.trim(), raw: { id: item.trim() } } : { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item }).filter((item) => item.id && !isBigPickle(item.id));
 }
 function payloadModels(payload) { return [...new Set(payloadModelEntries(payload).map((item) => item.id))]; }
 async function concreteModels(limit = 36) {
   const raw = await parentRouter.listModels({ force: false });
-  return raw.map((id) => ({ id: String(id).trim(), raw: { id: String(id).trim() } })).filter((entry) => isDirectProviderModel(entry.id)).slice(0, Math.max(1, Number(limit) || 36));
+  return raw.map((id) => String(id).trim()).filter((id) => isDirectProviderModel(id)).map((id) => ({ id, raw: { id } })).slice(0, Math.max(1, Number(limit) || 36));
 }
 async function concreteModel() { return (await concreteModels(1))[0]?.id || ''; }
-async function resolveModel(requestedModel = 'auto', taskType = 'general') { return parentRouter.resolveModel(requestedModel, taskType); }
+async function resolveModel(requestedModel = 'auto', taskType = 'general') {
+  if (isBigPickle(requestedModel)) return safeModelForTask(taskType);
+  const resolved = await parentRouter.resolveModel(requestedModel, taskType);
+  return isBigPickle(resolved) ? safeModelForTask(taskType) : resolved;
+}
+
+function safeModelForTask(taskType) {
+  const configured = String(process.env.ULTRON_M3_SAFE_MODEL || '').trim();
+  if (configured && !isBigPickle(configured)) return configured;
+  // Known-good OmniRoute provider confirmed working during Mark 2/Mark 3 diagnostics.
+  return 'nvidia/nvidia/nemotron-3-super-120b-a12b';
+}
 
 async function chat(messages, model = 'auto', tools = null, options = {}) {
   const taskType = options.taskType || 'general';
-  const result = await parentRouter.chat({ messages, model: model || 'auto', taskType, tools });
-  if (!isRoutingAlias(model) && !isBigPickle(result?.model)) return result;
+  const requested = String(model || 'auto').trim();
+  const selected = isRoutingAlias(requested) || isBigPickle(requested) ? safeModelForTask(taskType) : requested;
+  const result = await parentRouter.chat({ messages, model: selected, taskType, tools });
   if (isBigPickle(result?.model)) {
-    const fallback = String(process.env.ULTRON_M3_SAFE_MODEL || 'nvidia/nvidia/nemotron-3-super-120b-a12b').trim();
-    if (fallback && !isBigPickle(fallback)) {
-      try {
-        const retry = await parentRouter.chat({ messages, model: fallback, taskType, tools });
-        if (!isBigPickle(retry?.model)) return retry;
-      } catch {}
-    }
+    const fallback = safeModelForTask(taskType);
+    const retry = await parentRouter.chat({ messages, model: fallback, taskType, tools });
+    if (isBigPickle(retry?.model)) throw new Error('Big Pickle is blocked from Mark 3 runtime selection.');
+    return retry;
   }
   return result;
 }
+
 async function streamChat(messages, model = 'auto', tools = null, options = {}) {
-  return parentRouter.streamChat({ messages, model: model || 'auto', taskType: options.taskType || 'general', tools, onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
+  const taskType = options.taskType || 'general';
+  const requested = String(model || 'auto').trim();
+  const selected = isRoutingAlias(requested) || isBigPickle(requested) ? safeModelForTask(taskType) : requested;
+  return parentRouter.streamChat({ messages, model: selected, taskType, tools, onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
-async function chatExact(messages, model, tools) { return chat(messages, model, tools, { taskType: 'general' }); }
+async function chatExact(messages, model, tools) {
+  const selected = isBigPickle(model) || isRoutingAlias(model) ? safeModelForTask('general') : model;
+  return chat(messages, selected, tools, { taskType: 'general' });
+}
 async function health() { return parentRouter.health(); }
 function providerHealthSnapshot() { return []; }
 
