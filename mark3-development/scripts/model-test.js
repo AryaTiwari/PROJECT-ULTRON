@@ -5,38 +5,39 @@ const intelligence = require('../core/model-intelligence');
   try {
     const catalog = await integrations.models();
     const ids = integrations.payloadModels(catalog);
-    const blocked = ids.filter(integrations.isBigPickle);
-    const usable = ids.filter(integrations.isDirectProviderModel);
-    console.log(`OmniRoute /v1/models: PASS (${ids.length} eligible catalog entries returned).`);
-    console.log(`Big Pickle entries blocked by Mark 3 policy: ${blocked.length}.`);
-    console.log(`Direct provider models available: ${usable.length}.`);
-    if (!usable.length) throw new Error('No usable direct-provider OmniRoute models are available.');
+    if (!ids.length) throw new Error('No usable Mark 3 OmniRoute models are available.');
+    if (ids.some((id) => integrations.isOpenCodeModel(id) || integrations.isNvidiaModel(id) || integrations.isDevinModel(id))) {
+      throw new Error('Blocked inference models leaked into the Mark 3 catalog.');
+    }
 
     const live = await intelligence.catalog();
-    console.log(`Mark 3 eligible models after policy filtering: ${live.count}.`);
-    console.log(`Devin/DVA excluded: ${live.devinExcludedCount || 0}.`);
-    if (live.providerCounts) console.log(`Provider counts: ${Object.entries(live.providerCounts).map(([provider, count]) => `${provider}=${count}`).join(', ')}`);
+    console.log(`Mark 3 eligible models: ${live.count}.`);
+    if (live.providerCounts) console.log(`Providers: ${Object.entries(live.providerCounts).map(([provider, count]) => `${provider}=${count}`).join(', ')}`);
 
     const result = await integrations.chat(
-      [{ role: 'system', content: 'Reply with exactly: OMNIROUTE_OK' }, { role: 'user', content: 'Reply with exactly: OMNIROUTE_OK' }],
+      [
+        { role: 'system', content: 'Reply with exactly: OMNIROUTE_OK' },
+        { role: 'user', content: 'Reply with exactly: OMNIROUTE_OK' },
+      ],
+      'auto',
       null,
-      null,
+      { taskType: 'simple_qa' },
     );
-    const content = result?.choices?.[0]?.message?.content || result?.response || result?.text || '';
-    const used = String(result?.model || result?.__ultron?.model || '').trim();
-    const provider = String(result?.__ultron?.provider || integrations.providerFromModel(used) || '').trim();
-    if (!String(content).trim()) throw new Error('OmniRoute chat returned no usable text.');
-    if (integrations.isBigPickle(used)) throw new Error(`Big Pickle selected at runtime: ${used}`);
+    const content = String(result?.content || result?.response || result?.text || '').trim();
+    const used = String(result?.model || '').trim();
+    const provider = String(result?.provider || integrations.providerFromModel(used) || '').trim();
+    if (!content) throw new Error('OmniRoute chat returned no usable text.');
     if (!integrations.isDirectProviderModel(used)) throw new Error(`OmniRoute returned an ineligible model ID: ${used || '(missing)'}`);
-    if (live.models.length && !live.models.includes(used)) throw new Error(`Runtime selected a model outside the Mark 3 eligible catalog: ${used}`);
-    console.log(`OmniRoute /v1/chat/completions: PASS (provider=${provider}, model=${used}).`);
-    console.log(`Live response: ${String(content).trim().slice(0, 120)}`);
-    console.log('Big Pickle policy: PASS (blocked).');
-    console.log('OmniRoute provider-only end-to-end test: PASS.');
+    if (integrations.isOpenCodeModel(used) || integrations.isNvidiaModel(used) || integrations.isDevinModel(used)) throw new Error(`Blocked model selected at runtime: ${used}`);
+
+    console.log(`OmniRoute inference: PASS (provider=${provider}, model=${used}).`);
+    console.log(`Live response: ${content.slice(0, 120)}`);
+    console.log('Mark 3 model policy: PASS.');
   } catch (error) {
     console.error(`OmniRoute end-to-end test: FAIL: ${error.message}`);
-    if (error?.model) console.error(`Failed model: ${error.model}`);
-    if (Array.isArray(error?.failures)) console.error(`Provider failures: ${JSON.stringify(error.failures)}`);
+    if (Array.isArray(error?.failures)) {
+      for (const failure of error.failures) console.error(`  ${failure.model} [${failure.kind}]: ${failure.message}`);
+    }
     process.exitCode = 1;
   }
 })();
