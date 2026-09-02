@@ -7,6 +7,7 @@ const memory = require('./core/memory');
 const workspace = require('./core/workspace');
 const models = require('./core/model-intelligence');
 const integrations = require('./core/integrations');
+const web = require('./core/web');
 const voice = require('./core/voice-orchestrator');
 const { subscribe } = require('./core/events');
 const proactive = require('./core/proactive');
@@ -84,8 +85,9 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'OPTIONS') return send(res,204,'');
     if (req.method === 'GET' && req.url === '/api/health') {
       const router = await integrations.health();
-      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.8', inference:router, voice:voice.status(), pid:process.pid, port:config.port });
+      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.9', inference:router, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
     }
+    if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
     if (req.method === 'GET' && req.url === '/api/state') return send(res,200,{ ok:true, memory:memory.snapshot(), commitments:workspace.listCommitments({status:'open'}), projects:workspace.listProjects(), decisions:workspace.listDecisions() });
     if (req.method === 'GET' && req.url === '/api/models') return send(res,200,{ ok:true, ...(await models.intelligence()) });
     if (req.method === 'GET' && req.url === '/api/providers') return send(res,200,{ ok:true, ...(await integrations.providerHealthSnapshot()) });
