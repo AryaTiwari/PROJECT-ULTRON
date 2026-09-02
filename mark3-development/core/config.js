@@ -12,9 +12,10 @@ const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1
 // Mark 3 is intentionally running with OpenCode disabled for the current
 // routing investigation. This stays Mark-3-local and does not alter Mark 2.
 process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
-// Prefer NVIDIA NIM directly when its credential is available. This bypasses
-// stale OmniRoute provider catalogs while preserving OmniRoute for other lanes.
-if (!process.env.ULTRON_DIRECT_DEFAULT_MODEL) process.env.ULTRON_DIRECT_DEFAULT_MODEL = 'nvidia/z-ai/glm-5.2';
+// Prefer NVIDIA NIM directly when its credential is available. GLM-5.2's free
+// endpoint was retired on 2026-08-21, so use the current free Nemotron 3.5
+// Lightning endpoint instead and bypass stale OmniRoute provider catalogs.
+if (!process.env.ULTRON_DIRECT_DEFAULT_MODEL) process.env.ULTRON_DIRECT_DEFAULT_MODEL = 'nvidia/nvidia/nemotron-3.5-lightning-30b-a3b';
 
 module.exports = {
   root: ROOT,
