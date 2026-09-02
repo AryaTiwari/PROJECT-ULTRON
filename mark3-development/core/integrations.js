@@ -75,7 +75,7 @@ async function chatExact(messages, model, tools) {
   return modelRouter.chat({ messages, model, tools, taskType: 'general' });
 }
 async function health() { return modelRouter.health(); }
-function providerHealthSnapshot() { return []; }
+async function providerHealthSnapshot() { return modelRouter.providerSnapshot(); }
 
 async function speak(text, options = {}) {
   const failures = [];
@@ -180,5 +180,5 @@ module.exports = {
   voiceStatus,
   selectMark2Model,
   selectNonOpenCodeDirectModel,
-  PROVIDER_PRIORITY: ['chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'pollinations', 'zenmux', 'bytez', 'vertex'],
+  PROVIDER_PRIORITY: ['gemini', 'groq', 'deepseek', 'mistral', 'qwen', 'openai', 'anthropic', 'xai', 'vertex', 'zenmux', 'bytez', 'pollinations'],
 };
