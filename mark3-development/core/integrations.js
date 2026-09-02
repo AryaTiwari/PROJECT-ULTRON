@@ -81,10 +81,8 @@ async function concreteModel() { return (await concreteModels(1))[0]?.id || ''; 
 
 async function selectMark2Model(model = 'auto', taskType = 'general') {
   const requested = String(model || 'auto').trim();
-  if (requested && requested !== 'auto' && !isBigPickle(requested)) return requested;
+  if (requested && requested !== 'auto' && !isRoutingAlias(requested) && !isBigPickle(requested)) return requested;
 
-  // Exact Mark 2 selection path: use the same direct credential store and
-  // chooseAutoModel() when Mark 2 is operating in direct mode.
   const providerMode = String(process.env.ULTRON_MODEL_PROVIDER || 'omniroute').toLowerCase();
   if (providerMode === 'direct' || providerMode === 'auto') {
     try {
@@ -94,9 +92,8 @@ async function selectMark2Model(model = 'auto', taskType = 'general') {
     } catch {}
   }
 
-  // Otherwise use the exact Mark 2 OmniRoute resolver and its task aliases.
   try {
-    const selected = await omniRoute.resolveModel(requested || 'auto', taskType);
+    const selected = await omniRoute.resolveModel(requested && !isRoutingAlias(requested) ? requested : 'auto', taskType);
     return isBigPickle(selected) ? 'opencode/mimo-v2.5-free' : selected;
   } catch {
     return 'opencode/mimo-v2.5-free';
@@ -155,6 +152,7 @@ async function requestJson(url, options = {}, timeoutMs = 30000) {
     return data;
   } finally { clearTimeout(timer); }
 }
+const jsonRequest = requestJson;
 
 async function githubReadFile(pathname, ref) {
   if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
@@ -171,4 +169,4 @@ async function githubList(pathname = '', ref) {
   return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, resolveModel, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, streamChat, health, providerHealthSnapshot, speak, selectMark2Model, PROVIDER_PRIORITY: ['nvidia', 'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'opencode', 'pollinations', 'zenmux', 'bytez', 'vertex'] };
+module.exports = { requestJson, jsonRequest, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, resolveModel, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, streamChat, health, providerHealthSnapshot, speak, selectMark2Model, PROVIDER_PRIORITY: ['nvidia', 'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'opencode', 'pollinations', 'zenmux', 'bytez', 'vertex'] };
