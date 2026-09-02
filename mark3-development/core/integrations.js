@@ -71,8 +71,11 @@ async function chat(messages, model = 'auto', tools = null, options = {}) {
 async function streamChat(messages, model = 'auto', tools = null, options = {}) {
   return modelRouter.streamChat({ messages, model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
-async function chatExact(messages, model, tools) {
-  return modelRouter.chat({ messages, model, tools, taskType: 'general' });
+async function chatExact(messages, model, tools = null, options = {}) {
+  return modelRouter.chatExact({ messages, model, tools, taskType: options.taskType || 'general', timeoutMs: options.timeoutMs });
+}
+async function streamExact(messages, model, tools = null, options = {}) {
+  return modelRouter.streamExact({ messages, model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
 async function health() { return modelRouter.health(); }
 async function providerHealthSnapshot() { return modelRouter.providerSnapshot(); }
@@ -172,6 +175,7 @@ module.exports = {
   concreteModels,
   concreteModel,
   chatExact,
+  streamExact,
   chat,
   streamChat,
   health,
