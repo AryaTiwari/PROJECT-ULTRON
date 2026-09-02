@@ -52,8 +52,25 @@ const MODEL_FAILURE_TTL = {
 const PROVIDER_FAILURE_TTL = { ACCESS: 30 * 60 * 1000, RATE_LIMIT: 90 * 1000, UPSTREAM: 2 * 60 * 1000 };
 
 function csv(name) { return String(process.env[name] || '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean); }
+
+function inferBareProvider(model) {
+  const value = String(model || '').trim().toLowerCase();
+  if (!value) return 'unknown';
+  if (/^gemini(?:[-_.]|$)/.test(value)) return 'gemini';
+  if (/^(?:gpt|chatgpt|o1|o3|o4)(?:[-_.]|$)/.test(value)) return 'openai';
+  if (/^claude(?:[-_.]|$)/.test(value)) return 'anthropic';
+  if (/^deepseek(?:[-_.]|$)/.test(value)) return 'deepseek';
+  if (/^(?:mistral|ministral|codestral|pixtral)(?:[-_.]|$)/.test(value)) return 'mistral';
+  if (/^qwen(?:[-_.]|$)/.test(value)) return 'qwen';
+  if (/^grok(?:[-_.]|$)/.test(value)) return 'xai';
+  return 'unknown';
+}
+
 function providerFromModel(model) {
-  const first = String(model || '').trim().toLowerCase().split('/')[0];
+  const value = String(model || '').trim().toLowerCase();
+  if (!value) return 'unknown';
+  if (!value.includes('/')) return inferBareProvider(value);
+  const first = value.split('/')[0];
   return PROVIDER_ALIASES[first] || first || 'unknown';
 }
 function isNonChatModel(model) { return NON_CHAT_PATTERNS.some((pattern) => pattern.test(String(model || '').trim())); }
@@ -118,6 +135,10 @@ function taskModelScore(model, taskType = 'general') {
   const task = String(taskType || 'general').toLowerCase();
   let score = 0;
   if (/latest|stable/.test(value)) score += 5;
+  if (/deprecated|legacy|retired|eol/.test(value)) score -= 80;
+  if (/gemini-3\.6(?:[-/_.]|$)/.test(value)) score += 45;
+  else if (/gemini-3\.(?:[0-9]+)(?:[-/_.]|$)/.test(value)) score += 30;
+  else if (/gemini-2\.5(?:[-/_.]|$)/.test(value)) score -= 45;
   if (/preview|experimental|exp\b/.test(value)) score -= 12;
   if (/flash|mini|lite|small|fast/.test(value)) score += ['general', 'simple_qa', 'automation'].includes(task) ? 18 : 4;
   if (/chat|instruct/.test(value)) score += 8;
@@ -212,4 +233,4 @@ async function snapshot(catalog = []) {
   };
 }
 
-module.exports = { PROVIDERS, providerFromModel, isBlockedModel, isNonChatModel, policyAllows, buildCandidates, recordSuccess, recordFailure, resetTransientHealth, snapshot, credentialSnapshot };
+module.exports = { PROVIDERS, providerFromModel, inferBareProvider, isBlockedModel, isNonChatModel, policyAllows, buildCandidates, recordSuccess, recordFailure, resetTransientHealth, snapshot, credentialSnapshot };
