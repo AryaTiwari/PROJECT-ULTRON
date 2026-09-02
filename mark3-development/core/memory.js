@@ -3,12 +3,13 @@ const config = require('./config');
 const { readJson, writeJsonAtomic, appendJsonl } = require('./persistence');
 
 const TYPES = new Set(['semantic', 'episodic', 'working', 'strategic', 'preference', 'commitment', 'decision']);
+const OPERATIONAL_MEMORY = /^completed\s+\w+\s+task\s+using\s+/i;
 
 function normalize(text) {
   return String(text || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function tokens(text) { return new Set(normalize(text).split(' ').filter(Boolean)); }
+function tokens(text) { return new Set(normalize(text).split(' ').filter((token) => token.length > 1)); }
 function similarity(a, b) {
   const A = tokens(a), B = tokens(b);
   if (!A.size || !B.size) return 0;
@@ -30,6 +31,7 @@ function findSimilar(content, items = load()) {
 function remember(input = {}) {
   const content = String(input.content || '').trim();
   if (!content) throw new Error('Memory content is required.');
+  if (OPERATIONAL_MEMORY.test(content)) return { action: 'IGNORED_OPERATIONAL', memory: null, score: 0 };
   const type = TYPES.has(input.type) ? input.type : 'semantic';
   const items = load();
   const matches = findSimilar(content, items);
@@ -54,18 +56,43 @@ function remember(input = {}) {
   return { action: 'SAVED', memory };
 }
 
+function isContextFreeQuery(query) {
+  return /^(?:hey+|hi+|hello+|yo+|sup|what'?s up|good\s+(?:morning|afternoon|evening))(?:\s+(?:there|ultron|bro|buddy))?[!.?\s]*$/i.test(String(query || '').trim());
+}
+
+function tagOrProjectMatch(query, item) {
+  const q = normalize(query);
+  if (!q) return false;
+  const project = normalize(item.project || '');
+  if (project && (q.includes(project) || project.includes(q))) return true;
+  return (item.tags || []).some((tag) => {
+    const t = normalize(tag);
+    return t && (q.includes(t) || t.includes(q));
+  });
+}
+
 function retrieve(query, options = {}) {
-  const limit = Number(options.limit || config.maxContextItems);
+  const limit = Math.max(1, Math.min(Number(options.limit || config.maxContextItems), 8));
+  if (isContextFreeQuery(query)) return [];
+
   const items = load();
   const ranked = items.map(item => {
+    if (OPERATIONAL_MEMORY.test(String(item.content || ''))) return null;
+    const lexical = similarity(query, item.normalized || item.content);
+    const anchored = tagOrProjectMatch(query, item);
+    // Recency/importance may rank a relevant memory, but can never make an
+    // unrelated memory relevant on their own.
+    if (lexical < 0.055 && !anchored) return null;
     const recency = Math.max(0, 1 - ((Date.now() - Date.parse(item.lastUsedAt || item.updatedAt || item.createdAt)) / 1000 / 86400 / 90));
-    const score = similarity(query, item.normalized || item.content) * 0.7 + Number(item.importance || 0) * 0.2 + recency * 0.1;
-    return { item, score };
-  }).filter(row => row.score > 0.1).sort((a, b) => b.score - a.score).slice(0, limit);
+    const score = lexical * 0.78 + Number(item.importance || 0) * 0.12 + recency * 0.06 + (anchored ? 0.12 : 0);
+    return { item, score, lexical };
+  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, limit);
+
+  if (!ranked.length) return [];
   const usedAt = new Date().toISOString();
   for (const row of ranked) row.item.lastUsedAt = usedAt;
   save(items);
-  return ranked.map(row => ({ ...row.item, retrievalScore: Number(row.score.toFixed(4)) }));
+  return ranked.map(row => ({ ...row.item, retrievalScore: Number(row.score.toFixed(4)), lexicalScore: Number(row.lexical.toFixed(4)) }));
 }
 
 function snapshot() {
