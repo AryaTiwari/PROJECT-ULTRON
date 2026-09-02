@@ -2,7 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const { load: loadCredentials } = require('../../core/credentials/local-store');
-const parentRouter = require('../../core/omniroute');
+const parentRouter = require('../../core/model-router');
+const directRouter = require('../../core/direct-model-router');
+const omniRoute = require('../../core/omniroute');
 
 function readParentEnv(name) {
   try {
@@ -34,23 +36,16 @@ function isDevinModel(id) {
   const value = String(id || '').trim().toLowerCase();
   return /(^|[\\/_-])(dva|devin|agentic|bridge)([\\/_-]|$)/i.test(value);
 }
-
-// Big Pickle is disabled completely for Mark 3 testing/runtime selection.
-function isBigPickle(id) {
-  return /big[-_ ]?pickle/i.test(String(id || ''));
-}
-
+function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
 function isDirectProviderModel(id) {
   const value = String(id || '').trim();
   return Boolean(value && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value));
 }
-
 function providerFromModel(id) {
   const first = String(id || '').split('/')[0].trim().toLowerCase();
   const aliases = { pepper:'chipotle', chipotle:'chipotle', ddgw:'duckduckgo-web', felo:'felo-web', tllm:'theoldllm', unc:'uncloseai', cfp:'cloudflare-playground', cxa:'codex-app-server', aug:'auggie', zc:'zcode', kr:'kiro', kiro:'kiro', if:'qoder', qoder:'qoder', qw:'qwen', qwen:'qwen', gh:'github-copilot', 'github-copilot':'github-copilot', oc:'opencode', opencode:'opencode', pol:'pollinations', pollinations:'pollinations', zm:'zenmux', zenmux:'zenmux', nvidia:'nvidia', bytez:'bytez', vertex:'vertex' };
   return aliases[first] || first || 'unknown';
 }
-
 function classifyProviderError(error) {
   const status = Number(error?.status || 0);
   const text = `${error?.message || ''} ${error?.raw || error?.body || ''}`.toLowerCase();
@@ -66,8 +61,12 @@ function isPaidModelError(error) { return classifyProviderError(error) === 'PAID
 function isRetryableCandidateError(error) { return classifyProviderError(error) !== 'UNKNOWN'; }
 
 async function models() {
-  const data = await parentRouter.listModels({ force: true });
-  return { data: data.map((id) => ({ id })) };
+  try {
+    const data = await omniRoute.listModels({ force: true });
+    return { data: data.map((id) => ({ id })) };
+  } catch (error) {
+    return { data: [], error: error.message };
+  }
 }
 function payloadModelEntries(payload) {
   const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
@@ -75,47 +74,55 @@ function payloadModelEntries(payload) {
 }
 function payloadModels(payload) { return [...new Set(payloadModelEntries(payload).map((item) => item.id))]; }
 async function concreteModels(limit = 36) {
-  const raw = await parentRouter.listModels({ force: false });
-  return raw.map((id) => String(id).trim()).filter((id) => isDirectProviderModel(id)).map((id) => ({ id, raw: { id } })).slice(0, Math.max(1, Number(limit) || 36));
+  const raw = await models();
+  return payloadModelEntries(raw).filter((entry) => isDirectProviderModel(entry.id)).slice(0, Math.max(1, Number(limit) || 36));
 }
 async function concreteModel() { return (await concreteModels(1))[0]?.id || ''; }
-async function resolveModel(requestedModel = 'auto', taskType = 'general') {
-  if (isBigPickle(requestedModel)) return safeModelForTask(taskType);
-  const resolved = await parentRouter.resolveModel(requestedModel, taskType);
-  return isBigPickle(resolved) ? safeModelForTask(taskType) : resolved;
+
+async function selectMark2Model(model = 'auto', taskType = 'general') {
+  const requested = String(model || 'auto').trim();
+  if (requested && requested !== 'auto' && !isBigPickle(requested)) return requested;
+
+  // Exact Mark 2 selection path: use the same direct credential store and
+  // chooseAutoModel() when Mark 2 is operating in direct mode.
+  const providerMode = String(process.env.ULTRON_MODEL_PROVIDER || 'omniroute').toLowerCase();
+  if (providerMode === 'direct' || providerMode === 'auto') {
+    try {
+      const selected = await directRouter.chooseAutoModel();
+      if (selected && !isBigPickle(selected)) return selected;
+      if (isBigPickle(selected)) return 'opencode/mimo-v2.5-free';
+    } catch {}
+  }
+
+  // Otherwise use the exact Mark 2 OmniRoute resolver and its task aliases.
+  try {
+    const selected = await omniRoute.resolveModel(requested || 'auto', taskType);
+    return isBigPickle(selected) ? 'opencode/mimo-v2.5-free' : selected;
+  } catch {
+    return 'opencode/mimo-v2.5-free';
+  }
 }
 
-function safeModelForTask(taskType) {
-  const configured = String(process.env.ULTRON_M3_SAFE_MODEL || '').trim();
-  if (configured && !isBigPickle(configured)) return configured;
-  // Known-good OmniRoute provider confirmed working during Mark 2/Mark 3 diagnostics.
-  return 'nvidia/nvidia/nemotron-3-super-120b-a12b';
+async function resolveModel(requestedModel = 'auto', taskType = 'general') {
+  return selectMark2Model(requestedModel, taskType);
 }
 
 async function chat(messages, model = 'auto', tools = null, options = {}) {
   const taskType = options.taskType || 'general';
-  const requested = String(model || 'auto').trim();
-  const selected = isRoutingAlias(requested) || isBigPickle(requested) ? safeModelForTask(taskType) : requested;
-  const result = await parentRouter.chat({ messages, model: selected, taskType, tools });
-  if (isBigPickle(result?.model)) {
-    const fallback = safeModelForTask(taskType);
-    const retry = await parentRouter.chat({ messages, model: fallback, taskType, tools });
-    if (isBigPickle(retry?.model)) throw new Error('Big Pickle is blocked from Mark 3 runtime selection.');
-    return retry;
-  }
-  return result;
+  const selected = await selectMark2Model(model, taskType);
+  return parentRouter.chat({ messages, model: selected, tools, taskType });
 }
 
 async function streamChat(messages, model = 'auto', tools = null, options = {}) {
   const taskType = options.taskType || 'general';
-  const requested = String(model || 'auto').trim();
-  const selected = isRoutingAlias(requested) || isBigPickle(requested) ? safeModelForTask(taskType) : requested;
+  const selected = await selectMark2Model(model, taskType);
   return parentRouter.streamChat({ messages, model: selected, taskType, tools, onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
+
 async function chatExact(messages, model, tools) {
-  const selected = isBigPickle(model) || isRoutingAlias(model) ? safeModelForTask('general') : model;
-  return chat(messages, selected, tools, { taskType: 'general' });
+  return chat(messages, model, tools, { taskType: 'general' });
 }
+
 async function health() { return parentRouter.health(); }
 function providerHealthSnapshot() { return []; }
 
@@ -164,4 +171,4 @@ async function githubList(pathname = '', ref) {
   return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
 }
 
-module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, resolveModel, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, streamChat, health, providerHealthSnapshot, speak, PROVIDER_PRIORITY: ['nvidia', 'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'opencode', 'pollinations', 'zenmux', 'bytez', 'vertex'] };
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, resolveModel, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, streamChat, health, providerHealthSnapshot, speak, selectMark2Model, PROVIDER_PRIORITY: ['nvidia', 'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'opencode', 'pollinations', 'zenmux', 'bytez', 'vertex'] };
