@@ -35,6 +35,9 @@ if (!router.isBlockedModel('dva/swe-1-7-lightning')) throw new Error('Devin brid
 if (router.normalizeRequestedModel('auto/best-fast') !== 'auto') throw new Error('Routing aliases must resolve through Mark 3 live routing.');
 if (registry.providerFromModel('gemini-3.1-flash-lite') !== 'gemini') throw new Error('Bare Gemini model IDs must resolve to the Gemini provider.');
 if (registry.providerFromModel('claude-sonnet-4') !== 'anthropic') throw new Error('Bare Claude model IDs must resolve to Anthropic.');
+if (!router.nativeProviderAllowed('meta')) throw new Error('Native OmniRoute must accept legitimate providers not listed in the managed fallback registry.');
+if (!router.nativeProviderAllowed('cerebras')) throw new Error('Native OmniRoute must remain forward-compatible with new provider names.');
+if (router.nativeProviderAllowed('cloudflare-playground')) throw new Error('Known experimental browser/CLI providers must remain blocked from native assistant inference.');
 
 const fakeHistory = [
   { role: 'user', content: 'Review my Elevate website.' },
