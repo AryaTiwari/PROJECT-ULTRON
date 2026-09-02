@@ -140,7 +140,10 @@ async function modelToolLoop(messages, model, taskType, toolSchemas = null, exac
       if (!data.content && streamed) data.content = streamed;
       return { data, rounds: 0, streamed: true };
     } catch (error) {
-      if (emitted) throw error;
+      if (emitted) {
+        error.partialStream = true;
+        throw error;
+      }
       emit('model_stream_fallback', { model, taskType, reason: error.message, exact });
       const data = exact
         ? await integrations.chatExact(working, model, null, { taskType })
@@ -315,6 +318,7 @@ async function handle(message, options = {}) {
   let selectedModel = selection.model;
   let selectedProvider = integrations.providerFromModel(selectedModel);
   let lastError = null;
+  let leagueAfterUse = selection.league || null;
   const candidates = selection.candidates || [selection.model];
 
   for (let index = 0; index < candidates.length; index += 1) {
@@ -339,11 +343,22 @@ async function handle(message, options = {}) {
         modelLeague.recordTrial({ model: candidate, provider: candidateProvider, taskType, success: false, latencyMs, error: error.message, tournament: false });
       }
       emit('model_failed', { taskType, model: candidate, provider: candidateProvider, error: error.message, backupIndex: index });
-      if (index + 1 < candidates.length) emit('model_backup_selected', { taskType, failedModel: candidate, nextModel: candidates[index + 1], backupIndex: index + 1 });
+      if (index + 1 < candidates.length) {
+        if (error.partialStream) emit('model_stream_reset', { failedModel: candidate, nextModel: candidates[index + 1], taskType });
+        emit('model_backup_selected', { taskType, failedModel: candidate, nextModel: candidates[index + 1], backupIndex: index + 1 });
+      }
     }
   }
 
   if (!loop) throw lastError || new Error('All Model League routes failed.');
+
+  if (selection.mode === 'league') {
+    const reranked = modelLeague.promote(taskType);
+    leagueAfterUse = reranked;
+    if (reranked.previous !== reranked.primary) {
+      emit('model_league_promoted', { taskType, previous: reranked.previous, primary: reranked.primary, backups: reranked.backups, reason: 'operational-evidence' });
+    }
+  }
 
   const data = loop.data;
   const text = textFromResponse(data);
@@ -366,7 +381,7 @@ async function handle(message, options = {}) {
     provider: observedProvider,
     taskType,
     mode: selection.mode,
-    league: selection.mode === 'league' ? { primary: selection.model, backups: selection.candidates.slice(1, -1) } : null,
+    league: selection.mode === 'league' ? { primary: leagueAfterUse?.primary || selection.model, backups: leagueAfterUse?.backups || selection.candidates.slice(1, -1) } : null,
     plan,
     toolRounds: loop.rounds,
     streamed: Boolean(loop.streamed),
