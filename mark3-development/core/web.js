@@ -18,6 +18,8 @@ function status() {
     fetchEndpoint: TINYFISH_FETCH_URL,
     searchEndpoint: TINYFISH_SEARCH_URL,
     fallback: 'direct-http',
+    remoteDns: true,
+    canonicalHostRetry: true,
   };
 }
 
@@ -45,17 +47,37 @@ function isPrivateIp(ip) {
   return value === '::1' || value.startsWith('fe80:') || value.startsWith('fc') || value.startsWith('fd');
 }
 
-async function assertPublicHost(url) {
-  const host = url.hostname.toLowerCase();
-  if (host === 'localhost' || host.endsWith('.localhost')) throw new Error('Local/private URLs are not allowed through the public web fetcher.');
-  if (net.isIP(host)) {
-    if (isPrivateIp(host)) throw new Error('Local/private URLs are not allowed through the public web fetcher.');
-    return;
+function assertRemoteSafeUrl(url) {
+  const host = String(url.hostname || '').toLowerCase();
+  if (!host) throw new Error('URL hostname is required.');
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
+    throw new Error('Local/private URLs are not allowed through the public web fetcher.');
   }
+  if (net.isIP(host) && isPrivateIp(host)) {
+    throw new Error('Local/private URLs are not allowed through the public web fetcher.');
+  }
+}
+
+async function assertPublicHost(url) {
+  assertRemoteSafeUrl(url);
+  const host = url.hostname.toLowerCase();
+  if (net.isIP(host)) return;
   const addresses = await dns.lookup(host, { all: true });
   if (!addresses.length || addresses.some((entry) => isPrivateIp(entry.address))) {
     throw new Error('The URL resolved to a local/private network address and was blocked.');
   }
+}
+
+function urlVariants(input) {
+  const requested = normalizeUrl(input);
+  assertRemoteSafeUrl(requested);
+  const variants = [requested];
+  if (requested.hostname.toLowerCase().startsWith('www.')) {
+    const apex = new URL(requested.toString());
+    apex.hostname = requested.hostname.slice(4);
+    variants.push(apex);
+  }
+  return variants;
 }
 
 async function fetchJson(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -93,12 +115,20 @@ function tinyfishErrorText(payload) {
   }).filter(Boolean).join(' | ');
 }
 
+function resultText(result) {
+  return String(result?.text || result?.markdown || result?.content || '').trim();
+}
+
 async function tinyfishFetchPage(input, options = {}) {
   const key = tinyfishApiKey();
   if (!key) throw new Error('TINYFISH_API_KEY is not configured.');
-  const requested = normalizeUrl(input);
-  await assertPublicHost(requested);
+  const candidates = urlVariants(input);
+  const requested = candidates[0];
   const timeoutMs = Math.max(5000, Number(options.timeoutMs || DEFAULT_TIMEOUT_MS));
+
+  // TinyFish runs remotely, so do not require the user's PC DNS resolver to
+  // resolve the destination first. Obvious local/private targets are rejected
+  // syntactically above; TinyFish performs the actual remote resolution.
   const payload = await fetchJson(TINYFISH_FETCH_URL, {
     method: 'POST',
     headers: {
@@ -107,20 +137,24 @@ async function tinyfishFetchPage(input, options = {}) {
       Accept: 'application/json',
     },
     body: JSON.stringify({
-      urls: [requested.toString()],
+      urls: candidates.map((url) => url.toString()),
       format: 'markdown',
       links: true,
     }),
   }, timeoutMs);
-  const result = Array.isArray(payload?.results) ? payload.results[0] : null;
-  const text = String(result?.text || result?.markdown || result?.content || '').trim();
+
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  const result = results.find((entry) => resultText(entry));
+  const text = resultText(result);
   if (!result || !text) {
     const detail = tinyfishErrorText(payload) || 'TinyFish returned no readable page content.';
     throw new Error(detail);
   }
+
   const finalUrl = normalizeUrl(result.url || requested.toString());
-  await assertPublicHost(finalUrl);
+  assertRemoteSafeUrl(finalUrl);
   const maxText = Number(options.maxTextChars || DEFAULT_MAX_TEXT);
+  const canonicalRetryUsed = finalUrl.hostname.toLowerCase() !== requested.hostname.toLowerCase();
   return {
     requestedUrl: requested.toString(),
     url: finalUrl.toString(),
@@ -131,6 +165,7 @@ async function tinyfishFetchPage(input, options = {}) {
     truncated: text.length > maxText,
     provider: 'tinyfish',
     format: String(result.format || 'markdown'),
+    canonicalRetryUsed,
   };
 }
 
@@ -182,8 +217,7 @@ async function readLimitedBody(response, maxBytes) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function directFetchPage(input, options = {}) {
-  const requested = normalizeUrl(input);
+async function directFetchSingle(requested, options = {}) {
   await assertPublicHost(requested);
   const controller = new AbortController();
   const timeoutMs = Math.max(3000, Number(options.timeoutMs || DEFAULT_TIMEOUT_MS));
@@ -206,7 +240,6 @@ async function directFetchPage(input, options = {}) {
     if (!text) throw new Error('The page returned no readable text content.');
     const maxText = Number(options.maxTextChars || DEFAULT_MAX_TEXT);
     return {
-      requestedUrl: requested.toString(),
       url: finalUrl.toString(),
       status: response.status,
       contentType,
@@ -222,6 +255,25 @@ async function directFetchPage(input, options = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function directFetchPage(input, options = {}) {
+  const candidates = urlVariants(input);
+  const requested = candidates[0];
+  const failures = [];
+  for (const candidate of candidates) {
+    try {
+      const page = await directFetchSingle(candidate, options);
+      return {
+        ...page,
+        requestedUrl: requested.toString(),
+        canonicalRetryUsed: candidate.hostname.toLowerCase() !== requested.hostname.toLowerCase(),
+      };
+    } catch (error) {
+      failures.push(`${candidate.hostname}: ${error.message}`);
+    }
+  }
+  throw new Error(failures.join(' | '));
 }
 
 async function fetchPage(input, options = {}) {
@@ -303,6 +355,7 @@ module.exports = {
   shouldSearch,
   extractFirstUrl,
   normalizeUrl,
+  urlVariants,
   htmlToText,
   status,
 };
