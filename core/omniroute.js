@@ -142,8 +142,6 @@ async function request(pathname, options = {}) {
       body: options.body,
       signal: controller.signal,
     });
-    // Do not clear the timeout here. For JSON requests the body may stall after
-    // headers arrive. parseResponse owns cleanup after the body is fully read.
     return attachRequestContext(response, { controller, timer, timeoutMs });
   } catch (error) {
     clearTimeout(timer);
@@ -260,9 +258,7 @@ async function resolveModel(requestedModel = 'auto', taskType = 'general') {
     try {
       const liveModels = await listModels();
       if (liveModels.length && !liveModels.includes(requested)) return resolveModel('auto', taskType);
-    } catch {
-      // Keep explicit models usable if catalog discovery itself is unavailable.
-    }
+    } catch {}
     return requested;
   }
 
@@ -304,10 +300,8 @@ function extractInference(data) {
   const candidates = [
     message.content,
     message.text,
-    message.reasoning_content,
     delta.content,
     delta.text,
-    delta.reasoning_content,
     choice.text,
     output?.[0]?.content,
     data?.output_text,
@@ -320,22 +314,12 @@ function extractInference(data) {
   return { content, toolCalls, finishReason: choice?.finish_reason || null };
 }
 
-async function chat({
-  messages,
-  model = 'auto',
-  taskType = 'general',
-  tools = null,
-  timeoutMs = null,
-  maxAttempts = null,
-  skipModelValidation = false,
-} = {}) {
+async function chat({ messages, model = 'auto', taskType = 'general', tools = null, timeoutMs = null, maxAttempts = null, skipModelValidation = false } = {}) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute request requires messages.');
 
   const requested = normalizeModelId(model);
   const resolvedModel = skipModelValidation && requested ? requested : await resolveModel(model, taskType);
-  if (mark3OpenCodeDisabled() && (isOpenCodeModel(resolvedModel) || isNvidiaModel(resolvedModel))) {
-    throw new Error(`Disabled Mark 3 model: ${resolvedModel}`);
-  }
+  if (mark3OpenCodeDisabled() && (isOpenCodeModel(resolvedModel) || isNvidiaModel(resolvedModel))) throw new Error(`Disabled Mark 3 model: ${resolvedModel}`);
 
   const modelCandidates = mark3OpenCodeDisabled()
     ? [resolvedModel]
@@ -350,11 +334,7 @@ async function chat({
 
     for (let attempt = 0; attempt < attemptsPerCandidate; attempt += 1) {
       try {
-        const response = await request('/chat/completions', {
-          method: 'POST',
-          body: JSON.stringify(body),
-          timeoutMs: timeoutMs || undefined,
-        });
+        const response = await request('/chat/completions', { method: 'POST', body: JSON.stringify(body), timeoutMs: timeoutMs || undefined });
         const data = await parseResponse(response);
         if (mark3OpenCodeDisabled() && (isOpenCodeModel(data?.model) || isNvidiaModel(data?.model))) {
           const error = new Error(`OmniRoute returned a disabled Mark 3 model: ${data?.model}`);
@@ -363,20 +343,11 @@ async function chat({
         }
         const extracted = extractInference(data);
         if (!extracted.content.trim() && !extracted.toolCalls.length) {
-          const error = new Error('OmniRoute returned a successful HTTP response without usable text/tool calls.');
+          const error = new Error('OmniRoute returned a successful HTTP response without usable final text/tool calls.');
           error.status = 502;
           throw error;
         }
-        return {
-          content: extracted.content,
-          toolCalls: extracted.toolCalls,
-          finishReason: extracted.finishReason,
-          model: data?.model || candidate,
-          provider: 'omniroute',
-          raw: data,
-          requestedModel: model,
-          taskType,
-        };
+        return { content: extracted.content, toolCalls: extracted.toolCalls, finishReason: extracted.finishReason, model: data?.model || candidate, provider: 'omniroute', raw: data, requestedModel: model, taskType };
       } catch (error) {
         lastError = error;
         if (!transientStatus(error?.status)) throw error;
@@ -384,16 +355,11 @@ async function chat({
       }
     }
   }
-
   throw lastError || new Error('OmniRoute inference failed.');
 }
 
 function parseSseBlock(block) {
-  const dataLines = String(block || '')
-    .replace(/\r/g, '')
-    .split('\n')
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trimStart());
+  const dataLines = String(block || '').replace(/\r/g, '').split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart());
   return dataLines.length ? dataLines.join('\n') : null;
 }
 
@@ -409,15 +375,7 @@ function sseBoundaryLength(buffer, index) {
   return buffer.slice(index, index + 4) === '\r\n\r\n' ? 4 : 2;
 }
 
-async function streamChat({
-  messages,
-  model = 'auto',
-  taskType = 'general',
-  tools = null,
-  onDelta,
-  firstTokenTimeoutMs = null,
-  skipModelValidation = false,
-} = {}) {
+async function streamChat({ messages, model = 'auto', taskType = 'general', tools = null, onDelta, firstTokenTimeoutMs = null, skipModelValidation = false } = {}) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute streaming request requires messages.');
   if (typeof onDelta !== 'function') throw new Error('OmniRoute streaming request requires an onDelta callback.');
 
@@ -425,9 +383,7 @@ async function streamChat({
   const resolvedModel = skipModelValidation && requested ? requested : await resolveModel(model, taskType);
   const configuredFirstTokenTimeout = Math.max(3000, Number(firstTokenTimeoutMs || process.env.ULTRON_STREAM_FIRST_TOKEN_TIMEOUT_MS || 15000));
   const qualitySensitive = ['coding', 'research', 'planning'].includes(String(taskType || '').toLowerCase());
-  const candidates = mark3OpenCodeDisabled()
-    ? [resolvedModel]
-    : [...new Set([resolvedModel, ...(qualitySensitive ? [] : ['auto/best-fast']), ...(resolvedModel !== 'auto' ? ['auto'] : [])])];
+  const candidates = mark3OpenCodeDisabled() ? [resolvedModel] : [...new Set([resolvedModel, ...(qualitySensitive ? [] : ['auto/best-fast']), ...(resolvedModel !== 'auto' ? ['auto'] : [])])];
   let lastError = null;
 
   for (const candidate of candidates) {
@@ -452,12 +408,7 @@ async function streamChat({
       const response = await ultronFetch(url, {
         method: 'POST',
         headers: headers(key, true),
-        body: JSON.stringify({
-          model: candidate,
-          messages,
-          stream: true,
-          ...(Array.isArray(tools) && tools.length ? { tools } : {}),
-        }),
+        body: JSON.stringify({ model: candidate, messages, stream: true, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }),
         signal: controller.signal,
       });
 
@@ -488,12 +439,10 @@ async function streamChat({
         const choice = data?.choices?.[0] || {};
         const delta = choice?.delta || {};
         if (data?.model) observedModel = data.model;
-        const text = textFromContent(delta.content || delta.text || delta.reasoning_content || choice.text || data?.output_text || data?.text || '');
+        const text = textFromContent(delta.content || delta.text || choice.text || data?.output_text || data?.text || '');
 
         if (text) {
-          if (mark3OpenCodeDisabled() && (isOpenCodeModel(observedModel) || isNvidiaModel(observedModel))) {
-            throw new Error(`OmniRoute streaming selected disabled Mark 3 model: ${observedModel}`);
-          }
+          if (mark3OpenCodeDisabled() && (isOpenCodeModel(observedModel) || isNvidiaModel(observedModel))) throw new Error(`OmniRoute streaming selected disabled Mark 3 model: ${observedModel}`);
           markFirstEvent();
           fullText += text;
           onDelta(text, { model: observedModel, finishReason: choice?.finish_reason || null });
@@ -522,20 +471,12 @@ async function streamChat({
       if (buffer.trim()) consume(buffer);
 
       if (!gotMeaningfulEvent && !toolCalls.length) {
-        const error = new Error('OmniRoute streaming returned no usable content.');
+        const error = new Error('OmniRoute streaming returned no usable final content.');
         error.status = 502;
         throw error;
       }
 
-      return {
-        content: fullText,
-        toolCalls,
-        finishReason,
-        model: observedModel,
-        provider: 'omniroute',
-        requestedModel: model,
-        taskType,
-      };
+      return { content: fullText, toolCalls, finishReason, model: observedModel, provider: 'omniroute', requestedModel: model, taskType };
     } catch (error) {
       if (firstTokenTimer) clearTimeout(firstTokenTimer);
       firstTokenTimer = null;
@@ -550,7 +491,6 @@ async function streamChat({
       if (!transientStatus(error?.status)) throw error;
     }
   }
-
   throw lastError || new Error('OmniRoute streaming failed.');
 }
 
@@ -560,23 +500,9 @@ async function health() {
     const response = await request('/models', { timeoutMs: 10000 });
     const data = await parseResponse(response);
     const models = modelIds(data);
-    return {
-      ok: true,
-      authenticated: Boolean(await apiKey()),
-      endpoint: baseUrl(),
-      modelCount: models.length,
-      catalogSample: models.slice(0, 12),
-      latencyMs: Date.now() - started,
-    };
+    return { ok: true, authenticated: Boolean(await apiKey()), endpoint: baseUrl(), modelCount: models.length, catalogSample: models.slice(0, 12), latencyMs: Date.now() - started };
   } catch (error) {
-    return {
-      ok: false,
-      authenticated: Boolean(await apiKey()),
-      endpoint: baseUrl(),
-      modelCount: catalogCache.models.length,
-      latencyMs: Date.now() - started,
-      error: error.message,
-    };
+    return { ok: false, authenticated: Boolean(await apiKey()), endpoint: baseUrl(), modelCount: catalogCache.models.length, latencyMs: Date.now() - started, error: error.message };
   }
 }
 
@@ -584,15 +510,4 @@ function clearCache() {
   catalogCache = { models: [], fetchedAt: 0 };
 }
 
-module.exports = {
-  listModels,
-  hasModel,
-  resolveModel,
-  chat,
-  streamChat,
-  health,
-  isConfigured,
-  normalizeModelId,
-  clearCache,
-  extractInference,
-};
+module.exports = { listModels, hasModel, resolveModel, chat, streamChat, health, isConfigured, normalizeModelId, clearCache, extractInference };
