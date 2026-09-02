@@ -9,6 +9,10 @@ const ROOT = path.resolve(__dirname, '..');
 const DATA = path.join(ROOT, 'data');
 const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1').replace(/\/$/, '');
 
+// Mark 3 is intentionally running with OpenCode disabled for the current
+// routing investigation. This stays Mark-3-local and does not alter Mark 2.
+process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
+
 module.exports = {
   root: ROOT,
   dataDir: DATA,
@@ -19,6 +23,7 @@ module.exports = {
   omnirouteEndpointKey: String(process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim(),
   omniRouteStrict: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_OMNIROUTE_STRICT || '1')),
   disableBigPickle: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DISABLE_BIG_PICKLE || '1')),
+  disableOpenCode: true,
   agenticBridgeEnabled: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DEVIN_BRIDGE_ENABLED || '1')),
   agenticBridgeModel: process.env.ULTRON_M3_DEVIN_BRIDGE_MODEL || 'dva/swe-1-7-lightning',
   agenticBridgeTimeoutMs: num('ULTRON_M3_DEVIN_BRIDGE_TIMEOUT_MS', 180000),
