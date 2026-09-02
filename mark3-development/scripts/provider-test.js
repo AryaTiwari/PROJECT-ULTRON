@@ -5,7 +5,8 @@ const integrations = require('../core/integrations');
     const health = await integrations.health();
     const providers = await integrations.providerHealthSnapshot();
     console.log(`OmniRoute endpoint: ${health.endpoint || process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1'}`);
-    console.log(`Gateway catalog: ${health.gatewayModelCount || 0}; managed chat models: ${health.eligibleChatModelCount || 0}.`);
+    console.log(`Gateway catalog: ${health.gatewayModelCount || 0}; managed fallback models: ${health.eligibleFallbackModelCount || 0}.`);
+    console.log(`Routing mode: ${health.mode || 'unknown'}.`);
     for (const row of providers.providers || []) {
       if (!row.enabled && row.tier === 'experimental') continue;
       console.log(`${row.provider}: tier=${row.tier}, enabled=${row.enabled}, credential=${row.credentialDetected}, models=${row.catalogModels}, healthy=${row.healthyModel || 'none'}${row.lastFailureKind ? `, lastFailure=${row.lastFailureKind}` : ''}`);
@@ -22,10 +23,14 @@ const integrations = require('../core/integrations');
       { taskType: 'simple_qa' },
     );
     const text = String(result?.content || result?.response || result?.text || '').trim();
-    if (!text) throw new Error('Managed OmniRoute inference returned no text.');
-    if (!integrations.isDirectProviderModel(result?.model)) throw new Error(`Router returned an ineligible model: ${result?.model || '(missing)'}`);
+    if (!text) throw new Error('OmniRoute inference returned no text.');
+    const model = String(result?.model || '').trim();
+    const nativeAlias = integrations.isRoutingAlias(model) && result?.provider === 'omniroute-auto';
+    if (!nativeAlias && !integrations.isDirectProviderModel(model)) {
+      throw new Error(`Router returned an ineligible model: ${model || '(missing)'}`);
+    }
 
-    console.log(`Managed inference: PASS (provider=${result.provider || integrations.providerFromModel(result.model)}, model=${result.model}).`);
+    console.log(`Inference: PASS (mode=${result.routingMode || 'omniroute'}, provider=${result.provider || integrations.providerFromModel(model)}, model=${model}).`);
     console.log(`Response: ${text.slice(0, 120)}`);
     console.log('Provider health test: PASS.');
   } catch (error) {
