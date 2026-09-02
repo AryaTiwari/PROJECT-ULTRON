@@ -1,9 +1,10 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-const mark3Dir = path.resolve(new URL('..', import.meta.url).pathname);
+const mark3Dir = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const host = process.env.OMNIROUTE_HOST || '127.0.0.1';
 const port = Number(process.env.OMNIROUTE_PORT || 20128);
 const omniDir = process.env.OMNIROUTE_DIR || (process.platform === 'win32' && process.env.USERPROFILE
