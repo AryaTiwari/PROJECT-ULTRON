@@ -27,13 +27,16 @@ function serve(req,res) { const file = safePath(req.url || '/'); const target = 
 const server = http.createServer(async (req,res)=>{
   try {
     if(req.method==='OPTIONS') return send(res,204,'');
-    if(req.method==='GET' && req.url==='/api/health') return send(res,200,{ok:true,service:'ULTRON Mark 3',version:'3.0.0-alpha.2'});
+    if(req.method==='GET' && req.url==='/api/health') {
+      const router = await integrations.health();
+      return send(res,200,{ok:Boolean(router.ok),service:'ULTRON Mark 3',version:'3.0.0-beta.2',inference:{mode:router.mode,openCodeDisabled:true,omniRouteDisabled:true,directProviders:router.direct?.providers||{}},pid:process.pid,port:config.port});
+    }
     if(req.method==='GET' && req.url==='/api/state') return send(res,200,{ok:true,memory:memory.snapshot(),commitments:workspace.listCommitments({status:'open'}),projects:workspace.listProjects(),decisions:workspace.listDecisions()});
     if(req.method==='GET' && req.url==='/api/models') return send(res,200,{ok:true,...(await models.intelligence())});
     if(req.method==='GET' && req.url==='/api/diagnostics/omniroute') {
       let catalog = null; let error = null;
       try { catalog = await models.catalog(); } catch (e) { error = e instanceof Error ? e.message : String(e); }
-      return send(res,200,{ok:Boolean(catalog && catalog.count >= 0), endpoint:config.omnirouteBase, parentRouterLoaded:Boolean(catalog || error), catalog,error, credential:{envConfigured:Boolean(config.omnirouteApiKey),resolved:Boolean(await integrations.resolveOmniRouteApiKey())}});
+      return send(res,200,{ok:Boolean(catalog && catalog.count >= 0),endpoint:config.omnirouteBase,parentRouterLoaded:Boolean(catalog || error),catalog,error,credential:{envConfigured:Boolean(config.omnirouteEndpointKey),resolved:Boolean(await integrations.resolveOmniRouteApiKey())},inferenceDisabled:true});
     }
     if(req.method==='GET' && req.url==='/api/events') { res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','Access-Control-Allow-Origin':'*','X-Accel-Buffering':'no'}); res.write('event: connected\ndata:{"ok":true}\n\n'); sseClients.add(res); req.on('close',()=>sseClients.delete(res)); return; }
     if(req.method==='POST' && req.url==='/api/chat'){ const data=await body(req); const result=await assistant.handle(data.message,{model:data.model,history:data.history,taskType:data.taskType}); return send(res,200,result); }
@@ -45,4 +48,4 @@ const server = http.createServer(async (req,res)=>{
     return send(res,404,{ok:false,error:'Not found.'});
   } catch(error) { return send(res,500,{ok:false,error:error.message}); }
 });
-server.listen(config.port,config.host,()=>console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port}`));
+server.listen(config.port,config.host,()=>console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`));
