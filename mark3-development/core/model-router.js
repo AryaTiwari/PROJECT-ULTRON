@@ -62,7 +62,7 @@ function nativeProviderAllowed(provider) {
   if (allowlist.length) return allowlist.includes(normalized);
 
   const known = registry.PROVIDERS?.[normalized];
-  if (!known) return true; // Native OmniRoute chose it; trust unless explicitly denied.
+  if (!known) return true;
   if (known.tier !== 'experimental') return true;
   return /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''));
 }
@@ -173,9 +173,70 @@ async function listUsableModels({ force = false } = {}) {
     .filter((model) => model && !isBlockedModel(model) && registry.policyAllows(providerFromModel(model)));
 }
 
+async function listNativeEligibleModels({ force = false } = {}) {
+  const models = await omniRoute.listModels({ force });
+  return [...new Set((models || []).map(normalizeModel))]
+    .filter((model) => model && !isBlockedModel(model) && nativeProviderAllowed(providerFromModel(model)));
+}
+
 async function candidateModels(requestedModel = 'auto', taskType = 'general', { force = false, exclude = [] } = {}) {
   const catalog = await listUsableModels({ force });
   return registry.buildCandidates(catalog, normalizeRequestedModel(requestedModel), taskType, { maxCandidates: MAX_CANDIDATES, exclude });
+}
+
+async function chatExact({ messages, model, tools = null, taskType = 'general', timeoutMs = null } = {}) {
+  if (!Array.isArray(messages) || !messages.length) throw new Error('Exact model request requires messages.');
+  const requested = normalizeModel(model);
+  if (!requested || isRoutingAlias(requested) || isBlockedModel(requested)) throw new Error(`Model is not eligible for exact Mark 3 inference: ${requested || model}`);
+  const provider = providerFromModel(requested);
+  if (!nativeProviderAllowed(provider)) throw new Error(`Provider is disabled for exact Mark 3 inference: ${provider}`);
+  const budget = Math.max(5000, Number(timeoutMs || nativeTimeout(taskType)));
+  const started = Date.now();
+  emit('model_candidate_started', { model: requested, provider, timeoutMs: budget, exactRouting: true });
+  try {
+    const result = await omniRoute.chat({ messages, model: requested, tools, taskType, timeoutMs: budget, maxAttempts: 1, skipModelValidation: true });
+    const actual = concreteResultModel(result, requested);
+    if (isBlockedModel(actual)) throw new Error(`Exact inference returned a blocked/non-chat model: ${actual}`);
+    const actualProvider = providerFromModel(actual);
+    if (!nativeProviderAllowed(actualProvider)) throw new Error(`Exact inference returned a disabled provider '${actualProvider}' via ${actual}.`);
+    registry.recordSuccess(actual);
+    emit('model_candidate_succeeded', { model: actual, provider: actualProvider, durationMs: Date.now() - started, exactRouting: true });
+    return { ...result, model: actual, provider: actualProvider, transport: 'omniroute', routingMode: 'exact' };
+  } catch (error) {
+    const kind = classifyProviderError(error);
+    emit('model_candidate_failed', { model: requested, provider, kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500), durationMs: Date.now() - started, exactRouting: true });
+    if (kind === 'RESOURCE_PRESSURE') throw gatewayPressureError(error, [{ model: requested, provider, kind, exactRouting: true }]);
+    registry.recordFailure(requested, kind, error?.message || String(error));
+    throw error;
+  }
+}
+
+async function streamExact({ messages, model, tools = null, taskType = 'general', onDelta, firstTokenTimeoutMs = null } = {}) {
+  if (!Array.isArray(messages) || !messages.length) throw new Error('Exact streaming request requires messages.');
+  if (typeof onDelta !== 'function') throw new Error('Exact streaming request requires an onDelta callback.');
+  const requested = normalizeModel(model);
+  if (!requested || isRoutingAlias(requested) || isBlockedModel(requested)) throw new Error(`Model is not eligible for exact Mark 3 streaming: ${requested || model}`);
+  const provider = providerFromModel(requested);
+  if (!nativeProviderAllowed(provider)) throw new Error(`Provider is disabled for exact Mark 3 streaming: ${provider}`);
+  const budget = Math.max(5000, Number(firstTokenTimeoutMs || nativeTimeout(taskType)));
+  const started = Date.now();
+  emit('model_candidate_started', { model: requested, provider, timeoutMs: budget, streaming: true, exactRouting: true });
+  try {
+    const result = await omniRoute.streamChat({ messages, model: requested, tools, taskType, firstTokenTimeoutMs: budget, skipModelValidation: true, onDelta });
+    const actual = concreteResultModel(result, requested);
+    if (isBlockedModel(actual)) throw new Error(`Exact streaming returned a blocked/non-chat model: ${actual}`);
+    const actualProvider = providerFromModel(actual);
+    if (!nativeProviderAllowed(actualProvider)) throw new Error(`Exact streaming returned a disabled provider '${actualProvider}' via ${actual}.`);
+    registry.recordSuccess(actual);
+    emit('model_candidate_succeeded', { model: actual, provider: actualProvider, durationMs: Date.now() - started, streaming: true, exactRouting: true });
+    return { ...result, model: actual, provider: actualProvider, transport: 'omniroute', routingMode: 'exact' };
+  } catch (error) {
+    const kind = classifyProviderError(error);
+    emit('model_candidate_failed', { model: requested, provider, kind, status: Number(error?.status || 0), message: String(error?.message || error).slice(0, 500), durationMs: Date.now() - started, streaming: true, exactRouting: true });
+    if (kind === 'RESOURCE_PRESSURE') throw gatewayPressureError(error, [{ model: requested, provider, kind, exactRouting: true }]);
+    registry.recordFailure(requested, kind, error?.message || String(error));
+    throw error;
+  }
 }
 
 function aggregateFailure(failures) {
@@ -337,9 +398,12 @@ async function streamChat({ messages, model = 'auto', tools = null, taskType = '
 async function health() {
   const base = await omniRoute.health();
   let usable = [];
+  let nativeEligible = [];
   let catalogError = null;
-  try { usable = await listUsableModels({ force: true }); }
-  catch (error) { catalogError = error.message; }
+  try {
+    usable = await listUsableModels({ force: true });
+    nativeEligible = await listNativeEligibleModels({ force: false });
+  } catch (error) { catalogError = error.message; }
   const policy = await registry.snapshot(usable);
   return {
     ok: Boolean(base.ok),
@@ -348,8 +412,9 @@ async function health() {
     authenticated: base.authenticated,
     gatewayModelCount: base.modelCount,
     eligibleFallbackModelCount: usable.length,
+    nativeEligibleModelCount: nativeEligible.length,
     nativeAliases: ['auto/best-fast', 'auto/best-reasoning', 'auto/best-coding'],
-    catalogSample: usable.slice(0, 12),
+    catalogSample: nativeEligible.slice(0, 12),
     latencyMs: base.latencyMs,
     catalogError,
     candidateTimeoutMs: GENERAL_CANDIDATE_TIMEOUT_MS,
@@ -380,11 +445,14 @@ function resetProviderHealth() {
 module.exports = {
   chat,
   streamChat,
+  chatExact,
+  streamExact,
   health,
   providerSnapshot,
   clearRoutingCache,
   resetProviderHealth,
   listUsableModels,
+  listNativeEligibleModels,
   candidateModels,
   nativeAliasForTask,
   isRoutingAlias,
