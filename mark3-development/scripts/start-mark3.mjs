@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 
 const mark3Dir = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const projectRoot = path.resolve(mark3Dir, '..');
 const require = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
 const credentialStore = require('../../core/credentials/local-store');
 
 process.env.ULTRON_MODEL_PROVIDER = 'omniroute';
@@ -25,6 +27,7 @@ const logFile = path.join(logDir, 'omniroute.log');
 const readyTimeoutMs = Math.max(15000, Number(process.env.ULTRON_M3_OMNIROUTE_READY_TIMEOUT_MS || 120000));
 const maxOldSpaceMb = Math.max(1024, Number(process.env.ULTRON_OMNIROUTE_MAX_OLD_SPACE_MB || 3072));
 const requireReadyProvider = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_REQUIRE_READY_PROVIDER || '1'));
+const restartStaleGateway = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_RESTART_STALE_OMNIROUTE || '1'));
 
 function isLoopback() {
   const value = String(host).toLowerCase();
@@ -44,6 +47,14 @@ async function waitForPort(timeoutMs = readyTimeoutMs) {
   while (Date.now() - started < timeoutMs) {
     if (await isPortOpen()) return true;
     await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+}
+async function waitForPortClosed(timeoutMs = 10000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!(await isPortOpen())) return true;
+    await new Promise((resolve) => setTimeout(resolve, 300));
   }
   return false;
 }
@@ -97,7 +108,7 @@ async function verifyCatalog() {
     console.log(`[Mark 3] OmniRoute gateway online: ${models.length} catalog model(s) visible.`);
   } finally { clearTimeout(timer); }
 }
-async function verifyManagedInference() {
+async function probeManagedInference() {
   const before = await modelRouter.providerSnapshot();
   const configured = (before.providers || []).filter((row) => row.enabled && row.credentialDetected).map((row) => row.provider);
   const publicFallbacks = (before.providers || []).filter((row) => row.enabled && row.tier === 'public').map((row) => row.provider);
@@ -108,20 +119,26 @@ async function verifyManagedInference() {
         { role: 'system', content: 'This is a startup health probe. Reply with a short acknowledgement.' },
         { role: 'user', content: 'Mark 3 readiness check.' },
       ],
-      model: 'auto',
-      taskType: 'simple_qa',
-      tools: null,
+      model: 'auto', taskType: 'simple_qa', tools: null,
     });
     console.log(`[Mark 3] Managed inference ready: provider=${result.provider}, model=${result.model}.`);
-    return true;
+    return { ok: true, result };
   } catch (error) {
     const after = await modelRouter.providerSnapshot();
     const statuses = (after.providers || []).filter((row) => row.enabled).map((row) => `${row.provider}{credential=${row.credentialDetected},healthy=${row.healthyModel || 'no'},failure=${row.lastFailureKind || 'none'}}`).join(' ');
     console.error(`[Mark 3] Managed inference probe failed: ${error.message}`);
     if (statuses) console.error(`[Mark 3] Provider state: ${statuses}`);
-    if (requireReadyProvider) throw new Error('OmniRoute gateway is running, but no managed provider completed a real inference. Fix the provider shown above before Mark 3 starts.');
-    return false;
+    return { ok: false, error };
   }
+}
+async function stopLocalGatewayListener() {
+  if (process.platform === 'win32') {
+    const script = `$pids = Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; foreach ($pidValue in $pids) { if ($pidValue -and $pidValue -ne $PID) { Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue } }`;
+    await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 15000 });
+  } else {
+    try { await execFileAsync('sh', ['-lc', `pids=$(lsof -ti tcp:${port} 2>/dev/null || true); [ -z "$pids" ] || kill $pids`], { timeout: 15000 }); } catch {}
+  }
+  if (!(await waitForPortClosed())) throw new Error(`Could not stop the stale OmniRoute listener on port ${port}.`);
 }
 async function startLocalGateway() {
   const resolved = resolveEntry();
@@ -140,12 +157,31 @@ async function startLocalGateway() {
   }
 }
 async function main() {
-  if (!isLoopback()) console.log(`[Mark 3] Using configured remote OmniRoute endpoint ${baseUrl.origin}.`);
-  else if (await isPortOpen()) console.log(`[Mark 3] Existing OmniRoute gateway detected at http://${host}:${port}.`);
-  else await startLocalGateway();
+  let reusedExisting = false;
+  if (!isLoopback()) {
+    console.log(`[Mark 3] Using configured remote OmniRoute endpoint ${baseUrl.origin}.`);
+  } else if (await isPortOpen()) {
+    reusedExisting = true;
+    console.log(`[Mark 3] Existing OmniRoute gateway detected at http://${host}:${port}.`);
+  } else {
+    await startLocalGateway();
+  }
 
   await verifyCatalog();
-  await verifyManagedInference();
+  let probe = await probeManagedInference();
+
+  if (!probe.ok && isLoopback() && reusedExisting && restartStaleGateway) {
+    console.log('[Mark 3] Existing OmniRoute is reachable but has no working managed provider. Restarting it once with the current .env...');
+    await stopLocalGatewayListener();
+    modelRouter.clearRoutingCache?.();
+    await startLocalGateway();
+    await verifyCatalog();
+    probe = await probeManagedInference();
+  }
+
+  if (!probe.ok && requireReadyProvider) {
+    throw new Error('OmniRoute gateway is running, but no managed provider completed a real inference. Check the provider state printed above.');
+  }
 }
 
 main().catch((error) => {
