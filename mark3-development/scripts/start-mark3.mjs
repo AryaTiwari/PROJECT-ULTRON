@@ -68,6 +68,13 @@ function readTail(file, lines = 100) {
   catch { return ''; }
 }
 
+function stripHeapPin(nodeOptions) {
+  return String(nodeOptions || '')
+    .replace(/(?:^|\s)--max-old-space-size(?:=|\s+)\d+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function resolveEndpointKey() {
   const envKey = String(process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim();
   if (envKey) return envKey;
@@ -135,7 +142,7 @@ async function windowsListenerProcesses() {
     '  if ($p) { $rows += [PSCustomObject]@{ pid = [int]$listenerPid; name = $p.Name; commandLine = $p.CommandLine } }',
     '}',
     '$rows | ConvertTo-Json -Compress',
-  ].join('; ');
+  ].join('\n');
   try {
     const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       windowsHide: true,
@@ -195,11 +202,13 @@ async function startPackagedGateway() {
   const useGlobal = await commandExists(process.platform === 'win32' ? 'omniroute.cmd' : 'omniroute');
   const spec = packagedLaunchSpec(useGlobal);
   const handle = fs.openSync(logFile, 'a');
+  const preservedNodeOptions = stripHeapPin(process.env.NODE_OPTIONS);
   const env = {
     ...process.env,
     PORT: String(port),
     OMNIROUTE_PORT: String(port),
     OMNIROUTE_MEMORY_MB: String(memoryMb),
+    NODE_OPTIONS: preservedNodeOptions,
     OMNIROUTE_NO_UPDATE_NOTIFIER: '1',
     OMNIROUTE_CLI_SKIP_REPO_ENV: '1',
     NEXT_TELEMETRY_DISABLED: '1',
