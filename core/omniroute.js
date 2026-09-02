@@ -439,6 +439,8 @@ async function streamChat({ messages, model = 'auto', taskType = 'general', tool
         const choice = data?.choices?.[0] || {};
         const delta = choice?.delta || {};
         if (data?.model) observedModel = data.model;
+        const hiddenReasoning = textFromContent(delta['reasoning_content'] || '');
+        if (hiddenReasoning) markFirstEvent();
         const text = textFromContent(delta.content || delta.text || choice.text || data?.output_text || data?.text || '');
 
         if (text) {
