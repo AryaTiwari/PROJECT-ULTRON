@@ -75,7 +75,19 @@ async function concreteModel() { return (await concreteModels(1))[0]?.id || ''; 
 async function resolveModel(requestedModel = 'auto', taskType = 'general') { return parentRouter.resolveModel(requestedModel, taskType); }
 
 async function chat(messages, model = 'auto', tools = null, options = {}) {
-  return parentRouter.chat({ messages, model: model || 'auto', taskType: options.taskType || 'general', tools });
+  const taskType = options.taskType || 'general';
+  const result = await parentRouter.chat({ messages, model: model || 'auto', taskType, tools });
+  if (!isRoutingAlias(model) && !isBigPickle(result?.model)) return result;
+  if (isBigPickle(result?.model)) {
+    const fallback = String(process.env.ULTRON_M3_SAFE_MODEL || 'nvidia/nvidia/nemotron-3-super-120b-a12b').trim();
+    if (fallback && !isBigPickle(fallback)) {
+      try {
+        const retry = await parentRouter.chat({ messages, model: fallback, taskType, tools });
+        if (!isBigPickle(retry?.model)) return retry;
+      } catch {}
+    }
+  }
+  return result;
 }
 async function streamChat(messages, model = 'auto', tools = null, options = {}) {
   return parentRouter.streamChat({ messages, model: model || 'auto', taskType: options.taskType || 'general', tools, onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
