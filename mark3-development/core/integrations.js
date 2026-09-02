@@ -2,40 +2,183 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const { load: loadCredentials } = require('../../core/credentials/local-store');
-const parentRouter = require('./model-router');
-const omniRoute = require('../../core/omniroute');
+const modelRouter = require('./model-router');
+const rootVoice = require('../../core/voice');
+const windowsVoice = require('./windows-voice');
 
 function readParentEnv(name) {
-  try { const envPath = path.resolve(__dirname, '..', '..', '.env'); if (!fs.existsSync(envPath)) return ''; const line = fs.readFileSync(envPath, 'utf8').split(/\r?\n/).find((entry) => entry.trim().startsWith(name + '=')); return line ? line.slice(line.indexOf('=') + 1).trim().replace(/^['\"]|['\"]$/g, '') : ''; } catch { return ''; }
+  try {
+    const envPath = path.resolve(config.projectRoot, '.env');
+    if (!fs.existsSync(envPath)) return '';
+    const line = fs.readFileSync(envPath, 'utf8').split(/\r?\n/).find((entry) => entry.trim().startsWith(`${name}=`));
+    return line ? line.slice(line.indexOf('=') + 1).trim().replace(/^['\"]|['\"]$/g, '') : '';
+  } catch { return ''; }
 }
-async function resolveOmniRouteApiKey() { const direct = String(config.omnirouteEndpointKey || process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim(); if (direct) return direct; for (const name of ['OMNIROUTE_ENDPOINT_KEY','OMNIROUTE_API_KEY','ULTRON_OMNIROUTE_API_KEY']) { const env = readParentEnv(name); if (env) return env; } try { const saved = await loadCredentials(); return String(saved.OMNIROUTE_ENDPOINT_KEY || saved.OMNIROUTE_API_KEY || saved.ULTRON_OMNIROUTE_API_KEY || '').trim(); } catch { return ''; } }
-function isRoutingAlias(id) { const value=String(id||'').trim().toLowerCase(); return !value || /^auto(?:\/|$)/.test(value) || /^omniroute\//.test(value) || /^no-think(?:\/|$)/.test(value); }
-function isDevinModel(id) { return /(^|[\\/_-])(dva|devin|agentic|bridge)([\\/_-]|$)/i.test(String(id||'').trim()); }
-function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id||'')); }
-const FREE_OPENCODE_MODELS=new Set(['big-pickle','mimo-v2.5-free','hy3-free','nemotron-3-ultra-free','nemotron-3.5-lightning-free','x-preview-f-free','muse-spark-1.2-contributor-free']);
-function isOpenCodeModel(id) { const value=String(id||'').trim().toLowerCase(); return value==='opencode' || value.startsWith('opencode/') || value.startsWith('opencode-go/') || value.startsWith('oc/') || value.includes('big-pickle') || value.includes('big_pickle') || value.includes('big pickle') || FREE_OPENCODE_MODELS.has(value); }
-function isDirectProviderModel(id) { const value=String(id||'').trim(); return Boolean(value && !isRoutingAlias(value) && !isDevinModel(value) && !isBigPickle(value) && !isOpenCodeModel(value)); }
-function providerFromModel(id) { const first=String(id||'').split('/')[0].trim().toLowerCase(); return first || 'unknown'; }
-function classifyProviderError(error) { const status=Number(error?.status||0); const text=`${error?.message||''} ${error?.raw||error?.body||''}`.toLowerCase(); if(status===402||/payment_required|payment required|billing_error|paid model/.test(text)) return 'PAID_MODEL'; if([401,403].includes(status)||/missing api key|invalid_api_key|no active credentials|authentication failed|permission|forbidden/.test(text)) return 'CREDENTIALS_OR_ACCESS'; if(status===404||/model.*not.*found|model.*does not exist|not available/.test(text)) return 'MODEL_UNAVAILABLE'; if(status===429||/quota|rate limit|exhausted|anti-abuse|too many requests/.test(text)) return 'QUOTA_OR_RATE_LIMIT'; if(status>=500||/gateway|timed out|fetch failed|econnrefused|blocked by/.test(text)) return 'UPSTREAM_OR_NETWORK'; return 'UNKNOWN'; }
-function isProviderCredentialError(error) { return classifyProviderError(error)==='CREDENTIALS_OR_ACCESS'; }
-function isPaidModelError(error) { return classifyProviderError(error)==='PAID_MODEL'; }
-function isRetryableCandidateError(error) { return classifyProviderError(error)!=='UNKNOWN'; }
-async function models() { try { const data=await omniRoute.listModels({force:true}); return {data:data.map(id=>({id})).filter(item=>!isOpenCodeModel(item.id)&&!isBigPickle(item.id)&&!item.id.toLowerCase().startsWith('nvidia/'))}; } catch(error) { return {data:[],error:error.message}; } }
-function payloadModelEntries(payload) { const raw=Array.isArray(payload?.data)?payload.data:Array.isArray(payload?.models)?payload.models:[]; return raw.map(item=>typeof item==='string'?{id:item.trim(),raw:{id:item.trim()}}:{id:String(item?.id||item?.model||item?.name||'').trim(),raw:item}).filter(item=>item.id&&!isBigPickle(item.id)&&!isOpenCodeModel(item.id)&&!item.id.toLowerCase().startsWith('nvidia/')); }
-function payloadModels(payload) { return [...new Set(payloadModelEntries(payload).map(item=>item.id))]; }
-async function concreteModels(limit=36) { return payloadModelEntries(await models()).filter(entry=>isDirectProviderModel(entry.id)).slice(0,Math.max(1,Number(limit)||36)); }
-async function concreteModel() { return (await concreteModels(1))[0]?.id||''; }
-async function selectMark2Model(model='auto', taskType='general') { return parentRouter.normalizeRequestedModel(model); }
-async function selectNonOpenCodeDirectModel() { return ''; }
-async function resolveModel(requestedModel='auto', taskType='general') { return selectMark2Model(requestedModel,taskType); }
-async function chat(messages,model='auto',tools=null,options={}) { return parentRouter.chat({messages,model,tools,taskType:options.taskType||'general'}); }
-async function streamChat(messages,model='auto',tools=null,options={}) { return parentRouter.streamChat({messages,model,tools,taskType:options.taskType||'general',onDelta:options.onDelta,firstTokenTimeoutMs:options.firstTokenTimeoutMs}); }
-async function chatExact(messages,model,tools) { return parentRouter.chat({messages,model,tools,taskType:'general'}); }
-async function health() { return parentRouter.health(); }
+
+async function resolveOmniRouteApiKey() {
+  const direct = String(config.omnirouteEndpointKey || process.env.OMNIROUTE_ENDPOINT_KEY || process.env.OMNIROUTE_API_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || '').trim();
+  if (direct) return direct;
+  for (const name of ['OMNIROUTE_ENDPOINT_KEY', 'OMNIROUTE_API_KEY', 'ULTRON_OMNIROUTE_API_KEY']) {
+    const env = readParentEnv(name);
+    if (env) return env;
+  }
+  try {
+    const saved = await loadCredentials();
+    return String(saved.OMNIROUTE_ENDPOINT_KEY || saved.OMNIROUTE_API_KEY || saved.ULTRON_OMNIROUTE_API_KEY || '').trim();
+  } catch { return ''; }
+}
+
+function isRoutingAlias(id) { return modelRouter.isRoutingAlias(id); }
+function isDevinModel(id) { return modelRouter.isDevinModel(id); }
+function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
+function isOpenCodeModel(id) { return modelRouter.isOpenCodeModel(id); }
+function isNvidiaModel(id) { return modelRouter.isNvidiaModel(id); }
+function isDirectProviderModel(id) {
+  const value = String(id || '').trim();
+  return Boolean(value && !modelRouter.isBlockedModel(value));
+}
+function providerFromModel(id) { return modelRouter.providerFromModel(id); }
+function classifyProviderError(error) { return modelRouter.classifyProviderError(error); }
+function isProviderCredentialError(error) { return classifyProviderError(error) === 'ACCESS'; }
+function isPaidModelError(error) { return classifyProviderError(error) === 'PAID_MODEL'; }
+function isRetryableCandidateError(error) { return classifyProviderError(error) !== 'UNKNOWN'; }
+
+async function models() {
+  try {
+    const data = await modelRouter.listUsableModels({ force: true });
+    return { data: data.map((id) => ({ id })) };
+  } catch (error) {
+    return { data: [], error: error.message };
+  }
+}
+
+function payloadModelEntries(payload) {
+  const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+  return raw
+    .map((item) => typeof item === 'string' ? { id: item.trim(), raw: { id: item.trim() } } : { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item })
+    .filter((item) => item.id && isDirectProviderModel(item.id));
+}
+function payloadModels(payload) { return [...new Set(payloadModelEntries(payload).map((item) => item.id))]; }
+async function concreteModels(limit = 36) { return payloadModelEntries(await models()).slice(0, Math.max(1, Number(limit) || 36)); }
+async function concreteModel() { return (await concreteModels(1))[0]?.id || ''; }
+async function selectMark2Model(model = 'auto') { return modelRouter.normalizeRequestedModel(model); }
+async function selectNonOpenCodeDirectModel() { return concreteModel(); }
+async function resolveModel(requestedModel = 'auto') { return modelRouter.normalizeRequestedModel(requestedModel); }
+
+async function chat(messages, model = 'auto', tools = null, options = {}) {
+  return modelRouter.chat({ messages, model, tools, taskType: options.taskType || 'general' });
+}
+async function streamChat(messages, model = 'auto', tools = null, options = {}) {
+  return modelRouter.streamChat({ messages, model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
+}
+async function chatExact(messages, model, tools) {
+  return modelRouter.chat({ messages, model, tools, taskType: 'general' });
+}
+async function health() { return modelRouter.health(); }
 function providerHealthSnapshot() { return []; }
-async function speak(text) { const response=await fetch(`${config.parentCore}/api/tts`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,provider:'fish-audio-s2.1-pro-free',format:'mp3',volume:2})}); const raw=await response.text(); let data={}; try{data=raw?JSON.parse(raw):{};}catch{data={raw};} if(!response.ok){const error=new Error(`ULTRON TTS HTTP ${response.status}: ${String(raw).slice(0,1200)}`);error.status=response.status;throw error;} return data; }
-async function requestJson(url,options={},timeoutMs=30000) { const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),timeoutMs); try { const response=await fetch(url,{...(options||{}),signal:controller.signal}); const text=await response.text(); let data={}; try{data=text?JSON.parse(text):{};}catch{data={raw:text};} if(!response.ok){const error=new Error(`HTTP ${response.status}: ${text.slice(0,2500)}`);error.status=response.status;error.body=data;throw error;} return data; } finally { clearTimeout(timer); } }
-const jsonRequest=requestJson;
-async function githubReadFile(pathname,ref) { if(!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.'); const useRef=ref||config.githubBranch; const url=`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents/${String(pathname||'').split('/').filter(Boolean).map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(useRef)}`; const data=await requestJson(url,{headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',Authorization:`Bearer ${config.githubToken}`}},20000); if(data.type!=='file'||!data.content)throw new Error(`GitHub path is not a readable file: ${pathname}`); return {path:pathname,ref:useRef,sha:data.sha,content:Buffer.from(String(data.content).replace(/\r?\n/g,''),'base64').toString('utf8'),size:Number(data.size)||0}; }
-async function githubList(pathname='',ref) { if(!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.'); const useRef=ref||config.githubBranch; const suffix=pathname?'/'+String(pathname).split('/').filter(Boolean).map(encodeURIComponent).join('/') : ''; return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`,{headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',Authorization:`Bearer ${config.githubToken}`}},20000); }
-module.exports={requestJson,jsonRequest,resolveOmniRouteApiKey,githubReadFile,githubList,models,payloadModels,payloadModelEntries,resolveModel,isRoutingAlias,isDevinModel,isBigPickle,isOpenCodeModel,isDirectProviderModel,providerFromModel,classifyProviderError,isProviderCredentialError,isPaidModelError,isRetryableCandidateError,concreteModels,concreteModel,chatExact,chat,streamChat,health,providerHealthSnapshot,speak,selectMark2Model,selectNonOpenCodeDirectModel,PROVIDER_PRIORITY:['chipotle','duckduckgo-web','felo-web','theoldllm','uncloseai','cloudflare-playground','codex-app-server','auggie','zcode','gemini-cli','kiro','qoder','qwen','github-copilot','pollinations','zenmux','bytez','vertex']};
+
+async function speak(text, options = {}) {
+  const failures = [];
+  try {
+    const audio = await rootVoice.speak(text, { ...options, outputDir: config.voiceOutputDir });
+    if (audio?.path) return { ...audio, fallback: false };
+    if (audio?.reason) throw new Error(audio.reason);
+    throw new Error('Primary ULTRON voice returned no audio path.');
+  } catch (error) {
+    failures.push(`primary: ${error.message}`);
+  }
+
+  if (config.voiceFallback === 'windows-sapi') {
+    try {
+      const audio = await windowsVoice.synthesize(text, { ...options, outputDir: config.voiceOutputDir });
+      return { ...audio, primaryError: failures[0] || null };
+    } catch (error) {
+      failures.push(`windows-sapi: ${error.message}`);
+    }
+  }
+
+  throw new Error(`ULTRON voice synthesis failed. ${failures.join(' | ')}`);
+}
+
+function voiceStatus() {
+  let primary = {};
+  try { primary = rootVoice.status(); } catch (error) { primary = { configured: false, error: error.message }; }
+  return {
+    primary,
+    fallback: config.voiceFallback,
+    outputDir: config.voiceOutputDir,
+    referencePath: config.voiceReferencePath,
+    referencePresent: fs.existsSync(config.voiceReferencePath),
+  };
+}
+
+async function requestJson(url, options = {}, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...(options || {}), signal: controller.signal });
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}: ${text.slice(0, 2500)}`);
+      error.status = response.status;
+      error.body = data;
+      throw error;
+    }
+    return data;
+  } finally { clearTimeout(timer); }
+}
+const jsonRequest = requestJson;
+
+async function githubReadFile(pathname, ref) {
+  if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
+  const useRef = ref || config.githubBranch;
+  const encodedPath = String(pathname || '').split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  const url = `https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents/${encodedPath}?ref=${encodeURIComponent(useRef)}`;
+  const data = await requestJson(url, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
+  if (data.type !== 'file' || !data.content) throw new Error(`GitHub path is not a readable file: ${pathname}`);
+  return { path: pathname, ref: useRef, sha: data.sha, content: Buffer.from(String(data.content).replace(/\r?\n/g, ''), 'base64').toString('utf8'), size: Number(data.size) || 0 };
+}
+
+async function githubList(pathname = '', ref) {
+  if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
+  const useRef = ref || config.githubBranch;
+  const suffix = pathname ? `/${String(pathname).split('/').filter(Boolean).map(encodeURIComponent).join('/')}` : '';
+  return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
+}
+
+module.exports = {
+  requestJson,
+  jsonRequest,
+  resolveOmniRouteApiKey,
+  githubReadFile,
+  githubList,
+  models,
+  payloadModels,
+  payloadModelEntries,
+  resolveModel,
+  isRoutingAlias,
+  isDevinModel,
+  isBigPickle,
+  isOpenCodeModel,
+  isNvidiaModel,
+  isDirectProviderModel,
+  providerFromModel,
+  classifyProviderError,
+  isProviderCredentialError,
+  isPaidModelError,
+  isRetryableCandidateError,
+  concreteModels,
+  concreteModel,
+  chatExact,
+  chat,
+  streamChat,
+  health,
+  providerHealthSnapshot,
+  speak,
+  voiceStatus,
+  selectMark2Model,
+  selectNonOpenCodeDirectModel,
+  PROVIDER_PRIORITY: ['chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'pollinations', 'zenmux', 'bytez', 'vertex'],
+};
