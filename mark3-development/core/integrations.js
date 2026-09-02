@@ -39,7 +39,7 @@ function isDevinModel(id) {
 function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
 function isOpenCodeModel(id) {
   const value = String(id || '').trim().toLowerCase();
-  return value === 'opencode' || value.startsWith('opencode/') || value.startsWith('opencode-go/') || value.startsWith('oc/');
+  return value === 'opencode' || value.startsWith('opencode/') || value.startsWith('opencode-go/') || value.startsWith('oc/') || value.includes('big-pickle') || value.includes('big_pickle') || value.includes('big pickle');
 }
 function isDirectProviderModel(id) {
   const value = String(id || '').trim();
@@ -116,21 +116,14 @@ async function selectNonOpenCodeDirectModel() {
 
 async function selectMark2Model(model = 'auto', taskType = 'general') {
   const requested = String(model || 'auto').trim();
-
-  // Mark 3 has OpenCode disabled for now. Routing aliases are resolved to a
-  // concrete non-OpenCode provider before they ever reach the shared router.
   if (requested && requested !== 'auto' && !isRoutingAlias(requested) && !isBigPickle(requested) && !isOpenCodeModel(requested)) return requested;
-  if (requested && (isBigPickle(requested) || isOpenCodeModel(requested))) {
-    const replacement = await selectNonOpenCodeDirectModel();
-    if (replacement) return replacement;
-    throw new Error(`OpenCode is disabled in Mark 3 and no replacement provider is configured for ${requested}.`);
-  }
+  if (requested && (isBigPickle(requested) || isOpenCodeModel(requested))) throw new Error(`OpenCode is disabled in Mark 3: ${requested}`);
 
   const directReplacement = await selectNonOpenCodeDirectModel();
   if (directReplacement) return directReplacement;
 
   try {
-    const selected = await omniRoute.resolveModel('auto', taskType);
+    const selected = await omniRoute.resolveModel(requested && !isRoutingAlias(requested) ? requested : 'auto', taskType);
     if (!isBigPickle(selected) && !isOpenCodeModel(selected)) return selected;
   } catch {}
 
