@@ -9,10 +9,12 @@ function normalizeBaseUrl(value) {
   return String(value || '').replace(/\/$/, '');
 }
 
-// Mark 3 inference must use the proven Mark 2 direct-provider path.
-// This root config is the one imported by core/model-router.js.
+// MARK 3: inference is deliberately locked to the proven Mark 2 direct path.
+// Ignore every model/provider override that could reintroduce OpenCode or OmniRoute.
 process.env.ULTRON_MODEL_PROVIDER = 'direct';
+delete process.env.ULTRON_MODEL;
 delete process.env.ULTRON_DIRECT_DEFAULT_MODEL;
+delete process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL;
 process.env.ULTRON_DISABLE_OPENCODE = '1';
 delete process.env.OPENCODE_API_KEY;
 delete process.env.OPENCODE_GO_API_KEY;
@@ -34,7 +36,7 @@ const config = {
     baseUrl: omniRouteBase,
     endpoint: process.env.OMNIROUTE_CHAT_URL || `${omniRouteBase}/chat/completions`,
     apiKey: omniRouteEndpointKey,
-    model: process.env.ULTRON_MODEL || 'auto',
+    model: 'auto',
     timeoutMs: numberEnv('ULTRON_MODEL_TIMEOUT_MS', 120000),
   },
   supabase: {
