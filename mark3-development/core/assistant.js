@@ -1,14 +1,197 @@
-const config=require('./config');const memory=require('./memory');const workspace=require('./workspace');const models=require('./model-intelligence');const planner=require('./planner');const verifier=require('./verifier');const integrations=require('./integrations');const tools=require('./tools');const voice=require('./voice-orchestrator');const conversation=require('./conversation');const intent=require('./intent');const{emit}=require('./events');
-const BASE_SYSTEM=`You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity with projects, commitments, decisions and recent context.`;
-function textFromResponse(data){const direct=data?.content??data?.response??data?.text??data?.output_text??data?.choices?.[0]?.message?.content??data?.choices?.[0]?.message?.reasoning_content??data?.choices?.[0]?.delta?.content??data?.choices?.[0]?.delta?.reasoning_content??data?.choices?.[0]?.text??data?.choices?.[0]?.message?.text??data?.raw?.choices?.[0]?.message?.content??data?.raw?.response??data?.raw?.text??'';if(typeof direct==='string')return direct.trim();if(Array.isArray(direct))return direct.map(x=>typeof x==='string'?x:x?.text||x?.content||x?.value||'').join('').trim();if(direct&&typeof direct==='object')return String(direct.text||direct.content||direct.value||'').trim();return String(direct||'').trim();}
-function toolCallsFromResponse(data){return Array.isArray(data?.toolCalls)?data.toolCalls:Array.isArray(data?.choices?.[0]?.message?.tool_calls)?data.choices[0].message.tool_calls:Array.isArray(data?.raw?.choices?.[0]?.message?.tool_calls)?data.raw.choices[0].message.tool_calls:[];}
-function explicitGitHubPrompt(text){const match=String(text).match(/\b(?:read|open|inspect|check)\s+([A-Za-z0-9._\-/]+)\s+(?:from|on|in)\s+github\b/i);return match?match[1]:null;}
-function contextBlock(userMessage,retrieved,commitments,decisions,projects,modelIntelligence,recent){return['WORKING CONTEXT:',JSON.stringify({recentConversation:recent.slice(-config.maxConversationItems),recentMemories:retrieved,openCommitments:commitments.slice(0,8),decisions:decisions.slice(0,8),projects:projects.slice(0,8)}),'','MODEL INTELLIGENCE:',JSON.stringify({availableModelCount:modelIntelligence.live.count,models:modelIntelligence.live.models.slice(0,60),observedPerformance:modelIntelligence.observed.slice(0,40)}),'',`CURRENT USER REQUEST: ${userMessage}`].join('\n');}
-async function modelToolLoop(messages,model,taskType){let working=[...messages];for(let round=0;round<5;round++){const data=await integrations.chat(working,model,tools.schemas,{taskType});const calls=toolCallsFromResponse(data);if(!calls.length)return{data,rounds:round};working.push({role:'assistant',content:textFromResponse(data),tool_calls:calls});for(const call of calls){const fn=call.function||{};let input={};try{input=typeof fn.arguments==='string'?JSON.parse(fn.arguments||'{}'):fn.arguments||{};}catch{input={};}emit('tool_started',{tool:fn.name,input:{...input,path:input.path,model}});const result=await tools.execute(fn.name,input);emit('tool_completed',{tool:fn.name,result:result.result||result,model});working.push({role:'tool',tool_call_id:call.id||`${fn.name}-${round}`,name:fn.name,content:JSON.stringify(result)});}}throw new Error('ULTRON tool loop exceeded the five-round safety limit.');}
-function nativeModelForTask(taskType){const task=String(taskType||'general').toLowerCase();if(task==='coding')return'auto/best-coding';if(task==='research'||task==='planning')return'auto/best-reasoning';return'auto/best-fast';}
-async function chooseModel(intelligence,requested,taskType){const wanted=String(requested||'').trim();if(wanted&&integrations.isDirectProviderModel(wanted))return{model:wanted,mode:'direct'};if(wanted&&integrations.isRoutingAlias(wanted))return{model:wanted,mode:'routing'};return{model:nativeModelForTask(taskType),mode:'routing'};}
-async function handle(message,options={}){const userMessage=String(message||'').trim();if(!userMessage)throw new Error('Message is required.');const started=Date.now();const taskType=options.taskType||'general';emit('task_started',{message:userMessage});conversation.append('user',userMessage,{taskType});const retrieved=memory.retrieve(userMessage,{limit:config.maxContextItems});const commitments=workspace.listCommitments({status:'open'}),decisions=workspace.listDecisions(),projects=workspace.listProjects();const captured=intent.extractCommitment(userMessage);if(captured){const commitment=workspace.createCommitment({title:captured.title,priority:captured.priority,project:intent.extractProject(userMessage)});emit('commitment_created',{commitment});}
-let intelligence={live:{models:[],count:0},observed:[]};try{intelligence=await models.intelligence(taskType);}catch(error){emit('model_catalog_unavailable',{error:error.message});if(config.omniRouteStrict)throw error;}
-const recent=options.history?.length?options.history:conversation.recent();const plan=planner.createPlan(userMessage,taskType);emit('context_ready',{memoryCount:retrieved.length,commitments:commitments.length,projectCount:projects.length});const githubPath=explicitGitHubPrompt(userMessage);if(githubPath){emit('tool_started',{tool:'github_read_file',input:{path:githubPath,ref:config.githubBranch}});const file=await integrations.githubReadFile(githubPath,config.githubBranch);emit('tool_completed',{tool:'github_read_file',result:{path:file.path,sha:file.sha,size:file.size}});const response=`I inspected ${file.path} on GitHub (${file.sha.slice(0,7)}).\n\n${file.content.slice(0,12000)}`;const check=verifier.verifyText(response);verifier.report(check,'github-read-response');conversation.append('assistant',response,{model:'deterministic-github',taskType});memory.remember({type:'episodic',content:`GitHub file inspected: ${githubPath}`,source:'tool',project:'ULTRON Mark 3',importance:.35});emit('response_ready',{model:'deterministic-github',taskType});void voice.enqueue(response);emit('task_completed',{durationMs:Date.now()-started});return{ok:true,response,text:response,model:'deterministic-github',taskType,plan,tool:'github_read_file',sha:file.sha,modelIntelligence:intelligence};}
-const selection=await chooseModel(intelligence,options.model||'',taskType);const selectedModel=selection.model;const selectedProvider=integrations.providerFromModel(selectedModel);emit('model_selection',{availableModels:intelligence.live.count,selectedModel,mode:selection.mode,provider:selectedProvider});const messages=[{role:'system',content:`${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode==='routing'?'Use OmniRoute native routing; choose the best available provider automatically.':'Use the requested provider model through direct provider routing.'}\n\n${contextBlock(userMessage,retrieved,commitments,decisions,projects,intelligence,recent)}`},...recent.slice(-10).map(item=>({role:item.role==='assistant'?'assistant':'user',content:String(item.content||'')})),{role:'user',content:userMessage}];emit('model_started',{taskType,model:selectedModel,mode:selection.mode,provider:selectedProvider});const loop=await modelToolLoop(messages,selectedModel,taskType);const data=loop.data;const text=textFromResponse(data);const checked=verifier.report(verifier.verifyText(text),'model-response');if(!checked.ok)throw new Error('Model returned an empty response.');const observedModel=data?.model||data?.raw?.model||selectedModel;const observedProvider=data?.provider||data?.raw?.provider||integrations.providerFromModel(observedModel)||selectedProvider;models.record({provider:observedProvider,model:observedModel,taskType,success:true,latencyMs:Date.now()-started});conversation.append('assistant',text,{model:observedModel,provider:observedProvider,taskType,mode:selection.mode});memory.remember({type:'episodic',content:`Completed ${taskType} task using ${observedModel}.`,source:'model',project:intent.extractProject(userMessage),importance:.25});emit('response_ready',{model:observedModel,taskType,provider:observedProvider,mode:selection.mode});void voice.enqueue(text);emit('task_completed',{durationMs:Date.now()-started});return{ok:true,response:text,text,model:observedModel,provider:observedProvider,taskType,mode:selection.mode,plan,modelIntelligence:intelligence,toolRounds:loop.rounds};}
-module.exports={handle,BASE_SYSTEM};
+const config = require('./config');
+const memory = require('./memory');
+const workspace = require('./workspace');
+const models = require('./model-intelligence');
+const planner = require('./planner');
+const verifier = require('./verifier');
+const integrations = require('./integrations');
+const tools = require('./tools');
+const voice = require('./voice-orchestrator');
+const conversation = require('./conversation');
+const intent = require('./intent');
+const { emit } = require('./events');
+
+const BASE_SYSTEM = `You are ULTRON Mark 3, a persistent personal operating assistant and strategic companion. You are calm, formidable, intelligent, composed, direct, practical, subtly playful, philosophical when useful, and willing to challenge avoidance. Act like a trusted friend plus elite executive assistant. Never invent live facts, model capabilities, tool results, or completed work. State facts, assumptions, estimates and judgments separately. Prefer deterministic tools when reliable. Verify consequential actions whenever possible. Maintain continuity with projects, commitments, decisions and recent context.`;
+
+function textFromResponse(data) {
+  const direct = data?.content ?? data?.response ?? data?.text ?? data?.output_text
+    ?? data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.message?.reasoning_content
+    ?? data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.delta?.reasoning_content
+    ?? data?.choices?.[0]?.text ?? data?.choices?.[0]?.message?.text
+    ?? data?.raw?.choices?.[0]?.message?.content ?? data?.raw?.response ?? data?.raw?.text ?? '';
+  if (typeof direct === 'string') return direct.trim();
+  if (Array.isArray(direct)) return direct.map((item) => typeof item === 'string' ? item : item?.text || item?.content || item?.value || '').join('').trim();
+  if (direct && typeof direct === 'object') return String(direct.text || direct.content || direct.value || '').trim();
+  return String(direct || '').trim();
+}
+
+function toolCallsFromResponse(data) {
+  return Array.isArray(data?.toolCalls) ? data.toolCalls
+    : Array.isArray(data?.choices?.[0]?.message?.tool_calls) ? data.choices[0].message.tool_calls
+      : Array.isArray(data?.raw?.choices?.[0]?.message?.tool_calls) ? data.raw.choices[0].message.tool_calls
+        : [];
+}
+
+function explicitGitHubPrompt(text) {
+  const match = String(text).match(/\b(?:read|open|inspect|check)\s+([A-Za-z0-9._\-/]+)\s+(?:from|on|in)\s+github\b/i);
+  return match ? match[1] : null;
+}
+
+function contextBlock(userMessage, retrieved, commitments, decisions, projects, modelIntelligence, recent) {
+  return [
+    'WORKING CONTEXT:',
+    JSON.stringify({
+      recentConversation: recent.slice(-config.maxConversationItems),
+      recentMemories: retrieved,
+      openCommitments: commitments.slice(0, 8),
+      decisions: decisions.slice(0, 8),
+      projects: projects.slice(0, 8),
+    }),
+    '',
+    'MODEL INTELLIGENCE:',
+    JSON.stringify({
+      availableModelCount: modelIntelligence.live.count,
+      models: modelIntelligence.live.models.slice(0, 60),
+      observedPerformance: modelIntelligence.observed.slice(0, 40),
+    }),
+    '',
+    `CURRENT USER REQUEST: ${userMessage}`,
+  ].join('\n');
+}
+
+async function modelToolLoop(messages, model, taskType) {
+  let working = [...messages];
+  for (let round = 0; round < 5; round += 1) {
+    const data = await integrations.chat(working, model, tools.schemas, { taskType });
+    const calls = toolCallsFromResponse(data);
+    if (!calls.length) return { data, rounds: round };
+
+    working.push({ role: 'assistant', content: textFromResponse(data) || null, tool_calls: calls });
+    for (const call of calls) {
+      const fn = call.function || {};
+      let input = {};
+      try { input = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments || '{}') : fn.arguments || {}; }
+      catch { input = {}; }
+      emit('tool_started', { tool: fn.name, input: { ...input, path: input.path, model } });
+      const result = await tools.execute(fn.name, input);
+      emit('tool_completed', { tool: fn.name, result: result.result || result, model });
+      working.push({ role: 'tool', tool_call_id: call.id || `${fn.name}-${round}`, name: fn.name, content: JSON.stringify(result) });
+    }
+  }
+  throw new Error('ULTRON tool loop exceeded the five-round safety limit.');
+}
+
+function nativeModelForTask(taskType) {
+  const task = String(taskType || 'general').toLowerCase();
+  if (task === 'coding') return 'auto/best-coding';
+  if (task === 'research' || task === 'planning') return 'auto/best-reasoning';
+  return 'auto/best-fast';
+}
+
+async function chooseModel(_intelligence, requested, taskType) {
+  const wanted = String(requested || '').trim();
+  if (wanted && integrations.isDirectProviderModel(wanted)) return { model: wanted, mode: 'direct' };
+  return { model: nativeModelForTask(taskType), mode: 'routing' };
+}
+
+async function handle(message, options = {}) {
+  const userMessage = String(message || '').trim();
+  if (!userMessage) throw new Error('Message is required.');
+
+  const started = Date.now();
+  const taskType = options.taskType || 'general';
+  const previousConversation = Array.isArray(options.history) && options.history.length ? options.history : conversation.recent();
+
+  emit('task_started', { message: userMessage, taskType });
+  conversation.append('user', userMessage, { taskType });
+
+  const retrieved = memory.retrieve(userMessage, { limit: config.maxContextItems });
+  const commitments = workspace.listCommitments({ status: 'open' });
+  const decisions = workspace.listDecisions();
+  const projects = workspace.listProjects();
+
+  const captured = intent.extractCommitment(userMessage);
+  if (captured) {
+    const commitment = workspace.createCommitment({ title: captured.title, priority: captured.priority, project: intent.extractProject(userMessage) });
+    emit('commitment_created', { commitment });
+  }
+
+  let intelligence = { live: { models: [], count: 0 }, observed: [] };
+  try { intelligence = await models.intelligence(taskType); }
+  catch (error) {
+    emit('model_catalog_unavailable', { error: error.message });
+    if (config.omniRouteStrict) throw error;
+  }
+
+  const plan = planner.createPlan(userMessage, taskType);
+  emit('plan_created', { taskType, plan });
+  emit('context_ready', { memoryCount: retrieved.length, commitments: commitments.length, projectCount: projects.length });
+
+  const githubPath = explicitGitHubPrompt(userMessage);
+  if (githubPath) {
+    emit('tool_started', { tool: 'github_read_file', input: { path: githubPath, ref: config.githubBranch } });
+    const file = await integrations.githubReadFile(githubPath, config.githubBranch);
+    emit('tool_completed', { tool: 'github_read_file', result: { path: file.path, sha: file.sha, size: file.size } });
+    const response = `I inspected ${file.path} on GitHub (${file.sha.slice(0, 7)}).\n\n${file.content.slice(0, 12000)}`;
+    verifier.report(verifier.verifyText(response), 'github-read-response');
+    conversation.append('assistant', response, { model: 'deterministic-github', taskType });
+    memory.remember({ type: 'episodic', content: `GitHub file inspected: ${githubPath}`, source: 'tool', project: 'ULTRON Mark 3', importance: 0.35 });
+    emit('response_ready', { model: 'deterministic-github', taskType });
+    void voice.enqueue(response);
+    emit('task_completed', { durationMs: Date.now() - started });
+    return { ok: true, response, text: response, model: 'deterministic-github', taskType, plan, tool: 'github_read_file', sha: file.sha, modelIntelligence: intelligence };
+  }
+
+  const selection = await chooseModel(intelligence, options.model || '', taskType);
+  const selectedModel = selection.model;
+  const selectedProvider = integrations.providerFromModel(selectedModel);
+  emit('model_selection', { availableModels: intelligence.live.count, selectedModel, mode: selection.mode, provider: selectedProvider });
+
+  const messages = [
+    {
+      role: 'system',
+      content: `${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute routing with blocked providers excluded and automatic fallback enabled.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\n\n${contextBlock(userMessage, retrieved, commitments, decisions, projects, intelligence, previousConversation)}`,
+    },
+    ...previousConversation.slice(-10).map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
+    { role: 'user', content: userMessage },
+  ];
+
+  emit('model_started', { taskType, model: selectedModel, mode: selection.mode, provider: selectedProvider });
+  let loop;
+  try {
+    loop = await modelToolLoop(messages, selectedModel, taskType);
+  } catch (error) {
+    models.record({ provider: selectedProvider, model: selectedModel, taskType, success: false, latencyMs: Date.now() - started, reason: error.message });
+    emit('model_failed', { taskType, model: selectedModel, provider: selectedProvider, error: error.message });
+    throw error;
+  }
+
+  const data = loop.data;
+  const text = textFromResponse(data);
+  const checked = verifier.report(verifier.verifyText(text), 'model-response');
+  if (!checked.ok) throw new Error('Model returned an empty response.');
+
+  const observedModel = data?.model || data?.raw?.model || selectedModel;
+  const observedProvider = data?.provider || data?.raw?.provider || integrations.providerFromModel(observedModel) || selectedProvider;
+  models.record({ provider: observedProvider, model: observedModel, taskType, success: true, latencyMs: Date.now() - started });
+  conversation.append('assistant', text, { model: observedModel, provider: observedProvider, taskType, mode: selection.mode });
+  memory.remember({ type: 'episodic', content: `Completed ${taskType} task using ${observedModel}.`, source: 'model', project: intent.extractProject(userMessage), importance: 0.25 });
+  emit('response_ready', { model: observedModel, taskType, provider: observedProvider, mode: selection.mode });
+  void voice.enqueue(text);
+  emit('task_completed', { durationMs: Date.now() - started });
+
+  return {
+    ok: true,
+    response: text,
+    text,
+    model: observedModel,
+    provider: observedProvider,
+    taskType,
+    mode: selection.mode,
+    plan,
+    modelIntelligence: intelligence,
+    toolRounds: loop.rounds,
+  };
+}
+
+module.exports = { handle, BASE_SYSTEM };
