@@ -64,122 +64,69 @@ async function models() {
 }
 function payloadModelEntries(payload) {
   const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-  return raw.map((item) => typeof item === 'string'
-    ? { id: item.trim(), raw: { id: item.trim() } }
-    : { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item }).filter((item) => item.id);
+  return raw.map((item) => typeof item === 'string' ? { id: item.trim(), raw: { id: item.trim() } } : { id: String(item?.id || item?.model || item?.name || '').trim(), raw: item }).filter((item) => item.id);
 }
 function payloadModels(payload) { return [...new Set(payloadModelEntries(payload).map((item) => item.id))]; }
-
-async function concreteModels(limit = 36, options = {}) {
+async function concreteModels(limit = 36) {
   const raw = await parentRouter.listModels({ force: false });
-  const entries = raw.map((id) => ({ id: String(id).trim(), raw: { id: String(id).trim() } })).filter((entry) => isDirectProviderModel(entry.id));
-  return entries.slice(0, Math.max(1, Number(limit) || 36));
+  return raw.map((id) => ({ id: String(id).trim(), raw: { id: String(id).trim() } })).filter((entry) => isDirectProviderModel(entry.id)).slice(0, Math.max(1, Number(limit) || 36));
 }
-async function concreteModel(options = {}) { return (await concreteModels(1, options))[0]?.id || ''; }
-
-async function resolveModel(requestedModel = 'auto', taskType = 'general') {
-  return parentRouter.resolveModel(requestedModel, taskType);
-}
+async function concreteModel() { return (await concreteModels(1))[0]?.id || ''; }
+async function resolveModel(requestedModel = 'auto', taskType = 'general') { return parentRouter.resolveModel(requestedModel, taskType); }
 
 async function chat(messages, model = 'auto', tools = null, options = {}) {
-  return parentRouter.chat({
-    messages,
-    model: model || 'auto',
-    taskType: options.taskType || 'general',
-    tools,
-  });
+  return parentRouter.chat({ messages, model: model || 'auto', taskType: options.taskType || 'general', tools });
 }
-
 async function streamChat(messages, model = 'auto', tools = null, options = {}) {
-  return parentRouter.streamChat({
-    messages,
-    model: model || 'auto',
-    taskType: options.taskType || 'general',
-    tools,
-    onDelta: options.onDelta,
-    firstTokenTimeoutMs: options.firstTokenTimeoutMs,
-  });
+  return parentRouter.streamChat({ messages, model: model || 'auto', taskType: options.taskType || 'general', tools, onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
-
-async function chatExact(messages, model, tools) {
-  return chat(messages, model, tools, { taskType: 'general' });
-}
-
+async function chatExact(messages, model, tools) { return chat(messages, model, tools, { taskType: 'general' }); }
 async function health() { return parentRouter.health(); }
 function providerHealthSnapshot() { return []; }
 
 async function speak(text) {
-  const key = await resolveOmniRouteApiKey();
-  const headers = { 'Content-Type': 'application/json' };
-  if (key) headers['X-ULTRON-OMNIROUTE-KEY'] = key;
-  return parentRouter.isConfigured
-    ? (async () => {
-        const response = await fetch(`${config.parentCore}/api/tts`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ text, format: 'mp3', volume: 2 }),
-        });
-        const raw = await response.text();
-        let data = {};
-        try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
-        if (!response.ok) {
-          const error = new Error(`ULTRON TTS HTTP ${response.status}: ${String(raw).slice(0, 1200)}`);
-          error.status = response.status;
-          throw error;
-        }
-        return data;
-      })()
-    : { ok: false };
+  const response = await fetch(`${config.parentCore}/api/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, provider: 'fish-audio-s2.1-pro-free', format: 'mp3', volume: 2 }),
+  });
+  const raw = await response.text();
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+  if (!response.ok) {
+    const error = new Error(`ULTRON TTS HTTP ${response.status}: ${String(raw).slice(0, 1200)}`);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
 }
 
-module.exports = {
-  requestJson: async (url, options = {}, timeoutMs = 30000) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(url, { ...(options || {}), signal: controller.signal });
-      const text = await response.text();
-      let data = {};
-      try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
-      if (!response.ok) { const error = new Error(`HTTP ${response.status}: ${text.slice(0, 2500)}`); error.status = response.status; error.body = data; throw error; }
-      return data;
-    } finally { clearTimeout(timer); }
-  },
-  resolveOmniRouteApiKey,
-  githubReadFile: async (pathname, ref) => {
-    if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
-    const useRef = ref || config.githubBranch;
-    const url = `https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents/${String(pathname || '').split('/').filter(Boolean).map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(useRef)}`;
-    const data = await module.exports.requestJson(url, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
-    if (data.type !== 'file' || !data.content) throw new Error(`GitHub path is not a readable file: ${pathname}`);
-    return { path: pathname, ref: useRef, sha: data.sha, content: Buffer.from(String(data.content).replace(/\r?\n/g, ''), 'base64').toString('utf8'), size: Number(data.size) || 0 };
-  },
-  githubList: async (pathname = '', ref) => {
-    if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
-    const useRef = ref || config.githubBranch;
-    const suffix = pathname ? '/' + String(pathname).split('/').filter(Boolean).map(encodeURIComponent).join('/') : '';
-    return module.exports.requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
-  },
-  models,
-  payloadModels,
-  payloadModelEntries,
-  resolveModel,
-  isRoutingAlias,
-  isDevinModel,
-  isBigPickle,
-  isDirectProviderModel,
-  providerFromModel,
-  classifyProviderError,
-  isProviderCredentialError,
-  isPaidModelError,
-  isRetryableCandidateError,
-  concreteModels,
-  concreteModel,
-  chatExact,
-  chat,
-  streamChat,
-  health,
-  providerHealthSnapshot,
-  speak,
-  PROVIDER_PRIORITY: ['nvidia', 'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'opencode', 'pollinations', 'zenmux', 'bytez', 'vertex'],
-};
+async function requestJson(url, options = {}, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...(options || {}), signal: controller.signal });
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+    if (!response.ok) { const error = new Error(`HTTP ${response.status}: ${text.slice(0, 2500)}`); error.status = response.status; error.body = data; throw error; }
+    return data;
+  } finally { clearTimeout(timer); }
+}
+
+async function githubReadFile(pathname, ref) {
+  if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
+  const useRef = ref || config.githubBranch;
+  const url = `https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents/${String(pathname || '').split('/').filter(Boolean).map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(useRef)}`;
+  const data = await requestJson(url, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
+  if (data.type !== 'file' || !data.content) throw new Error(`GitHub path is not a readable file: ${pathname}`);
+  return { path: pathname, ref: useRef, sha: data.sha, content: Buffer.from(String(data.content).replace(/\r?\n/g, ''), 'base64').toString('utf8'), size: Number(data.size) || 0 };
+}
+async function githubList(pathname = '', ref) {
+  if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
+  const useRef = ref || config.githubBranch;
+  const suffix = pathname ? '/' + String(pathname).split('/').filter(Boolean).map(encodeURIComponent).join('/') : '';
+  return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
+}
+
+module.exports = { requestJson, resolveOmniRouteApiKey, githubReadFile, githubList, models, payloadModels, payloadModelEntries, resolveModel, isRoutingAlias, isDevinModel, isBigPickle, isDirectProviderModel, providerFromModel, classifyProviderError, isProviderCredentialError, isPaidModelError, isRetryableCandidateError, concreteModels, concreteModel, chatExact, chat, streamChat, health, providerHealthSnapshot, speak, PROVIDER_PRIORITY: ['nvidia', 'chipotle', 'duckduckgo-web', 'felo-web', 'theoldllm', 'uncloseai', 'cloudflare-playground', 'codex-app-server', 'auggie', 'zcode', 'gemini-cli', 'kiro', 'qoder', 'qwen', 'github-copilot', 'opencode', 'pollinations', 'zenmux', 'bytez', 'vertex'] };
