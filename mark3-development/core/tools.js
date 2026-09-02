@@ -10,7 +10,8 @@ const githubSchemas = [
 ];
 
 const webSchemas = [
-  { type:'function', function:{ name:'web_fetch', description:'Fetch readable text from a public HTTP/HTTPS web page. Use when the user supplies a URL or asks to inspect a specific public page.', parameters:{ type:'object', properties:{ url:{type:'string'} }, required:['url'] } } },
+  { type:'function', function:{ name:'web_fetch', description:'Fetch clean readable content from a public URL. TinyFish Fetch is primary and direct HTTP is fallback.', parameters:{ type:'object', properties:{ url:{type:'string'} }, required:['url'] } } },
+  { type:'function', function:{ name:'web_search', description:'Search the live web through TinyFish Search and return structured current results.', parameters:{ type:'object', properties:{ query:{type:'string'}, limit:{type:'number'} }, required:['query'] } } },
 ];
 
 const schemas = [...githubSchemas, ...webSchemas];
@@ -22,6 +23,7 @@ function assertToken(){if(!config.githubToken)throw new Error('GITHUB_TOKEN is n
 async function execute(name,input={}){
   const ref=input.ref||config.githubBranch;
   if(name==='web_fetch')return{ok:true,tool:name,result:await web.fetchPage(input.url)};
+  if(name==='web_search')return{ok:true,tool:name,result:await web.searchWeb(input.query,{limit:input.limit||5})};
   if(name==='github_read_file')return{ok:true,tool:name,result:await integrations.githubReadFile(input.path,ref)};
   if(name==='github_list')return{ok:true,tool:name,result:await integrations.githubList(input.path||'',ref)};
   if(name==='github_create_file'){assertToken();const url=`https://api.github.com/repos/${config.githubOwner}/${config.githubRepo}/contents/${String(input.path||'').split('/').map(encodeURIComponent).join('/')}`;const res=await integrations.jsonRequest(url,{method:'PUT',headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',Authorization:`Bearer ${config.githubToken}`},body:JSON.stringify({message:`feat(mark3): create ${input.path}`,content:Buffer.from(String(input.content||''),'utf8').toString('base64'),branch:ref})},30000);const verify=await integrations.githubReadFile(input.path,ref);if(verify.content!==String(input.content||''))throw new Error('GitHub create verification failed.');return{ok:true,tool:name,result:{path:input.path,sha:verify.sha,verified:true,commit:res.commit?.sha||null}};}
