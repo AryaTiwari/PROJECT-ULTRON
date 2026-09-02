@@ -48,6 +48,9 @@ if (conversation.contextFor('www.elevateos.in', fakeHistory).length !== 2) throw
 if (conversation.contextFor('Explain quantum tunneling', fakeHistory).length !== 0) throw new Error('Unrelated new topics must not inherit old conversation context.');
 if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw new Error('Web URL normalization invariant failed.');
 if (web.extractFirstUrl('Review www.elevateos.in please') !== 'www.elevateos.in') throw new Error('Web URL extraction invariant failed.');
+const elevateVariants = web.urlVariants('www.elevateos.in');
+if (elevateVariants.length !== 2 || elevateVariants[1].hostname !== 'elevateos.in') throw new Error('WWW URLs must generate an apex-domain retry for remote web fetching.');
+if (!web.status().remoteDns || !web.status().canonicalHostRetry) throw new Error('TinyFish must remain remote-DNS-first with canonical host retry enabled.');
 if (!web.shouldSearch('Search the web for the latest Gemini updates')) throw new Error('Explicit live-web search intent must trigger TinyFish Search.');
 if (web.shouldSearch('Explain how transformers work')) throw new Error('Evergreen questions must not trigger unnecessary web search.');
 if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must remain the primary web provider.');
