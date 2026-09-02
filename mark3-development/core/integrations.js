@@ -36,9 +36,10 @@ function isDevinModel(id) {
   return /(^|[\\/_-])(dva|devin|agentic|bridge)([\\/_-]|$)/i.test(value);
 }
 function isBigPickle(id) { return /big[-_ ]?pickle/i.test(String(id || '')); }
+const FREE_OPENCODE_MODELS = new Set(['big-pickle','mimo-v2.5-free','hy3-free','nemotron-3-ultra-free','nemotron-3.5-lightning-free','x-preview-f-free','muse-spark-1.2-contributor-free']);
 function isOpenCodeModel(id) {
   const value = String(id || '').trim().toLowerCase();
-  return value === 'opencode' || value.startsWith('opencode/') || value.startsWith('opencode-go/') || value.startsWith('oc/') || value.includes('big-pickle') || value.includes('big_pickle') || value.includes('big pickle');
+  return value === 'opencode' || value.startsWith('opencode/') || value.startsWith('opencode-go/') || value.startsWith('oc/') || value.includes('big-pickle') || value.includes('big_pickle') || value.includes('big pickle') || FREE_OPENCODE_MODELS.has(value);
 }
 function isDirectProviderModel(id) {
   const value = String(id || '').trim();
