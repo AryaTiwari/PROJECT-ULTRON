@@ -11,6 +11,8 @@ const required = [
   'core/memory.js',
   'core/workspace.js',
   'core/model-intelligence.js',
+  'core/model-league.js',
+  'core/model-arena.js',
   'core/provider-registry.js',
   'core/model-router.js',
   'core/planner.js',
@@ -94,11 +96,18 @@ if (/message\.reasoning_content|delta\.reasoning_content/.test(omniTransport)) {
 
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
+const router = require('../core/model-router');
+const league = require('../core/model-league');
+const arena = require('../core/model-arena');
 const conversation = require('../core/conversation');
 const web = require('../core/web');
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
+if (!config.modelLeaguePath.startsWith(config.dataDir)) throw new Error('Model League state must live under Mark 3 data.');
 if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''))) throw new Error('Experimental browser/CLI providers must be disabled by default.');
+if (typeof router.chatExact !== 'function' || typeof router.streamExact !== 'function' || typeof router.listNativeEligibleModels !== 'function') throw new Error('Model League requires exact-model router primitives.');
+if (typeof league.recommend !== 'function' || typeof league.selectParticipants !== 'function') throw new Error('Adaptive Model League API is incomplete.');
+if (typeof arena.runTournament !== 'function' || typeof arena.start !== 'function') throw new Error('Model Arena API is incomplete.');
 if (conversation.contextFor('hey ultron', [{ role:'assistant', content:'Old unrelated task' }]).length) throw new Error('Greeting context isolation invariant failed.');
 if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw new Error('Public web URL normalization invariant failed.');
 if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must be the primary Mark 3 web provider.');
