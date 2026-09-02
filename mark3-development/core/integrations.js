@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const { load: loadCredentials } = require('../../core/credentials/local-store');
-const parentRouter = require('../../core/model-router');
+const parentRouter = require('./model-router');
 const omniRoute = require('../../core/omniroute');
 
 function readParentEnv(name) {
@@ -25,12 +25,12 @@ function payloadModelEntries(payload) { const raw=Array.isArray(payload?.data)?p
 function payloadModels(payload) { return [...new Set(payloadModelEntries(payload).map(item=>item.id))]; }
 async function concreteModels(limit=36) { return payloadModelEntries(await models()).filter(entry=>isDirectProviderModel(entry.id)).slice(0,Math.max(1,Number(limit)||36)); }
 async function concreteModel() { return (await concreteModels(1))[0]?.id||''; }
-async function selectMark2Model(model='auto', taskType='general') { const requested=String(model||'auto').trim(); const lower=requested.toLowerCase(); if(!requested||isRoutingAlias(requested)||isBigPickle(requested)||isOpenCodeModel(requested)||lower.startsWith('nvidia/')) return 'auto'; return requested; }
+async function selectMark2Model(model='auto', taskType='general') { return parentRouter.normalizeRequestedModel(model); }
 async function selectNonOpenCodeDirectModel() { return ''; }
 async function resolveModel(requestedModel='auto', taskType='general') { return selectMark2Model(requestedModel,taskType); }
-async function chat(messages,model='auto',tools=null,options={}) { return parentRouter.chat({messages,model:await selectMark2Model(model,options.taskType||'general'),tools,taskType:options.taskType||'general'}); }
-async function streamChat(messages,model='auto',tools=null,options={}) { return parentRouter.streamChat({messages,model:await selectMark2Model(model,options.taskType||'general'),tools,taskType:options.taskType||'general',onDelta:options.onDelta,firstTokenTimeoutMs:options.firstTokenTimeoutMs}); }
-async function chatExact(messages,model,tools) { return parentRouter.chat({messages,model:await selectMark2Model(model,'general'),tools}); }
+async function chat(messages,model='auto',tools=null,options={}) { return parentRouter.chat({messages,model,tools,taskType:options.taskType||'general'}); }
+async function streamChat(messages,model='auto',tools=null,options={}) { return parentRouter.streamChat({messages,model,tools,taskType:options.taskType||'general',onDelta:options.onDelta,firstTokenTimeoutMs:options.firstTokenTimeoutMs}); }
+async function chatExact(messages,model,tools) { return parentRouter.chat({messages,model,tools,taskType:'general'}); }
 async function health() { return parentRouter.health(); }
 function providerHealthSnapshot() { return []; }
 async function speak(text) { const response=await fetch(`${config.parentCore}/api/tts`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,provider:'fish-audio-s2.1-pro-free',format:'mp3',volume:2})}); const raw=await response.text(); let data={}; try{data=raw?JSON.parse(raw):{};}catch{data={raw};} if(!response.ok){const error=new Error(`ULTRON TTS HTTP ${response.status}: ${String(raw).slice(0,1200)}`);error.status=response.status;throw error;} return data; }
