@@ -37,6 +37,12 @@ function explicitGitHubPrompt(text) {
   return match ? match[1] : null;
 }
 
+function needsRepositoryTools(text, taskType) {
+  const value = String(text || '').toLowerCase();
+  if (String(taskType || '').toLowerCase() === 'coding' && /\b(repo|repository|github|codebase|branch|commit|file|source|project ultron|ultron)\b/.test(value)) return true;
+  return /\b(github|repository|repo|codebase|branch|commit|pull request|source file|edit file|update file|create file|delete file|project[- ]ultron)\b/.test(value);
+}
+
 function contextBlock(userMessage, retrieved, commitments, decisions, projects, modelIntelligence, recent) {
   return [
     'WORKING CONTEXT:',
@@ -59,12 +65,14 @@ function contextBlock(userMessage, retrieved, commitments, decisions, projects, 
   ].join('\n');
 }
 
-async function modelToolLoop(messages, model, taskType) {
+async function modelToolLoop(messages, model, taskType, toolSchemas = null) {
   let working = [...messages];
+  const schemas = Array.isArray(toolSchemas) && toolSchemas.length ? toolSchemas : null;
   for (let round = 0; round < 5; round += 1) {
-    const data = await integrations.chat(working, model, tools.schemas, { taskType });
+    const data = await integrations.chat(working, model, schemas, { taskType });
     const calls = toolCallsFromResponse(data);
     if (!calls.length) return { data, rounds: round };
+    if (!schemas) throw new Error('Model attempted a tool call when repository tools were not enabled for this request.');
 
     working.push({ role: 'assistant', content: textFromResponse(data) || null, tool_calls: calls });
     for (const call of calls) {
@@ -145,12 +153,13 @@ async function handle(message, options = {}) {
   const selection = await chooseModel(intelligence, options.model || '', taskType);
   const selectedModel = selection.model;
   const selectedProvider = integrations.providerFromModel(selectedModel);
-  emit('model_selection', { availableModels: intelligence.live.count, selectedModel, mode: selection.mode, provider: selectedProvider });
+  const repositoryToolsEnabled = needsRepositoryTools(userMessage, taskType);
+  emit('model_selection', { availableModels: intelligence.live.count, selectedModel, mode: selection.mode, provider: selectedProvider, repositoryToolsEnabled });
 
   const messages = [
     {
       role: 'system',
-      content: `${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute routing with blocked providers excluded and automatic fallback enabled.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\n\n${contextBlock(userMessage, retrieved, commitments, decisions, projects, intelligence, previousConversation)}`,
+      content: `${BASE_SYSTEM}\n\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute routing with blocked providers excluded and automatic fallback enabled.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled because this is ordinary conversation/non-repository work.'}\n\n${contextBlock(userMessage, retrieved, commitments, decisions, projects, intelligence, previousConversation)}`,
     },
     ...previousConversation.slice(-10).map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
     { role: 'user', content: userMessage },
@@ -159,7 +168,7 @@ async function handle(message, options = {}) {
   emit('model_started', { taskType, model: selectedModel, mode: selection.mode, provider: selectedProvider });
   let loop;
   try {
-    loop = await modelToolLoop(messages, selectedModel, taskType);
+    loop = await modelToolLoop(messages, selectedModel, taskType, repositoryToolsEnabled ? tools.schemas : null);
   } catch (error) {
     models.record({ provider: selectedProvider, model: selectedModel, taskType, success: false, latencyMs: Date.now() - started, reason: error.message });
     emit('model_failed', { taskType, model: selectedModel, provider: selectedProvider, error: error.message });
@@ -194,4 +203,4 @@ async function handle(message, options = {}) {
   };
 }
 
-module.exports = { handle, BASE_SYSTEM };
+module.exports = { handle, BASE_SYSTEM, needsRepositoryTools };
