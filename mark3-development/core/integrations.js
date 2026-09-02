@@ -92,6 +92,7 @@ function directProviderModel(provider) {
     groq: 'llama-3.3-70b-versatile',
     mistral: 'mistral-small-latest',
     xai: 'grok-4',
+    nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
   };
   return defaults[provider] ? `${provider}/${defaults[provider]}` : '';
 }
@@ -101,15 +102,18 @@ async function selectNonOpenCodeDirectModel() {
   if (envOverride && !isOpenCodeModel(envOverride) && !isBigPickle(envOverride) && directRouter.providerForModel(envOverride)) {
     const creds = await loadCredentials().catch(() => ({}));
     const provider = directRouter.providerForModel(envOverride);
-    if (creds?.[directRouter.PROVIDERS?.[provider]?.key] || process.env[directRouter.PROVIDERS?.[provider]?.key || '']) return envOverride;
+    const providerKey = directRouter.PROVIDERS?.[provider]?.key;
+    const aliasKey = provider === 'nvidia' ? 'NVIDIA_NIM_API_KEY' : '';
+    if (creds?.[providerKey] || creds?.[aliasKey] || process.env[providerKey] || (aliasKey && process.env[aliasKey])) return envOverride;
   }
 
   const saved = await loadCredentials().catch(() => ({}));
   const env = process.env;
-  const candidates = ['gemini', 'openai', 'anthropic', 'deepseek', 'groq', 'mistral', 'xai'];
+  const candidates = ['nvidia', 'gemini', 'openai', 'anthropic', 'deepseek', 'groq', 'mistral', 'xai'];
   for (const provider of candidates) {
     const key = directRouter.PROVIDERS?.[provider]?.key;
-    if (key && String(saved?.[key] || env[key] || '').trim()) return directProviderModel(provider);
+    const aliasKey = provider === 'nvidia' ? 'NVIDIA_NIM_API_KEY' : '';
+    if (key && String(saved?.[key] || saved?.[aliasKey] || env[key] || (aliasKey && env[aliasKey]) || '').trim()) return directProviderModel(provider);
   }
   return '';
 }
