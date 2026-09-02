@@ -5,8 +5,10 @@ const intelligence = require('../core/model-intelligence');
   try {
     const catalog = await integrations.models();
     const ids = integrations.payloadModels(catalog);
+    const blocked = ids.filter(integrations.isBigPickle);
     const usable = ids.filter(integrations.isDirectProviderModel);
-    console.log(`OmniRoute /v1/models: PASS (${ids.length} catalog entries returned).`);
+    console.log(`OmniRoute /v1/models: PASS (${ids.length} eligible catalog entries returned).`);
+    console.log(`Big Pickle entries blocked by Mark 3 policy: ${blocked.length}.`);
     console.log(`Direct provider models available: ${usable.length}.`);
     if (!usable.length) throw new Error('No usable direct-provider OmniRoute models are available.');
 
@@ -14,22 +16,22 @@ const intelligence = require('../core/model-intelligence');
     console.log(`Mark 3 eligible models after policy filtering: ${live.count}.`);
     console.log(`Devin/DVA excluded: ${live.devinExcludedCount || 0}.`);
     if (live.providerCounts) console.log(`Provider counts: ${Object.entries(live.providerCounts).map(([provider, count]) => `${provider}=${count}`).join(', ')}`);
-    console.log(`Probe order: ${(integrations.PROVIDER_PRIORITY || []).join(' -> ')}`);
-    console.log(`Candidate pool: ${live.models.slice(0, 12).join(', ')}`);
 
-    const result = await integrations.chat([
-      { role: 'system', content: 'Reply with exactly: OMNIROUTE_OK' },
-      { role: 'user', content: 'Reply with exactly: OMNIROUTE_OK' },
-    ], null, null);
+    const result = await integrations.chat(
+      [{ role: 'system', content: 'Reply with exactly: OMNIROUTE_OK' }, { role: 'user', content: 'Reply with exactly: OMNIROUTE_OK' }],
+      null,
+      null,
+    );
     const content = result?.choices?.[0]?.message?.content || result?.response || result?.text || '';
     const used = String(result?.model || result?.__ultron?.model || '').trim();
     const provider = String(result?.__ultron?.provider || integrations.providerFromModel(used) || '').trim();
     if (!String(content).trim()) throw new Error('OmniRoute chat returned no usable text.');
+    if (integrations.isBigPickle(used)) throw new Error(`Big Pickle selected at runtime: ${used}`);
     if (!integrations.isDirectProviderModel(used)) throw new Error(`OmniRoute returned an ineligible model ID: ${used || '(missing)'}`);
     if (live.models.length && !live.models.includes(used)) throw new Error(`Runtime selected a model outside the Mark 3 eligible catalog: ${used}`);
     console.log(`OmniRoute /v1/chat/completions: PASS (provider=${provider}, model=${used}).`);
     console.log(`Live response: ${String(content).trim().slice(0, 120)}`);
-    console.log(`Provider probe health: ${JSON.stringify(integrations.providerHealthSnapshot())}`);
+    console.log('Big Pickle policy: PASS (blocked).');
     console.log('OmniRoute provider-only end-to-end test: PASS.');
   } catch (error) {
     console.error(`OmniRoute end-to-end test: FAIL: ${error.message}`);
