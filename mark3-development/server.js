@@ -6,6 +6,7 @@ const assistant = require('./core/assistant');
 const memory = require('./core/memory');
 const workspace = require('./core/workspace');
 const models = require('./core/model-intelligence');
+const modelArena = require('./core/model-arena');
 const integrations = require('./core/integrations');
 const web = require('./core/web');
 const voice = require('./core/voice-orchestrator');
@@ -15,6 +16,7 @@ const proactive = require('./core/proactive');
 const webRoot = path.join(config.root, 'interface');
 const audioRoot = path.resolve(config.voiceOutputDir);
 const sseClients = new Set();
+const leagueEnabled = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_LEAGUE_ENABLED || '1'));
 
 fs.mkdirSync(audioRoot, { recursive: true });
 subscribe((event) => {
@@ -85,7 +87,7 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'OPTIONS') return send(res,204,'');
     if (req.method === 'GET' && req.url === '/api/health') {
       const router = await integrations.health();
-      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.12', inference:router, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
+      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.13', inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
     }
     if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
     if (req.method === 'POST' && req.url === '/api/web/fetch') {
@@ -100,12 +102,19 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method === 'GET' && req.url === '/api/state') return send(res,200,{ ok:true, memory:memory.snapshot(), commitments:workspace.listCommitments({status:'open'}), projects:workspace.listProjects(), decisions:workspace.listDecisions() });
     if (req.method === 'GET' && req.url === '/api/models') return send(res,200,{ ok:true, ...(await models.intelligence()) });
+    if (req.method === 'GET' && req.url === '/api/models/league') return send(res,200,{ok:true,enabled:leagueEnabled,...modelArena.status()});
+    if (req.method === 'POST' && req.url === '/api/models/league/calibrate') {
+      if (!leagueEnabled) return send(res,409,{ok:false,error:'Model League is disabled.'});
+      const data = await body(req);
+      const result = await modelArena.runTournament(String(data.taskType || 'general'), { participants:data.participants, forceCatalog:true });
+      return send(res,result.ok?200:409,result);
+    }
     if (req.method === 'GET' && req.url === '/api/providers') return send(res,200,{ ok:true, ...(await integrations.providerHealthSnapshot()) });
     if (req.method === 'GET' && req.url === '/api/diagnostics/omniroute') {
       let catalog=null,catalogError=null;
       try { catalog=await models.catalog(); } catch(error) { catalogError=error instanceof Error?error.message:String(error); }
       const router=await integrations.health();
-      return send(res,router.ok?200:503,{ ok:Boolean(router.ok), endpoint:config.omnirouteBase, router, providers:await integrations.providerHealthSnapshot(), catalog, catalogError, credential:{ envConfigured:Boolean(config.omnirouteEndpointKey), resolved:Boolean(await integrations.resolveOmniRouteApiKey()) } });
+      return send(res,router.ok?200:503,{ ok:Boolean(router.ok), endpoint:config.omnirouteBase, router, providers:await integrations.providerHealthSnapshot(), modelLeague:modelArena.status(), catalog, catalogError, credential:{ envConfigured:Boolean(config.omnirouteEndpointKey), resolved:Boolean(await integrations.resolveOmniRouteApiKey()) } });
     }
     if (req.method === 'GET' && req.url === '/api/voice/status') return send(res,200,{ok:true,...voice.status()});
     if (req.method === 'POST' && req.url === '/api/voice/enabled') {
@@ -139,4 +148,10 @@ const server = http.createServer(async (req,res) => {
     try{res.end();}catch{}
   }
 });
-server.listen(config.port,config.host,()=>console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`));
+server.listen(config.port,config.host,()=>{
+  console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`);
+  if (leagueEnabled) {
+    modelArena.start();
+    console.log('[Mark 3] Model League enabled: adaptive primary + ranked backups; arena calibration scheduled.');
+  }
+});
