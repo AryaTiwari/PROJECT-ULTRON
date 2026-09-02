@@ -88,6 +88,16 @@ const server = http.createServer(async (req,res) => {
       return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.9', inference:router, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
     }
     if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
+    if (req.method === 'POST' && req.url === '/api/web/fetch') {
+      const data = await body(req);
+      const page = await web.fetchPage(String(data.url || ''));
+      return send(res,200,{ok:true,url:page.url,title:page.title,status:page.status,provider:page.provider,chars:page.text.length,truncated:page.truncated,primaryError:page.primaryError||null,preview:page.text.slice(0,1200)});
+    }
+    if (req.method === 'POST' && req.url === '/api/web/search') {
+      const data = await body(req);
+      const result = await web.searchWeb(String(data.query || ''),{limit:data.limit||5});
+      return send(res,200,{ok:true,...result});
+    }
     if (req.method === 'GET' && req.url === '/api/state') return send(res,200,{ ok:true, memory:memory.snapshot(), commitments:workspace.listCommitments({status:'open'}), projects:workspace.listProjects(), decisions:workspace.listDecisions() });
     if (req.method === 'GET' && req.url === '/api/models') return send(res,200,{ ok:true, ...(await models.intelligence()) });
     if (req.method === 'GET' && req.url === '/api/providers') return send(res,200,{ ok:true, ...(await integrations.providerHealthSnapshot()) });
