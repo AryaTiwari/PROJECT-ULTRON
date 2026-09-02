@@ -76,10 +76,26 @@ function policyAllows(provider) {
 function stateTemplate() { return { version: 2, providers: {}, models: {}, updatedAt: null }; }
 function loadState() {
   const state = readJson(config.providerHealthPath, stateTemplate());
-  if (!state || typeof state !== 'object') return stateTemplate();
+  if (!state || typeof state !== 'object' || state.version !== 2) return stateTemplate();
   state.providers ||= {}; state.models ||= {}; return state;
 }
-function saveState(state) { state.updatedAt = new Date().toISOString(); writeJsonAtomic(config.providerHealthPath, state); }
+function saveState(state) { state.version = 2; state.updatedAt = new Date().toISOString(); writeJsonAtomic(config.providerHealthPath, state); }
+function resetTransientHealth() {
+  const state = loadState();
+  for (const provider of Object.values(state.providers)) {
+    provider.disabledUntil = null;
+    provider.lastFailureKind = null;
+    provider.lastFailureMessage = null;
+    if (provider.healthyModel) provider.status = 'healthy'; else provider.status = 'unknown';
+  }
+  for (const model of Object.values(state.models)) {
+    model.disabledUntil = null;
+    model.lastFailureKind = null;
+    model.lastFailureMessage = null;
+    if (model.lastSuccessAt) model.status = 'healthy'; else model.status = 'unknown';
+  }
+  saveState(state);
+}
 function activeUntil(entry) {
   const until = Date.parse(entry?.disabledUntil || '');
   return Number.isFinite(until) && until > Date.now() ? until : 0;
@@ -141,7 +157,6 @@ async function buildCandidates(catalog, requestedModel = 'auto', taskType = 'gen
     const unconfiguredPenalty = def.tier === 'api' && !credentialDetected && !recentSuccess ? 250 : 0;
     return {
       provider,
-      def,
       health,
       recentSuccess,
       credentialDetected,
@@ -197,4 +212,4 @@ async function snapshot(catalog = []) {
   };
 }
 
-module.exports = { PROVIDERS, providerFromModel, isBlockedModel, isNonChatModel, policyAllows, buildCandidates, recordSuccess, recordFailure, snapshot, credentialSnapshot };
+module.exports = { PROVIDERS, providerFromModel, isBlockedModel, isNonChatModel, policyAllows, buildCandidates, recordSuccess, recordFailure, resetTransientHealth, snapshot, credentialSnapshot };
