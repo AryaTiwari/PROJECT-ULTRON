@@ -13,7 +13,12 @@ const LOG_FILE = path.join(LOG_DIR, 'mark3-omniroute.log');
 const LOCK_FILE = path.join(LOG_DIR, 'mark3-omniroute.lock');
 const ENTRY = path.join(OMNI_DIR, 'scripts', 'dev', 'run-next.mjs');
 const MEMORY_MB = Number(process.env.OMNIROUTE_MEMORY_MB || 4096);
-const TURBOPACK = process.env.OMNIROUTE_USE_TURBOPACK || '1';
+// Turbopack can create a noisy child-process tree on Windows. OmniRoute documents
+// webpack as the Windows fallback, so keep Mark 3 quiet/stable there while still
+// allowing the existing environment override on non-Windows systems.
+const TURBOPACK = process.platform === 'win32'
+  ? '0'
+  : (process.env.OMNIROUTE_USE_TURBOPACK || '1');
 
 function isOpen(host, port) {
   return new Promise((resolve) => {
