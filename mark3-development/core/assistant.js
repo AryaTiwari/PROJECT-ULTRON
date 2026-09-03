@@ -8,6 +8,7 @@ const verifier = require('./verifier');
 const integrations = require('./integrations');
 const tools = require('./tools');
 const web = require('./web');
+const codingBrain = require('./coding-brain');
 const voice = require('./voice-orchestrator');
 const conversation = require('./conversation');
 const intent = require('./intent');
@@ -278,6 +279,31 @@ async function handle(message, options = {}) {
     void voice.enqueue(response);
     emit('task_completed', { durationMs: Date.now() - started, inputMode });
     return { ok: true, response, text: response, model: 'deterministic-github', taskType, inputMode, plan, tool: 'github_read_file', sha: file.sha };
+  }
+
+  if (codingBrain.shouldUse(userMessage, taskType)) {
+    const codingMode = codingBrain.modeFor(userMessage);
+    const codingWorkspace = codingBrain.resolveWorkspace(userMessage, options.codingWorkspace);
+    emit('coding_brain_probe', { mode: codingMode, workspace: codingWorkspace, taskType });
+    const brainHealth = await codingBrain.health();
+    if (brainHealth.ok) {
+      emit('coding_brain_started', { mode: codingMode, workspace: codingWorkspace, taskType });
+      try {
+        const codingResult = await codingBrain.run(userMessage, { mode: codingMode, workspace: codingWorkspace });
+        for (const stage of Array.isArray(codingResult.trace) ? codingResult.trace : []) emit('coding_brain_stage', stage);
+        const response = codingBrain.summarize(codingResult);
+        conversation.append('assistant', response, { model: 'coding-brain', provider: 'ultron-cortex', taskType: 'coding', mode: codingMode, inputMode });
+        emit('coding_brain_completed', { mode: codingMode, workspace: codingWorkspace, changedFiles: codingResult.changedFiles || [], validation: codingResult.validation?.status || null, review: codingResult.review?.verdict || null });
+        emit('response_ready', { model: 'coding-brain', provider: 'ultron-cortex', taskType: 'coding', mode: codingMode, inputMode });
+        void voice.enqueue(response);
+        emit('task_completed', { durationMs: Date.now() - started, inputMode });
+        return { ok: Boolean(codingResult.ok), response, text: response, model: 'coding-brain', provider: 'ultron-cortex', taskType: 'coding', mode: codingMode, inputMode, plan, coding: codingResult, toolRounds: 0 };
+      } catch (error) {
+        emit('coding_brain_failed', { mode: codingMode, workspace: codingWorkspace, error: error.message });
+      }
+    } else {
+      emit('coding_brain_unavailable', { url: brainHealth.url, error: brainHealth.error || brainHealth.reason || 'offline' });
+    }
   }
 
   let fetchedPage = null;
