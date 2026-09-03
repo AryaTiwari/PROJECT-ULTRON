@@ -7,6 +7,7 @@ let managedChild = null;
 let startupPromise = null;
 let runtimeDir = null;
 let lastStartError = null;
+let startOnNextHealth = false;
 
 function enabled() {
   return config.codingBrainEnabled;
@@ -18,8 +19,9 @@ function shouldUse(message, taskType) {
   const task = String(taskType || '').toLowerCase();
   const action = /\b(?:fix|implement|add|change|update|modify|edit|refactor|remove|delete|create|build|debug|investigate|inspect|review|test|repair|optimi[sz]e)\b/.test(text);
   const codeSignal = /\b(?:repo|repository|codebase|source|branch|commit|file|function|class|component|server|api|endpoint|route|website|app|interface|frontend|backend|database|module|service|feature|screen|page|project|ultron|elevate|bug|code)\b/.test(text);
-  if (task === 'coding') return action;
-  return action && codeSignal;
+  const selected = task === 'coding' ? action : action && codeSignal;
+  if (selected) startOnNextHealth = true;
+  return selected;
 }
 
 function modeFor(message) {
@@ -116,7 +118,7 @@ function brainPort() {
   }
 }
 
-async function health() {
+async function rawHealth() {
   if (!enabled()) return { ok: false, enabled: false, reason: 'disabled', url: config.codingBrainUrl, managed: false };
   try {
     const data = await request(`${config.codingBrainUrl}/health`, {}, Math.min(1500, config.codingBrainTimeoutMs));
@@ -134,6 +136,7 @@ async function health() {
       url: config.codingBrainUrl,
       managed: Boolean(managedChild && !managedChild.killed),
       runtimeDir: runtimeDir || findRuntimeDir(),
+      standby: config.codingBrainAutoStart,
       error: error.message,
       lastStartError,
     };
@@ -144,7 +147,7 @@ async function waitUntilHealthy(timeoutMs = config.codingBrainStartupTimeoutMs) 
   const started = Date.now();
   let last = null;
   while (Date.now() - started < timeoutMs) {
-    last = await health();
+    last = await rawHealth();
     if (last.ok) return last;
     if (managedChild && managedChild.exitCode !== null) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -154,7 +157,7 @@ async function waitUntilHealthy(timeoutMs = config.codingBrainStartupTimeoutMs) 
 
 async function startManagedRuntime() {
   if (!enabled()) throw new Error('Coding Brain is disabled.');
-  const current = await health();
+  const current = await rawHealth();
   if (current.ok) return current;
   if (!config.codingBrainAutoStart) throw new Error('Coding Brain is offline and auto-start is disabled.');
   if (startupPromise) return startupPromise;
@@ -167,14 +170,12 @@ async function startManagedRuntime() {
       fs.mkdirSync(logDir, { recursive: true });
       const logPath = path.join(logDir, 'coding-brain.log');
       const log = fs.openSync(logPath, 'a');
-      const host = '127.0.0.1';
-      const port = brainPort();
       managedChild = spawn(process.execPath, [serverFile], {
         cwd: runtimeDir,
         env: {
           ...process.env,
-          ULTRON_CODING_BRAIN_HOST: host,
-          ULTRON_CODING_BRAIN_PORT: String(port),
+          ULTRON_CODING_BRAIN_HOST: '127.0.0.1',
+          ULTRON_CODING_BRAIN_PORT: String(brainPort()),
           ULTRON_MARK3_URL: `http://127.0.0.1:${config.port}`,
         },
         windowsHide: true,
@@ -201,9 +202,22 @@ async function startManagedRuntime() {
 }
 
 async function ensureRunning() {
-  const current = await health();
+  startOnNextHealth = false;
+  const current = await rawHealth();
   if (current.ok) return current;
   return startManagedRuntime();
+}
+
+async function health() {
+  const demanded = startOnNextHealth;
+  startOnNextHealth = false;
+  const current = await rawHealth();
+  if (current.ok || !demanded || !config.codingBrainAutoStart) return current;
+  try {
+    return await startManagedRuntime();
+  } catch (error) {
+    return { ...current, ok: false, autoStartFailed: true, error: error.message, lastStartError: error.message };
+  }
 }
 
 async function run(message, options = {}) {
