@@ -48,8 +48,10 @@ function isBareUrl(text) {
 function isContinuation(text) {
   const value = String(text || '').trim();
   if (isBareUrl(value)) return true;
-  if (/^(?:yes|yeah|yep|no|nope|okay|ok|sure|do it|continue|go on|finish(?:\s+it)?(?:\s+now)?|complete(?:\s+it)?|resume|retry|try again|proceed|carry on|this|that|it|same|exactly|why|how so)\b/i.test(value)) return true;
-  return value.split(/\s+/).length <= 8 && /\b(?:this|that|it|they|them|those|these|above|previous|same|link|url|request|task)\b/i.test(value);
+  if (/^(?:yes|yeah|yep|no|nope|okay|ok|sure|do it|just\s+do\s+it|do\s+that(?:\s+now)?|run\s+it|execute\s+it|go\s+ahead(?:\s+and\s+do\s+it)?|continue|go on|finish(?:\s+it)?(?:\s+now)?|complete(?:\s+it)?|resume|retry|try again|proceed|carry on|this|that|it|same|exactly|why|how so)\b/i.test(value)) return true;
+  if (/\bwhat\s+are\s+you\s+waiting\s+for\b[\s,;:!-]*(?:just\s+)?(?:do\s+it|go\s+ahead|start|proceed|execute)/i.test(value)) return true;
+  if (/\b(?:come\s+on|go\s+on)[\s,;:!-]*(?:just\s+)?(?:do\s+it|continue|finish\s+it|execute)/i.test(value)) return true;
+  return value.split(/\s+/).length <= 10 && /\b(?:this|that|it|they|them|those|these|above|previous|same|link|url|request|task|search|research)\b/i.test(value);
 }
 
 function currentSession(rows) {
@@ -79,7 +81,7 @@ function contextFor(query, suppliedHistory = null) {
   if (!source.length) return [];
 
   if (isBareUrl(value)) return source.slice(-4);
-  if (isContinuation(value)) return source.slice(-6);
+  if (isContinuation(value)) return source.slice(-8);
 
   const tail = source.slice(-8);
   const relevant = tail.some((item) => overlap(value, item.content) >= 0.16);
