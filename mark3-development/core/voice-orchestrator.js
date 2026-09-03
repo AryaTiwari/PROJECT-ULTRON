@@ -3,6 +3,7 @@ const config = require('./config');
 const { readJson, writeJsonAtomic } = require('./persistence');
 const { emit } = require('./events');
 const integrations = require('./integrations');
+const { withCommandHandoff } = require('./assistant-handoff');
 
 const voiceStatePath = path.join(config.dataDir, 'voice-state.json');
 let voiceState = readJson(voiceStatePath, { enabled: true });
@@ -77,7 +78,8 @@ async function speakChunk(text, index, total, token) {
 
 function enqueue(text) {
   if (!isEnabled()) return Promise.resolve({ skipped: true, reason: 'voice-disabled' });
-  const chunks = splitSpeech(text);
+  const spokenText = withCommandHandoff(text);
+  const chunks = splitSpeech(spokenText);
   if (!chunks.length) return queue;
   const token = generation;
   queue = queue.then(async () => {
