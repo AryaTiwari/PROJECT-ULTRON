@@ -19,8 +19,13 @@ function isIdentityIntent(text) {
 }
 
 function historyRows(supplied) {
-  const rows = Array.isArray(supplied) && supplied.length ? supplied : conversation.recent(10);
-  return rows.filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+  // Persistent Mark 3 history is authoritative because the browser may have
+  // aborted a request before it added that failed command to its local history.
+  const persisted = conversation.recent(10)
+    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+  if (persisted.length) return persisted;
+  return (Array.isArray(supplied) ? supplied : [])
+    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
 }
 
 function continuationTargetsSelfRepository(message, suppliedHistory) {
