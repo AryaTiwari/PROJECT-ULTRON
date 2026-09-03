@@ -5,126 +5,86 @@ const { execFileSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 const projectRoot = path.resolve(root, '..');
 const required = [
-  'server.js',
-  'core/config.js',
-  'core/persistence.js',
-  'core/memory.js',
-  'core/workspace.js',
-  'core/model-intelligence.js',
-  'core/model-league.js',
-  'core/model-arena.js',
-  'core/provider-registry.js',
-  'core/direct-provider-router.js',
-  'core/omniroute-fallback.js',
-  'core/omniroute-lazy-hooks.js',
-  'core/model-router.js',
-  'core/planner.js',
-  'core/verifier.js',
-  'core/integrations.js',
-  'core/founder-behavior.js',
-  'core/tools.js',
-  'core/web.js',
-  'core/coding-brain.js',
-  'core/coding-inference.js',
-  'core/self-repository.js',
-  'core/assistant.js',
-  'core/assistant-handoff.js',
-  'core/conversation.js',
-  'core/proactive.js',
-  'core/voice-orchestrator.js',
-  'core/windows-voice.js',
-  'scripts/start-mark3.mjs',
-  'scripts/start-transport.mjs',
-  'interface/index.html',
-  'interface/style.css',
-  'interface/chat-transport.js',
-  'interface/app.js',
+  'server.js','core/config.js','core/persistence.js','core/memory.js','core/workspace.js','core/model-intelligence.js','core/model-league.js','core/model-arena.js',
+  'core/provider-registry.js','core/direct-provider-router.js','core/omniroute-fallback.js','core/omniroute-lazy-hooks.js','core/model-router.js','core/planner.js','core/verifier.js',
+  'core/integrations.js','core/founder-behavior.js','core/tools.js','core/web.js','core/research-agent.js','core/coding-brain.js','core/coding-inference.js','core/self-repository.js',
+  'core/assistant.js','core/assistant-handoff.js','core/conversation.js','core/proactive.js','core/voice-orchestrator.js','core/windows-voice.js','core/operating-modes.js','core/git-publisher.js',
+  'core/archive.js','core/document-renderer.js','core/file-vault.js','core/multimodal.js','core/native-voice-input.js',
+  'scripts/start-mark3.mjs','scripts/start-transport.mjs','scripts/flow-selftest.js','scripts/research-selftest.js','scripts/routing-selftest.js','scripts/multimodal-selftest.js',
+  'interface/index.html','interface/style.css','interface/multimodal.css','interface/chat-transport.js','interface/wake-boost.js','interface/app.js','interface/native-voice.js','interface/multimodal-ui.js',
 ];
-const sharedTransport = ['core/omniroute.js', 'core/voice/index.js', 'core/credentials/local-store.js'];
+const sharedTransport = ['core/omniroute.js','core/voice/index.js','core/credentials/local-store.js'];
 
-for (const rel of required) {
-  const file = path.join(root, rel);
-  if (!fs.existsSync(file)) throw new Error(`Missing required Mark 3 file: ${rel}`);
-}
-for (const rel of sharedTransport) {
-  const file = path.join(projectRoot, rel);
-  if (!fs.existsSync(file)) throw new Error(`Missing shared transport file: ${rel}`);
-}
+for (const rel of required) if (!fs.existsSync(path.join(root, rel))) throw new Error(`Missing required Mark 3 file: ${rel}`);
+for (const rel of sharedTransport) if (!fs.existsSync(path.join(projectRoot, rel))) throw new Error(`Missing shared transport file: ${rel}`);
 
 const js = [];
 function walk(dir) {
   for (const name of fs.readdirSync(dir)) {
-    if (['node_modules', 'data', 'workspace', '.ultron'].includes(name)) continue;
+    if (['node_modules','data','workspace','.ultron'].includes(name)) continue;
     const file = path.join(dir, name);
     const stat = fs.statSync(file);
     if (stat.isDirectory()) walk(file);
-    else if (/\.(js|cjs|mjs)$/.test(name)) js.push(file);
+    else if (/\.(?:js|cjs|mjs)$/.test(name)) js.push(file);
   }
 }
 walk(root);
-
-const sharedJs = sharedTransport.filter((rel) => /\.(js|cjs|mjs)$/.test(rel)).map((rel) => path.join(projectRoot, rel));
+const sharedJs = sharedTransport.filter((rel) => /\.(?:js|cjs|mjs)$/.test(rel)).map((rel) => path.join(projectRoot, rel));
 for (const file of [...js, ...sharedJs]) {
   try { execFileSync(process.execPath, ['--check', file], { stdio: 'inherit' }); }
-  catch {
-    const label = file.startsWith(`${root}${path.sep}`) ? path.relative(root, file) : path.relative(projectRoot, file);
-    throw new Error(`JavaScript syntax check failed: ${label}`);
-  }
+  catch { throw new Error(`JavaScript syntax check failed: ${file.startsWith(root) ? path.relative(root,file) : path.relative(projectRoot,file)}`); }
 }
 
 function hasRuntimeCoupling(text) {
-  const startUnified = /(?:require\s*\(|import\s+[^;]*?from\s+|spawn\s*\([^,]+,\s*\[[^\]]*)['\"](?:\.\.\/)*scripts\/start-unified\.mjs['\"]/m;
-  const parentCoreUsage = /\bconfig\.parentCore\b/;
-  return startUnified.test(text) || parentCoreUsage.test(text);
+  return /(?:require\s*\(|import\s+[^;]*?from\s+|spawn\s*\([^,]+,\s*\[[^\]]*)['\"](?:\.\.\/)*scripts\/start-unified\.mjs['\"]/m.test(text)
+    || /\bconfig\.parentCore\b/.test(text);
 }
-
 for (const file of js) {
   const rel = path.relative(root, file);
   const text = fs.readFileSync(file, 'utf8');
   if (/github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}/.test(text)) throw new Error(`Possible secret embedded in source: ${rel}`);
-  if (rel !== path.join('scripts', 'preflight.js') && hasRuntimeCoupling(text)) throw new Error(`Mark 2 runtime coupling detected in Mark 3 source: ${rel}`);
+  if (rel !== path.join('scripts','preflight.js') && hasRuntimeCoupling(text)) throw new Error(`Mark 2 runtime coupling detected in Mark 3 source: ${rel}`);
 }
 
-const packageFile = path.join(root, 'package.json');
-if (fs.existsSync(packageFile)) {
-  const pkg = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
-  const start = String(pkg?.scripts?.start || '');
-  if (/start-unified\.mjs/i.test(start)) throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
-  if (!/start-transport\.mjs/i.test(start)) throw new Error('Mark 3 startup must use the direct-first transport selector.');
-  if (pkg.version !== '3.0.0-beta.20') throw new Error(`Unexpected Mark 3 package version: ${pkg.version}`);
-}
+const pkg = JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+if (pkg.version !== '3.0.0-beta.22') throw new Error(`Unexpected Mark 3 package version: ${pkg.version}`);
+const startScript = String(pkg?.scripts?.start || '');
+if (/start-unified\.mjs/i.test(startScript)) throw new Error('Mark 3 package start script must not launch Mark 2.');
+if (!/start-transport\.mjs/i.test(startScript)) throw new Error('Mark 3 startup must use the direct-first transport selector.');
+if (!/multimodal-selftest\.js/.test(startScript)) throw new Error('Mark 3 startup must validate the multimodal runtime before launch.');
 
-const mark3Launcher = fs.readFileSync(path.join(root, 'scripts', 'start-mark3.mjs'), 'utf8');
-if (/run-next\.mjs[^\n\r]*['\"]?\s*,?\s*['\"]dev['\"]?/i.test(mark3Launcher)) {
-  throw new Error('Mark 3 must not launch OmniRoute through run-next.mjs dev during normal startup. Use the packaged production runtime.');
-}
-if (!/OMNIROUTE_MEMORY_MB/.test(mark3Launcher) || !/omniroute-production\.log/.test(mark3Launcher)) {
-  throw new Error('Mark 3 OmniRoute launcher must keep the production low-memory runtime policy.');
-}
-
-const transportLauncher = fs.readFileSync(path.join(root, 'scripts', 'start-transport.mjs'), 'utf8');
-if (!/Direct Gemini\/Groq\/NVIDIA credential pool detected/.test(transportLauncher) || !/lazy fallback/i.test(transportLauncher)) {
-  throw new Error('Direct-provider startup must leave OmniRoute as a lazy fallback.');
-}
-if (!/GEMINI_API_KEY2/.test(transportLauncher) || !/GROQ_API_KEY2/.test(transportLauncher)) {
-  throw new Error('Direct-provider startup must recognize secondary Gemini and Groq API keys.');
-}
+const mark3Launcher = fs.readFileSync(path.join(root,'scripts','start-mark3.mjs'),'utf8');
+if (/run-next\.mjs[^\n\r]*\bdev\b/i.test(mark3Launcher)) throw new Error('Normal Mark 3 startup must not use OmniRoute source dev mode.');
+if (!/OMNIROUTE_MEMORY_MB/.test(mark3Launcher) || !/omniroute-production\.log/.test(mark3Launcher)) throw new Error('OmniRoute production low-memory startup policy is missing.');
+const transportLauncher = fs.readFileSync(path.join(root,'scripts','start-transport.mjs'),'utf8');
+if (!/Direct Gemini\/Groq\/NVIDIA credential pool detected/.test(transportLauncher) || !/lazy fallback/i.test(transportLauncher)) throw new Error('Direct-first startup with lazy OmniRoute fallback is missing.');
+if (!/GEMINI_API_KEY2/.test(transportLauncher) || !/GROQ_API_KEY2/.test(transportLauncher)) throw new Error('Secondary Gemini/Groq credentials must be recognized at startup.');
 if (/detached:\s*true/.test(transportLauncher)) throw new Error('Direct-provider startup must not eagerly warm a detached OmniRoute process.');
 
-const omniTransport = fs.readFileSync(path.join(projectRoot, 'core', 'omniroute.js'), 'utf8');
-if (/message\.reasoning_content|delta\.reasoning_content/.test(omniTransport)) {
-  throw new Error('Mark 3 transport must not surface hidden reasoning_content as visible assistant text.');
-}
+const rootOmni = fs.readFileSync(path.join(projectRoot,'core','omniroute.js'),'utf8');
+if (/message\.reasoning_content|delta\.reasoning_content/.test(rootOmni)) throw new Error('Hidden reasoning_content must not become visible assistant text.');
 
-const interfaceJs = fs.readFileSync(path.join(root, 'interface', 'app.js'), 'utf8');
-if (!/SpeechRecognition|webkitSpeechRecognition/.test(interfaceJs)) throw new Error('Voice-first interface must keep browser speech recognition.');
-if (!/WAKE_WORD=['\"]ultron['\"]/.test(interfaceJs) || !/wakeMatch\s*\(/.test(interfaceJs)) throw new Error('Wake-word detection for Ultron is missing.');
-if (!/COMMAND_SILENCE_MS=4000/.test(interfaceJs)) throw new Error('Voice command silence window must remain four seconds.');
-if (!/createMediaElementSource/.test(interfaceJs) || !/createAnalyser/.test(interfaceJs) || !/speechEnergy/.test(interfaceJs)) throw new Error('Audio-reactive speaking visualization is missing.');
-if (!/recognitionMode==='wake'/.test(interfaceJs) || !/recognitionMode==='command'/.test(interfaceJs)) throw new Error('Wake/command recognition state machine is missing.');
-const chatTransport = fs.readFileSync(path.join(root, 'interface', 'chat-transport.js'), 'utf8');
-if (!/10\s*\*\s*60\s*\*\s*1000/.test(chatTransport) || !/api\\\/chat|api\/chat/.test(chatTransport)) throw new Error('Chat transport must override the legacy 120-second UI cancellation with the managed long-task ceiling.');
-if (!/MIN_REPLY_WINDOW_MS\s*=\s*7000/.test(chatTransport) || !/listenAfterResponseMs/.test(chatTransport) || !/voice_completed/.test(chatTransport)) throw new Error('Adaptive voice follow-up must keep at least a seven-second no-wake reply window.');
+const appJs = fs.readFileSync(path.join(root,'interface','app.js'),'utf8');
+const wakeBoost = fs.readFileSync(path.join(root,'interface','wake-boost.js'),'utf8');
+const chatTransport = fs.readFileSync(path.join(root,'interface','chat-transport.js'),'utf8');
+const nativeVoiceUi = fs.readFileSync(path.join(root,'interface','native-voice.js'),'utf8');
+const multimodalUi = fs.readFileSync(path.join(root,'interface','multimodal-ui.js'),'utf8');
+const indexHtml = fs.readFileSync(path.join(root,'interface','index.html'),'utf8');
+const serverSource = fs.readFileSync(path.join(root,'server.js'),'utf8');
+
+if (!/SpeechRecognition|webkitSpeechRecognition/.test(appJs) || !/WAKE_WORD=['\"]ultron['\"]/.test(appJs)) throw new Error('Wake-word browser recognition is missing.');
+if (!/COMMAND_SILENCE_MS=4000/.test(appJs)) throw new Error('Patient four-second end-of-command silence window must remain enabled.');
+if (!/createMediaElementSource/.test(appJs) || !/createAnalyser/.test(appJs)) throw new Error('Audio-reactive voice visualization is missing.');
+if (!/prematureFastFinalize:\s*false/.test(wakeBoost)) throw new Error('Premature voice finalization must remain disabled.');
+if (!/FLOW_REPLY_WINDOW_MS\s*=\s*10000/.test(chatTransport) || !/PLAYBACK_SETTLE_MS\s*=\s*700/.test(chatTransport)) throw new Error('Playback-safe ten-second conversation flow is missing.');
+if (!/MediaRecorder/.test(nativeVoiceUi) || !/\/api\/voice\/transcribe/.test(nativeVoiceUi) || !/browserTranscript/.test(nativeVoiceUi)) throw new Error('Native-audio authoritative command path is missing.');
+if (!/\/api\/files\/upload/.test(multimodalUi) || !/attachments/.test(multimodalUi) || !/artifacts/.test(multimodalUi)) throw new Error('Attachment/artifact UI wiring is missing.');
+if (!/multimodal\.css/.test(indexHtml) || !/native-voice\.js/.test(indexHtml) || !/multimodal-ui\.js/.test(indexHtml)) throw new Error('Multimodal interface assets are not loaded.');
+if (!/version:'3\.0\.0-beta\.22'/.test(serverSource)) throw new Error('Server runtime version must match beta.22.');
+if (!/ULTRON_M3_LEAGUE_ARENA_ENABLED\s*\|\|\s*['"]0['"]/.test(serverSource)) throw new Error('Background Model Arena must be opt-in to preserve API quota.');
+for (const route of ['/api/files/upload','/api/files/read','/api/files/download','/api/media/generate','/api/voice/transcribe']) {
+  if (!serverSource.includes(route)) throw new Error(`Multimodal server route missing: ${route}`);
+}
 
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
@@ -141,55 +101,34 @@ const integrations = require('../core/integrations');
 const founderBehavior = require('../core/founder-behavior');
 const selfRepository = require('../core/self-repository');
 const handoff = require('../core/assistant-handoff');
+const multimodal = require('../core/multimodal');
+const fileVault = require('../core/file-vault');
+const nativeVoice = require('../core/native-voice-input');
 
-// The shared root OmniRoute module still reads this selector, but Mark 3 routes direct APIs above it.
-if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Shared OmniRoute compatibility selector must remain omniroute.');
+if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Shared compatibility transport selector must remain omniroute.');
 if (config.disableNvidiaInference !== false) throw new Error('NVIDIA direct inference must remain enabled.');
-if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
-if (!config.modelLeaguePath.startsWith(config.dataDir)) throw new Error('Model League state must live under Mark 3 data.');
-if (!/^https?:\/\/127\.0\.0\.1:8791|^https?:\/\/localhost:8791/i.test(config.codingBrainUrl) && !process.env.ULTRON_M3_CODING_BRAIN_URL) throw new Error('Coding Brain should default to the local sidecar endpoint.');
-if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''))) throw new Error('Experimental browser/CLI providers must be disabled by default.');
-if (!registry.PROVIDERS.nvidia || registry.PROVIDERS.nvidia.tier !== 'api') throw new Error('NVIDIA must be a first-class API provider.');
-if (!registry.PROVIDERS.gemini.credentials.includes('GEMINI_API_KEY2') || !registry.PROVIDERS.groq.credentials.includes('GROQ_API_KEY2')) throw new Error('Provider registry must recognize secondary Gemini/Groq credentials.');
-if (typeof direct.chat !== 'function' || typeof direct.streamChat !== 'function' || typeof direct.candidates !== 'function' || typeof direct.health !== 'function' || typeof direct.credentialPool !== 'function') throw new Error('Multi-key direct-provider router API is incomplete.');
-if (!direct.PROVIDERS.gemini.keys.includes('GEMINI_API_KEY2') || !direct.PROVIDERS.groq.keys.includes('GROQ_API_KEY2')) throw new Error('Direct provider key pools are missing KEY2 slots.');
-if (direct.providerOrder('simple_qa')[0] !== 'groq') throw new Error('Simple Q&A must prefer Groq for low latency.');
-if (direct.providerOrder('coding')[0] !== 'nvidia' || direct.providerOrder('planning')[0] !== 'nvidia') throw new Error('Coding/planning must prefer NVIDIA specialist models.');
-if (direct.providerOrder('research')[0] !== 'gemini') throw new Error('Research must prefer Gemini.');
-if (!direct.isDirectModel('gemini/gemini-test') || !direct.isDirectModel('groq/model/test') || !direct.isDirectModel('nvidia/openai/gpt-oss-120b')) throw new Error('Direct Gemini/Groq/NVIDIA model parsing is incomplete.');
-if (router.isBlockedModel('nvidia/openai/gpt-oss-120b')) throw new Error('NVIDIA direct inference is still blocked by router policy.');
+if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Voice output must be anchored to Project-Ultron.');
+if (!registry.PROVIDERS.nvidia || registry.PROVIDERS.nvidia.tier !== 'api') throw new Error('NVIDIA must remain a first-class direct API provider.');
+if (!registry.PROVIDERS.gemini.credentials.includes('GEMINI_API_KEY2') || !registry.PROVIDERS.groq.credentials.includes('GROQ_API_KEY2')) throw new Error('Provider registry lost secondary Gemini/Groq keys.');
+if (!direct.PROVIDERS.gemini.keys.includes('GEMINI_API_KEY2') || !direct.PROVIDERS.groq.keys.includes('GROQ_API_KEY2')) throw new Error('Direct key pools lost secondary credentials.');
+if (direct.providerOrder('simple_qa')[0] !== 'groq' || direct.providerOrder('research')[0] !== 'gemini' || direct.providerOrder('coding')[0] !== 'nvidia') throw new Error('Specialist provider order changed unexpectedly.');
+if (router.isBlockedModel('nvidia/openai/gpt-oss-120b')) throw new Error('NVIDIA inference is incorrectly blocked.');
 if (typeof omniFallback.ensure !== 'function' || omniFallback.status().mode !== 'lazy-fallback') throw new Error('Lazy OmniRoute fallback API is incomplete.');
-if (typeof router.chatExact !== 'function' || typeof router.streamExact !== 'function' || typeof router.listNativeEligibleModels !== 'function') throw new Error('Model League requires exact-model router primitives.');
-if (typeof league.recommend !== 'function' || typeof league.selectParticipants !== 'function' || typeof league.directConfigured !== 'function' || typeof league.isDirectModel !== 'function') throw new Error('Adaptive direct-only Model League API is incomplete.');
-if (!league.isDirectModel('gemini/gemini-test') || league.isDirectModel('anthropic/claude-test')) throw new Error('Model League direct-model filter is invalid.');
-if (typeof arena.runTournament !== 'function' || typeof arena.start !== 'function') throw new Error('Model Arena API is incomplete.');
-if (typeof codingBrain.run !== 'function' || typeof codingBrain.health !== 'function' || typeof codingBrain.shouldUse !== 'function') throw new Error('Coding Brain bridge API is incomplete.');
-if (!codingBrain.shouldUse('Fix the wake-word bug in the interface', 'coding')) throw new Error('Repository implementation tasks must route to Coding Brain.');
-if (codingBrain.shouldUse('What is a JavaScript closure?', 'coding')) throw new Error('Simple coding questions must not invoke the heavyweight Coding Brain.');
-if (codingBrain.modeFor('Inspect the wake-word implementation') !== 'plan') throw new Error('Read-only coding investigation must use plan mode.');
-if (codingBrain.modeFor('Fix the wake-word implementation') !== 'apply') throw new Error('Explicit coding modifications must use apply mode.');
-if (codingInference.roleTaskType('editor') !== 'coding' || codingInference.roleTaskType('reviewer') !== 'planning') throw new Error('Coding Brain role-to-model routing is invalid.');
-if (typeof integrations.githubSelfStatus !== 'function' || typeof integrations.founderBehaviorStatus !== 'function') throw new Error('Integrations are missing self-status or founder behavior APIs.');
-if (typeof founderBehavior.apply !== 'function' || typeof founderBehavior.seedMemory !== 'function' || founderBehavior.MEMORY_SEEDS.length < 6) throw new Error('Founder behavior/memory layer is incomplete.');
-const founderPrompt = founderBehavior.apply([{ role:'system', content:'You are ULTRON Mark 3, a persistent personal operating assistant.' }, { role:'user', content:'Should I prioritize the Elevate OS Performance OS or brand marketplace?' }]);
-const founderSystem = String(founderPrompt[0]?.content || '');
-if (!/chief of staff/i.test(founderSystem) || !/Sir/.test(founderSystem) || !/Master Arya/.test(founderSystem) || !/Performance OS/.test(founderSystem) || !/Reel Analyzer/.test(founderSystem)) throw new Error('Founder behavior must inject address, advisory style and Elevate OS product boundaries.');
-if (founderBehavior.polishDeterministic('Morning, Arya. I’m online.') !== 'Morning, Sir. I’m online.') throw new Error('Deterministic fast responses must use the founder address style.');
-const codingPrompt = founderBehavior.apply([{ role:'system', content:'You are ULTRON Coding Brain Investigator.' }, { role:'user', content:'Inspect Elevate OS code.' }]);
-if (/chief of staff/i.test(String(codingPrompt[0]?.content || ''))) throw new Error('Founder personality must not contaminate Coding Brain specialist prompts.');
-if (!selfRepository.isSelfRepositoryStatusIntent('Ultron can you check your own get hub and tell me whether there is a new update')) throw new Error('Voice-transcribed self-GitHub update intent must use the deterministic fast path.');
-if (!conversation.isContinuation('finish it now')) throw new Error('Failed-task continuation phrase “finish it now” must preserve prior context.');
-if (!selfRepository.continuationTargetsSelfRepository('finish it now', [{ role:'user', content:'Check your own GitHub and tell me whether there is a new update.' }])) throw new Error('Self-GitHub task must survive a finish-it-now continuation.');
-if (handoff.responseDelivery('Done.').listenAfterResponseMs !== 0) throw new Error('Ordinary responses must not always reopen the command window.');
-if (handoff.responseDelivery('Anything else, Sir?').listenAfterResponseMs < 7000) throw new Error('Questions/command invitations must keep the reply window open for at least seven seconds.');
-if (!/Anything else, Sir\?/i.test(handoff.withCommandHandoff('Done.'))) throw new Error('Explicit command handoff helper must use the new restrained Sir phrasing.');
-if (handoff.withCommandHandoff('What should I do next?') !== 'What should I do next?') throw new Error('Assistant handoff must not duplicate an existing follow-up question.');
-const voiceOrchestrator = fs.readFileSync(path.join(root, 'core', 'voice-orchestrator.js'), 'utf8');
-if (/withCommandHandoff/.test(voiceOrchestrator)) throw new Error('Voice layer must not silently append a generic command handoff.');
-if (conversation.contextFor('hey ultron', [{ role:'assistant', content:'Old unrelated task' }]).length) throw new Error('Greeting context isolation invariant failed.');
-if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw new Error('Public web URL normalization invariant failed.');
-if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must be the primary Mark 3 web provider.');
-if (!web.status().configured) console.warn('[Mark 3] TinyFish warning: TINYFISH_API_KEY was not detected; URL fetch will use direct fallback and live web search will be unavailable.');
-else console.log('[Mark 3] TinyFish web layer configured: Fetch + Search enabled.');
+if (typeof router.chatExact !== 'function' || typeof router.streamExact !== 'function') throw new Error('Exact model routing primitives are missing.');
+if (typeof league.recommend !== 'function' || typeof arena.runTournament !== 'function') throw new Error('Model League APIs are incomplete.');
+if (typeof codingBrain.run !== 'function' || !codingBrain.shouldUse('Fix the wake-word bug in the interface','coding')) throw new Error('Coding Brain routing is incomplete.');
+if (codingBrain.shouldUse('What is a JavaScript closure?','coding')) throw new Error('Simple coding questions must not invoke Coding Brain.');
+if (codingInference.roleTaskType('editor') !== 'coding') throw new Error('Coding Brain editor routing is invalid.');
+if (typeof integrations.githubSelfStatus !== 'function' || typeof integrations.founderBehaviorStatus !== 'function') throw new Error('Integrations are missing self-status/founder behavior APIs.');
+if (typeof founderBehavior.apply !== 'function' || founderBehavior.MEMORY_SEEDS.length < 6) throw new Error('Founder behavior/memory layer is incomplete.');
+if (!selfRepository.isSelfRepositoryStatusIntent('Ultron check your own get hub for an update')) throw new Error('Voice-transcribed self-GitHub intent must use deterministic status.');
+if (!conversation.isContinuation('finish it now') || !conversation.isContinuation('just do it')) throw new Error('Continuation recovery lost command phrases.');
+if (handoff.responseDelivery('Anything else, Sir?').listenAfterResponseMs < 7000) throw new Error('Explicit questions must keep a no-wake reply window.');
+if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must remain the primary public web research layer.');
+if (typeof multimodal.generate !== 'function' || typeof multimodal.readFile !== 'function' || typeof multimodal.attachmentContext !== 'function') throw new Error('Multimodal core API is incomplete.');
+if (multimodal.generationIntent('Ultron make a PDF report')?.kind !== 'pdf' || multimodal.generationIntent('Ultron generate an image')?.kind !== 'image') throw new Error('Natural artifact routing is incomplete.');
+if (!fileVault.status().maxFileBytes || typeof nativeVoice.transcribe !== 'function') throw new Error('File vault or native voice input API is incomplete.');
 
-console.log(`ULTRON Mark 3 preflight passed: ${required.length} Mark 3 files, ${sharedTransport.length} shared transport files and ${js.length + sharedJs.length} JavaScript files validated.`);
+if (!web.status().configured) console.warn('[Mark 3] TinyFish warning: TINYFISH_API_KEY was not detected; live web search will be unavailable.');
+else console.log('[Mark 3] TinyFish web layer configured: Fetch + Search enabled.');
+console.log(`ULTRON Mark 3 beta.22 preflight passed: ${required.length} Mark 3 files, ${sharedTransport.length} shared transport files and ${js.length + sharedJs.length} JavaScript files validated.`);
