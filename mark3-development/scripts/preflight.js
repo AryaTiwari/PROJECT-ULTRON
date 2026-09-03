@@ -21,6 +21,7 @@ const required = [
   'core/planner.js',
   'core/verifier.js',
   'core/integrations.js',
+  'core/founder-behavior.js',
   'core/tools.js',
   'core/web.js',
   'core/coding-brain.js',
@@ -90,7 +91,7 @@ if (fs.existsSync(packageFile)) {
   const start = String(pkg?.scripts?.start || '');
   if (/start-unified\.mjs/i.test(start)) throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
   if (!/start-transport\.mjs/i.test(start)) throw new Error('Mark 3 startup must use the direct-first transport selector.');
-  if (pkg.version !== '3.0.0-beta.19') throw new Error(`Unexpected Mark 3 package version: ${pkg.version}`);
+  if (pkg.version !== '3.0.0-beta.20') throw new Error(`Unexpected Mark 3 package version: ${pkg.version}`);
 }
 
 const mark3Launcher = fs.readFileSync(path.join(root, 'scripts', 'start-mark3.mjs'), 'utf8');
@@ -123,6 +124,7 @@ if (!/createMediaElementSource/.test(interfaceJs) || !/createAnalyser/.test(inte
 if (!/recognitionMode==='wake'/.test(interfaceJs) || !/recognitionMode==='command'/.test(interfaceJs)) throw new Error('Wake/command recognition state machine is missing.');
 const chatTransport = fs.readFileSync(path.join(root, 'interface', 'chat-transport.js'), 'utf8');
 if (!/10\s*\*\s*60\s*\*\s*1000/.test(chatTransport) || !/api\\\/chat|api\/chat/.test(chatTransport)) throw new Error('Chat transport must override the legacy 120-second UI cancellation with the managed long-task ceiling.');
+if (!/MIN_REPLY_WINDOW_MS\s*=\s*7000/.test(chatTransport) || !/listenAfterResponseMs/.test(chatTransport) || !/voice_completed/.test(chatTransport)) throw new Error('Adaptive voice follow-up must keep at least a seven-second no-wake reply window.');
 
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
@@ -136,6 +138,7 @@ const web = require('../core/web');
 const codingBrain = require('../core/coding-brain');
 const codingInference = require('../core/coding-inference');
 const integrations = require('../core/integrations');
+const founderBehavior = require('../core/founder-behavior');
 const selfRepository = require('../core/self-repository');
 const handoff = require('../core/assistant-handoff');
 
@@ -166,12 +169,22 @@ if (codingBrain.shouldUse('What is a JavaScript closure?', 'coding')) throw new 
 if (codingBrain.modeFor('Inspect the wake-word implementation') !== 'plan') throw new Error('Read-only coding investigation must use plan mode.');
 if (codingBrain.modeFor('Fix the wake-word implementation') !== 'apply') throw new Error('Explicit coding modifications must use apply mode.');
 if (codingInference.roleTaskType('editor') !== 'coding' || codingInference.roleTaskType('reviewer') !== 'planning') throw new Error('Coding Brain role-to-model routing is invalid.');
-if (typeof integrations.githubSelfStatus !== 'function') throw new Error('Deterministic self-GitHub status API is missing.');
+if (typeof integrations.githubSelfStatus !== 'function' || typeof integrations.founderBehaviorStatus !== 'function') throw new Error('Integrations are missing self-status or founder behavior APIs.');
+if (typeof founderBehavior.apply !== 'function' || typeof founderBehavior.seedMemory !== 'function' || founderBehavior.MEMORY_SEEDS.length < 6) throw new Error('Founder behavior/memory layer is incomplete.');
+const founderPrompt = founderBehavior.apply([{ role:'system', content:'You are ULTRON Mark 3, a persistent personal operating assistant.' }, { role:'user', content:'Should I prioritize the Elevate OS Performance OS or brand marketplace?' }]);
+const founderSystem = String(founderPrompt[0]?.content || '');
+if (!/chief of staff/i.test(founderSystem) || !/Sir/.test(founderSystem) || !/Master Arya/.test(founderSystem) || !/Performance OS/.test(founderSystem) || !/Reel Analyzer/.test(founderSystem)) throw new Error('Founder behavior must inject address, advisory style and Elevate OS product boundaries.');
+const codingPrompt = founderBehavior.apply([{ role:'system', content:'You are ULTRON Coding Brain Investigator.' }, { role:'user', content:'Inspect Elevate OS code.' }]);
+if (/chief of staff/i.test(String(codingPrompt[0]?.content || ''))) throw new Error('Founder personality must not contaminate Coding Brain specialist prompts.');
 if (!selfRepository.isSelfRepositoryStatusIntent('Ultron can you check your own get hub and tell me whether there is a new update')) throw new Error('Voice-transcribed self-GitHub update intent must use the deterministic fast path.');
 if (!conversation.isContinuation('finish it now')) throw new Error('Failed-task continuation phrase “finish it now” must preserve prior context.');
 if (!selfRepository.continuationTargetsSelfRepository('finish it now', [{ role:'user', content:'Check your own GitHub and tell me whether there is a new update.' }])) throw new Error('Self-GitHub task must survive a finish-it-now continuation.');
-if (!/next command/i.test(handoff.withCommandHandoff('Done.'))) throw new Error('Assistant command handoff must remain active for ordinary responses.');
+if (handoff.responseDelivery('Done.').listenAfterResponseMs !== 0) throw new Error('Ordinary responses must not always reopen the command window.');
+if (handoff.responseDelivery('Anything else, Sir?').listenAfterResponseMs < 7000) throw new Error('Questions/command invitations must keep the reply window open for at least seven seconds.');
+if (!/Anything else, Sir\?/i.test(handoff.withCommandHandoff('Done.'))) throw new Error('Explicit command handoff helper must use the new restrained Sir phrasing.');
 if (handoff.withCommandHandoff('What should I do next?') !== 'What should I do next?') throw new Error('Assistant handoff must not duplicate an existing follow-up question.');
+const voiceOrchestrator = fs.readFileSync(path.join(root, 'core', 'voice-orchestrator.js'), 'utf8');
+if (/withCommandHandoff/.test(voiceOrchestrator)) throw new Error('Voice layer must not silently append a generic command handoff.');
 if (conversation.contextFor('hey ultron', [{ role:'assistant', content:'Old unrelated task' }]).length) throw new Error('Greeting context isolation invariant failed.');
 if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw new Error('Public web URL normalization invariant failed.');
 if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must be the primary Mark 3 web provider.');
