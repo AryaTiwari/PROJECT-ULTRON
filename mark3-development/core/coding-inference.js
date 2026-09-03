@@ -5,7 +5,7 @@ const models = require('./model-intelligence');
 function roleTaskType(role) {
   const value = String(role || '').toLowerCase();
   if (value === 'editor') return 'coding';
-  if (value === 'reviewer' || value === 'planner') return 'planning';
+  if (['reviewer', 'planner', 'investigator', 'scope-planner', 'architect', 'dx-planner'].includes(value)) return 'planning';
   return 'coding';
 }
 
