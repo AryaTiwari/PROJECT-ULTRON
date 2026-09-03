@@ -6,6 +6,7 @@ const { registerTool } = require('../core/executor');
 const voice = require('../core/voice');
 const github = require('../core/github-controller');
 const modelIntelligence = require('../core/model-intelligence');
+const artifacts = require('../core/artifacts');
 
 function registerBuiltinTools() {
   registerTool('system_info', async () => ({ platform: process.platform, arch: process.arch, hostname: os.hostname(), release: os.release(), cpus: os.cpus().length, memory_gb: Number((os.totalmem() / 1024 ** 3).toFixed(2)), free_memory_gb: Number((os.freemem() / 1024 ** 3).toFixed(2)), uptime_seconds: os.uptime(), username: os.userInfo().username }), {
@@ -37,6 +38,22 @@ function registerBuiltinTools() {
   }, {
     description: 'Write or replace a local UTF-8 text file. Requires confirmation.', requiresConfirmation: true, destructive: true, risk: 'high',
     inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false },
+  });
+
+  registerTool('create_pdf', async (input = {}) => artifacts.createPdf(input), {
+    description: 'Create a real local PDF artifact and return its actual ULTRON download URL. Use this whenever the user asks to create, generate, export, send, or provide a PDF. Never invent a sandbox:, file:, or download URL instead.',
+    requiresConfirmation: false,
+    risk: 'low',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Document title.' },
+        content: { type: 'string', description: 'Complete document content. Simple Markdown headings and bullets are supported.' },
+        filename: { type: 'string', description: 'Optional PDF filename.' },
+      },
+      required: ['content'],
+      additionalProperties: false,
+    },
   });
 
   registerTool('run_powershell', async (input = {}) => {
