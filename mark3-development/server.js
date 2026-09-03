@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./core/config');
 const assistant = require('./core/assistant');
-const { withCommandHandoff } = require('./core/assistant-handoff');
+const { responseDelivery, REPLY_WINDOW_MS } = require('./core/assistant-handoff');
 const memory = require('./core/memory');
 const workspace = require('./core/workspace');
 const models = require('./core/model-intelligence');
@@ -95,7 +95,12 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'OPTIONS') return send(res,204,'');
     if (req.method === 'GET' && req.url === '/api/health') {
       const [router, brain] = await Promise.all([integrations.health(), codingBrain.health()]);
-      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.17', interfaceMode:'voice-first-wake', inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, codingBrain:brain, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
+      return send(res, router.ok ? 200 : 503, {
+        ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.20', interfaceMode:'voice-first-wake',
+        behavior:{ ...(integrations.founderBehaviorStatus ? integrations.founderBehaviorStatus() : {}), replyWindowMs:REPLY_WINDOW_MS },
+        inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, codingBrain:brain,
+        web:web.status(), voice:voice.status(), pid:process.pid, port:config.port,
+      });
     }
     if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
     if (req.method === 'POST' && req.url === '/api/web/fetch') {
@@ -164,13 +169,13 @@ const server = http.createServer(async (req,res) => {
       const data=await body(req);
       const selfResult=await selfRepository.handle(data.message,data.history);
       if(selfResult){
-        const delivered=withCommandHandoff(selfResult.response||selfResult.text||'');
-        void voice.enqueue(delivered);
-        return send(res,200,{...selfResult,ok:true,response:delivered,text:delivered});
+        const delivery=responseDelivery(selfResult.response||selfResult.text||'');
+        void voice.enqueue(delivery.text);
+        return send(res,200,{...selfResult,ok:true,response:delivery.text,text:delivery.text,listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply});
       }
       const result=await assistant.handle(data.message,{model:data.model,history:data.history,taskType:data.taskType,inputMode:data.inputMode,codingWorkspace:data.codingWorkspace});
-      const delivered=withCommandHandoff(result.response||result.text||'');
-      return send(res,200,{...result,response:delivered,text:delivered});
+      const delivery=responseDelivery(result.response||result.text||'');
+      return send(res,200,{...result,response:delivery.text,text:delivery.text,listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply,hasSuggestion:delivery.hasSuggestion});
     }
     if (req.method === 'POST' && req.url === '/api/memory') { const data=await body(req); return send(res,200,{ok:true,result:memory.remember(data)}); }
     if (req.method === 'POST' && req.url === '/api/commitments') { const data=await body(req); return send(res,200,{ok:true,commitment:workspace.createCommitment(data)}); }
@@ -186,6 +191,8 @@ const server = http.createServer(async (req,res) => {
 server.listen(config.port,config.host,()=>{
   console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`);
   console.log('[Mark 3] Voice-first wake interface active: say "Ultron", speak the command, then pause for four seconds.');
+  console.log(`[Mark 3] Conversational reply window: ${Math.round(REPLY_WINDOW_MS / 1000)} seconds after ULTRON asks a question; no repeated wake word required.`);
+  console.log('[Mark 3] Founder chief-of-staff behavior active: adaptive suggestions, direct disagreement and Elevate OS context when relevant.');
   console.log(`[Mark 3] Coding Brain bridge ${config.codingBrainEnabled ? 'enabled' : 'disabled'} at ${config.codingBrainUrl}.`);
   if (leagueEnabled) {
     modelArena.start();
