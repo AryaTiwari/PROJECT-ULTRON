@@ -5,42 +5,40 @@
     enabled: supported && localStorage.getItem('ultron-m3-native-voice') !== '0',
     stream: null,
     recorder: null,
-    preRoll: [],
     commandChunks: [],
     commandActive: false,
-    suppressPreRoll: false,
+    suppressCapture: false,
     ready: false,
     starting: null,
     mime: 'audio/webm',
   };
 
-  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+  function streamLive() {
+    return Boolean(state.stream?.getAudioTracks?.().some((track) => track.readyState === 'live'));
+  }
+
+  function preferredMime() {
+    const preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'];
+    return preferred.find((value) => MediaRecorder.isTypeSupported?.(value)) || '';
+  }
+
+  function audioExtension(mime) {
+    return /^audio\/ogg/i.test(String(mime || '')) ? 'ogg' : 'webm';
+  }
 
   async function ensureRecorder() {
     if (!state.enabled || !supported) return false;
-    if (state.ready && state.recorder?.state !== 'inactive') return true;
+    if (state.ready && streamLive()) return true;
     if (state.starting) return state.starting;
     state.starting = (async () => {
       try {
         state.stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
         });
-        const preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
-        const mimeType = preferred.find((value) => MediaRecorder.isTypeSupported?.(value)) || '';
-        state.mime = mimeType || 'audio/webm';
-        state.recorder = new MediaRecorder(state.stream, mimeType ? { mimeType } : undefined);
-        state.recorder.ondataavailable = (event) => {
-          if (!event.data || !event.data.size) return;
-          if (state.commandActive) state.commandChunks.push(event.data);
-          else if (!state.suppressPreRoll) {
-            state.preRoll.push(event.data);
-            while (state.preRoll.length > 3) state.preRoll.shift();
-          }
-        };
-        state.recorder.start(800);
-        state.ready = true;
+        state.mime = preferredMime() || 'audio/webm';
+        state.ready = streamLive();
         updateButton();
-        return true;
+        return state.ready;
       } catch {
         state.ready = false;
         updateButton();
@@ -51,22 +49,67 @@
   }
 
   function beginCommand() {
-    if (!state.enabled || !state.ready || state.commandActive || state.suppressPreRoll) return;
-    state.commandActive = true;
-    state.commandChunks = [...state.preRoll];
-    state.preRoll = [];
+    if (!state.enabled || !state.ready || !streamLive() || state.commandActive || state.suppressCapture) return;
+    const mimeType = preferredMime();
+    state.mime = mimeType || 'audio/webm';
+    state.commandChunks = [];
+    try {
+      const recorder = new MediaRecorder(state.stream, mimeType ? { mimeType } : undefined);
+      state.recorder = recorder;
+      state.commandActive = true;
+      recorder.ondataavailable = (event) => {
+        if (state.commandActive && event.data?.size) state.commandChunks.push(event.data);
+      };
+      recorder.onerror = () => {
+        state.commandActive = false;
+        state.commandChunks = [];
+      };
+      // A fresh recorder per command guarantees the Blob starts with a valid
+      // WebM/Ogg container header. Rolling timeslice fragments are not standalone
+      // media files and can be rejected by Whisper/Groq when the first chunks are dropped.
+      recorder.start();
+    } catch {
+      state.recorder = null;
+      state.commandActive = false;
+      state.commandChunks = [];
+    }
   }
 
   async function captureCommand() {
     if (!state.enabled || !state.ready || !state.recorder || !state.commandActive) return null;
-    try { state.recorder.requestData(); } catch {}
-    await sleep(180);
+    const recorder = state.recorder;
+    if (recorder.state === 'inactive') {
+      state.commandActive = false;
+      state.recorder = null;
+      state.commandChunks = [];
+      return null;
+    }
+
+    await new Promise((resolve) => {
+      const finish = () => resolve();
+      recorder.addEventListener('stop', finish, { once: true });
+      recorder.addEventListener('error', finish, { once: true });
+      try { recorder.stop(); } catch { resolve(); }
+    });
+
     const chunks = [...state.commandChunks];
+    const mime = recorder.mimeType || state.mime || chunks[0]?.type || 'audio/webm';
     state.commandActive = false;
+    state.recorder = null;
     state.commandChunks = [];
     if (!chunks.length) return null;
-    const blob = new Blob(chunks, { type: state.mime || chunks[0]?.type || 'audio/webm' });
+    const blob = new Blob(chunks, { type: mime });
     return blob.size >= 900 ? blob : null;
+  }
+
+  function discardCommand() {
+    const recorder = state.recorder;
+    state.commandActive = false;
+    state.commandChunks = [];
+    state.recorder = null;
+    if (recorder && recorder.state !== 'inactive') {
+      try { recorder.stop(); } catch {}
+    }
   }
 
   function base64(blob) {
@@ -99,12 +142,13 @@
 
   async function transcribe(blob, browserTranscript) {
     const audioBase64 = await base64(blob);
+    const mime = blob.type || state.mime || 'audio/webm';
     const response = await baseFetch('/api/voice/transcribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: `ultron-command-${Date.now()}.webm`,
-        mime: blob.type || state.mime || 'audio/webm',
+        name: `ultron-command-${Date.now()}.${audioExtension(mime)}`,
+        mime,
         audioBase64,
         browserTranscript: String(browserTranscript || ''),
       }),
@@ -183,6 +227,7 @@
         state.enabled = !state.enabled;
         localStorage.setItem('ultron-m3-native-voice', state.enabled ? '1' : '0');
         if (state.enabled) await ensureRecorder();
+        else discardCommand();
         updateButton();
       });
       updateButton();
@@ -193,16 +238,12 @@
       const observer = new MutationObserver(() => {
         const speaking = wrap.classList.contains('speaking');
         if (speaking) {
-          // Do not feed ULTRON's own synthesized speech into the next command's
-          // rolling pre-roll. Echo cancellation is helpful, but provenance is better.
-          state.suppressPreRoll = true;
-          state.preRoll = [];
+          // Never feed ULTRON's own synthesized speech into a user command.
+          state.suppressCapture = true;
+          discardCommand();
           return;
         }
-        if (state.suppressPreRoll) {
-          state.suppressPreRoll = false;
-          state.preRoll = [];
-        }
+        if (state.suppressCapture) state.suppressCapture = false;
         if (wrap.classList.contains('command-listening')) {
           void ensureRecorder().then((ok) => { if (ok) beginCommand(); });
         }
@@ -210,15 +251,13 @@
       observer.observe(wrap, { attributes: true, attributeFilter: ['class'] });
     }
 
-    // If the browser has already granted microphone permission, start the rolling
-    // audio buffer immediately without showing another prompt. Otherwise the first
-    // normal user gesture/wake interaction starts it and the browser transcript is
-    // still available as a fallback for that turn.
+    // Keep only the microphone stream warm. A fresh MediaRecorder is created for
+    // each command so every uploaded file is a complete valid media container.
     void warmIfAlreadyGranted();
     const warm = () => { if (state.enabled) void ensureRecorder(); };
     document.addEventListener('pointerdown', warm, { once: true, passive: true });
     document.addEventListener('keydown', warm, { once: true });
   });
 
-  window.__ULTRON_NATIVE_VOICE = { state, ensureRecorder, beginCommand };
+  window.__ULTRON_NATIVE_VOICE = { state, ensureRecorder, beginCommand, captureCommand };
 })();
