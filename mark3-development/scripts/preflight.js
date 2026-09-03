@@ -174,6 +174,7 @@ if (typeof founderBehavior.apply !== 'function' || typeof founderBehavior.seedMe
 const founderPrompt = founderBehavior.apply([{ role:'system', content:'You are ULTRON Mark 3, a persistent personal operating assistant.' }, { role:'user', content:'Should I prioritize the Elevate OS Performance OS or brand marketplace?' }]);
 const founderSystem = String(founderPrompt[0]?.content || '');
 if (!/chief of staff/i.test(founderSystem) || !/Sir/.test(founderSystem) || !/Master Arya/.test(founderSystem) || !/Performance OS/.test(founderSystem) || !/Reel Analyzer/.test(founderSystem)) throw new Error('Founder behavior must inject address, advisory style and Elevate OS product boundaries.');
+if (founderBehavior.polishDeterministic('Morning, Arya. I’m online.') !== 'Morning, Sir. I’m online.') throw new Error('Deterministic fast responses must use the founder address style.');
 const codingPrompt = founderBehavior.apply([{ role:'system', content:'You are ULTRON Coding Brain Investigator.' }, { role:'user', content:'Inspect Elevate OS code.' }]);
 if (/chief of staff/i.test(String(codingPrompt[0]?.content || ''))) throw new Error('Founder personality must not contaminate Coding Brain specialist prompts.');
 if (!selfRepository.isSelfRepositoryStatusIntent('Ultron can you check your own get hub and tell me whether there is a new update')) throw new Error('Voice-transcribed self-GitHub update intent must use the deterministic fast path.');
