@@ -91,33 +91,62 @@ function syncStateMemory() {
   });
 }
 
+function currentExecution() {
+  if (!activeExecution) return null;
+  return workspace.listExecutions(50).find((item) => item.id === activeExecution.id) || null;
+}
 function addEvidence(text) {
-  if (!activeExecution || !text) return;
-  const current = workspace.listExecutions(50).find((item) => item.id === activeExecution.id);
-  if (!current) return;
+  const current = currentExecution();
+  if (!current || !text) return;
   const evidence = [...(Array.isArray(current.evidence) ? current.evidence : []), String(text).slice(0, 500)].slice(-12);
-  workspace.updateExecution(activeExecution.id, { evidence });
+  workspace.updateExecution(current.id, { evidence });
+}
+function deriveVerification(baseResult = null) {
+  const current = currentExecution();
+  if (!current) return baseResult;
+  const kind = current.kind || current.planKind || 'advice';
+  const evidence = Array.isArray(current.evidence) ? current.evidence : [];
+  if (kind === 'advice') return baseResult || verifier.verifyExecution({ kind, response: 'completed' });
+  if (kind === 'state_change') return verifier.verifyExecution({ kind, stateChanged: Boolean(current.stateChanged), evidence });
+  if (kind === 'research') {
+    const sourceCount = evidence.filter((item) => /research_agent|web_search|web_fetch/i.test(String(item))).length;
+    return verifier.verifyExecution({ kind, response: baseResult?.ok ? 'response produced' : '', sourceCount, evidence });
+  }
+  if (kind === 'repository_action') {
+    const changeEvidence = evidence.filter((item) => /github_(?:update|create)_file|coding|changed file|commit/i.test(String(item))).length;
+    const verifiedEvidence = evidence.some((item) => /verified|validation|pass|success/i.test(String(item)));
+    return verifier.verifyExecution({ kind, changedFiles: changeEvidence, validation: verifiedEvidence ? 'verified' : '', evidence });
+  }
+  if (kind === 'artifact') {
+    const artifactCount = evidence.filter((item) => /artifact|file.*persist|download/i.test(String(item))).length;
+    return verifier.verifyExecution({ kind, artifactCount, evidence });
+  }
+  return baseResult || verifier.verifyExecution({ kind, response: 'completed', evidence });
 }
 function finishExecution(result = null, fallbackStatus = 'partial') {
-  if (!activeExecution) return;
-  const patch = result
-    ? { verification: result, status: result.ok ? 'verified' : result.status === 'failed' ? 'failed' : result.status || fallbackStatus }
+  const current = currentExecution();
+  if (!current) { activeExecution = null; return; }
+  const finalResult = result ? deriveVerification(result) : null;
+  const patch = finalResult
+    ? { verification: finalResult, status: finalResult.ok ? 'verified' : finalResult.status === 'failed' ? 'failed' : finalResult.status || fallbackStatus }
     : { status: fallbackStatus };
-  try { workspace.updateExecution(activeExecution.id, patch); } catch {}
+  try { workspace.updateExecution(current.id, patch); } catch {}
   activeExecution = null;
 }
 function onRuntimeEvent(event) {
   if (event.type === 'task_started') {
     const mutation = intent.extractWorkspaceMutation(event.message);
+    let stateChanged = false;
     if (mutation) {
       const applied = workspace.applyMutation(mutation);
+      stateChanged = Boolean(applied);
       syncStateMemory();
       emit('workspace_state_changed', { mutation, applied });
     }
     const kind = planner.classify(event.message, event.taskType);
     activeExecution = workspace.recordExecution({ objective: event.message, taskType: event.taskType, status: 'executing' });
     activeExecution.kind = kind;
-    workspace.updateExecution(activeExecution.id, { kind });
+    workspace.updateExecution(activeExecution.id, { kind, stateChanged });
     return;
   }
   if (!activeExecution) return;
@@ -134,17 +163,20 @@ function onRuntimeEvent(event) {
     return;
   }
   if (event.type === 'coding_brain_completed') {
+    const evidence = [event.review ? `review=${event.review}` : '', event.validation ? `validation=${event.validation}` : ''].filter(Boolean);
+    for (const item of evidence) addEvidence(item);
     const result = verifier.verifyExecution({
       kind: 'repository_action',
       changedFiles: Array.isArray(event.changedFiles) ? event.changedFiles.length : 0,
       validation: event.validation || '',
-      evidence: [event.review ? `review=${event.review}` : '', event.validation ? `validation=${event.validation}` : ''].filter(Boolean),
+      evidence,
     });
     verifier.report(result, 'coding-brain-execution');
     finishExecution(result);
     return;
   }
   if (event.type === 'verification_complete') {
+    if (event.operation === 'coding-brain-execution') return;
     if (event.result) finishExecution(event.result);
     return;
   }
