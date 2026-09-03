@@ -8,6 +8,7 @@ const verifier = require('./verifier');
 const integrations = require('./integrations');
 const tools = require('./tools');
 const web = require('./web');
+const researchAgent = require('./research-agent');
 const codingBrain = require('./coding-brain');
 const voice = require('./voice-orchestrator');
 const conversation = require('./conversation');
@@ -100,7 +101,7 @@ function workspaceContext(userMessage) {
 
 function contextBlock(retrieved, workspaceData, recent, page, searchEvidence) {
   const blocks = [];
-  if (recent.length) blocks.push('RELEVANT RECENT CONVERSATION:', JSON.stringify(recent.slice(-6)));
+  if (recent.length) blocks.push('RELEVANT RECENT CONVERSATION:', JSON.stringify(recent.slice(-8)));
   if (retrieved.length) blocks.push('RELEVANT LONG-TERM MEMORY:', JSON.stringify(retrieved.slice(0, 6)));
   if (workspaceData.commitments.length || workspaceData.decisions.length || workspaceData.projects.length) {
     blocks.push('RELEVANT WORKSPACE STATE:', JSON.stringify({
@@ -119,18 +120,24 @@ function contextBlock(retrieved, workspaceData, recent, page, searchEvidence) {
   }
   if (searchEvidence) {
     blocks.push(
-      'LIVE WEB SEARCH:',
-      JSON.stringify({ query: searchEvidence.query, provider: searchEvidence.provider, results: searchEvidence.results })
+      'COMPLETED LIVE RESEARCH:',
+      JSON.stringify({
+        query: searchEvidence.query,
+        provider: searchEvidence.provider,
+        researchTask: searchEvidence.researchTask || null,
+        research: searchEvidence.research || null,
+        results: searchEvidence.results,
+      })
     );
     const readablePages = (searchEvidence.pages || []).filter((item) => item?.text);
-    for (const evidencePage of readablePages.slice(0, 3)) {
+    for (const evidencePage of readablePages.slice(0, 5)) {
       blocks.push(
-        `SEARCH RESULT PAGE: ${evidencePage.url}`,
-        JSON.stringify({ title: evidencePage.title || evidencePage.searchTitle || '', provider: evidencePage.provider, truncated: evidencePage.truncated }),
+        `RESEARCH EVIDENCE PAGE: ${evidencePage.url}`,
+        JSON.stringify({ title: evidencePage.title || evidencePage.searchTitle || '', provider: evidencePage.provider, source: evidencePage.source || null, truncated: evidencePage.truncated }),
         String(evidencePage.text || '').slice(0, 8000)
       );
     }
-    blocks.push('Use the live search results and fetched pages above as evidence. Do not pretend you lack web access.');
+    blocks.push('The research above has already been executed. Synthesize it now. Do not narrate an intention to search, ask Sir to provide a more specific search prompt, or tell him to use Hootsuite/Afluencer himself. Those are internal research sources, not user instructions.');
   }
   if (!blocks.length) blocks.push('No prior context is required for this request. Answer from the current user message only.');
   return blocks.join('\n\n');
@@ -223,8 +230,14 @@ function fastGreeting(userMessage) {
 }
 
 function deterministicWebFailure(kind, target, error) {
-  const label = kind === 'search' ? 'search the live web' : `fetch ${target}`;
+  const label = kind === 'search' ? 'complete the live research' : `fetch ${target}`;
   return `I couldn't ${label}, Sir. The web layer returned: ${error.message}`;
+}
+
+function researchHistory(previousConversation, suppliedHistory) {
+  if (Array.isArray(previousConversation) && previousConversation.length) return previousConversation;
+  if (Array.isArray(suppliedHistory) && suppliedHistory.length) return suppliedHistory;
+  return conversation.recent(10);
 }
 
 async function handle(message, options = {}) {
@@ -232,12 +245,14 @@ async function handle(message, options = {}) {
   if (!userMessage) throw new Error('Message is required.');
 
   const started = Date.now();
-  const taskType = options.taskType || 'general';
+  const requestedTaskType = options.taskType || 'general';
   const inputMode = String(options.inputMode || 'chat').toLowerCase() === 'voice' ? 'voice' : 'chat';
   const previousConversation = conversation.contextFor(userMessage, options.history);
+  const resolvedResearchTask = researchAgent.resolve(userMessage, researchHistory(previousConversation, options.history));
+  const taskType = resolvedResearchTask ? 'research' : requestedTaskType;
 
-  emit('task_started', { message: userMessage, taskType, inputMode });
-  conversation.append('user', userMessage, { taskType, inputMode });
+  emit('task_started', { message: userMessage, taskType, requestedTaskType, inputMode, research: resolvedResearchTask || null });
+  conversation.append('user', userMessage, { taskType, requestedTaskType, inputMode });
 
   if (conversation.isGreeting(userMessage)) {
     const response = fastGreeting(userMessage);
@@ -249,8 +264,8 @@ async function handle(message, options = {}) {
     return { ok: true, response, text: response, model: 'mark3-fastpath', provider: 'local', taskType: 'smalltalk', mode: 'fastpath', inputMode, plan: null, toolRounds: 0 };
   }
 
-  const retrieved = memory.retrieve(userMessage, { limit: Math.min(config.maxContextItems, 6) });
-  const workspaceData = workspaceContext(userMessage);
+  const retrieved = memory.retrieve(resolvedResearchTask?.original || userMessage, { limit: Math.min(config.maxContextItems, 6) });
+  const workspaceData = workspaceContext(resolvedResearchTask?.original || userMessage);
 
   const captured = intent.extractCommitment(userMessage);
   if (captured) {
@@ -258,13 +273,14 @@ async function handle(message, options = {}) {
     emit('commitment_created', { commitment });
   }
 
-  const plan = planner.createPlan(userMessage, taskType);
+  const plan = planner.createPlan(resolvedResearchTask?.original || userMessage, taskType);
   emit('context_ready', {
     memoryCount: retrieved.length,
     commitments: workspaceData.commitments.length,
     projectCount: workspaceData.projects.length,
     conversationItems: previousConversation.length,
     inputMode,
+    researchResumed: Boolean(resolvedResearchTask?.resumed),
   });
 
   const githubPath = explicitGitHubPrompt(userMessage);
@@ -282,13 +298,13 @@ async function handle(message, options = {}) {
     return { ok: true, response, text: response, model: 'deterministic-github', taskType, inputMode, plan, tool: 'github_read_file', sha: file.sha };
   }
 
-  if (codingBrain.shouldUse(userMessage, taskType)) {
+  if (codingBrain.shouldUse(userMessage, requestedTaskType)) {
     const codingMode = codingBrain.modeFor(userMessage);
     const codingWorkspace = codingBrain.resolveWorkspace(userMessage, options.codingWorkspace);
-    emit('coding_brain_probe', { mode: codingMode, workspace: codingWorkspace, taskType });
+    emit('coding_brain_probe', { mode: codingMode, workspace: codingWorkspace, taskType: requestedTaskType });
     const brainHealth = await codingBrain.health();
     if (brainHealth.ok) {
-      emit('coding_brain_started', { mode: codingMode, workspace: codingWorkspace, taskType });
+      emit('coding_brain_started', { mode: codingMode, workspace: codingWorkspace, taskType: requestedTaskType });
       try {
         const codingResult = await codingBrain.run(userMessage, { mode: codingMode, workspace: codingWorkspace });
         for (const stage of Array.isArray(codingResult.trace) ? codingResult.trace : []) emit('coding_brain_stage', stage);
@@ -323,6 +339,39 @@ async function handle(message, options = {}) {
       emit('task_completed', { durationMs: Date.now() - started, inputMode });
       return { ok: true, response, text: response, model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', inputMode, plan, webError: error.message };
     }
+  } else if (resolvedResearchTask) {
+    emit('tool_started', {
+      tool: 'research_agent',
+      input: {
+        original: resolvedResearchTask.original,
+        query: resolvedResearchTask.query,
+        kind: resolvedResearchTask.kind,
+        resumed: resolvedResearchTask.resumed,
+        sources: web.researchProfile(resolvedResearchTask.query).sources,
+      },
+    });
+    try {
+      searchEvidence = await researchAgent.run(resolvedResearchTask, { searchLimit: 6, fetchTop: 3, specializedFetchTop: 2 });
+      emit('tool_completed', {
+        tool: 'research_agent',
+        result: {
+          query: searchEvidence.query,
+          kind: resolvedResearchTask.kind,
+          resumed: resolvedResearchTask.resumed,
+          resultCount: searchEvidence.results.length,
+          fetchedPages: searchEvidence.pages.filter((item) => item.text).length,
+          provider: searchEvidence.provider,
+          sources: searchEvidence.research?.completedSources || [],
+        },
+      });
+    } catch (error) {
+      emit('tool_failed', { tool: 'research_agent', query: resolvedResearchTask.query, error: error.message });
+      const response = deterministicWebFailure('search', resolvedResearchTask.original, error);
+      conversation.append('assistant', response, { model: 'deterministic-web-error', provider: 'web', taskType, inputMode });
+      emit('response_ready', { model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', inputMode });
+      emit('task_completed', { durationMs: Date.now() - started, inputMode });
+      return { ok: true, response, text: response, model: 'deterministic-web-error', provider: 'web', taskType, mode: 'tool-error', inputMode, plan, webError: error.message, researchTask: resolvedResearchTask };
+    }
   } else if (web.shouldSearch(userMessage)) {
     emit('tool_started', { tool: 'web_search', input: { query: userMessage, primary: 'tinyfish' } });
     try {
@@ -338,7 +387,7 @@ async function handle(message, options = {}) {
     }
   }
 
-  const repositoryToolsEnabled = needsRepositoryTools(userMessage, taskType);
+  const repositoryToolsEnabled = needsRepositoryTools(userMessage, requestedTaskType);
   const selection = await chooseModel(options.model || '', taskType, { allowLeague: !repositoryToolsEnabled });
   const toolSchemas = tools.schemasFor({ github: repositoryToolsEnabled, web: false });
   emit('model_selection', {
@@ -349,13 +398,15 @@ async function handle(message, options = {}) {
     repositoryToolsEnabled,
     webFetched: Boolean(fetchedPage),
     webSearched: Boolean(searchEvidence),
+    researchKind: resolvedResearchTask?.kind || null,
+    researchResumed: Boolean(resolvedResearchTask?.resumed),
     inputMode,
   });
 
   const messages = [
     {
       role: 'system',
-      content: `${BASE_SYSTEM}\n\n${responseStyleInstruction(userMessage, inputMode)}\nINTERACTION MODE: ${inputMode === 'voice' ? 'VOICE-FIRST. The response will be spoken aloud automatically.' : 'CHAT BACKUP. The response may still be spoken aloud, so keep prose speech-friendly.'}\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 OmniRoute native routing and fallback policy.' : selection.mode === 'league' ? 'Use the adaptive Model League primary; backups are available if it fails.' : 'Use the requested provider model through the Mark 3 OmniRoute transport.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
+      content: `${BASE_SYSTEM}\n\n${responseStyleInstruction(resolvedResearchTask?.original || userMessage, inputMode)}\n${researchAgent.deliveryInstruction(resolvedResearchTask)}\nINTERACTION MODE: ${inputMode === 'voice' ? 'VOICE-FIRST. The response will be spoken aloud automatically.' : 'CHAT BACKUP. The response may still be spoken aloud, so keep prose speech-friendly.'}\nMODEL MODE: ${selection.mode === 'routing' ? 'Use Mark 3 native routing and fallback policy.' : selection.mode === 'league' ? 'Use the adaptive Model League primary; backups are available if it fails.' : 'Use the selected direct provider model.'}\nREPOSITORY TOOLS: ${repositoryToolsEnabled ? 'Enabled for this request.' : 'Disabled for this request.'}\n\n${contextBlock(retrieved, workspaceData, previousConversation, fetchedPage, searchEvidence)}`,
     },
     ...previousConversation.map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '') })),
     { role: 'user', content: userMessage },
@@ -397,7 +448,7 @@ async function handle(message, options = {}) {
     }
   }
 
-  if (!loop) throw lastError || new Error('All Model League routes failed.');
+  if (!loop) throw lastError || new Error('All model routes failed.');
 
   if (selection.mode === 'league') {
     const reranked = modelLeague.promote(taskType);
@@ -415,10 +466,10 @@ async function handle(message, options = {}) {
   const observedModel = data?.model || data?.raw?.model || selectedModel;
   const observedProvider = data?.provider || data?.raw?.provider || integrations.providerFromModel(observedModel) || selectedProvider;
   models.record({ provider: observedProvider, model: observedModel, taskType, success: true, latencyMs: Date.now() - started });
-  conversation.append('assistant', text, { model: observedModel, provider: observedProvider, taskType, mode: selection.mode, inputMode });
-  emit('response_ready', { model: observedModel, taskType, provider: observedProvider, mode: selection.mode, streamed: Boolean(loop.streamed), inputMode });
+  conversation.append('assistant', text, { model: observedModel, provider: observedProvider, taskType, mode: selection.mode, inputMode, researchKind: resolvedResearchTask?.kind || null });
+  emit('response_ready', { model: observedModel, taskType, provider: observedProvider, mode: selection.mode, streamed: Boolean(loop.streamed), inputMode, researchKind: resolvedResearchTask?.kind || null });
   void voice.enqueue(text);
-  emit('task_completed', { durationMs: Date.now() - started, inputMode });
+  emit('task_completed', { durationMs: Date.now() - started, inputMode, researchKind: resolvedResearchTask?.kind || null });
 
   return {
     ok: true,
@@ -433,10 +484,11 @@ async function handle(message, options = {}) {
     plan,
     toolRounds: loop.rounds,
     streamed: Boolean(loop.streamed),
+    researchTask: resolvedResearchTask || null,
     web: fetchedPage
       ? { mode: 'fetch', url: fetchedPage.url, title: fetchedPage.title, status: fetchedPage.status, provider: fetchedPage.provider }
       : searchEvidence
-        ? { mode: 'search', query: searchEvidence.query, resultCount: searchEvidence.results.length, provider: searchEvidence.provider }
+        ? { mode: resolvedResearchTask ? 'research' : 'search', query: searchEvidence.query, resultCount: searchEvidence.results.length, provider: searchEvidence.provider, sources: searchEvidence.research?.completedSources || [] }
         : null,
   };
 }
