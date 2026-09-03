@@ -7,6 +7,7 @@ const TRIAL_TIMEOUT_MS = Math.max(7000, Number(process.env.ULTRON_M3_LEAGUE_TRIA
 const JUDGE_TIMEOUT_MS = Math.max(10000, Number(process.env.ULTRON_M3_LEAGUE_JUDGE_TIMEOUT_MS || 30000));
 const INTERVAL_MS = Math.max(15 * 60 * 1000, Number(process.env.ULTRON_M3_LEAGUE_INTERVAL_MS || 45 * 60 * 1000));
 const INITIAL_DELAY_MS = Math.max(15000, Number(process.env.ULTRON_M3_LEAGUE_INITIAL_DELAY_MS || 60000));
+const AUTO_RUN = /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_LEAGUE_ARENA_AUTORUN || '0'));
 const TASKS = ['general', 'coding', 'research', 'planning'];
 
 let timer = null;
@@ -181,12 +182,17 @@ async function scheduledRound() {
 
 function start() {
   stop();
+  if (!AUTO_RUN) {
+    emit('model_league_passive', { reason: 'arena_autorun_disabled', policy: 'learn-from-real-requests' });
+    return false;
+  }
   const initial = setTimeout(async () => {
     timer = null;
     await scheduledRound();
     timer = setInterval(scheduledRound, INTERVAL_MS);
   }, INITIAL_DELAY_MS);
   timer = initial;
+  return true;
 }
 
 function stop() {
@@ -198,6 +204,8 @@ function stop() {
 function status() {
   return {
     running,
+    autoRun: AUTO_RUN,
+    learningMode: AUTO_RUN ? 'active-benchmarking' : 'passive-operational-evidence',
     participantsPerRound: PARTICIPANTS,
     intervalMs: INTERVAL_MS,
     trialTimeoutMs: TRIAL_TIMEOUT_MS,
