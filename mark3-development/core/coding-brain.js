@@ -10,7 +10,7 @@ function shouldUse(message, taskType) {
   const text = String(message || '').toLowerCase();
   const task = String(taskType || '').toLowerCase();
   const action = /\b(?:fix|implement|add|change|update|modify|edit|refactor|remove|delete|create|build|debug|investigate|inspect|review|test|repair|optimi[sz]e)\b/.test(text);
-  const codeSignal = /\b(?:repo|repository|codebase|source|branch|file|function|class|component|server|api|website|app|interface|project|ultron|elevate|bug|code)\b/.test(text);
+  const codeSignal = /\b(?:repo|repository|codebase|source|branch|commit|file|function|class|component|server|api|endpoint|route|website|app|interface|frontend|backend|database|module|service|feature|screen|page|project|ultron|elevate|bug|code)\b/.test(text);
   if (task === 'coding') return action;
   return action && codeSignal;
 }
@@ -64,10 +64,11 @@ async function run(message, options = {}) {
   if (!task) throw new Error('Coding task is required.');
   const workspace = resolveWorkspace(task, options.workspace);
   const mode = options.mode || modeFor(task);
+  const host = ['0.0.0.0', '::', '[::]'].includes(String(config.host).toLowerCase()) ? '127.0.0.1' : config.host;
   return request(`${config.codingBrainUrl}/run`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ task, workspace, mode, mark3Url: `http://${config.host}:${config.port}` }),
+    body: JSON.stringify({ task, workspace, mode, mark3Url: `http://${host}:${config.port}` }),
   }, config.codingBrainTimeoutMs);
 }
 
