@@ -8,6 +8,7 @@ let startupPromise = null;
 let runtimeDir = null;
 let lastStartError = null;
 let startOnNextHealth = false;
+let runtimeRefreshStatus = null;
 
 function enabled() {
   return config.codingBrainEnabled;
@@ -96,9 +97,37 @@ function runProcess(command, args, options = {}) {
   });
 }
 
+async function refreshRuntime(dir) {
+  const gitDir = path.join(dir, '.git');
+  if (!fs.existsSync(gitDir)) return { attempted: false, updated: false, reason: 'not-a-git-clone' };
+  try {
+    const branch = (await runProcess('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir })).stdout.trim();
+    if (branch !== 'main') return { attempted: false, updated: false, reason: `branch-${branch || 'unknown'}` };
+    const dirty = (await runProcess('git', ['status', '--porcelain'], { cwd: dir })).stdout.trim();
+    if (dirty) return { attempted: false, updated: false, reason: 'local-changes-present' };
+    const before = (await runProcess('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+    await runProcess('git', ['fetch', '--quiet', 'origin', 'main'], { cwd: dir });
+    await runProcess('git', ['merge', '--ff-only', '--quiet', 'FETCH_HEAD'], { cwd: dir });
+    const after = (await runProcess('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+    return { attempted: true, updated: Boolean(before && after && before !== after), before: before || null, after: after || null, reason: before === after ? 'already-current' : 'fast-forwarded' };
+  } catch (error) {
+    return { attempted: true, updated: false, reason: 'refresh-failed', error: error.message };
+  }
+}
+
 async function provisionRuntime() {
   const existing = findRuntimeDir();
-  if (existing) return existing;
+  if (existing) {
+    runtimeRefreshStatus = await refreshRuntime(existing);
+    if (runtimeRefreshStatus.reason === 'local-changes-present') {
+      console.warn(`[Mark 3] Coding Brain at ${existing} has local changes; auto-update skipped safely.`);
+    } else if (runtimeRefreshStatus.reason === 'refresh-failed') {
+      console.warn(`[Mark 3] Coding Brain auto-update failed; using the existing runtime: ${runtimeRefreshStatus.error}`);
+    } else if (runtimeRefreshStatus.updated) {
+      console.log(`[Mark 3] Coding Brain auto-updated ${String(runtimeRefreshStatus.before).slice(0, 8)} -> ${String(runtimeRefreshStatus.after).slice(0, 8)}.`);
+    }
+    return existing;
+  }
   if (!config.codingBrainAutoProvision) throw new Error('Coding Brain runtime was not found and auto-provisioning is disabled.');
 
   const target = path.resolve(config.projectRoot, '.ultron', 'coding-brain');
@@ -106,6 +135,7 @@ async function provisionRuntime() {
   if (fs.existsSync(target) && !validRuntime(target)) fs.rmSync(target, { recursive: true, force: true });
   await runProcess('git', ['clone', '--depth', '1', '--branch', 'main', config.codingBrainRepo, target], { cwd: config.projectRoot });
   if (!validRuntime(target)) throw new Error('Coding Brain repository was cloned but ultron-cortex/server.mjs is missing.');
+  runtimeRefreshStatus = { attempted: true, updated: true, reason: 'provisioned-new-clone' };
   return target;
 }
 
@@ -127,6 +157,7 @@ async function rawHealth() {
       url: config.codingBrainUrl,
       managed: Boolean(managedChild && !managedChild.killed),
       runtimeDir: runtimeDir || findRuntimeDir(),
+      runtimeRefresh: runtimeRefreshStatus,
       ...data,
     };
   } catch (error) {
@@ -136,6 +167,7 @@ async function rawHealth() {
       url: config.codingBrainUrl,
       managed: Boolean(managedChild && !managedChild.killed),
       runtimeDir: runtimeDir || findRuntimeDir(),
+      runtimeRefresh: runtimeRefreshStatus,
       standby: config.codingBrainAutoStart,
       error: error.message,
       lastStartError,
@@ -190,7 +222,7 @@ async function startManagedRuntime() {
       managedChild.once('error', (error) => { lastStartError = error.message; });
       const ready = await waitUntilHealthy();
       lastStartError = null;
-      return { ...ready, autoStarted: true, logPath };
+      return { ...ready, autoStarted: true, logPath, runtimeRefresh: runtimeRefreshStatus };
     } catch (error) {
       lastStartError = error.message;
       throw error;
@@ -234,9 +266,12 @@ async function run(message, options = {}) {
   }, config.codingBrainTimeoutMs);
 }
 
-function validationLabel(validation) {
-  if (!validation || validation.status === 'not-run') return 'No project validation script was available.';
-  if (validation.passed) return 'Validation passed.';
+function validationLabel(result) {
+  const validation = result?.validation;
+  const level = result?.reliability?.verificationLevel;
+  if (level === 'verified-current-tree') return 'Validation passed against the exact current working tree.';
+  if (!validation || validation.status === 'not-run') return 'No executable project validation script was available; the result is reviewed but not test-proven.';
+  if (validation.passed) return 'Validation passed, but no fresh working-tree evidence was recorded.';
   return 'Validation found a failure.';
 }
 
@@ -245,13 +280,14 @@ function summarize(result) {
   if (result.mode === 'plan' || result.mode === 'inspect') {
     const summary = String(result.plan?.summary || 'I inspected the codebase and built a plan.').trim();
     const files = Array.isArray(result.selectedFiles) ? result.selectedFiles.length : 0;
-    return `${summary}${files ? ` I narrowed it to ${files} relevant file${files === 1 ? '' : 's'}.` : ''}`;
+    const specialist = result.investigation ? ' I ran a root-cause investigation first.' : result.planningCouncil ? ' I ran the planning council first.' : '';
+    return `${summary}${files ? ` I narrowed it to ${files} relevant file${files === 1 ? '' : 's'}.` : ''}${specialist}`;
   }
   const changed = Array.isArray(result.changedFiles) ? result.changedFiles.length : 0;
   const review = String(result.review?.verdict || 'unknown');
   const base = String(result.summary || 'The coding task is complete.').trim();
   const reviewLine = review === 'pass' ? 'The independent review passed.' : review === 'needs_changes' ? 'The reviewer still found issues that need attention.' : 'The review result was inconclusive.';
-  return `${base} I changed ${changed} file${changed === 1 ? '' : 's'}. ${validationLabel(result.validation)} ${reviewLine}`.replace(/\s+/g, ' ').trim();
+  return `${base} I changed ${changed} file${changed === 1 ? '' : 's'}. ${validationLabel(result)} ${reviewLine}`.replace(/\s+/g, ' ').trim();
 }
 
 module.exports = { enabled, shouldUse, modeFor, resolveWorkspace, health, ensureRunning, run, summarize };
