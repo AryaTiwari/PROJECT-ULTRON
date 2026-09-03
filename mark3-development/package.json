@@ -1,9 +1,9 @@
 {
   "name": "ultron-mark3",
-  "version": "3.0.0-beta.14",
+  "version": "3.0.0-beta.15",
   "private": true,
   "type": "commonjs",
-  "description": "ULTRON Mark 3 voice-first personal operating assistant",
+  "description": "ULTRON Mark 3 wake-word voice-first personal operating assistant",
   "scripts": {
     "start": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/start-mark3.mjs && node --env-file=../.env server.js",
     "check": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/smoke-test.js",
