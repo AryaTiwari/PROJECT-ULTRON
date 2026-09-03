@@ -3,15 +3,21 @@ const integrations = require('../core/integrations');
 (async () => {
   try {
     const health = await integrations.health();
-    const providers = await integrations.providerHealthSnapshot();
-    console.log(`OmniRoute endpoint: ${health.endpoint || process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1'}`);
-    console.log(`Gateway catalog: ${health.gatewayModelCount || 0}; managed fallback models: ${health.eligibleFallbackModelCount || 0}.`);
     console.log(`Routing mode: ${health.mode || 'unknown'}.`);
-    for (const row of providers.providers || []) {
-      if (!row.enabled && row.tier === 'experimental') continue;
-      console.log(`${row.provider}: tier=${row.tier}, enabled=${row.enabled}, credential=${row.credentialDetected}, models=${row.catalogModels}, healthy=${row.healthyModel || 'none'}${row.lastFailureKind ? `, lastFailure=${row.lastFailureKind}` : ''}`);
+    console.log(`Primary transport: ${health.primary || 'unknown'}.`);
+
+    const direct = health.direct || {};
+    console.log(`Direct strategy: ${direct.strategy || 'not reported'}.`);
+    for (const [provider, row] of Object.entries(direct.providers || {})) {
+      const keyCount = Number(row?.keyCount || 0);
+      const keyStates = (row?.keys || []).map((key) => `${key.slot}:${key.status}`).join(', ') || 'none';
+      console.log(`${provider}: configured=${Boolean(row?.configured)}, keys=${keyCount}, keyStates=[${keyStates}], models=${(row?.models || []).length}.`);
     }
-    if (!health.ok) throw new Error(health.error || health.catalogError || 'OmniRoute health check failed.');
+
+    const omni = health.omniroute || {};
+    console.log(`OmniRoute fallback: ${omni.ok ? 'online' : 'standby/offline'}${omni.endpoint ? ` at ${omni.endpoint}` : ''}; gateway models=${omni.gatewayModelCount || 0}.`);
+
+    if (!health.ok) throw new Error(health.catalogError || omni.error || 'No direct or OmniRoute model transport is available.');
 
     const result = await integrations.chat(
       [
@@ -23,14 +29,14 @@ const integrations = require('../core/integrations');
       { taskType: 'simple_qa' },
     );
     const text = String(result?.content || result?.response || result?.text || '').trim();
-    if (!text) throw new Error('OmniRoute inference returned no text.');
+    if (!text) throw new Error('Model transport inference returned no text.');
     const model = String(result?.model || '').trim();
     const nativeAlias = integrations.isRoutingAlias(model) && result?.provider === 'omniroute-auto';
     if (!nativeAlias && !integrations.isDirectProviderModel(model)) {
       throw new Error(`Router returned an ineligible model: ${model || '(missing)'}`);
     }
 
-    console.log(`Inference: PASS (mode=${result.routingMode || 'omniroute'}, provider=${result.provider || integrations.providerFromModel(model)}, model=${model}).`);
+    console.log(`Inference: PASS (mode=${result.routingMode || result.transport || 'unknown'}, provider=${result.provider || integrations.providerFromModel(model)}, model=${model}, credentialSlot=${result.credentialSlot || 'not-exposed'}).`);
     console.log(`Response: ${text.slice(0, 120)}`);
     console.log('Provider health test: PASS.');
   } catch (error) {
