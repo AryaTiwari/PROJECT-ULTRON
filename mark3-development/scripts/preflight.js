@@ -21,6 +21,7 @@ const required = [
   'core/tools.js',
   'core/web.js',
   'core/assistant.js',
+  'core/assistant-handoff.js',
   'core/conversation.js',
   'core/proactive.js',
   'core/voice-orchestrator.js',
@@ -95,16 +96,11 @@ if (/message\.reasoning_content|delta\.reasoning_content/.test(omniTransport)) {
 }
 
 const interfaceJs = fs.readFileSync(path.join(root, 'interface', 'app.js'), 'utf8');
-const interfaceCss = fs.readFileSync(path.join(root, 'interface', 'style.css'), 'utf8');
-if (!/SpeechRecognition/.test(interfaceJs) || !/inputMode/.test(interfaceJs) || !/voiceOrb/.test(interfaceJs)) {
-  throw new Error('Mark 3 interface must keep browser microphone input and voice-mode handoff.');
-}
-if (!/VOICE PRIMARY/.test(interfaceJs) || !/BACKUP SURFACE/.test(interfaceJs) || !/transcript-panel/.test(interfaceJs)) {
-  throw new Error('Mark 3 interface must remain voice-primary with chat as the backup transcript surface.');
-}
-if (!/voice-orb/.test(interfaceCss) || !/listening/.test(interfaceCss) || !/speaking/.test(interfaceCss)) {
-  throw new Error('Mark 3 interface must retain lightweight visual voice states.');
-}
+if (!/SpeechRecognition|webkitSpeechRecognition/.test(interfaceJs)) throw new Error('Voice-first interface must keep browser speech recognition.');
+if (!/WAKE_WORD=['\"]ultron['\"]/.test(interfaceJs) || !/wakeMatch\s*\(/.test(interfaceJs)) throw new Error('Wake-word detection for Ultron is missing.');
+if (!/COMMAND_SILENCE_MS=4000/.test(interfaceJs)) throw new Error('Voice command silence window must remain four seconds.');
+if (!/createMediaElementSource/.test(interfaceJs) || !/createAnalyser/.test(interfaceJs) || !/speechEnergy/.test(interfaceJs)) throw new Error('Audio-reactive speaking visualization is missing.');
+if (!/recognitionMode==='wake'/.test(interfaceJs) || !/recognitionMode==='command'/.test(interfaceJs)) throw new Error('Wake/command recognition state machine is missing.');
 
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
@@ -113,7 +109,7 @@ const league = require('../core/model-league');
 const arena = require('../core/model-arena');
 const conversation = require('../core/conversation');
 const web = require('../core/web');
-const assistant = require('../core/assistant');
+const handoff = require('../core/assistant-handoff');
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
 if (!config.modelLeaguePath.startsWith(config.dataDir)) throw new Error('Model League state must live under Mark 3 data.');
@@ -121,8 +117,8 @@ if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test
 if (typeof router.chatExact !== 'function' || typeof router.streamExact !== 'function' || typeof router.listNativeEligibleModels !== 'function') throw new Error('Model League requires exact-model router primitives.');
 if (typeof league.recommend !== 'function' || typeof league.selectParticipants !== 'function') throw new Error('Adaptive Model League API is incomplete.');
 if (typeof arena.runTournament !== 'function' || typeof arena.start !== 'function') throw new Error('Model Arena API is incomplete.');
-if (!/Spoken conversation/i.test(assistant.responseStyleInstruction('Tell me what happened', 'voice'))) throw new Error('Voice requests must receive speech-native response instructions.');
-if (!/written\/structured artifact/i.test(assistant.responseStyleInstruction('Write me an email', 'voice'))) throw new Error('Written deliverables must remain readable even in voice mode.');
+if (!/next command/i.test(handoff.withCommandHandoff('Done.'))) throw new Error('Assistant command handoff must remain active for ordinary responses.');
+if (handoff.withCommandHandoff('What should I do next?') !== 'What should I do next?') throw new Error('Assistant handoff must not duplicate an existing follow-up question.');
 if (conversation.contextFor('hey ultron', [{ role:'assistant', content:'Old unrelated task' }]).length) throw new Error('Greeting context isolation invariant failed.');
 if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw new Error('Public web URL normalization invariant failed.');
 if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must be the primary Mark 3 web provider.');
