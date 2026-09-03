@@ -3,11 +3,13 @@ const path = require('path');
 const operatingModes = require('../core/operating-modes');
 const founderBehavior = require('../core/founder-behavior');
 const gitPublisher = require('../core/git-publisher');
+const conversation = require('../core/conversation');
 
 const root = path.resolve(__dirname, '..');
 const wakeBoost = fs.readFileSync(path.join(root, 'interface', 'wake-boost.js'), 'utf8');
 const chatTransport = fs.readFileSync(path.join(root, 'interface', 'chat-transport.js'), 'utf8');
 const nativeVoice = fs.readFileSync(path.join(root, 'interface', 'native-voice.js'), 'utf8');
+const conversationSource = fs.readFileSync(path.join(root, 'core', 'conversation.js'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(root, 'interface', 'index.html'), 'utf8');
 
 function assert(condition, message) {
@@ -38,6 +40,12 @@ assert(gitPublisher.shouldPublish('Implement this and push it to GitHub.'), 'Exp
 assert(gitPublisher.shouldPublish('Fix it and commit it.'), 'Explicit commit intent must enable verified publication.');
 assert(!gitPublisher.shouldPublish('Fix this bug locally.'), 'Local coding tasks must not silently publish.');
 
+assert(conversation.isContinuation('list it'), 'Short follow-up "list it" must preserve the active task context.');
+assert(conversation.isContinuation('show them'), 'Short deictic list follow-ups must preserve active context.');
+assert(conversation.isRecallQuery('remember the last conversation regarding fitness creator with 100k followers'), 'Explicit prior-conversation recall intent was not detected.');
+assert(conversation.isRecallQuery('what did we discuss in the previous chat about fitness creators'), 'Previous-chat recall wording was not detected.');
+assert(/searchHistory/.test(conversationSource) && /recalled:\s*true/.test(conversationSource), 'Persisted conversation archive search must remain wired into continuity.');
+
 assert(/Math\.max\(5/.test(wakeBoost), 'Wake booster must request at least five recognition alternatives.');
 assert(/fuzzyDistance:\s*2/.test(wakeBoost), 'Wake booster fuzzy-distance policy is missing.');
 assert(/prematureFastFinalize:\s*false/.test(wakeBoost), 'Premature fast-finalization must stay disabled.');
@@ -57,4 +65,4 @@ const nativeIndex = indexHtml.indexOf('native-voice.js');
 assert(wakeIndex >= 0 && appIndex > wakeIndex, 'wake-boost.js must load before app.js.');
 assert(nativeIndex > appIndex, 'native-voice.js must load after app.js so it can observe command-listening state.');
 
-console.log('ULTRON interaction self-test passed: fuzzy wake, authoritative native-audio command capture, patient finalization, playback-safe 10s flow, specialist modes and explicit Git publishing validated.');
+console.log('ULTRON interaction self-test passed: fuzzy wake, authoritative native-audio command capture, patient finalization, playback-safe 10s flow, short-turn continuity, persisted conversation recall, specialist modes and explicit Git publishing validated.');
