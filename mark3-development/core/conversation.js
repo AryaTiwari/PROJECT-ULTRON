@@ -1,6 +1,9 @@
 const config = require('./config');
 const { appendJsonl, readJsonl } = require('./persistence');
 
+let legacyStore = null;
+try { legacyStore = require('../../core/memory/local-store'); } catch {}
+
 const SESSION_GAP_MS = Math.max(5 * 60 * 1000, Number(process.env.ULTRON_M3_SESSION_GAP_MS || 45 * 60 * 1000));
 
 function append(role, content, meta = {}) {
@@ -77,7 +80,15 @@ function currentSession(rows) {
 function normalizeHistory(history) {
   return (Array.isArray(history) ? history : [])
     .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim())
-    .map((item) => ({ role: item.role, content: String(item.content || ''), at: item.at || null, model: item.model || null }));
+    .map((item) => ({ role: item.role, content: String(item.content || ''), at: item.at || item.created_at || item.createdAt || null, model: item.model || null }));
+}
+
+function legacyConversationRows() {
+  if (!legacyStore?.getRecentMessages) return [];
+  try {
+    return normalizeHistory(legacyStore.getRecentMessages(5000, { excludeCurrentUserMessage: false }))
+      .map((item) => ({ ...item, legacy: true }));
+  } catch { return []; }
 }
 
 function recallQueryText(query) {
@@ -87,9 +98,21 @@ function recallQueryText(query) {
     .trim() || String(query || '').trim();
 }
 
+function uniqueContext(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const key = `${item.role}|${item.at || ''}|${String(item.content || '').trim()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function searchHistory(query, options = {}) {
-  const rows = readJsonl(config.conversationPath)
-    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+  const mark3Rows = readJsonl(config.conversationPath)
+    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim())
+    .map((item) => ({ ...item, legacy: false }));
+  const rows = uniqueContext([...legacyConversationRows(), ...mark3Rows]);
   if (!rows.length) return [];
 
   const focused = recallQueryText(query);
@@ -116,17 +139,7 @@ function searchHistory(query, options = {}) {
     .sort((a, b) => a - b)
     .map((index) => rows[index])
     .slice(-limit)
-    .map((m) => ({ role: m.role, content: m.content, at: m.at, model: m.model || null, recalled: true }));
-}
-
-function uniqueContext(items) {
-  const seen = new Set();
-  return (Array.isArray(items) ? items : []).filter((item) => {
-    const key = `${item.role}|${item.at || ''}|${String(item.content || '').trim()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    .map((m) => ({ role: m.role, content: m.content, at: m.at || m.created_at || m.createdAt || null, model: m.model || null, recalled: true, legacy: Boolean(m.legacy) }));
 }
 
 function contextFor(query, suppliedHistory = null) {
@@ -158,4 +171,4 @@ function contextFor(query, suppliedHistory = null) {
   return tail.slice(-6);
 }
 
-module.exports = { append, recent, contextFor, searchHistory, isRecallQuery, isGreeting, isBareUrl, isContinuation, overlap };
+module.exports = { append, recent, contextFor, searchHistory, legacyConversationRows, isRecallQuery, isGreeting, isBareUrl, isContinuation, overlap };
