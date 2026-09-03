@@ -39,12 +39,17 @@ assert(!gitPublisher.shouldPublish('Fix this bug locally.'), 'Local coding tasks
 
 assert(/Math\.max\(5/.test(wakeBoost), 'Wake booster must request at least five recognition alternatives.');
 assert(/fuzzyDistance:\s*2/.test(wakeBoost), 'Wake booster fuzzy-distance policy is missing.');
-assert(/FAST_FINAL_SILENCE_MS\s*=\s*2200/.test(wakeBoost), 'Adaptive final-command latency must remain about 2.2 seconds.');
+assert(/prematureFastFinalize:\s*false/.test(wakeBoost), 'Premature fast-finalization must stay disabled.');
+assert(/commandTranscript:\s*['"]raw-confidence-ranked['"]/.test(wakeBoost), 'Command speech must preserve raw recognition text.');
+assert(/locale:\s*['"]en-IN['"]/.test(wakeBoost), 'Indian-English recognition locale must remain enabled.');
+assert(!/FAST_FINAL_SILENCE_MS/.test(wakeBoost), 'Fast-finalize timer must not return; it can cut speech mid-command.');
 assert(/FLOW_REPLY_WINDOW_MS\s*=\s*8000/.test(chatTransport), 'Voice conversation flow must remain open for eight seconds.');
+assert(/PLAYBACK_SETTLE_MS\s*=\s*700/.test(chatTransport), 'Conversation flow must wait for stable browser playback completion.');
+assert(/voiceSynthesisComplete/.test(chatTransport) && /playbackSettled\(\)/.test(chatTransport), 'Flow must wait for TTS synthesis and playback completion before reopening the mic.');
 assert(/lastChatInputMode\s*===\s*['"]voice['"]/.test(chatTransport), 'Wake-free flow must be tied to voice-originated conversation turns.');
 
 const wakeIndex = indexHtml.indexOf('wake-boost.js');
 const appIndex = indexHtml.indexOf('app.js');
 assert(wakeIndex >= 0 && appIndex > wakeIndex, 'wake-boost.js must load before app.js.');
 
-console.log('ULTRON interaction self-test passed: fuzzy wake, fast finalization, 8s flow, specialist modes and explicit Git publishing validated.');
+console.log('ULTRON interaction self-test passed: fuzzy wake, raw command capture, patient finalization, playback-safe 8s flow, specialist modes and explicit Git publishing validated.');
