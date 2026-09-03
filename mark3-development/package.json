@@ -1,9 +1,9 @@
 {
   "name": "ultron-mark3",
-  "version": "3.0.0-beta.18",
+  "version": "3.0.0-beta.19",
   "private": true,
   "type": "commonjs",
-  "description": "ULTRON Mark 3 direct-first voice operating assistant with lazy OmniRoute fallback and evidence-driven Coding Brain",
+  "description": "ULTRON Mark 3 multi-key specialist direct-provider assistant with lazy OmniRoute fallback and evidence-driven Coding Brain",
   "scripts": {
     "start": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/start-transport.mjs && node --env-file=../.env server.js",
     "check": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/smoke-test.js",
