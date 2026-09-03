@@ -48,8 +48,8 @@ function isBareUrl(text) {
 function isContinuation(text) {
   const value = String(text || '').trim();
   if (isBareUrl(value)) return true;
-  if (/^(?:yes|yeah|yep|no|nope|okay|ok|sure|do it|continue|go on|this|that|it|same|exactly|why|how so)\b/i.test(value)) return true;
-  return value.split(/\s+/).length <= 8 && /\b(?:this|that|it|they|them|those|these|above|previous|same|link|url)\b/i.test(value);
+  if (/^(?:yes|yeah|yep|no|nope|okay|ok|sure|do it|continue|go on|finish(?:\s+it)?(?:\s+now)?|complete(?:\s+it)?|resume|retry|try again|proceed|carry on|this|that|it|same|exactly|why|how so)\b/i.test(value)) return true;
+  return value.split(/\s+/).length <= 8 && /\b(?:this|that|it|they|them|those|these|above|previous|same|link|url|request|task)\b/i.test(value);
 }
 
 function currentSession(rows) {
