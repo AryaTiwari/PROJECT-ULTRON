@@ -4,13 +4,12 @@ const config = require('./config');
 const fileVault = require('./file-vault');
 const documentRenderer = require('./document-renderer');
 const omniFallback = require('./omniroute-fallback');
-const omniRoute = require('./omniroute-lazy-hooks');
+const integrations = require('./integrations');
 const nativeVoice = require('./native-voice-input');
 const { load: loadCredentials } = require('../../core/credentials/local-store');
 
 const MEDIA_TIMEOUT_MS = Math.max(30000, Number(process.env.ULTRON_M3_MEDIA_TIMEOUT_MS || 180000));
 const VIDEO_TIMEOUT_MS = Math.max(MEDIA_TIMEOUT_MS, Number(process.env.ULTRON_M3_VIDEO_TIMEOUT_MS || 360000));
-const DOCUMENT_TIMEOUT_MS = Math.max(30000, Number(process.env.ULTRON_M3_DOCUMENT_TIMEOUT_MS || 120000));
 const ATTACHMENT_LIMIT = Math.max(1, Math.min(6, Number(process.env.ULTRON_M3_ATTACHMENT_LIMIT || 4)));
 const ATTACHMENT_CONTEXT_CHARS = Math.max(6000, Number(process.env.ULTRON_M3_ATTACHMENT_CONTEXT_CHARS || 36000));
 
@@ -168,21 +167,15 @@ function modelText(result) {
 }
 
 async function documentContent(prompt, attachmentContext = '') {
-  const result = await omniRoute.chat({
-    model: 'auto/best-reasoning',
-    taskType: 'planning',
-    timeoutMs: DOCUMENT_TIMEOUT_MS,
-    maxAttempts: 2,
-    skipModelValidation: true,
-    messages: [
-      { role: 'system', content: 'You are ULTRON Document Composer. Produce polished document content in clean Markdown. Follow the user request exactly. Do not include meta commentary, hidden reasoning, download instructions or markdown code fences.' },
-      ...(attachmentContext ? [{ role: 'system', content: `PRIVATE ATTACHMENT CONTEXT:\n${attachmentContext.slice(0, ATTACHMENT_CONTEXT_CHARS)}` }] : []),
-      { role: 'user', content: String(prompt || '').trim() },
-    ],
-  });
+  const messages = [
+    { role: 'system', content: 'You are ULTRON Document Composer. Produce polished document content in clean Markdown. Follow the user request exactly. Do not include meta commentary, hidden reasoning, claims that file tools are unavailable, download instructions or markdown code fences. The local ULTRON runtime will render the file after you provide the content.' },
+    ...(attachmentContext ? [{ role: 'system', content: `PRIVATE ATTACHMENT CONTEXT:\n${attachmentContext.slice(0, ATTACHMENT_CONTEXT_CHARS)}` }] : []),
+    { role: 'user', content: String(prompt || '').trim() },
+  ];
+  const result = await integrations.chat(messages, 'auto/best-reasoning', null, { taskType: 'planning' });
   const text = modelText(result);
-  if (!text) throw new Error('OmniRoute document composer returned no content.');
-  return { text, model: result.model || 'auto/best-reasoning', provider: result.provider || 'omniroute-auto' };
+  if (!text) throw new Error('ULTRON document composer returned no content.');
+  return { text, model: result.model || 'auto/best-reasoning', provider: result.provider || integrations.providerFromModel(result.model) || 'mark3-router' };
 }
 
 async function generateDocument(prompt, format = 'pdf', options = {}) {
@@ -195,8 +188,8 @@ async function generateDocument(prompt, format = 'pdf', options = {}) {
     name: `${title.replace(/[^A-Za-z0-9._ -]+/g, '_').replace(/\s+/g, '-').toLowerCase() || 'ultron-document'}.${target}`,
     mime,
     kind: 'generated',
-    source: 'omniroute-document-composer',
-    metadata: { composerModel: composed.model, prompt: String(prompt || '').slice(0, 1200), format: target },
+    source: 'mark3-document-composer',
+    metadata: { composerModel: composed.model, composerProvider: composed.provider, prompt: String(prompt || '').slice(0, 1200), format: target },
   });
   return {
     kind: target,
@@ -281,13 +274,19 @@ function stripWake(text) {
 
 function generationIntent(message) {
   const text = stripWake(message);
-  const action = /\b(?:generate|create|make|render|design|produce|build)\b/i.test(text);
-  if (!action) return null;
+  if (!text) return null;
+  const artifact = /\b(?:pdf|docx|word document|word file|document|report|brief|proposal|image|picture|poster|thumbnail|visual|wallpaper|artwork|logo|video|clip|animation|b-roll|broll)\b/i.test(text);
+  if (!artifact) return null;
+  const informational = /^(?:what|why|how|when|where|who)\b|^(?:tell me|explain|describe|compare)\b/i.test(text);
+  if (informational) return null;
+  const action = /\b(?:generate|create|make|render|design|produce|build|send|give|prepare|export|save|provide|deliver|turn|convert)\b/i.test(text);
+  const requestForm = /^(?:please\b|can\s+you\b|could\s+you\b|would\s+you\b|i\s+(?:want|need)\b)/i.test(text);
+  if (!action && !requestForm) return null;
   if (/\b(?:image|picture|poster|thumbnail|visual|wallpaper|artwork|logo)\b/i.test(text)) return { kind: 'image', prompt: text };
   if (/\b(?:video|clip|animation|b-roll|broll)\b/i.test(text)) return { kind: 'video', prompt: text };
   if (/\bpdf\b/i.test(text)) return { kind: 'pdf', prompt: text };
   if (/\b(?:docx|word document|word file)\b/i.test(text)) return { kind: 'docx', prompt: text };
-  if (/\b(?:document|report|brief|proposal)\b/i.test(text) && /\b(?:file|download|document|report|proposal)\b/i.test(text)) return { kind: 'docx', prompt: text };
+  if (/\b(?:document|report|brief|proposal)\b/i.test(text)) return { kind: 'docx', prompt: text };
   return null;
 }
 
@@ -302,8 +301,8 @@ async function generate(intent, options = {}) {
 async function status() {
   const [voiceStatus, images, videos] = await Promise.all([nativeVoice.status(), Promise.resolve([]), Promise.resolve([])]);
   return {
-    mediaTransport: 'omniroute-primary',
-    documents: 'omniroute-content + local-renderer',
+    mediaTransport: 'omniroute-primary-for-specialty-media',
+    documents: 'direct-provider-content + local-renderer; omniroute-fallback-only',
     fileVault: fileVault.status(),
     nativeVoice: voiceStatus,
     endpoints: { image: '/v1/images/generations', video: '/v1/videos/generations', ocr: '/v1/ocr', transcription: '/v1/audio/transcriptions' },
