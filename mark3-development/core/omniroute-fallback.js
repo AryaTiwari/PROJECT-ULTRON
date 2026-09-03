@@ -4,7 +4,7 @@ const { spawn } = require('child_process');
 const omniRoute = require('../../core/omniroute');
 const config = require('./config');
 
-const READY_TIMEOUT_MS = Math.max(30000, Number(process.env.ULTRON_M3_OMNIROUTE_LAZY_TIMEOUT_MS || 180000));
+const READY_TIMEOUT_MS = Math.max(180000, Number(process.env.ULTRON_M3_OMNIROUTE_LAZY_TIMEOUT_MS || 180000));
 const POLL_MS = Math.max(250, Number(process.env.ULTRON_M3_OMNIROUTE_LAZY_POLL_MS || 900));
 const MAX_LAUNCH_ATTEMPTS = Math.max(1, Math.min(3, Number(process.env.ULTRON_M3_OMNIROUTE_LAZY_LAUNCH_ATTEMPTS || 2)));
 const runtimeDir = path.join(config.projectRoot, '.ultron');
