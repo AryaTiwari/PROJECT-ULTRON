@@ -5,11 +5,10 @@ const DIRECT_HEAVY_TIMEOUT_MS = Math.max(DIRECT_TIMEOUT_MS, Number(process.env.U
 const FIRST_TOKEN_TIMEOUT_MS = Math.max(3000, Number(process.env.ULTRON_M3_DIRECT_FIRST_TOKEN_TIMEOUT_MS || 9000));
 const KEY_RATE_LIMIT_COOLDOWN_MS = Math.max(15000, Number(process.env.ULTRON_M3_DIRECT_KEY_RATE_LIMIT_COOLDOWN_MS || 90000));
 const KEY_ACCESS_COOLDOWN_MS = Math.max(KEY_RATE_LIMIT_COOLDOWN_MS, Number(process.env.ULTRON_M3_DIRECT_KEY_ACCESS_COOLDOWN_MS || 30 * 60 * 1000));
-const KEY_UPSTREAM_COOLDOWN_MS = Math.max(5000, Number(process.env.ULTRON_M3_DIRECT_KEY_UPSTREAM_COOLDOWN_MS || 20000));
 const MODEL_COOLDOWN_MS = Math.max(60000, Number(process.env.ULTRON_M3_DIRECT_MODEL_COOLDOWN_MS || 6 * 60 * 60 * 1000));
 const MODEL_CACHE_MS = Math.max(30000, Number(process.env.ULTRON_M3_DIRECT_MODEL_CACHE_MS || 10 * 60 * 1000));
 const MODEL_DISCOVERY_TIMEOUT_MS = Math.max(3000, Number(process.env.ULTRON_M3_DIRECT_MODEL_DISCOVERY_TIMEOUT_MS || 7000));
-const MODELS_PER_PROVIDER = Math.max(1, Math.min(6, Number(process.env.ULTRON_M3_DIRECT_MODELS_PER_PROVIDER || 3)));
+const MODELS_PER_PROVIDER = Math.max(1, Math.min(4, Number(process.env.ULTRON_M3_DIRECT_MODELS_PER_PROVIDER || 2)));
 
 const PROVIDERS = {
   gemini: {
@@ -32,38 +31,37 @@ const PROVIDERS = {
   },
 };
 
-// Preference hints only. Live provider catalogs are discovered and ranked first,
-// so a renamed/retired model does not require an ULTRON source patch.
 const DEFAULT_MODELS = {
   gemini: {
-    simple_qa: ['gemini-3.5-flash-lite', 'gemini-3.6-flash'],
-    general: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'],
-    coding: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'],
-    planning: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'],
-    research: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'],
+    simple_qa: ['gemini-3.6-flash', 'gemini-3.5-flash-lite'],
+    general: ['gemini-3.6-flash', 'gemini-3.5-flash'],
+    coding: ['gemini-3.6-flash', 'gemini-3.5-flash'],
+    planning: ['gemini-3.6-flash', 'gemini-3.5-flash'],
+    research: ['gemini-3.6-flash', 'gemini-3.5-flash'],
     automation: ['gemini-3.6-flash', 'gemini-3.5-flash-lite'],
   },
   groq: {
     simple_qa: ['llama-3.1-8b-instant', 'qwen/qwen3.8-27b'],
-    general: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'qwen/qwen3.6-27b'],
-    coding: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'qwen/qwen3.6-27b'],
+    general: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
+    coding: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
     planning: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
     research: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'],
-    automation: ['llama-3.1-8b-instant', 'qwen/qwen3.6-27b'],
+    automation: ['llama-3.1-8b-instant', 'qwen/qwen3.8-27b'],
   },
   nvidia: {
     simple_qa: ['meta/llama-3.3-70b-instruct', 'openai/gpt-oss-120b'],
-    general: ['openai/gpt-oss-120b', 'nvidia/nemotron-3-super-120b-a12b', 'z-ai/glm-5.2'],
-    coding: ['deepseek-ai/deepseek-v4-flash', 'qwen/qwen2.5-coder-32b-instruct', 'openai/gpt-oss-120b'],
-    planning: ['nvidia/nemotron-3-super-120b-a12b', 'openai/gpt-oss-120b', 'z-ai/glm-5.2'],
-    research: ['nvidia/nemotron-3-super-120b-a12b', 'openai/gpt-oss-120b', 'z-ai/glm-5.2'],
-    automation: ['deepseek-ai/deepseek-v4-flash', 'meta/llama-3.3-70b-instruct'],
+    general: ['openai/gpt-oss-120b', 'nvidia/nemotron-3-super-120b-a12b'],
+    coding: ['deepseek-ai/deepseek-v4-flash', 'qwen/qwen2.5-coder-32b-instruct'],
+    planning: ['nvidia/nemotron-3-super-120b-a12b', 'openai/gpt-oss-120b'],
+    research: ['nvidia/nemotron-3-super-120b-a12b', 'openai/gpt-oss-120b'],
+    automation: ['meta/llama-3.3-70b-instruct', 'openai/gpt-oss-120b'],
   },
 };
 
 const keyStates = new Map();
 const modelCooldowns = new Map();
 const catalogCache = new Map();
+const discoveryStatus = new Map();
 
 function csv(name) {
   return String(process.env[name] || '').split(',').map((value) => value.trim()).filter(Boolean);
@@ -120,13 +118,8 @@ function parse(model) {
   return { provider, model: actual, canonical: value };
 }
 
-function providerForModel(model) {
-  return parse(model).provider;
-}
-
-function isDirectModel(model) {
-  return Boolean(providerForModel(model));
-}
+function providerForModel(model) { return parse(model).provider; }
+function isDirectModel(model) { return Boolean(providerForModel(model)); }
 
 function stateForKey(provider, slot) {
   const id = `${provider}:${slot}`;
@@ -161,8 +154,6 @@ function keyFailureKind(error) {
 function keyCooldownFor(kind) {
   if (kind === 'RATE_LIMIT') return KEY_RATE_LIMIT_COOLDOWN_MS;
   if (kind === 'ACCESS') return KEY_ACCESS_COOLDOWN_MS;
-  if (kind === 'UPSTREAM') return KEY_UPSTREAM_COOLDOWN_MS;
-  if (kind === 'UNKNOWN') return Math.min(KEY_UPSTREAM_COOLDOWN_MS, 10000);
   return 0;
 }
 
@@ -205,16 +196,13 @@ function markModelFailure(model, kind = 'UNKNOWN') {
   const ttl = kind === 'MODEL_UNAVAILABLE' ? MODEL_COOLDOWN_MS : Math.min(MODEL_COOLDOWN_MS, 60 * 60 * 1000);
   modelCooldowns.set(String(model), Date.now() + ttl);
 }
-
-function markModelSuccess(model) {
-  modelCooldowns.delete(String(model));
-}
+function markModelSuccess(model) { modelCooldowns.delete(String(model)); }
 
 async function storedCredentials() {
   try { return await loadCredentials(); } catch { return {}; }
 }
 
-async function credentialPool(provider, { includeCooling = false } = {}) {
+async function allCredentialEntries(provider) {
   const cfg = PROVIDERS[provider];
   if (!cfg) return [];
   const stored = await storedCredentials();
@@ -224,12 +212,15 @@ async function credentialPool(provider, { includeCooling = false } = {}) {
     const value = String(process.env[slot] || stored[slot] || '').trim();
     if (!value || seenValues.has(value)) continue;
     seenValues.add(value);
-    const state = stateForKey(provider, slot);
-    const cooling = Number(state.disabledUntil || 0) > Date.now();
-    if (!includeCooling && cooling) continue;
-    entries.push({ provider, slot, value, state, cooling });
+    entries.push({ provider, slot, value, state: stateForKey(provider, slot) });
   }
-  entries.sort((a, b) => {
+  return entries;
+}
+
+async function credentialPool(provider, { includeCooling = false } = {}) {
+  const entries = await allCredentialEntries(provider);
+  const filtered = entries.filter((entry) => includeCooling || Number(entry.state.disabledUntil || 0) <= Date.now());
+  filtered.sort((a, b) => {
     const aUsed = Number(a.state.lastUsedAt || 0);
     const bUsed = Number(b.state.lastUsedAt || 0);
     if (aUsed !== bUsed) return aUsed - bUsed;
@@ -237,7 +228,7 @@ async function credentialPool(provider, { includeCooling = false } = {}) {
     const bRatio = b.state.uses ? b.state.failures / b.state.uses : 0;
     return aRatio - bRatio || a.slot.localeCompare(b.slot);
   });
-  return entries;
+  return filtered.map((entry) => ({ ...entry, cooling: Number(entry.state.disabledUntil || 0) > Date.now() }));
 }
 
 async function credentialMap() {
@@ -251,9 +242,7 @@ async function credentialMap() {
 
 async function configuredProviders() {
   const out = [];
-  for (const provider of Object.keys(PROVIDERS)) {
-    if ((await credentialPool(provider, { includeCooling: true })).length) out.push(provider);
-  }
+  for (const provider of Object.keys(PROVIDERS)) if ((await allCredentialEntries(provider)).length) out.push(provider);
   return out;
 }
 
@@ -275,7 +264,6 @@ function modelScore(model, taskType, provider, preferenceIndex = -1) {
   if (/latest|stable/.test(value)) score += 8;
   if (/deprecated|legacy|retired|eol/.test(value)) score -= 100;
   if (/preview|experimental|exp\b/.test(value)) score -= 5;
-
   if (task === 'simple_qa' || task === 'automation') {
     if (/instant|flash|lite|mini|small|fast|8b/.test(value)) score += 35;
     if (size && size <= 12) score += 14;
@@ -297,7 +285,6 @@ function modelScore(model, taskType, provider, preferenceIndex = -1) {
     if (/reason|pro|nemotron/.test(value)) score += 8;
     if (size >= 27 && size <= 120) score += 6;
   }
-
   const order = providerOrder(task);
   const providerRank = order.indexOf(provider);
   if (providerRank >= 0) score += Math.max(0, 30 - providerRank * 12);
@@ -316,14 +303,22 @@ function parseCatalog(provider, data) {
     .filter(Boolean);
 }
 
+function errorFor(provider, response, raw, slot = null) {
+  const suffix = slot ? ` via ${slot}` : '';
+  const error = new Error(`${provider} direct HTTP ${response.status}${suffix}: ${String(raw || '').slice(0, 1000)}`);
+  error.status = response.status;
+  error.raw = raw;
+  error.directProvider = provider;
+  error.credentialSlot = slot;
+  return error;
+}
+
 async function fetchCatalogWithKey(provider, entry) {
   const cfg = PROVIDERS[provider];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MODEL_DISCOVERY_TIMEOUT_MS);
   try {
-    const url = provider === 'gemini'
-      ? `${cfg.baseUrl}/models?key=${encodeURIComponent(entry.value)}`
-      : `${cfg.baseUrl}/models`;
+    const url = provider === 'gemini' ? `${cfg.baseUrl}/models?key=${encodeURIComponent(entry.value)}` : `${cfg.baseUrl}/models`;
     const response = await fetch(url, {
       headers: provider === 'gemini' ? {} : { Authorization: `Bearer ${entry.value}` },
       signal: controller.signal,
@@ -333,29 +328,29 @@ async function fetchCatalogWithKey(provider, entry) {
     let data = {};
     try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`${provider} model catalog returned invalid JSON.`); }
     return [...new Set(parseCatalog(provider, data).filter((model) => !nonChatModel(model)))];
-  } finally {
-    clearTimeout(timer);
-  }
+  } finally { clearTimeout(timer); }
 }
 
 async function discoverProviderModels(provider, { force = false } = {}) {
   const cached = catalogCache.get(provider);
   if (!force && cached?.models?.length && Date.now() - cached.fetchedAt < MODEL_CACHE_MS) return [...cached.models];
-  const pool = await credentialPool(provider);
+
+  // Discovery is deliberately passive: it never mutates inference key health,
+  // usage counters or cooldowns. A /models timeout is not evidence that a key
+  // cannot perform inference.
+  const pool = await allCredentialEntries(provider);
   let lastError = null;
   for (const entry of pool) {
-    markKeyUsed(entry);
     try {
       const models = await fetchCatalogWithKey(provider, entry);
       if (models.length) {
-        markKeySuccess(entry);
         catalogCache.set(provider, { models, fetchedAt: Date.now(), slot: entry.slot });
+        discoveryStatus.set(provider, { ok: true, at: Date.now(), slot: entry.slot, error: null });
         return [...models];
       }
     } catch (error) {
       lastError = error;
-      const kind = keyFailureKind(error);
-      if (kind !== 'MODEL_UNAVAILABLE' && Number(error?.status || 0) !== 404) markKeyFailure(entry, error);
+      discoveryStatus.set(provider, { ok: false, at: Date.now(), slot: entry.slot, error: String(error.message || error).slice(0, 300) });
     }
   }
   if (cached?.models?.length) return [...cached.models];
@@ -380,17 +375,12 @@ async function modelList(provider, taskType) {
 
 async function candidates(taskType = 'general') {
   if (!enabled()) return [];
-  const order = providerOrder(taskType);
   const rows = [];
-  for (const provider of order) {
-    const configured = (await credentialPool(provider, { includeCooling: true })).length > 0;
-    if (!configured) continue;
+  for (const provider of providerOrder(taskType)) {
+    if (!(await allCredentialEntries(provider)).length) continue;
     const models = await modelList(provider, taskType);
     rows.push({ provider, models: models.map((model) => canonical(provider, model)).filter((model) => !modelCooling(model)) });
   }
-
-  // Breadth-first failover: each provider's best specialist model gets a chance before
-  // ULTRON burns multiple attempts on a degraded provider.
   const out = [];
   const maxDepth = rows.reduce((max, row) => Math.max(max, row.models.length), 0);
   for (let depth = 0; depth < maxDepth; depth += 1) {
@@ -417,16 +407,6 @@ function normalizeMessages(messages) {
   }));
 }
 
-function errorFor(provider, response, raw, slot = null) {
-  const suffix = slot ? ` via ${slot}` : '';
-  const error = new Error(`${provider} direct HTTP ${response.status}${suffix}: ${String(raw || '').slice(0, 1000)}`);
-  error.status = response.status;
-  error.raw = raw;
-  error.directProvider = provider;
-  error.credentialSlot = slot;
-  return error;
-}
-
 async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -434,10 +414,7 @@ async function fetchWithTimeout(url, options, timeoutMs) {
   finally { clearTimeout(timer); }
 }
 
-function openAiTools(tools) {
-  return Array.isArray(tools) && tools.length ? tools : undefined;
-}
-
+function openAiTools(tools) { return Array.isArray(tools) && tools.length ? tools : undefined; }
 function geminiTools(tools) {
   if (!Array.isArray(tools) || !tools.length) return undefined;
   const declarations = tools.map((tool) => tool?.function || tool).filter((fn) => fn?.name).map((fn) => ({
@@ -520,16 +497,17 @@ async function chatWithKey({ parsed, entry, messages, tools, budget }) {
   return { content, toolCalls, model: parsed.canonical, provider: parsed.provider, transport: 'direct', credentialSlot: entry.slot, raw: data };
 }
 
+function poolUnavailableError(provider, configured) {
+  const error = new Error(configured.length ? `All ${provider} API keys are cooling down from verified quota/auth failures.` : `Direct provider ${provider} is not configured.`);
+  error.status = configured.length ? 429 : 401;
+  return error;
+}
+
 async function chat({ messages, model, tools = null, taskType = 'general', timeoutMs = null } = {}) {
   const parsed = parse(model);
   if (!parsed.provider) throw new Error(`Not a direct provider model: ${model}`);
   const pool = await credentialPool(parsed.provider);
-  if (!pool.length) {
-    const configured = await credentialPool(parsed.provider, { includeCooling: true });
-    const error = new Error(configured.length ? `All ${parsed.provider} API keys are cooling down.` : `Direct provider ${parsed.provider} is not configured.`);
-    error.status = configured.length ? 429 : 401;
-    throw error;
-  }
+  if (!pool.length) throw poolUnavailableError(parsed.provider, await credentialPool(parsed.provider, { includeCooling: true }));
 
   const budget = Math.max(3000, Number(timeoutMs || timeoutFor(taskType)));
   let lastError = null;
@@ -544,16 +522,18 @@ async function chat({ messages, model, tools = null, taskType = 'general', timeo
       return { ...result, keyAttempts: attempts.length };
     } catch (error) {
       lastError = error;
-      const kind = keyFailureKind(error);
       error.credentialSlot ||= entry.slot;
+      const kind = markKeyFailure(entry, error);
       if (kind === 'MODEL_UNAVAILABLE' || kind === 'BAD_ROUTE') {
         markModelFailure(parsed.canonical, kind);
         break;
       }
-      markKeyFailure(entry, error);
+      // Provider/network failure is not evidence that the second account is bad.
+      // Let Mark 3 move to the next provider instead of wasting another key.
+      if (kind === 'UPSTREAM' || kind === 'UNKNOWN') break;
+      // RATE_LIMIT / ACCESS are key-specific: try the next configured account.
     }
   }
-
   const error = lastError || new Error(`${parsed.provider} direct API exhausted its credential pool.`);
   error.keyAttempts = attempts;
   throw error;
@@ -648,12 +628,7 @@ async function streamChat({ messages, model, tools = null, taskType = 'general',
   const parsed = parse(model);
   if (!parsed.provider) throw new Error(`Not a direct provider model: ${model}`);
   const pool = await credentialPool(parsed.provider);
-  if (!pool.length) {
-    const configured = await credentialPool(parsed.provider, { includeCooling: true });
-    const error = new Error(configured.length ? `All ${parsed.provider} API keys are cooling down.` : `Direct provider ${parsed.provider} is not configured.`);
-    error.status = configured.length ? 429 : 401;
-    throw error;
-  }
+  if (!pool.length) throw poolUnavailableError(parsed.provider, await credentialPool(parsed.provider, { includeCooling: true }));
 
   let lastError = null;
   const attempts = [];
@@ -668,15 +643,14 @@ async function streamChat({ messages, model, tools = null, taskType = 'general',
     } catch (error) {
       lastError = error;
       if (error.partialStream) throw error;
-      const kind = keyFailureKind(error);
+      const kind = markKeyFailure(entry, error);
       if (kind === 'MODEL_UNAVAILABLE' || kind === 'BAD_ROUTE') {
         markModelFailure(parsed.canonical, kind);
         break;
       }
-      markKeyFailure(entry, error);
+      if (kind === 'UPSTREAM' || kind === 'UNKNOWN') break;
     }
   }
-
   const error = lastError || new Error(`${parsed.provider} direct streaming exhausted its credential pool.`);
   error.keyAttempts = attempts;
   throw error;
@@ -711,13 +685,14 @@ async function health() {
       keyCount: entries.length,
       keys: keySummary(provider, entries),
       models,
+      discovery: discoveryStatus.get(provider) || null,
       specialties: PROVIDERS[provider].specialties,
     };
   }
   return {
     enabled: enabled(),
     configured: Object.values(providers).some((row) => row.configured),
-    strategy: 'specialist-provider-order + live-model-ranking + least-recently-used-key-pool',
+    strategy: 'specialist-provider-order + passive-catalog + quota-only-key-cooldown + least-recently-used-key-pool',
     providers,
     providerOrder: {
       general: providerOrder('general'),
@@ -730,8 +705,13 @@ async function health() {
   };
 }
 
-function clearCache() {
-  catalogCache.clear();
+function clearCache() { catalogCache.clear(); discoveryStatus.clear(); }
+function resetTransientHealth() {
+  for (const state of keyStates.values()) {
+    state.disabledUntil = 0;
+    state.lastFailureKind = null;
+  }
+  modelCooldowns.clear();
 }
 
 module.exports = {
@@ -755,4 +735,5 @@ module.exports = {
   health,
   timeoutFor,
   clearCache,
+  resetTransientHealth,
 };
