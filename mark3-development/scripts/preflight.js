@@ -20,6 +20,8 @@ const required = [
   'core/integrations.js',
   'core/tools.js',
   'core/web.js',
+  'core/coding-brain.js',
+  'core/coding-inference.js',
   'core/assistant.js',
   'core/assistant-handoff.js',
   'core/conversation.js',
@@ -109,14 +111,23 @@ const league = require('../core/model-league');
 const arena = require('../core/model-arena');
 const conversation = require('../core/conversation');
 const web = require('../core/web');
+const codingBrain = require('../core/coding-brain');
+const codingInference = require('../core/coding-inference');
 const handoff = require('../core/assistant-handoff');
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
 if (!config.modelLeaguePath.startsWith(config.dataDir)) throw new Error('Model League state must live under Mark 3 data.');
+if (!/^https?:\/\/127\.0\.0\.1:8791|^https?:\/\/localhost:8791/i.test(config.codingBrainUrl) && !process.env.ULTRON_M3_CODING_BRAIN_URL) throw new Error('Coding Brain should default to the local sidecar endpoint.');
 if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''))) throw new Error('Experimental browser/CLI providers must be disabled by default.');
 if (typeof router.chatExact !== 'function' || typeof router.streamExact !== 'function' || typeof router.listNativeEligibleModels !== 'function') throw new Error('Model League requires exact-model router primitives.');
 if (typeof league.recommend !== 'function' || typeof league.selectParticipants !== 'function') throw new Error('Adaptive Model League API is incomplete.');
 if (typeof arena.runTournament !== 'function' || typeof arena.start !== 'function') throw new Error('Model Arena API is incomplete.');
+if (typeof codingBrain.run !== 'function' || typeof codingBrain.health !== 'function' || typeof codingBrain.shouldUse !== 'function') throw new Error('Coding Brain bridge API is incomplete.');
+if (!codingBrain.shouldUse('Fix the wake-word bug in the interface', 'coding')) throw new Error('Repository implementation tasks must route to Coding Brain.');
+if (codingBrain.shouldUse('What is a JavaScript closure?', 'coding')) throw new Error('Simple coding questions must not invoke the heavyweight Coding Brain.');
+if (codingBrain.modeFor('Inspect the wake-word implementation') !== 'plan') throw new Error('Read-only coding investigation must use plan mode.');
+if (codingBrain.modeFor('Fix the wake-word implementation') !== 'apply') throw new Error('Explicit coding modifications must use apply mode.');
+if (codingInference.roleTaskType('editor') !== 'coding' || codingInference.roleTaskType('reviewer') !== 'planning') throw new Error('Coding Brain role-to-model routing is invalid.');
 if (!/next command/i.test(handoff.withCommandHandoff('Done.'))) throw new Error('Assistant command handoff must remain active for ordinary responses.');
 if (handoff.withCommandHandoff('What should I do next?') !== 'What should I do next?') throw new Error('Assistant handoff must not duplicate an existing follow-up question.');
 if (conversation.contextFor('hey ultron', [{ role:'assistant', content:'Old unrelated task' }]).length) throw new Error('Greeting context isolation invariant failed.');
