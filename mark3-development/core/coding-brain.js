@@ -1,5 +1,12 @@
+const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const config = require('./config');
+
+let managedChild = null;
+let startupPromise = null;
+let runtimeDir = null;
+let lastStartError = null;
 
 function enabled() {
   return config.codingBrainEnabled;
@@ -49,19 +56,160 @@ async function request(url, options = {}, timeoutMs = 2500) {
   } finally { clearTimeout(timer); }
 }
 
+function candidateDirs() {
+  const values = [];
+  if (config.codingBrainDir) values.push(path.resolve(config.codingBrainDir));
+  values.push(path.resolve(config.projectRoot, '..', 'CODING-AGENT-BRAIN'));
+  values.push(path.resolve(config.projectRoot, '.ultron', 'coding-brain'));
+  return [...new Set(values)];
+}
+
+function validRuntime(dir) {
+  return Boolean(dir && fs.existsSync(path.join(dir, 'ultron-cortex', 'server.mjs')));
+}
+
+function findRuntimeDir() {
+  for (const dir of candidateDirs()) if (validRuntime(dir)) return dir;
+  return null;
+}
+
+function runProcess(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || config.projectRoot,
+      env: options.env || process.env,
+      windowsHide: true,
+      stdio: options.stdio || ['ignore', 'pipe', 'pipe'],
+      shell: false,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => { if (stdout.length < 12000) stdout += String(chunk); });
+    child.stderr?.on('data', (chunk) => { if (stderr.length < 12000) stderr += String(chunk); });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`${command} exited with code ${code}${stderr.trim() ? `: ${stderr.trim().slice(-1200)}` : ''}`));
+    });
+  });
+}
+
+async function provisionRuntime() {
+  const existing = findRuntimeDir();
+  if (existing) return existing;
+  if (!config.codingBrainAutoProvision) throw new Error('Coding Brain runtime was not found and auto-provisioning is disabled.');
+
+  const target = path.resolve(config.projectRoot, '.ultron', 'coding-brain');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  if (fs.existsSync(target) && !validRuntime(target)) fs.rmSync(target, { recursive: true, force: true });
+  await runProcess('git', ['clone', '--depth', '1', '--branch', 'main', config.codingBrainRepo, target], { cwd: config.projectRoot });
+  if (!validRuntime(target)) throw new Error('Coding Brain repository was cloned but ultron-cortex/server.mjs is missing.');
+  return target;
+}
+
+function brainPort() {
+  try {
+    const url = new URL(config.codingBrainUrl);
+    return Number(url.port || 8791);
+  } catch {
+    return 8791;
+  }
+}
+
 async function health() {
-  if (!enabled()) return { ok: false, enabled: false, reason: 'disabled', url: config.codingBrainUrl };
+  if (!enabled()) return { ok: false, enabled: false, reason: 'disabled', url: config.codingBrainUrl, managed: false };
   try {
     const data = await request(`${config.codingBrainUrl}/health`, {}, Math.min(1500, config.codingBrainTimeoutMs));
-    return { enabled: true, url: config.codingBrainUrl, ...data };
+    return {
+      enabled: true,
+      url: config.codingBrainUrl,
+      managed: Boolean(managedChild && !managedChild.killed),
+      runtimeDir: runtimeDir || findRuntimeDir(),
+      ...data,
+    };
   } catch (error) {
-    return { ok: false, enabled: true, url: config.codingBrainUrl, error: error.message };
+    return {
+      ok: false,
+      enabled: true,
+      url: config.codingBrainUrl,
+      managed: Boolean(managedChild && !managedChild.killed),
+      runtimeDir: runtimeDir || findRuntimeDir(),
+      error: error.message,
+      lastStartError,
+    };
   }
+}
+
+async function waitUntilHealthy(timeoutMs = config.codingBrainStartupTimeoutMs) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await health();
+    if (last.ok) return last;
+    if (managedChild && managedChild.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(last?.error || `Coding Brain did not become ready within ${timeoutMs}ms.`);
+}
+
+async function startManagedRuntime() {
+  if (!enabled()) throw new Error('Coding Brain is disabled.');
+  const current = await health();
+  if (current.ok) return current;
+  if (!config.codingBrainAutoStart) throw new Error('Coding Brain is offline and auto-start is disabled.');
+  if (startupPromise) return startupPromise;
+
+  startupPromise = (async () => {
+    try {
+      runtimeDir = await provisionRuntime();
+      const serverFile = path.join(runtimeDir, 'ultron-cortex', 'server.mjs');
+      const logDir = path.resolve(config.projectRoot, '.ultron');
+      fs.mkdirSync(logDir, { recursive: true });
+      const logPath = path.join(logDir, 'coding-brain.log');
+      const log = fs.openSync(logPath, 'a');
+      const host = '127.0.0.1';
+      const port = brainPort();
+      managedChild = spawn(process.execPath, [serverFile], {
+        cwd: runtimeDir,
+        env: {
+          ...process.env,
+          ULTRON_CODING_BRAIN_HOST: host,
+          ULTRON_CODING_BRAIN_PORT: String(port),
+          ULTRON_MARK3_URL: `http://127.0.0.1:${config.port}`,
+        },
+        windowsHide: true,
+        stdio: ['ignore', log, log],
+        shell: false,
+      });
+      try { fs.closeSync(log); } catch {}
+      managedChild.once('exit', (code, signal) => {
+        if (code !== 0 && code !== null) lastStartError = `Coding Brain process exited with code ${code}${signal ? ` (${signal})` : ''}.`;
+        managedChild = null;
+      });
+      managedChild.once('error', (error) => { lastStartError = error.message; });
+      const ready = await waitUntilHealthy();
+      lastStartError = null;
+      return { ...ready, autoStarted: true, logPath };
+    } catch (error) {
+      lastStartError = error.message;
+      throw error;
+    } finally {
+      startupPromise = null;
+    }
+  })();
+  return startupPromise;
+}
+
+async function ensureRunning() {
+  const current = await health();
+  if (current.ok) return current;
+  return startManagedRuntime();
 }
 
 async function run(message, options = {}) {
   const task = String(message || '').trim();
   if (!task) throw new Error('Coding task is required.');
+  await ensureRunning();
   const workspace = resolveWorkspace(task, options.workspace);
   const mode = options.mode || modeFor(task);
   const host = ['0.0.0.0', '::', '[::]'].includes(String(config.host).toLowerCase()) ? '127.0.0.1' : config.host;
@@ -92,4 +240,4 @@ function summarize(result) {
   return `${base} I changed ${changed} file${changed === 1 ? '' : 's'}. ${validationLabel(result.validation)} ${reviewLine}`.replace(/\s+/g, ' ').trim();
 }
 
-module.exports = { enabled, shouldUse, modeFor, resolveWorkspace, health, run, summarize };
+module.exports = { enabled, shouldUse, modeFor, resolveWorkspace, health, ensureRunning, run, summarize };
