@@ -108,6 +108,14 @@ function elevateRelevant(text) {
   return /\b(?:elevate\s*os|elevateos|creator(?:s| economy)?|reel|content creator|performance os|creator upgrade|cup\b|instagram|meta api|supabase|brand marketplace|brand collab|creator tools|creator growth|strategy session|moneti[sz]|pricing|client|outreach|website|saas|founder|startup|revenue|growth|acquisition)\b/i.test(String(text || ''));
 }
 
+function polishDeterministic(text) {
+  return String(text || '')
+    .replace(/^Morning,\s*Arya\./i, 'Morning, Sir.')
+    .replace(/^Hey\s+Arya\./i, 'Sir.')
+    .replace(/^Arya,\s*/i, 'Sir, ')
+    .trim();
+}
+
 function apply(messages = []) {
   if (!Array.isArray(messages) || !messages.length) return messages;
   const userMessage = latestUserMessage(messages);
@@ -146,4 +154,4 @@ function status() {
   };
 }
 
-module.exports = { FOUNDER_BEHAVIOR, ELEVATE_OS_BRIEF, MEMORY_SEEDS, elevateRelevant, apply, seedMemory, status };
+module.exports = { FOUNDER_BEHAVIOR, ELEVATE_OS_BRIEF, MEMORY_SEEDS, elevateRelevant, polishDeterministic, apply, seedMemory, status };
