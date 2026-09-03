@@ -15,6 +15,7 @@
     "core:voice-test": "node --env-file=.env core/voice/smoke-test.js",
     "core:voice-live-test": "node --env-file=.env core/voice/live-test.js",
     "core:voice-fish-test": "node --env-file=.env core/voice/fish-live-test.js",
+    "core:artifact-test": "node core/artifact-smoke-test.js",
     "core:check": "node --env-file=.env core/smoke-test.js",
     "core:stream-check": "node --env-file=.env core/stream-smoke-test.js",
     "core:memory-test": "node --env-file=.env core/memory-smoke-test.js",
