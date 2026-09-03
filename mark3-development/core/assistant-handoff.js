@@ -1,3 +1,5 @@
+const founderBehavior = require('./founder-behavior');
+
 const DEFAULT_HANDOFF = 'Anything else, Sir?';
 const REPLY_WINDOW_MS = Math.max(7000, Number(process.env.ULTRON_M3_REPLY_WINDOW_MS || 7000));
 
@@ -28,7 +30,7 @@ function invitesImmediateReply(text) {
 }
 
 function responseDelivery(text) {
-  const value = String(text || '').trim();
+  const value = founderBehavior.polishDeterministic(String(text || '').trim());
   const invitesReply = invitesImmediateReply(value);
   return {
     text: value,
@@ -43,7 +45,7 @@ function responseDelivery(text) {
 // Normal Mark 3 responses should prefer a useful next move and should not append
 // a generic question automatically.
 function withCommandHandoff(text, handoff = DEFAULT_HANDOFF) {
-  const value = String(text || '').trim();
+  const value = founderBehavior.polishDeterministic(String(text || '').trim());
   if (!value || looksStructured(value) || alreadyHandsOff(value) || /\?\s*$/.test(value)) return value;
   return `${value} ${handoff}`;
 }
