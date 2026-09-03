@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const config = require('./config');
+const gitPublisher = require('./git-publisher');
 
 let managedChild = null;
 let startupPromise = null;
@@ -19,7 +20,7 @@ function shouldUse(message, taskType) {
   const text = String(message || '').toLowerCase();
   const task = String(taskType || '').toLowerCase();
   const action = /\b(?:fix|implement|add|change|update|modify|edit|refactor|remove|delete|create|build|debug|investigate|inspect|review|test|repair|optimi[sz]e)\b/.test(text);
-  const codeSignal = /\b(?:repo|repository|codebase|source|branch|commit|file|function|class|component|server|api|endpoint|route|website|app|interface|frontend|backend|database|module|service|feature|screen|page|project|ultron|elevate|bug|code)\b/.test(text);
+  const codeSignal = /\b(?:repo|repository|codebase|source|branch|commit|file|function|class|component|server|api|endpoint|route|website|app|interface|frontend|backend|database|module|service|feature|screen|page|project|ultron|elevate|bug|code|github|push|publish)\b/.test(text);
   const selected = task === 'coding' ? action : action && codeSignal;
   if (selected) startOnNextHealth = true;
   return selected;
@@ -259,11 +260,16 @@ async function run(message, options = {}) {
   const workspace = resolveWorkspace(task, options.workspace);
   const mode = options.mode || modeFor(task);
   const host = ['0.0.0.0', '::', '[::]'].includes(String(config.host).toLowerCase()) ? '127.0.0.1' : config.host;
-  return request(`${config.codingBrainUrl}/run`, {
+  const result = await request(`${config.codingBrainUrl}/run`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ task, workspace, mode, mark3Url: `http://${host}:${config.port}` }),
   }, config.codingBrainTimeoutMs);
+
+  if (mode === 'apply' && result?.ok && gitPublisher.shouldPublish(task)) {
+    result.publish = gitPublisher.publish({ workspace, changedFiles: result.changedFiles, task });
+  }
+  return result;
 }
 
 function validationLabel(result) {
@@ -273,6 +279,14 @@ function validationLabel(result) {
   if (!validation || validation.status === 'not-run') return 'No executable project validation script was available; the result is reviewed but not test-proven.';
   if (validation.passed) return 'Validation passed, but no fresh working-tree evidence was recorded.';
   return 'Validation found a failure.';
+}
+
+function publishLabel(result) {
+  const publish = result?.publish;
+  if (!publish) return '';
+  if (publish.published) return ` Pushed ${String(publish.commit || '').slice(0, 8)} to ${publish.branch}.`;
+  if (publish.committed) return ` I committed the verified files locally, but the push failed: ${publish.reason}.`;
+  return ` GitHub publish was requested but blocked: ${publish.reason}.`;
 }
 
 function summarize(result) {
@@ -287,7 +301,7 @@ function summarize(result) {
   const review = String(result.review?.verdict || 'unknown');
   const base = String(result.summary || 'The coding task is complete.').trim();
   const reviewLine = review === 'pass' ? 'The independent review passed.' : review === 'needs_changes' ? 'The reviewer still found issues that need attention.' : 'The review result was inconclusive.';
-  return `${base} I changed ${changed} file${changed === 1 ? '' : 's'}. ${validationLabel(result)} ${reviewLine}`.replace(/\s+/g, ' ').trim();
+  return `${base} I changed ${changed} file${changed === 1 ? '' : 's'}. ${validationLabel(result)} ${reviewLine}${publishLabel(result)}`.replace(/\s+/g, ' ').trim();
 }
 
-module.exports = { enabled, shouldUse, modeFor, resolveWorkspace, health, ensureRunning, run, summarize };
+module.exports = { enabled, shouldUse, modeFor, resolveWorkspace, health, ensureRunning, run, summarize, gitPublisher };
