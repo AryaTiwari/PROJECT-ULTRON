@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { createPdf, createDocx } = require('../core/document-renderer');
+const { createPdf, createDocx, markdownBlocks, normalizeTypography } = require('../core/document-renderer');
 const { readZipEntry } = require('../core/archive');
 const multimodal = require('../core/multimodal');
 
@@ -10,6 +10,28 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
 const pdf = createPdf('# Test Report\n\nA concise ULTRON report.\n\n- First point\n- Second point', 'Self Test');
 assert(Buffer.isBuffer(pdf) && pdf.subarray(0, 8).toString('ascii').startsWith('%PDF-1.4'), 'Local PDF renderer did not produce a PDF.');
 assert(pdf.length > 400, 'Generated PDF is unexpectedly small.');
+
+const readableSample = `# Fitness Creator Brand Partnership Guide
+
+**Target Audience:** Creators with 50K–100K followers.
+
+- Identify your niche → match the brand’s product focus.
+
+| # | Brand | Primary Product/Service | Typical Creator Fit | Contact |
+|---|---|---|---|---|
+| 1 | Gymshark | Performance apparel | Strength & gym lifestyle | partnerships@example.com |
+| 2 | MyProtein | Supplements | Nutrition & meal prep | influencer@example.com |
+`;
+const readableBlocks = markdownBlocks(readableSample);
+assert(readableBlocks.filter((block) => block.type === 'tableRow').length === 2, 'Markdown tables must become structured PDF records instead of raw pipe text.');
+assert(normalizeTypography('50K–100K • brand’s → plan') === "50K-100K - brand's -> plan", 'PDF typography normalization must convert unsupported Unicode punctuation deterministically.');
+const readablePdfText = createPdf(readableSample, 'Fitness Creator Brand Partnership Guide').toString('ascii');
+assert(readablePdfText.includes('50K-100K'), 'Readable PDF must preserve follower ranges without question-mark corruption.');
+assert(readablePdfText.includes("brand's"), 'Readable PDF must preserve apostrophes without question-mark corruption.');
+assert(readablePdfText.includes('1. Gymshark'), 'Wide Markdown brand tables must render as readable brand records.');
+assert(!readablePdfText.includes('| # | Brand |'), 'Raw Markdown table syntax must not leak into rendered PDFs.');
+assert(readablePdfText.includes('/Helvetica-Bold'), 'Readable PDF renderer must use heading emphasis.');
+assert(readablePdfText.includes('Page 1 of'), 'Readable PDF renderer must add page numbering.');
 
 const docx = createDocx('# Test Document\n\nULTRON multimodal self test.', 'Self Test');
 assert(Buffer.isBuffer(docx) && docx.length > 500, 'Local DOCX renderer did not produce an archive.');
@@ -67,4 +89,4 @@ assert(/ULTRON_M3_LEAGUE_ARENA_ENABLED\s*\|\|\s*['"]0['"]/.test(server), 'Backgr
 assert(/native-audio-multimodal-flow/.test(server), 'Server must expose the native-audio multimodal interface mode.');
 assert(/3\.0\.0-beta\.22/.test(server), 'Server runtime version must be beta.22.');
 
-console.log('ULTRON multimodal self-test passed: direct-first PDF/DOCX generation, server-side natural artifact routing, clickable downloads, valid native-audio containers, POST-only STT fallback, attachments and quota-safe passive Model League validated.');
+console.log('ULTRON multimodal self-test passed: readable structured PDF/DOCX rendering, direct-first document generation, server-side natural artifact routing, clickable downloads, valid native-audio containers, POST-only STT fallback, attachments and quota-safe passive Model League validated.');
