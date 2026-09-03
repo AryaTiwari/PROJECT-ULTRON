@@ -5,6 +5,7 @@ const { load: loadCredentials } = require('../../core/credentials/local-store');
 const PROVIDERS = {
   gemini: { tier: 'api', priority: 10, credentials: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] },
   groq: { tier: 'api', priority: 20, credentials: ['GROQ_API_KEY'] },
+  nvidia: { tier: 'api', priority: 25, credentials: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'] },
   deepseek: { tier: 'api', priority: 30, credentials: ['DEEPSEEK_API_KEY'] },
   mistral: { tier: 'api', priority: 40, credentials: ['MISTRAL_API_KEY'] },
   qwen: { tier: 'api', priority: 50, credentials: ['QWEN_API_KEY', 'DASHSCOPE_API_KEY'] },
@@ -42,7 +43,7 @@ const NON_CHAT_PATTERNS = [
 ];
 const BLOCKED_MODEL_PATTERNS = [
   /^auto(?:\/|$)/i, /^no-think(?:\/|$)/i, /^opencode(?:-go)?(?:\/|$)/i, /^oc\//i,
-  /^nvidia\//i, /big[-_ ]?pickle/i, /(^|[\/_-])(dva|devin|agentic|bridge)([\/_-]|$)/i,
+  /big[-_ ]?pickle/i, /(^|[\/_-])(dva|devin|agentic|bridge)([\/_-]|$)/i,
   /(mimo-v2\.5-free|hy3-free|nemotron-3-ultra-free|nemotron-3\.5-lightning-free|x-preview-f-free|muse-spark-1\.2-contributor-free)/i,
 ];
 const MODEL_FAILURE_TTL = {
@@ -63,6 +64,7 @@ function inferBareProvider(model) {
   if (/^(?:mistral|ministral|codestral|pixtral)(?:[-_.]|$)/.test(value)) return 'mistral';
   if (/^qwen(?:[-_.]|$)/.test(value)) return 'qwen';
   if (/^grok(?:[-_.]|$)/.test(value)) return 'xai';
+  if (/^(?:nemotron|nvidia)(?:[-_.]|$)/.test(value)) return 'nvidia';
   return 'unknown';
 }
 
@@ -136,14 +138,16 @@ function taskModelScore(model, taskType = 'general') {
   let score = 0;
   if (/latest|stable/.test(value)) score += 5;
   if (/deprecated|legacy|retired|eol/.test(value)) score -= 80;
-  if (/gemini-3\.6(?:[-/_.]|$)/.test(value)) score += 45;
-  else if (/gemini-3\.(?:[0-9]+)(?:[-/_.]|$)/.test(value)) score += 30;
+  if (/gemini-3\.8(?:[-/_.]|$)/.test(value)) score += 60;
+  else if (/gemini-3\.7(?:[-/_.]|$)/.test(value)) score += 55;
+  else if (/gemini-3\.6(?:[-/_.]|$)/.test(value)) score += 48;
+  else if (/gemini-3\.(?:[0-9]+)(?:[-/_.]|$)/.test(value)) score += 35;
   else if (/gemini-2\.5(?:[-/_.]|$)/.test(value)) score -= 45;
   if (/preview|experimental|exp\b/.test(value)) score -= 12;
-  if (/flash|mini|lite|small|fast/.test(value)) score += ['general', 'simple_qa', 'automation'].includes(task) ? 18 : 4;
+  if (/flash|mini|lite|small|fast|instant/.test(value)) score += ['general', 'simple_qa', 'automation'].includes(task) ? 18 : 4;
   if (/chat|instruct/.test(value)) score += 8;
-  if (/code|coder|coding/.test(value)) score += task === 'coding' ? 20 : 2;
-  if (/reason|think|pro|sonnet/.test(value)) score += ['research', 'planning', 'coding'].includes(task) ? 14 : 3;
+  if (/code|coder|coding|deepseek-v4/.test(value)) score += task === 'coding' ? 24 : 2;
+  if (/reason|think|pro|sonnet|nemotron|gpt-oss-120b/.test(value)) score += ['research', 'planning', 'coding'].includes(task) ? 16 : 3;
   return score;
 }
 
@@ -227,7 +231,7 @@ async function snapshot(catalog = []) {
     };
   }).filter((row) => row.catalogModels || row.credentialDetected || row.healthyModel);
   return {
-    mode: 'managed-omniroute', experimentalEnabled: allowExperimental(), unknownProvidersEnabled: allowUnknown(),
+    mode: 'direct-first-with-omniroute-fallback', experimentalEnabled: allowExperimental(), unknownProvidersEnabled: allowUnknown(),
     providers: providers.sort((a, b) => (PROVIDERS[a.provider]?.priority || 500) - (PROVIDERS[b.provider]?.priority || 500)),
     healthyProvider: providers.find((row) => row.healthyModel && row.enabled) || null,
   };
