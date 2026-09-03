@@ -29,6 +29,7 @@ const voiceRoot = anchorProjectPathEnv('ULTRON_VOICE_ROOT', '.ultron/voice');
 const voiceReferencePath = anchorProjectPathEnv('ULTRON_VOICE_REFERENCE_PATH', '.ultron/voice/ultron-reference.mp3');
 const voiceCloneState = anchorProjectPathEnv('ULTRON_VOICE_CLONE_STATE', '.ultron/voice/voice-clone.json');
 const voiceOutputDir = anchorProjectPathEnv('ULTRON_TTS_OUTPUT_DIR', '.ultron/audio');
+const codingBrainWorkspace = anchorProjectPathEnv('ULTRON_M3_CODING_WORKSPACE', '.');
 const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128/v1').replace(/\/$/, '');
 
 module.exports = {
@@ -47,6 +48,10 @@ module.exports = {
   agenticBridgeEnabled: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DEVIN_BRIDGE_ENABLED || '1')),
   agenticBridgeModel: process.env.ULTRON_M3_DEVIN_BRIDGE_MODEL || 'dva/swe-1-7-lightning',
   agenticBridgeTimeoutMs: num('ULTRON_M3_DEVIN_BRIDGE_TIMEOUT_MS', 180000),
+  codingBrainEnabled: !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_CODING_BRAIN_ENABLED || '1')),
+  codingBrainUrl: String(process.env.ULTRON_M3_CODING_BRAIN_URL || 'http://127.0.0.1:8791').replace(/\/$/, ''),
+  codingBrainTimeoutMs: num('ULTRON_M3_CODING_BRAIN_TIMEOUT_MS', 600000),
+  codingBrainWorkspace,
   voiceRoot,
   voiceReferencePath,
   voiceCloneState,
