@@ -5,6 +5,9 @@ const config = require('./core/config');
 const assistant = require('./core/assistant');
 const { responseDelivery, REPLY_WINDOW_MS } = require('./core/assistant-handoff');
 const founderBehavior = require('./core/founder-behavior');
+const operatingModes = require('./core/operating-modes');
+const gitPublisher = require('./core/git-publisher');
+const conversation = require('./core/conversation');
 const memory = require('./core/memory');
 const workspace = require('./core/workspace');
 const models = require('./core/model-intelligence');
@@ -98,11 +101,25 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET' && req.url === '/api/health') {
       const [router, brain] = await Promise.all([integrations.health(), codingBrain.health()]);
       return send(res, router.ok ? 200 : 503, {
-        ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.20', interfaceMode:'voice-first-wake',
+        ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.20', interfaceMode:'voice-first-flow',
         behavior:{ ...(integrations.founderBehaviorStatus ? integrations.founderBehaviorStatus() : founderBehavior.status()), replyWindowMs:REPLY_WINDOW_MS, memorySeed:founderMemorySeed },
+        operatingMode:operatingModes.status(),
+        github:gitPublisher.status(config.projectRoot),
         inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, codingBrain:brain,
         web:web.status(), voice:voice.status(), pid:process.pid, port:config.port,
       });
+    }
+    if (req.method === 'GET' && req.url === '/api/mode') return send(res,200,{ok:true,...operatingModes.status()});
+    if (req.method === 'POST' && req.url === '/api/mode') {
+      const data = await body(req);
+      const changed = operatingModes.setMode(String(data.mode || ''), 'api');
+      return send(res,200,{ok:true,...changed});
+    }
+    if (req.method === 'GET' && req.url.startsWith('/api/github/status')) {
+      const params = new URL(req.url, 'http://127.0.0.1').searchParams;
+      const workspacePath = String(params.get('workspace') || config.projectRoot);
+      const status = gitPublisher.probe(workspacePath);
+      return send(res,status.connected?200:503,{ok:Boolean(status.connected),...status});
     }
     if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
     if (req.method === 'POST' && req.url === '/api/web/fetch') {
@@ -133,7 +150,7 @@ const server = http.createServer(async (req,res) => {
       const result = await codingInference.infer(String(data.role || 'editor'), data.messages);
       return send(res,200,result);
     }
-    if (req.method === 'GET' && req.url === '/api/state') return send(res,200,{ ok:true, memory:memory.snapshot(), commitments:workspace.listCommitments({status:'open'}), projects:workspace.listProjects(), decisions:workspace.listDecisions() });
+    if (req.method === 'GET' && req.url === '/api/state') return send(res,200,{ ok:true, mode:operatingModes.status(), memory:memory.snapshot(), commitments:workspace.listCommitments({status:'open'}), projects:workspace.listProjects(), decisions:workspace.listDecisions() });
     if (req.method === 'GET' && req.url === '/api/models') return send(res,200,{ ok:true, ...(await models.intelligence()) });
     if (req.method === 'GET' && req.url === '/api/models/league') return send(res,200,{ok:true,enabled:leagueEnabled,...modelArena.status()});
     if (req.method === 'POST' && req.url === '/api/models/league/calibrate') {
@@ -169,15 +186,24 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method === 'POST' && req.url === '/api/chat') {
       const data=await body(req);
+      const modeControl=operatingModes.handleCommand(data.message);
+      if(modeControl){
+        const delivery=responseDelivery(modeControl.response||'Mode updated, Sir.');
+        conversation.append('user',String(data.message||''),{taskType:'mode-control',inputMode:data.inputMode||'chat'});
+        conversation.append('assistant',delivery.text,{model:'mark3-mode-controller',provider:'local',taskType:'mode-control',inputMode:data.inputMode||'chat'});
+        void voice.enqueue(delivery.text);
+        return send(res,200,{ok:true,response:delivery.text,text:delivery.text,model:'mark3-mode-controller',provider:'local',taskType:'mode-control',mode:modeControl.mode,operatingMode:operatingModes.status(),listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply});
+      }
       const selfResult=await selfRepository.handle(data.message,data.history);
       if(selfResult){
         const delivery=responseDelivery(selfResult.response||selfResult.text||'');
         void voice.enqueue(delivery.text);
-        return send(res,200,{...selfResult,ok:true,response:delivery.text,text:delivery.text,listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply});
+        return send(res,200,{...selfResult,ok:true,response:delivery.text,text:delivery.text,operatingMode:operatingModes.status(),listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply});
       }
-      const result=await assistant.handle(data.message,{model:data.model,history:data.history,taskType:data.taskType,inputMode:data.inputMode,codingWorkspace:data.codingWorkspace});
+      const routedTaskType=operatingModes.routeTask(data.message,data.taskType||'general');
+      const result=await assistant.handle(data.message,{model:data.model,history:data.history,taskType:routedTaskType,inputMode:data.inputMode,codingWorkspace:data.codingWorkspace});
       const delivery=responseDelivery(result.response||result.text||'');
-      return send(res,200,{...result,response:delivery.text,text:delivery.text,listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply,hasSuggestion:delivery.hasSuggestion});
+      return send(res,200,{...result,response:delivery.text,text:delivery.text,operatingMode:operatingModes.status(),listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply,hasSuggestion:delivery.hasSuggestion});
     }
     if (req.method === 'POST' && req.url === '/api/memory') { const data=await body(req); return send(res,200,{ok:true,result:memory.remember(data)}); }
     if (req.method === 'POST' && req.url === '/api/commitments') { const data=await body(req); return send(res,200,{ok:true,commitment:workspace.createCommitment(data)}); }
@@ -192,10 +218,11 @@ const server = http.createServer(async (req,res) => {
 });
 server.listen(config.port,config.host,()=>{
   console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`);
-  console.log('[Mark 3] Voice-first wake interface active: say "Ultron", speak the command, then pause for four seconds.');
-  console.log(`[Mark 3] Conversational reply window: ${Math.round(REPLY_WINDOW_MS / 1000)} seconds after ULTRON asks a question; no repeated wake word required.`);
-  console.log(`[Mark 3] Founder chief-of-staff behavior active: ${founderMemorySeed.total || 0} Elevate OS operating memories available; ${founderMemorySeed.seeded || 0} newly seeded this run.`);
-  console.log(`[Mark 3] Coding Brain bridge ${config.codingBrainEnabled ? 'enabled' : 'disabled'} at ${config.codingBrainUrl}.`);
+  console.log('[Mark 3] Voice-first flow active: fuzzy wake boost + wake-free conversational follow-ups.');
+  console.log(`[Mark 3] Conversational reply window: ${Math.round(REPLY_WINDOW_MS / 1000)} seconds minimum after direct questions; voice sessions extend this automatically.`);
+  console.log(`[Mark 3] Operating mode: ${operatingModes.status().label}. Say “Ultron, go developer mode” (or sales/trader/influencer strategist mode) to switch.`);
+  console.log(`[Mark 3] Founder executive-aide behavior active: ${founderMemorySeed.total || 0} Elevate OS operating memories available; ${founderMemorySeed.seeded || 0} newly seeded this run.`);
+  console.log(`[Mark 3] Coding Brain bridge ${config.codingBrainEnabled ? 'enabled' : 'disabled'} at ${config.codingBrainUrl}. Explicit push/commit/GitHub requests publish verified task files only.`);
   if (leagueEnabled) {
     modelArena.start();
     console.log('[Mark 3] Model League enabled: adaptive primary + ranked backups; arena calibration scheduled.');
