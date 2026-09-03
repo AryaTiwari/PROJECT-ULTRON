@@ -3,26 +3,37 @@ const { load: loadCredentials } = require('../../core/credentials/local-store');
 const DIRECT_TIMEOUT_MS = Math.max(4000, Number(process.env.ULTRON_M3_DIRECT_TIMEOUT_MS || 14000));
 const DIRECT_HEAVY_TIMEOUT_MS = Math.max(DIRECT_TIMEOUT_MS, Number(process.env.ULTRON_M3_DIRECT_HEAVY_TIMEOUT_MS || 26000));
 const FIRST_TOKEN_TIMEOUT_MS = Math.max(3000, Number(process.env.ULTRON_M3_DIRECT_FIRST_TOKEN_TIMEOUT_MS || 9000));
-const COOLDOWN_MS = Math.max(15000, Number(process.env.ULTRON_M3_DIRECT_COOLDOWN_MS || 90000));
+const KEY_RATE_LIMIT_COOLDOWN_MS = Math.max(15000, Number(process.env.ULTRON_M3_DIRECT_KEY_RATE_LIMIT_COOLDOWN_MS || 90000));
+const KEY_ACCESS_COOLDOWN_MS = Math.max(KEY_RATE_LIMIT_COOLDOWN_MS, Number(process.env.ULTRON_M3_DIRECT_KEY_ACCESS_COOLDOWN_MS || 30 * 60 * 1000));
+const KEY_UPSTREAM_COOLDOWN_MS = Math.max(5000, Number(process.env.ULTRON_M3_DIRECT_KEY_UPSTREAM_COOLDOWN_MS || 20000));
+const MODEL_COOLDOWN_MS = Math.max(60000, Number(process.env.ULTRON_M3_DIRECT_MODEL_COOLDOWN_MS || 6 * 60 * 60 * 1000));
+const MODEL_CACHE_MS = Math.max(30000, Number(process.env.ULTRON_M3_DIRECT_MODEL_CACHE_MS || 10 * 60 * 1000));
+const MODEL_DISCOVERY_TIMEOUT_MS = Math.max(3000, Number(process.env.ULTRON_M3_DIRECT_MODEL_DISCOVERY_TIMEOUT_MS || 7000));
+const MODELS_PER_PROVIDER = Math.max(1, Math.min(6, Number(process.env.ULTRON_M3_DIRECT_MODELS_PER_PROVIDER || 3)));
 
 const PROVIDERS = {
   gemini: {
     family: 'gemini',
-    keys: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    keys: ['GEMINI_API_KEY', 'GEMINI_API_KEY2', 'GOOGLE_API_KEY', 'GOOGLE_API_KEY2'],
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    specialties: ['general conversation', 'research synthesis', 'long-context work', 'tool use'],
   },
   groq: {
     family: 'openai',
-    keys: ['GROQ_API_KEY'],
+    keys: ['GROQ_API_KEY', 'GROQ_API_KEY2'],
     baseUrl: 'https://api.groq.com/openai/v1',
+    specialties: ['low-latency answers', 'simple Q&A', 'automation', 'fast iteration'],
   },
   nvidia: {
     family: 'openai',
-    keys: ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'],
+    keys: ['NVIDIA_API_KEY', 'NVIDIA_API_KEY2', 'NVIDIA_NIM_API_KEY'],
     baseUrl: 'https://integrate.api.nvidia.com/v1',
+    specialties: ['coding', 'planning', 'independent review', 'reasoning-heavy work'],
   },
 };
 
+// Preference hints only. Live provider catalogs are discovered and ranked first,
+// so a renamed/retired model does not require an ULTRON source patch.
 const DEFAULT_MODELS = {
   gemini: {
     simple_qa: ['gemini-3.5-flash-lite', 'gemini-3.6-flash'],
@@ -43,14 +54,16 @@ const DEFAULT_MODELS = {
   nvidia: {
     simple_qa: ['meta/llama-3.3-70b-instruct', 'openai/gpt-oss-120b'],
     general: ['openai/gpt-oss-120b', 'nvidia/nemotron-3-super-120b-a12b', 'z-ai/glm-5.2'],
-    coding: ['deepseek-ai/deepseek-v4-flash', 'openai/gpt-oss-120b', 'qwen/qwen2.5-coder-32b-instruct'],
+    coding: ['deepseek-ai/deepseek-v4-flash', 'qwen/qwen2.5-coder-32b-instruct', 'openai/gpt-oss-120b'],
     planning: ['nvidia/nemotron-3-super-120b-a12b', 'openai/gpt-oss-120b', 'z-ai/glm-5.2'],
     research: ['nvidia/nemotron-3-super-120b-a12b', 'openai/gpt-oss-120b', 'z-ai/glm-5.2'],
     automation: ['deepseek-ai/deepseek-v4-flash', 'meta/llama-3.3-70b-instruct'],
   },
 };
 
-const cooldowns = new Map();
+const keyStates = new Map();
+const modelCooldowns = new Map();
+const catalogCache = new Map();
 
 function csv(name) {
   return String(process.env[name] || '').split(',').map((value) => value.trim()).filter(Boolean);
@@ -67,22 +80,30 @@ function taskName(taskType) {
 
 function providerOrder(taskType) {
   const task = taskName(taskType);
-  const configured = csv(`ULTRON_M3_DIRECT_PROVIDER_ORDER_${task.toUpperCase()}`);
+  const configured = csv(`ULTRON_M3_DIRECT_PROVIDER_ORDER_${task.toUpperCase()}`).map((provider) => provider.toLowerCase());
   if (configured.length) return configured.filter((provider) => PROVIDERS[provider]);
   if (task === 'simple_qa' || task === 'automation') return ['groq', 'gemini', 'nvidia'];
-  if (task === 'planning' || task === 'research') return ['gemini', 'nvidia', 'groq'];
+  if (task === 'coding' || task === 'planning') return ['nvidia', 'gemini', 'groq'];
+  if (task === 'research') return ['gemini', 'nvidia', 'groq'];
   return ['gemini', 'groq', 'nvidia'];
 }
 
-function modelList(provider, taskType) {
+function configuredModelOverride(provider, taskType) {
   const task = taskName(taskType);
   const taskSpecific = csv(`ULTRON_M3_DIRECT_${provider.toUpperCase()}_${task.toUpperCase()}_MODELS`);
   const providerWide = csv(`ULTRON_M3_DIRECT_${provider.toUpperCase()}_MODELS`);
-  return taskSpecific.length ? taskSpecific : providerWide.length ? providerWide : (DEFAULT_MODELS[provider]?.[task] || DEFAULT_MODELS[provider]?.general || []);
+  return taskSpecific.length ? taskSpecific : providerWide;
+}
+
+function defaultModelList(provider, taskType) {
+  const task = taskName(taskType);
+  return DEFAULT_MODELS[provider]?.[task] || DEFAULT_MODELS[provider]?.general || [];
 }
 
 function canonical(provider, model) {
-  return `${provider}/${String(model || '').replace(/^\/+/, '')}`;
+  let actual = String(model || '').replace(/^\/+/, '');
+  if (provider === 'nvidia' && actual.toLowerCase().startsWith('nvidia/')) actual = actual.slice('nvidia/'.length);
+  return `${provider}/${actual}`;
 }
 
 function parse(model) {
@@ -95,8 +116,6 @@ function parse(model) {
   const provider = value.slice(0, slash).toLowerCase();
   if (!PROVIDERS[provider]) return { provider: null, model: value, canonical: value };
   let actual = value.slice(slash + 1);
-  // NVIDIA's own namespace is also named "nvidia". Keep a readable single-prefix
-  // canonical id while restoring the provider namespace for the API request.
   if (provider === 'nvidia' && /^(?:nemotron|llama-.*nemotron)/i.test(actual)) actual = `nvidia/${actual}`;
   return { provider, model: actual, canonical: value };
 }
@@ -109,49 +128,273 @@ function isDirectModel(model) {
   return Boolean(providerForModel(model));
 }
 
+function stateForKey(provider, slot) {
+  const id = `${provider}:${slot}`;
+  if (!keyStates.has(id)) {
+    keyStates.set(id, {
+      provider,
+      slot,
+      lastUsedAt: 0,
+      lastSuccessAt: 0,
+      lastFailureAt: 0,
+      disabledUntil: 0,
+      successes: 0,
+      failures: 0,
+      uses: 0,
+      lastFailureKind: null,
+    });
+  }
+  return keyStates.get(id);
+}
+
+function keyFailureKind(error) {
+  const status = Number(error?.status || 0);
+  const text = `${error?.message || ''} ${error?.raw || ''}`.toLowerCase();
+  if (status === 429 || /quota|rate limit|too many requests|resource exhausted|exhausted/.test(text)) return 'RATE_LIMIT';
+  if ([401, 403].includes(status) || /invalid.*key|api key.*invalid|authentication|unauthorized|forbidden|permission denied/.test(text)) return 'ACCESS';
+  if ([404, 410].includes(status) || /model.*not.*found|model.*does not exist|not available/.test(text)) return 'MODEL_UNAVAILABLE';
+  if (status === 400 && /model|unsupported|tool|request/.test(text)) return 'BAD_ROUTE';
+  if ([408, 425, 500, 502, 503, 504].includes(status) || /timed out|abort|fetch failed|econnreset|econnrefused|upstream|gateway/.test(text)) return 'UPSTREAM';
+  return 'UNKNOWN';
+}
+
+function keyCooldownFor(kind) {
+  if (kind === 'RATE_LIMIT') return KEY_RATE_LIMIT_COOLDOWN_MS;
+  if (kind === 'ACCESS') return KEY_ACCESS_COOLDOWN_MS;
+  if (kind === 'UPSTREAM') return KEY_UPSTREAM_COOLDOWN_MS;
+  if (kind === 'UNKNOWN') return Math.min(KEY_UPSTREAM_COOLDOWN_MS, 10000);
+  return 0;
+}
+
+function markKeyUsed(entry) {
+  const state = stateForKey(entry.provider, entry.slot);
+  state.lastUsedAt = Date.now();
+  state.uses += 1;
+}
+
+function markKeySuccess(entry) {
+  const state = stateForKey(entry.provider, entry.slot);
+  state.lastSuccessAt = Date.now();
+  state.successes += 1;
+  state.lastFailureKind = null;
+  state.disabledUntil = 0;
+}
+
+function markKeyFailure(entry, error) {
+  const state = stateForKey(entry.provider, entry.slot);
+  const kind = keyFailureKind(error);
+  state.lastFailureAt = Date.now();
+  state.failures += 1;
+  state.lastFailureKind = kind;
+  const cooldown = keyCooldownFor(kind);
+  if (cooldown) state.disabledUntil = Math.max(state.disabledUntil || 0, Date.now() + cooldown);
+  return kind;
+}
+
+function modelCooling(model) {
+  const until = modelCooldowns.get(String(model));
+  if (!until || until <= Date.now()) {
+    modelCooldowns.delete(String(model));
+    return false;
+  }
+  return true;
+}
+
+function markModelFailure(model, kind = 'UNKNOWN') {
+  if (!['MODEL_UNAVAILABLE', 'BAD_ROUTE'].includes(kind)) return;
+  const ttl = kind === 'MODEL_UNAVAILABLE' ? MODEL_COOLDOWN_MS : Math.min(MODEL_COOLDOWN_MS, 60 * 60 * 1000);
+  modelCooldowns.set(String(model), Date.now() + ttl);
+}
+
+function markModelSuccess(model) {
+  modelCooldowns.delete(String(model));
+}
+
+async function storedCredentials() {
+  try { return await loadCredentials(); } catch { return {}; }
+}
+
+async function credentialPool(provider, { includeCooling = false } = {}) {
+  const cfg = PROVIDERS[provider];
+  if (!cfg) return [];
+  const stored = await storedCredentials();
+  const seenValues = new Set();
+  const entries = [];
+  for (const slot of cfg.keys) {
+    const value = String(process.env[slot] || stored[slot] || '').trim();
+    if (!value || seenValues.has(value)) continue;
+    seenValues.add(value);
+    const state = stateForKey(provider, slot);
+    const cooling = Number(state.disabledUntil || 0) > Date.now();
+    if (!includeCooling && cooling) continue;
+    entries.push({ provider, slot, value, state, cooling });
+  }
+  entries.sort((a, b) => {
+    const aUsed = Number(a.state.lastUsedAt || 0);
+    const bUsed = Number(b.state.lastUsedAt || 0);
+    if (aUsed !== bUsed) return aUsed - bUsed;
+    const aRatio = a.state.uses ? a.state.failures / a.state.uses : 0;
+    const bRatio = b.state.uses ? b.state.failures / b.state.uses : 0;
+    return aRatio - bRatio || a.slot.localeCompare(b.slot);
+  });
+  return entries;
+}
+
 async function credentialMap() {
-  let stored = {};
-  try { stored = await loadCredentials(); } catch {}
   const out = {};
-  for (const [provider, cfg] of Object.entries(PROVIDERS)) {
-    out[provider] = '';
-    for (const key of cfg.keys) {
-      const value = String(process.env[key] || stored[key] || '').trim();
-      if (value) { out[provider] = value; break; }
-    }
+  for (const provider of Object.keys(PROVIDERS)) {
+    const pool = await credentialPool(provider, { includeCooling: true });
+    out[provider] = pool[0]?.value || '';
   }
   return out;
 }
 
 async function configuredProviders() {
-  const creds = await credentialMap();
-  return Object.keys(PROVIDERS).filter((provider) => Boolean(creds[provider]));
+  const out = [];
+  for (const provider of Object.keys(PROVIDERS)) {
+    if ((await credentialPool(provider, { includeCooling: true })).length) out.push(provider);
+  }
+  return out;
 }
 
-function cooling(model) {
-  const until = cooldowns.get(String(model));
-  if (!until || until <= Date.now()) { cooldowns.delete(String(model)); return false; }
-  return true;
+function nonChatModel(model) {
+  return /(^|[\/_-])(embed|embedding|rerank|whisper|speech|audio|tts|transcrib|image|video|vision-embed)([\/_-]|$)/i.test(String(model || ''));
 }
 
-function markFailure(model) {
-  cooldowns.set(String(model), Date.now() + COOLDOWN_MS);
+function sizeScore(value) {
+  const match = String(value || '').toLowerCase().match(/(?:^|[-_/])(\d{1,3})b(?:[-_/]|$)/);
+  return match ? Number(match[1]) : 0;
 }
 
-function markSuccess(model) {
-  cooldowns.delete(String(model));
+function modelScore(model, taskType, provider, preferenceIndex = -1) {
+  const value = String(model || '').toLowerCase();
+  const task = taskName(taskType);
+  if (!value || nonChatModel(value)) return -10000;
+  let score = preferenceIndex >= 0 ? 140 - preferenceIndex * 8 : 0;
+  const size = sizeScore(value);
+  if (/latest|stable/.test(value)) score += 8;
+  if (/deprecated|legacy|retired|eol/.test(value)) score -= 100;
+  if (/preview|experimental|exp\b/.test(value)) score -= 5;
+
+  if (task === 'simple_qa' || task === 'automation') {
+    if (/instant|flash|lite|mini|small|fast|8b/.test(value)) score += 35;
+    if (size && size <= 12) score += 14;
+    if (size >= 70) score -= 8;
+  } else if (task === 'coding') {
+    if (/coder|code|coding|deepseek|qwen|gpt-oss|nemotron/.test(value)) score += 38;
+    if (/reason|think|pro/.test(value)) score += 10;
+    if (size >= 27) score += 12;
+  } else if (task === 'planning') {
+    if (/reason|think|nemotron|gpt-oss|glm|pro|deepseek/.test(value)) score += 36;
+    if (size >= 70) score += 15;
+    else if (size >= 27) score += 8;
+  } else if (task === 'research') {
+    if (/pro|reason|think|nemotron|gpt-oss|glm|deepseek/.test(value)) score += 28;
+    if (/flash/.test(value) && provider === 'gemini') score += 12;
+    if (size >= 70) score += 10;
+  } else {
+    if (/flash|instruct|chat|qwen|gpt-oss|gemini/.test(value)) score += 20;
+    if (/reason|pro|nemotron/.test(value)) score += 8;
+    if (size >= 27 && size <= 120) score += 6;
+  }
+
+  const order = providerOrder(task);
+  const providerRank = order.indexOf(provider);
+  if (providerRank >= 0) score += Math.max(0, 30 - providerRank * 12);
+  return score;
+}
+
+function parseCatalog(provider, data) {
+  if (provider === 'gemini') {
+    return (Array.isArray(data?.models) ? data.models : [])
+      .filter((item) => !Array.isArray(item?.supportedGenerationMethods) || item.supportedGenerationMethods.includes('generateContent'))
+      .map((item) => String(item?.name || '').replace(/^models\//, '').trim())
+      .filter(Boolean);
+  }
+  return (Array.isArray(data?.data) ? data.data : [])
+    .map((item) => typeof item === 'string' ? item : String(item?.id || item?.model || '').trim())
+    .filter(Boolean);
+}
+
+async function fetchCatalogWithKey(provider, entry) {
+  const cfg = PROVIDERS[provider];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MODEL_DISCOVERY_TIMEOUT_MS);
+  try {
+    const url = provider === 'gemini'
+      ? `${cfg.baseUrl}/models?key=${encodeURIComponent(entry.value)}`
+      : `${cfg.baseUrl}/models`;
+    const response = await fetch(url, {
+      headers: provider === 'gemini' ? {} : { Authorization: `Bearer ${entry.value}` },
+      signal: controller.signal,
+    });
+    const raw = await response.text();
+    if (!response.ok) throw errorFor(provider, response, raw, entry.slot);
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`${provider} model catalog returned invalid JSON.`); }
+    return [...new Set(parseCatalog(provider, data).filter((model) => !nonChatModel(model)))];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function discoverProviderModels(provider, { force = false } = {}) {
+  const cached = catalogCache.get(provider);
+  if (!force && cached?.models?.length && Date.now() - cached.fetchedAt < MODEL_CACHE_MS) return [...cached.models];
+  const pool = await credentialPool(provider);
+  let lastError = null;
+  for (const entry of pool) {
+    markKeyUsed(entry);
+    try {
+      const models = await fetchCatalogWithKey(provider, entry);
+      if (models.length) {
+        markKeySuccess(entry);
+        catalogCache.set(provider, { models, fetchedAt: Date.now(), slot: entry.slot });
+        return [...models];
+      }
+    } catch (error) {
+      lastError = error;
+      const kind = keyFailureKind(error);
+      if (kind !== 'MODEL_UNAVAILABLE' && Number(error?.status || 0) !== 404) markKeyFailure(entry, error);
+    }
+  }
+  if (cached?.models?.length) return [...cached.models];
+  if (lastError && /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DIRECT_MODEL_DISCOVERY_STRICT || '0'))) throw lastError;
+  return [];
+}
+
+async function modelList(provider, taskType) {
+  const override = configuredModelOverride(provider, taskType);
+  if (override.length) return [...new Set(override)].filter((model) => !nonChatModel(model)).slice(0, MODELS_PER_PROVIDER);
+  const discovered = await discoverProviderModels(provider);
+  const preferred = defaultModelList(provider, taskType);
+  if (!discovered.length) return preferred.slice(0, MODELS_PER_PROVIDER);
+  const preferenceMap = new Map(preferred.map((model, index) => [String(model).toLowerCase(), index]));
+  return discovered
+    .map((model) => ({ model, score: modelScore(model, taskType, provider, preferenceMap.has(model.toLowerCase()) ? preferenceMap.get(model.toLowerCase()) : -1) }))
+    .filter((entry) => entry.score > -1000)
+    .sort((a, b) => b.score - a.score || a.model.localeCompare(b.model))
+    .slice(0, MODELS_PER_PROVIDER)
+    .map((entry) => entry.model);
 }
 
 async function candidates(taskType = 'general') {
   if (!enabled()) return [];
-  const creds = await credentialMap();
+  const order = providerOrder(taskType);
+  const rows = [];
+  for (const provider of order) {
+    const configured = (await credentialPool(provider, { includeCooling: true })).length > 0;
+    if (!configured) continue;
+    const models = await modelList(provider, taskType);
+    rows.push({ provider, models: models.map((model) => canonical(provider, model)).filter((model) => !modelCooling(model)) });
+  }
+
+  // Breadth-first failover: each provider's best specialist model gets a chance before
+  // ULTRON burns multiple attempts on a degraded provider.
   const out = [];
-  for (const provider of providerOrder(taskType)) {
-    if (!creds[provider]) continue;
-    for (const model of modelList(provider, taskType)) {
-      const id = canonical(provider, model);
-      if (!cooling(id)) out.push(id);
-    }
+  const maxDepth = rows.reduce((max, row) => Math.max(max, row.models.length), 0);
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    for (const row of rows) if (row.models[depth]) out.push(row.models[depth]);
   }
   return [...new Set(out)];
 }
@@ -174,11 +417,13 @@ function normalizeMessages(messages) {
   }));
 }
 
-function errorFor(provider, response, raw) {
-  const error = new Error(`${provider} direct HTTP ${response.status}: ${String(raw || '').slice(0, 1000)}`);
+function errorFor(provider, response, raw, slot = null) {
+  const suffix = slot ? ` via ${slot}` : '';
+  const error = new Error(`${provider} direct HTTP ${response.status}${suffix}: ${String(raw || '').slice(0, 1000)}`);
   error.status = response.status;
   error.raw = raw;
   error.directProvider = provider;
+  error.credentialSlot = slot;
   return error;
 }
 
@@ -235,7 +480,7 @@ function geminiPayload(messages, tools) {
   return body;
 }
 
-function geminiResult(data, parsed) {
+function geminiResult(data, parsed, slot) {
   const parts = data?.candidates?.[0]?.content?.parts || [];
   const content = parts.map((part) => part?.text || '').join('');
   const toolCalls = parts.filter((part) => part?.functionCall?.name).map((part, index) => ({
@@ -244,49 +489,74 @@ function geminiResult(data, parsed) {
     function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args || {}) },
   }));
   if (!content.trim() && !toolCalls.length) throw new Error('Gemini direct API returned no visible text or tool calls.');
-  return { content, toolCalls, model: parsed.canonical, provider: 'gemini', transport: 'direct', raw: data };
+  return { content, toolCalls, model: parsed.canonical, provider: 'gemini', transport: 'direct', credentialSlot: slot, raw: data };
+}
+
+async function chatWithKey({ parsed, entry, messages, tools, budget }) {
+  const cfg = PROVIDERS[parsed.provider];
+  if (cfg.family === 'gemini') {
+    const url = `${cfg.baseUrl}/models/${encodeURIComponent(parsed.model)}:generateContent?key=${encodeURIComponent(entry.value)}`;
+    const response = await fetchWithTimeout(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(geminiPayload(messages, tools)) }, budget);
+    const raw = await response.text();
+    if (!response.ok) throw errorFor(parsed.provider, response, raw, entry.slot);
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error('Gemini direct API returned invalid JSON.'); }
+    return geminiResult(data, parsed, entry.slot);
+  }
+
+  const response = await fetchWithTimeout(`${cfg.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', Authorization: `Bearer ${entry.value}` },
+    body: JSON.stringify({ model: parsed.model, messages: normalizeMessages(messages), ...(openAiTools(tools) ? { tools: openAiTools(tools) } : {}) }),
+  }, budget);
+  const raw = await response.text();
+  if (!response.ok) throw errorFor(parsed.provider, response, raw, entry.slot);
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`${parsed.provider} direct API returned invalid JSON.`); }
+  const message = data?.choices?.[0]?.message || {};
+  const content = typeof message.content === 'string' ? message.content : '';
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  if (!content.trim() && !toolCalls.length) throw new Error(`${parsed.provider} direct API returned no visible text or tool calls.`);
+  return { content, toolCalls, model: parsed.canonical, provider: parsed.provider, transport: 'direct', credentialSlot: entry.slot, raw: data };
 }
 
 async function chat({ messages, model, tools = null, taskType = 'general', timeoutMs = null } = {}) {
   const parsed = parse(model);
   if (!parsed.provider) throw new Error(`Not a direct provider model: ${model}`);
-  const creds = await credentialMap();
-  const apiKey = creds[parsed.provider];
-  if (!apiKey) throw new Error(`Direct provider ${parsed.provider} is not configured.`);
-  const cfg = PROVIDERS[parsed.provider];
-  const budget = Math.max(3000, Number(timeoutMs || timeoutFor(taskType)));
-  try {
-    if (cfg.family === 'gemini') {
-      const url = `${cfg.baseUrl}/models/${encodeURIComponent(parsed.model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-      const response = await fetchWithTimeout(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(geminiPayload(messages, tools)) }, budget);
-      const raw = await response.text();
-      if (!response.ok) throw errorFor(parsed.provider, response, raw);
-      let data = {};
-      try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error('Gemini direct API returned invalid JSON.'); }
-      const result = geminiResult(data, parsed);
-      markSuccess(parsed.canonical);
-      return result;
-    }
-
-    const response = await fetchWithTimeout(`${cfg.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: parsed.model, messages: normalizeMessages(messages), ...(openAiTools(tools) ? { tools: openAiTools(tools) } : {}) }),
-    }, budget);
-    const raw = await response.text();
-    if (!response.ok) throw errorFor(parsed.provider, response, raw);
-    let data = {};
-    try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`${parsed.provider} direct API returned invalid JSON.`); }
-    const message = data?.choices?.[0]?.message || {};
-    const content = typeof message.content === 'string' ? message.content : '';
-    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    if (!content.trim() && !toolCalls.length) throw new Error(`${parsed.provider} direct API returned no visible text or tool calls.`);
-    markSuccess(parsed.canonical);
-    return { content, toolCalls, model: parsed.canonical, provider: parsed.provider, transport: 'direct', raw: data };
-  } catch (error) {
-    markFailure(parsed.canonical);
+  const pool = await credentialPool(parsed.provider);
+  if (!pool.length) {
+    const configured = await credentialPool(parsed.provider, { includeCooling: true });
+    const error = new Error(configured.length ? `All ${parsed.provider} API keys are cooling down.` : `Direct provider ${parsed.provider} is not configured.`);
+    error.status = configured.length ? 429 : 401;
     throw error;
   }
+
+  const budget = Math.max(3000, Number(timeoutMs || timeoutFor(taskType)));
+  let lastError = null;
+  const attempts = [];
+  for (const entry of pool) {
+    markKeyUsed(entry);
+    attempts.push(entry.slot);
+    try {
+      const result = await chatWithKey({ parsed, entry, messages, tools, budget });
+      markKeySuccess(entry);
+      markModelSuccess(parsed.canonical);
+      return { ...result, keyAttempts: attempts.length };
+    } catch (error) {
+      lastError = error;
+      const kind = keyFailureKind(error);
+      error.credentialSlot ||= entry.slot;
+      if (kind === 'MODEL_UNAVAILABLE' || kind === 'BAD_ROUTE') {
+        markModelFailure(parsed.canonical, kind);
+        break;
+      }
+      markKeyFailure(entry, error);
+    }
+  }
+
+  const error = lastError || new Error(`${parsed.provider} direct API exhausted its credential pool.`);
+  error.keyAttempts = attempts;
+  throw error;
 }
 
 async function readSse(response, onEvent) {
@@ -310,18 +580,7 @@ async function readSse(response, onEvent) {
   if (tail.startsWith('data:')) await onEvent(tail.slice(5).trim());
 }
 
-async function streamChat({ messages, model, tools = null, taskType = 'general', onDelta, firstTokenTimeoutMs = null } = {}) {
-  if (typeof onDelta !== 'function') throw new Error('Direct streaming requires onDelta.');
-  if (Array.isArray(tools) && tools.length) {
-    const data = await chat({ messages, model, tools, taskType, timeoutMs: timeoutFor(taskType) });
-    if (data.content) onDelta(data.content, { model: data.model, provider: data.provider, transport: 'direct' });
-    return data;
-  }
-  const parsed = parse(model);
-  if (!parsed.provider) throw new Error(`Not a direct provider model: ${model}`);
-  const creds = await credentialMap();
-  const apiKey = creds[parsed.provider];
-  if (!apiKey) throw new Error(`Direct provider ${parsed.provider} is not configured.`);
+async function streamWithKey({ parsed, entry, messages, taskType, onDelta, firstTokenTimeoutMs }) {
   const cfg = PROVIDERS[parsed.provider];
   const controller = new AbortController();
   const firstBudget = Math.max(2500, Number(firstTokenTimeoutMs || FIRST_TOKEN_TIMEOUT_MS));
@@ -335,9 +594,9 @@ async function streamChat({ messages, model, tools = null, taskType = 'general',
   let fullText = '';
   try {
     if (cfg.family === 'gemini') {
-      const url = `${cfg.baseUrl}/models/${encodeURIComponent(parsed.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+      const url = `${cfg.baseUrl}/models/${encodeURIComponent(parsed.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(entry.value)}`;
       const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(geminiPayload(messages, null)), signal: controller.signal });
-      if (!response.ok) { const raw = await response.text(); throw errorFor(parsed.provider, response, raw); }
+      if (!response.ok) { const raw = await response.text(); throw errorFor(parsed.provider, response, raw, entry.slot); }
       await readSse(response, async (raw) => {
         if (raw === '[DONE]') return;
         let data;
@@ -346,16 +605,16 @@ async function streamChat({ messages, model, tools = null, taskType = 'general',
         if (!text) return;
         seen();
         fullText += text;
-        onDelta(text, { model: parsed.canonical, provider: parsed.provider, transport: 'direct' });
+        onDelta(text, { model: parsed.canonical, provider: parsed.provider, transport: 'direct', credentialSlot: entry.slot });
       });
     } else {
       const response = await fetch(`${cfg.baseUrl}/chat/completions`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${entry.value}` },
         body: JSON.stringify({ model: parsed.model, messages: normalizeMessages(messages), stream: true }),
         signal: controller.signal,
       });
-      if (!response.ok) { const raw = await response.text(); throw errorFor(parsed.provider, response, raw); }
+      if (!response.ok) { const raw = await response.text(); throw errorFor(parsed.provider, response, raw, entry.slot); }
       await readSse(response, async (raw) => {
         if (raw === '[DONE]') return;
         let data;
@@ -364,14 +623,13 @@ async function streamChat({ messages, model, tools = null, taskType = 'general',
         if (!text) return;
         seen();
         fullText += text;
-        onDelta(text, { model: parsed.canonical, provider: parsed.provider, transport: 'direct' });
+        onDelta(text, { model: parsed.canonical, provider: parsed.provider, transport: 'direct', credentialSlot: entry.slot });
       });
     }
     if (!fullText.trim()) throw new Error(`${parsed.provider} direct stream returned no visible text.`);
-    markSuccess(parsed.canonical);
-    return { content: fullText, toolCalls: [], model: parsed.canonical, provider: parsed.provider, transport: 'direct', raw: null };
+    return { content: fullText, toolCalls: [], model: parsed.canonical, provider: parsed.provider, transport: 'direct', credentialSlot: entry.slot, raw: null, partialStream: firstSeen };
   } catch (error) {
-    markFailure(parsed.canonical);
+    if (firstSeen) error.partialStream = true;
     throw error;
   } finally {
     clearTimeout(firstTimer);
@@ -379,20 +637,101 @@ async function streamChat({ messages, model, tools = null, taskType = 'general',
   }
 }
 
+async function streamChat({ messages, model, tools = null, taskType = 'general', onDelta, firstTokenTimeoutMs = null } = {}) {
+  if (typeof onDelta !== 'function') throw new Error('Direct streaming requires onDelta.');
+  if (Array.isArray(tools) && tools.length) {
+    const data = await chat({ messages, model, tools, taskType, timeoutMs: timeoutFor(taskType) });
+    if (data.content) onDelta(data.content, { model: data.model, provider: data.provider, transport: 'direct', credentialSlot: data.credentialSlot });
+    return data;
+  }
+
+  const parsed = parse(model);
+  if (!parsed.provider) throw new Error(`Not a direct provider model: ${model}`);
+  const pool = await credentialPool(parsed.provider);
+  if (!pool.length) {
+    const configured = await credentialPool(parsed.provider, { includeCooling: true });
+    const error = new Error(configured.length ? `All ${parsed.provider} API keys are cooling down.` : `Direct provider ${parsed.provider} is not configured.`);
+    error.status = configured.length ? 429 : 401;
+    throw error;
+  }
+
+  let lastError = null;
+  const attempts = [];
+  for (const entry of pool) {
+    markKeyUsed(entry);
+    attempts.push(entry.slot);
+    try {
+      const result = await streamWithKey({ parsed, entry, messages, taskType, onDelta, firstTokenTimeoutMs });
+      markKeySuccess(entry);
+      markModelSuccess(parsed.canonical);
+      return { ...result, keyAttempts: attempts.length };
+    } catch (error) {
+      lastError = error;
+      if (error.partialStream) throw error;
+      const kind = keyFailureKind(error);
+      if (kind === 'MODEL_UNAVAILABLE' || kind === 'BAD_ROUTE') {
+        markModelFailure(parsed.canonical, kind);
+        break;
+      }
+      markKeyFailure(entry, error);
+    }
+  }
+
+  const error = lastError || new Error(`${parsed.provider} direct streaming exhausted its credential pool.`);
+  error.keyAttempts = attempts;
+  throw error;
+}
+
+function keySummary(provider, entries) {
+  return entries.map((entry) => {
+    const state = stateForKey(provider, entry.slot);
+    const cooling = Number(state.disabledUntil || 0) > Date.now();
+    return {
+      slot: entry.slot,
+      status: cooling ? 'cooldown' : state.lastSuccessAt ? 'healthy' : 'ready',
+      uses: state.uses,
+      successes: state.successes,
+      failures: state.failures,
+      lastFailureKind: state.lastFailureKind,
+      disabledUntil: cooling ? new Date(state.disabledUntil).toISOString() : null,
+    };
+  });
+}
+
 async function health() {
-  const creds = await credentialMap();
-  const providers = Object.fromEntries(Object.keys(PROVIDERS).map((provider) => [provider, { configured: Boolean(creds[provider]), models: Boolean(creds[provider]) ? modelList(provider, 'general').map((model) => canonical(provider, model)) : [] }]));
+  const providers = {};
+  for (const provider of Object.keys(PROVIDERS)) {
+    const entries = await credentialPool(provider, { includeCooling: true });
+    let models = [];
+    if (entries.length) {
+      try { models = (await modelList(provider, 'general')).map((model) => canonical(provider, model)); } catch {}
+    }
+    providers[provider] = {
+      configured: entries.length > 0,
+      keyCount: entries.length,
+      keys: keySummary(provider, entries),
+      models,
+      specialties: PROVIDERS[provider].specialties,
+    };
+  }
   return {
     enabled: enabled(),
     configured: Object.values(providers).some((row) => row.configured),
+    strategy: 'specialist-provider-order + live-model-ranking + least-recently-used-key-pool',
     providers,
     providerOrder: {
       general: providerOrder('general'),
       simple_qa: providerOrder('simple_qa'),
       coding: providerOrder('coding'),
       planning: providerOrder('planning'),
+      research: providerOrder('research'),
+      automation: providerOrder('automation'),
     },
   };
+}
+
+function clearCache() {
+  catalogCache.clear();
 }
 
 module.exports = {
@@ -403,12 +742,17 @@ module.exports = {
   canonical,
   providerForModel,
   isDirectModel,
+  credentialPool,
   credentialMap,
   configuredProviders,
+  providerOrder,
+  modelList,
   candidates,
   allConfiguredModels,
+  discoverProviderModels,
   chat,
   streamChat,
   health,
   timeoutFor,
+  clearCache,
 };
