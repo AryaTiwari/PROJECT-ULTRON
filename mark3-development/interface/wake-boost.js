@@ -3,8 +3,6 @@
   if (!NativeRecognition) return;
 
   const TARGET = 'ultron';
-  const FAST_FINAL_SILENCE_MS = 2200;
-  let fastFinalizeTimer = null;
   const PHRASE_ALIASES = [
     /\bultra\s+on\b/gi,
     /\bultra\s+one\b/gi,
@@ -44,66 +42,57 @@
     return distance(value, TARGET) <= (value.length >= 6 ? 2 : 1);
   }
 
-  function normalizeTranscript(transcript) {
+  function normalizeWakeTranscript(transcript) {
     let text = String(transcript || '').trim();
     if (!text) return text;
     for (const pattern of PHRASE_ALIASES) text = text.replace(pattern, TARGET);
     const words = text.split(/\s+/);
     let replaced = false;
-    const normalized = words.map((word) => {
+    return words.map((word) => {
       if (!replaced && wakeLike(word)) {
         replaced = true;
         const punctuation = String(word).match(/[^a-zA-Z]+$/)?.[0] || '';
         return `${TARGET}${punctuation}`;
       }
       return word;
-    });
-    return normalized.join(' ');
+    }).join(' ');
+  }
+
+  function isWakeListening() {
+    return Boolean(document.querySelector('.globe-wrap.wake-listening'));
   }
 
   function enhanceResults(results) {
+    const wakeMode = isWakeListening();
     const output = [];
     for (let i = 0; i < results.length; i += 1) {
       const source = results[i];
       const alternatives = [];
       for (let j = 0; j < source.length; j += 1) {
         const alt = source[j];
+        const raw = String(alt?.transcript || '').trim();
         alternatives.push({
-          transcript: normalizeTranscript(alt?.transcript || ''),
+          // Fuzzy normalization is deliberately wake-only. Once Sir is issuing a
+          // command, preserve Chrome's raw transcript instead of rewriting words
+          // that merely resemble “Ultron”.
+          transcript: wakeMode ? normalizeWakeTranscript(raw) : raw,
           confidence: Number(alt?.confidence || 0),
         });
       }
       alternatives.sort((a, b) => {
-        const aWake = /\bultron\b/i.test(a.transcript) ? 1 : 0;
-        const bWake = /\bultron\b/i.test(b.transcript) ? 1 : 0;
-        return bWake - aWake || b.confidence - a.confidence;
+        if (wakeMode) {
+          const aWake = /\bultron\b/i.test(a.transcript) ? 1 : 0;
+          const bWake = /\bultron\b/i.test(b.transcript) ? 1 : 0;
+          return bWake - aWake || b.confidence - a.confidence;
+        }
+        // In command mode use recognition confidence only. Do not bias toward
+        // wake-like words; the user is already inside the command session.
+        return b.confidence - a.confidence;
       });
       alternatives.isFinal = Boolean(source.isFinal);
       output[i] = alternatives;
     }
     return output;
-  }
-
-  function scheduleFastFinalize(enhanced, resultIndex) {
-    if (fastFinalizeTimer) {
-      clearTimeout(fastFinalizeTimer);
-      fastFinalizeTimer = null;
-    }
-    let hasFinalSpeech = false;
-    for (let i = Number(resultIndex || 0); i < enhanced.length; i += 1) {
-      if (enhanced[i]?.isFinal && String(enhanced[i]?.[0]?.transcript || '').trim()) {
-        hasFinalSpeech = true;
-        break;
-      }
-    }
-    if (!hasFinalSpeech) return;
-    fastFinalizeTimer = setTimeout(() => {
-      const listening = document.querySelector('.globe-wrap.command-listening');
-      const text = String(document.querySelector('#voiceInterim')?.textContent || '').trim();
-      const orb = document.querySelector('#voiceOrb');
-      if (listening && text && orb && !orb.disabled) orb.click();
-      fastFinalizeTimer = null;
-    }, FAST_FINAL_SILENCE_MS);
   }
 
   function EnhancedRecognition() {
@@ -118,17 +107,19 @@
           try { target.maxAlternatives = Math.max(5, Number(value) || 1); } catch {}
           return true;
         }
+        if (prop === 'lang') {
+          // Arya speaks Indian English. Chrome is noticeably more reliable with
+          // the matching locale than a browser-default en-US profile.
+          try { target.lang = /^en(?:-|$)/i.test(String(value || '')) ? 'en-IN' : value; } catch {}
+          return true;
+        }
         if (prop === 'onresult' && typeof value === 'function') {
-          target.onresult = (event) => {
-            const enhanced = enhanceResults(event.results);
-            value({
-              resultIndex: event.resultIndex,
-              results: enhanced,
-              type: event.type,
-              timeStamp: event.timeStamp,
-            });
-            scheduleFastFinalize(enhanced, event.resultIndex);
-          };
+          target.onresult = (event) => value({
+            resultIndex: event.resultIndex,
+            results: enhanceResults(event.results),
+            type: event.type,
+            timeStamp: event.timeStamp,
+          });
           return true;
         }
         try { target[prop] = value; } catch {}
@@ -144,7 +135,9 @@
     enabled: true,
     alternatives: 5,
     fuzzyDistance: 2,
-    fastFinalSilenceMs: FAST_FINAL_SILENCE_MS,
-    normalizeTranscript,
+    commandTranscript: 'raw-confidence-ranked',
+    locale: 'en-IN',
+    prematureFastFinalize: false,
+    normalizeTranscript: normalizeWakeTranscript,
   };
 })();
