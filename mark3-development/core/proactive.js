@@ -1,9 +1,14 @@
-const { emit } = require('./events');
+const { emit, subscribe } = require('./events');
 const workspace = require('./workspace');
+const intent = require('./intent');
+const planner = require('./planner');
+const verifier = require('./verifier');
 
 let timer = null;
+let unsubscribe = null;
 let lastFingerprint = '';
 let lastAlertAt = 0;
+let activeExecution = null;
 const QUIET_REPEAT_MS = Math.max(5 * 60 * 1000, Number(process.env.ULTRON_M3_PROACTIVE_REPEAT_MS || 60 * 60 * 1000));
 
 function hoursUntil(value) { return value ? (Date.parse(value) - Date.now()) / 3600000 : Infinity; }
@@ -68,6 +73,82 @@ function evaluate() {
   }
   return { emitted: false, attention: feed };
 }
-function start(intervalMs) { stop(); timer = setInterval(evaluate, intervalMs); timer.unref?.(); evaluate(); }
-function stop() { if (timer) clearInterval(timer); timer = null; }
-module.exports = { start, stop, evaluate, attentionFeed, briefing, scoreItem, attentionLevel };
+
+function addEvidence(text) {
+  if (!activeExecution || !text) return;
+  const current = workspace.listExecutions(50).find((item) => item.id === activeExecution.id);
+  if (!current) return;
+  const evidence = [...(Array.isArray(current.evidence) ? current.evidence : []), String(text).slice(0, 500)].slice(-12);
+  workspace.updateExecution(activeExecution.id, { evidence });
+}
+function finishExecution(result = null, fallbackStatus = 'partial') {
+  if (!activeExecution) return;
+  const patch = result
+    ? { verification: result, status: result.ok ? 'verified' : result.status === 'failed' ? 'failed' : result.status || fallbackStatus }
+    : { status: fallbackStatus };
+  try { workspace.updateExecution(activeExecution.id, patch); } catch {}
+  activeExecution = null;
+}
+function onRuntimeEvent(event) {
+  if (event.type === 'task_started') {
+    const mutation = intent.extractWorkspaceMutation(event.message);
+    if (mutation) {
+      const applied = workspace.applyMutation(mutation);
+      emit('workspace_state_changed', { mutation, applied });
+    }
+    const kind = planner.classify(event.message, event.taskType);
+    activeExecution = workspace.recordExecution({ objective: event.message, taskType: event.taskType, status: 'executing' });
+    activeExecution.kind = kind;
+    workspace.updateExecution(activeExecution.id, { kind });
+    return;
+  }
+  if (!activeExecution) return;
+  if (event.type === 'plan_created') {
+    workspace.updateExecution(activeExecution.id, { planId: event.plan?.id || null, planKind: event.plan?.kind || activeExecution.kind });
+    return;
+  }
+  if (event.type === 'tool_completed') {
+    const verified = event.result?.verified === true ? ' verified' : '';
+    addEvidence(`${event.tool}${verified} completed`);
+    return;
+  }
+  if (event.type === 'tool_failed') {
+    addEvidence(`${event.tool} failed: ${event.error || 'unknown error'}`);
+    return;
+  }
+  if (event.type === 'coding_brain_completed') {
+    const result = verifier.verifyExecution({
+      kind: 'repository_action',
+      changedFiles: Array.isArray(event.changedFiles) ? event.changedFiles.length : 0,
+      validation: event.validation || '',
+      evidence: [event.review ? `review=${event.review}` : '', event.validation ? `validation=${event.validation}` : ''].filter(Boolean),
+    });
+    verifier.report(result, 'coding-brain-execution');
+    finishExecution(result);
+    return;
+  }
+  if (event.type === 'verification_complete') {
+    const result = event.result || null;
+    if (result) finishExecution(result);
+    return;
+  }
+  if (event.type === 'task_completed') {
+    finishExecution(null, 'completed');
+  }
+}
+
+function start(intervalMs) {
+  stop();
+  unsubscribe = subscribe(onRuntimeEvent);
+  timer = setInterval(evaluate, intervalMs);
+  timer.unref?.();
+  evaluate();
+}
+function stop() {
+  if (timer) clearInterval(timer);
+  timer = null;
+  if (unsubscribe) unsubscribe();
+  unsubscribe = null;
+  activeExecution = null;
+}
+module.exports = { start, stop, evaluate, attentionFeed, briefing, scoreItem, attentionLevel, onRuntimeEvent };
