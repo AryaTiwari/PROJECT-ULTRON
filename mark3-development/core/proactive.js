@@ -3,12 +3,15 @@ const workspace = require('./workspace');
 const intent = require('./intent');
 const planner = require('./planner');
 const verifier = require('./verifier');
+const memory = require('./memory');
+const modelLeague = require('./model-league');
 
 let timer = null;
 let unsubscribe = null;
 let lastFingerprint = '';
 let lastAlertAt = 0;
 let activeExecution = null;
+let originalLeagueRecommend = null;
 const QUIET_REPEAT_MS = Math.max(5 * 60 * 1000, Number(process.env.ULTRON_M3_PROACTIVE_REPEAT_MS || 60 * 60 * 1000));
 
 function hoursUntil(value) { return value ? (Date.parse(value) - Date.now()) / 3600000 : Infinity; }
@@ -36,23 +39,16 @@ function attentionLevel(score) {
 function attentionFeed() {
   const tasks = workspace.listTasks().filter((item) => !['completed', 'cancelled', 'archived'].includes(item.status));
   const commitments = workspace.listCommitments().filter((item) => !['completed', 'cancelled', 'archived'].includes(item.status));
-  const rows = [
+  return [
     ...tasks.map((item) => ({ kind: 'task', item, score: scoreItem(item, 'task') })),
     ...commitments.map((item) => ({ kind: 'commitment', item, score: scoreItem(item, 'commitment') })),
   ].map((row) => ({ ...row, level: attentionLevel(row.score) })).sort((a, b) => b.score - a.score);
-  return rows;
 }
 function fingerprint(items) { return items.map((row) => `${row.kind}:${row.item.id}:${row.item.status}:${row.item.dueAt || ''}:${row.item.priority}:${row.item.updatedAt}`).join('|'); }
 function briefing(limit = 5) {
   const feed = attentionFeed().filter((row) => row.level !== 'silent').slice(0, limit);
   const state = workspace.stateSnapshot();
-  return {
-    generatedAt: new Date().toISOString(),
-    topAction: state.topAction,
-    attention: feed,
-    blocked: state.blocked.slice(0, 5),
-    summary: workspace.renderBriefing(state),
-  };
+  return { generatedAt: new Date().toISOString(), topAction: state.topAction, attention: feed, blocked: state.blocked.slice(0, 5), summary: workspace.renderBriefing(state) };
 }
 function evaluate() {
   const feed = attentionFeed();
@@ -72,6 +68,27 @@ function evaluate() {
     return { emitted: true, attention: feed };
   }
   return { emitted: false, attention: feed };
+}
+
+function syncStateMemory() {
+  const state = workspace.stateSnapshot();
+  const content = [
+    `Current workspace status: ${state.counts.projects} active project(s), ${state.counts.goals} active goal(s), ${state.counts.tasks} active task(s), ${state.counts.commitments} open commitment(s).`,
+    state.topAction ? `Next priority: ${state.topAction.title}${state.topAction.project ? ` for ${state.topAction.project}` : ''}.` : 'No next priority is currently recorded.',
+    state.goals.length ? `Active goals: ${state.goals.slice(0, 5).map((item) => item.title).join('; ')}.` : '',
+    state.tasks.length ? `Active tasks: ${state.tasks.slice(0, 8).map((item) => `${item.title}${item.project ? ` [${item.project}]` : ''}`).join('; ')}.` : '',
+    state.blocked.length ? `Waiting/blocked: ${state.blocked.slice(0, 5).map((item) => `${item.title}${item.blockedBy ? ` -> ${item.blockedBy}` : ''}`).join('; ')}.` : '',
+  ].filter(Boolean).join(' ');
+  return memory.remember({
+    type: 'strategic',
+    key: 'ultron:workspace:current_state',
+    entity: 'ULTRON workspace',
+    relation: 'current state',
+    content,
+    importance: 0.95,
+    source: 'state-engine',
+    tags: ['status', 'work', 'priority', 'priorities', 'next', 'tasks', 'goals', 'pending', 'waiting'],
+  });
 }
 
 function addEvidence(text) {
@@ -94,6 +111,7 @@ function onRuntimeEvent(event) {
     const mutation = intent.extractWorkspaceMutation(event.message);
     if (mutation) {
       const applied = workspace.applyMutation(mutation);
+      syncStateMemory();
       emit('workspace_state_changed', { mutation, applied });
     }
     const kind = planner.classify(event.message, event.taskType);
@@ -108,8 +126,7 @@ function onRuntimeEvent(event) {
     return;
   }
   if (event.type === 'tool_completed') {
-    const verified = event.result?.verified === true ? ' verified' : '';
-    addEvidence(`${event.tool}${verified} completed`);
+    addEvidence(`${event.tool}${event.result?.verified === true ? ' verified' : ''} completed`);
     return;
   }
   if (event.type === 'tool_failed') {
@@ -128,18 +145,27 @@ function onRuntimeEvent(event) {
     return;
   }
   if (event.type === 'verification_complete') {
-    const result = event.result || null;
-    if (result) finishExecution(result);
+    if (event.result) finishExecution(event.result);
     return;
   }
-  if (event.type === 'task_completed') {
-    finishExecution(null, 'completed');
-  }
+  if (event.type === 'task_completed') finishExecution(null, 'completed');
 }
 
+function demoteModelLeague() {
+  const enabled = /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_LEAGUE_ENABLED || '0'));
+  if (enabled || originalLeagueRecommend) return;
+  originalLeagueRecommend = modelLeague.recommend;
+  modelLeague.recommend = (taskType = 'general') => ({ taskType, primary: null, backups: [], ranked: [], rounds: 0, lastTournamentAt: null, transportPolicy: 'diagnostic-opt-in' });
+}
+function restoreModelLeague() {
+  if (originalLeagueRecommend) modelLeague.recommend = originalLeagueRecommend;
+  originalLeagueRecommend = null;
+}
 function start(intervalMs) {
   stop();
+  demoteModelLeague();
   unsubscribe = subscribe(onRuntimeEvent);
+  syncStateMemory();
   timer = setInterval(evaluate, intervalMs);
   timer.unref?.();
   evaluate();
@@ -150,5 +176,6 @@ function stop() {
   if (unsubscribe) unsubscribe();
   unsubscribe = null;
   activeExecution = null;
+  restoreModelLeague();
 }
-module.exports = { start, stop, evaluate, attentionFeed, briefing, scoreItem, attentionLevel, onRuntimeEvent };
+module.exports = { start, stop, evaluate, attentionFeed, briefing, scoreItem, attentionLevel, onRuntimeEvent, syncStateMemory };
