@@ -2,7 +2,9 @@
   const nativeFetch = window.fetch.bind(window);
   const CHAT_TRANSPORT_TIMEOUT_MS = 10 * 60 * 1000;
   const MIN_REPLY_WINDOW_MS = 7000;
+  const REPLY_OPEN_GRACE_MS = 12000;
   let pendingReplyWindowMs = 0;
+  let replyOpenDeadline = 0;
   let replyTimer = null;
 
   function audioEnabled() {
@@ -21,9 +23,20 @@
     return Boolean(document.querySelector('.globe-wrap.command-listening'));
   }
 
+  function expirePendingReply() {
+    pendingReplyWindowMs = 0;
+    replyOpenDeadline = 0;
+    clearReplyTimer();
+  }
+
   function openReplyWindow() {
     const duration = Math.max(MIN_REPLY_WINDOW_MS, Number(pendingReplyWindowMs || 0));
     if (!duration) return;
+    if (replyOpenDeadline && Date.now() > replyOpenDeadline) {
+      expirePendingReply();
+      return;
+    }
+
     const orb = document.querySelector('#voiceOrb');
     const status = String(document.querySelector('#statusText')?.textContent || '');
     if (!orb || orb.disabled || /SPEAKING|THINKING|ROUTING|GENERATING/i.test(status)) {
@@ -32,6 +45,7 @@
     }
 
     pendingReplyWindowMs = 0;
+    replyOpenDeadline = 0;
     clearReplyTimer();
     if (!commandListening()) orb.click();
 
@@ -47,6 +61,7 @@
 
   function scheduleReplyWindow(delay = 250) {
     if (!pendingReplyWindowMs) return;
+    if (!replyOpenDeadline) replyOpenDeadline = Date.now() + Math.max(REPLY_OPEN_GRACE_MS, pendingReplyWindowMs + 5000);
     setTimeout(openReplyWindow, delay);
   }
 
@@ -68,6 +83,7 @@
       try {
         const data = await response.clone().json();
         pendingReplyWindowMs = Math.max(0, Number(data?.listenAfterResponseMs || 0));
+        replyOpenDeadline = pendingReplyWindowMs ? Date.now() + Math.max(REPLY_OPEN_GRACE_MS, pendingReplyWindowMs + 5000) : 0;
         if (pendingReplyWindowMs && !audioEnabled()) scheduleReplyWindow(350);
       } catch {}
       return response;
@@ -84,6 +100,11 @@
     events.addEventListener('task_completed', () => {
       if (!audioEnabled()) scheduleReplyWindow(250);
     });
+
+    const shortcut = document.querySelector('.voice-shortcut');
+    if (shortcut && !/7 sec direct reply/i.test(String(shortcut.textContent || ''))) {
+      shortcut.textContent = `${String(shortcut.textContent || '').trim()} · 7 sec direct reply after questions`;
+    }
   });
 
   window.__ULTRON_CHAT_TRANSPORT_TIMEOUT_MS = CHAT_TRANSPORT_TIMEOUT_MS;
