@@ -53,7 +53,7 @@ function extractWorkspaceMutation(message) {
 }
 function extractCommitment(message) {
   const mutation = extractWorkspaceMutation(message);
-  return mutation?.type === 'create_commitment' || mutation?.type === 'create_task'
+  return mutation?.type === 'create_commitment'
     ? { title: mutation.title, priority: mutation.priority, dueAt: mutation.dueAt, project: mutation.project }
     : null;
 }
