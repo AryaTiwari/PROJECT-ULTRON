@@ -18,6 +18,10 @@ delete process.env.ULTRON_DIRECT_DEFAULT_MODEL;
 delete process.env.OPENCODE_API_KEY;
 delete process.env.OPENCODE_GO_API_KEY;
 
+// Patch only Mark 3's in-process shared OmniRoute chat calls. Catalog/health reads stay
+// passive, so Model League does not wake the fallback simply by inspecting models.
+require('./omniroute-lazy-hooks');
+
 function anchorProjectPathEnv(name, fallback) {
   const raw = String(process.env[name] || fallback).trim();
   const resolved = path.isAbsolute(raw) ? raw : path.resolve(PROJECT_ROOT, raw);
