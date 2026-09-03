@@ -3,11 +3,14 @@
   const CHAT_TRANSPORT_TIMEOUT_MS = 10 * 60 * 1000;
   const MIN_REPLY_WINDOW_MS = 7000;
   const FLOW_REPLY_WINDOW_MS = 8000;
-  const REPLY_OPEN_GRACE_MS = 12000;
+  const REPLY_OPEN_GRACE_MS = 16000;
+  const PLAYBACK_SETTLE_MS = 700;
   let pendingReplyWindowMs = 0;
   let replyOpenDeadline = 0;
   let replyTimer = null;
   let lastChatInputMode = 'chat';
+  let voiceSynthesisComplete = false;
+  let lastSpeakingSeenAt = 0;
 
   function audioEnabled() {
     const button = document.querySelector('#voiceToggle');
@@ -25,9 +28,23 @@
     return Boolean(document.querySelector('.globe-wrap.command-listening'));
   }
 
+  function playbackActive() {
+    const wrap = document.querySelector('.globe-wrap');
+    const status = String(document.querySelector('#statusText')?.textContent || '');
+    const active = Boolean(wrap?.classList.contains('speaking')) || /SPEAKING/i.test(status);
+    if (active) lastSpeakingSeenAt = Date.now();
+    return active;
+  }
+
+  function playbackSettled() {
+    if (playbackActive()) return false;
+    return !lastSpeakingSeenAt || Date.now() - lastSpeakingSeenAt >= PLAYBACK_SETTLE_MS;
+  }
+
   function expirePendingReply() {
     pendingReplyWindowMs = 0;
     replyOpenDeadline = 0;
+    voiceSynthesisComplete = false;
     clearReplyTimer();
   }
 
@@ -53,15 +70,25 @@
       return;
     }
 
+    // With audio enabled, never reopen the mic merely because the HTTP response
+    // arrived. Wait until Mark 3 has generated every TTS chunk AND the browser
+    // has been visibly quiet for a short settle window. This prevents the mic
+    // from interrupting ULTRON between speech chunks.
+    if (audioEnabled() && (!voiceSynthesisComplete || !playbackSettled())) {
+      setTimeout(openReplyWindow, 180);
+      return;
+    }
+
     const orb = document.querySelector('#voiceOrb');
     const status = String(document.querySelector('#statusText')?.textContent || '');
     if (!orb || orb.disabled || /SPEAKING|THINKING|ROUTING|GENERATING/i.test(status)) {
-      setTimeout(openReplyWindow, 220);
+      setTimeout(openReplyWindow, 180);
       return;
     }
 
     pendingReplyWindowMs = 0;
     replyOpenDeadline = 0;
+    voiceSynthesisComplete = false;
     clearReplyTimer();
     if (!commandListening()) orb.click();
 
@@ -82,7 +109,7 @@
 
   function scheduleReplyWindow(delay = 250) {
     if (!pendingReplyWindowMs) return;
-    if (!replyOpenDeadline) replyOpenDeadline = Date.now() + Math.max(REPLY_OPEN_GRACE_MS, pendingReplyWindowMs + 5000);
+    if (!replyOpenDeadline) replyOpenDeadline = Date.now() + Math.max(REPLY_OPEN_GRACE_MS, pendingReplyWindowMs + 8000);
     setTimeout(openReplyWindow, delay);
   }
 
@@ -100,11 +127,9 @@
     if (!/(?:^|\/)api\/chat(?:$|[?#])/.test(url)) return nativeFetch(input, init);
 
     lastChatInputMode = requestInputMode(init);
+    voiceSynthesisComplete = false;
+    lastSpeakingSeenAt = 0;
 
-    // app.js still owns a legacy 120-second controller. Ignore that signal for
-    // /api/chat and let Mark 3 / direct providers / Cortex enforce task-level
-    // timeouts. Keep one larger transport ceiling so a dead connection cannot
-    // wait forever.
     const controller = new AbortController();
     const next = { ...init, signal: controller.signal };
     const timer = setTimeout(() => {
@@ -117,11 +142,12 @@
         const explicitWindow = Math.max(0, Number(data?.listenAfterResponseMs || 0));
         const flowWindow = lastChatInputMode === 'voice' ? FLOW_REPLY_WINDOW_MS : 0;
         pendingReplyWindowMs = Math.max(explicitWindow, flowWindow);
-        replyOpenDeadline = pendingReplyWindowMs ? Date.now() + Math.max(REPLY_OPEN_GRACE_MS, pendingReplyWindowMs + 5000) : 0;
+        replyOpenDeadline = pendingReplyWindowMs ? Date.now() + Math.max(REPLY_OPEN_GRACE_MS, pendingReplyWindowMs + 8000) : 0;
         if (data?.operatingMode) setModeChip(data.operatingMode);
-        // Event-driven voice_completed is preferred; delayed opening covers very
-        // fast TTS, muted audio, or an event arriving before HTTP completion.
-        if (pendingReplyWindowMs) scheduleReplyWindow(audioEnabled() ? 1100 : 300);
+
+        // If audio is muted there is no TTS lifecycle to wait for. Otherwise the
+        // SSE voice_completed/voice_error events below decide when flow can open.
+        if (pendingReplyWindowMs && !audioEnabled()) scheduleReplyWindow(250);
       } catch {}
       return response;
     }).finally(() => clearTimeout(timer));
@@ -130,20 +156,44 @@
   window.addEventListener('DOMContentLoaded', () => {
     void refreshMode();
     const events = new EventSource('/api/events');
-    events.addEventListener('voice_completed', () => scheduleReplyWindow(220));
-    events.addEventListener('voice_error', () => scheduleReplyWindow(280));
+    events.addEventListener('voice_started', () => {
+      voiceSynthesisComplete = false;
+      lastSpeakingSeenAt = Date.now();
+    });
+    events.addEventListener('voice_ready', () => {
+      lastSpeakingSeenAt = Date.now();
+    });
+    events.addEventListener('voice_completed', () => {
+      voiceSynthesisComplete = true;
+      scheduleReplyWindow(180);
+    });
+    events.addEventListener('voice_error', () => {
+      voiceSynthesisComplete = true;
+      scheduleReplyWindow(300);
+    });
     events.addEventListener('task_completed', () => {
-      if (!audioEnabled()) scheduleReplyWindow(200);
+      if (!audioEnabled()) scheduleReplyWindow(180);
     });
     events.addEventListener('mode_changed', (event) => {
       try { setModeChip(JSON.parse(event.data)); } catch {}
     });
 
+    // Track browser playback state independently from server-side synthesis.
+    const wrap = document.querySelector('.globe-wrap');
+    if (wrap) {
+      const observer = new MutationObserver(() => {
+        if (wrap.classList.contains('speaking')) lastSpeakingSeenAt = Date.now();
+        else if (voiceSynthesisComplete && pendingReplyWindowMs) scheduleReplyWindow(PLAYBACK_SETTLE_MS);
+      });
+      observer.observe(wrap, { attributes: true, attributeFilter: ['class'] });
+    }
+
     const shortcut = document.querySelector('.voice-shortcut');
-    if (shortcut) shortcut.textContent = 'Fuzzy wake · 8 sec conversational flow · Ctrl + Space';
+    if (shortcut) shortcut.textContent = 'Fuzzy wake · patient speech capture · 8 sec conversational flow';
   });
 
   window.__ULTRON_CHAT_TRANSPORT_TIMEOUT_MS = CHAT_TRANSPORT_TIMEOUT_MS;
   window.__ULTRON_MIN_REPLY_WINDOW_MS = MIN_REPLY_WINDOW_MS;
   window.__ULTRON_FLOW_REPLY_WINDOW_MS = FLOW_REPLY_WINDOW_MS;
+  window.__ULTRON_PLAYBACK_SETTLE_MS = PLAYBACK_SETTLE_MS;
 })();
