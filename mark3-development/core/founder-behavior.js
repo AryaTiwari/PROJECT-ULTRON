@@ -46,6 +46,57 @@ ELEVATE OS — FOUNDER BRIEFING:
 Use this as baseline context, then prefer newer memories, current repository state, live metrics or explicit corrections from Arya when they conflict with it.
 `;
 
+const MEMORY_SEEDS = [
+  {
+    type: 'strategic',
+    content: 'Elevate OS is Arya Tiwari’s creator-focused SaaS being built toward a Creator Operating System for analysis, improvement, measurement, growth and monetization; Tanusri Nandi is Co-Founder.',
+    importance: 0.95,
+    tags: ['elevate os', 'founder', 'startup', 'creator saas'],
+  },
+  {
+    type: 'strategic',
+    content: 'Elevate OS currently centers on Home, Free Strategy Session, Creator Upgrade Program, authentication/settings, navigation/themes, Elevate AI Reel Analyzer, Cloudflare backend/deployment, Supabase-backed data and recent analyses; marketplace capabilities are not automatically assumed live.',
+    importance: 0.9,
+    tags: ['elevate os', 'product', 'current system'],
+  },
+  {
+    type: 'decision',
+    content: 'Performance OS is metrics-only: views, followers, interactions, reach/rates, goals, trends and short AI coaching. Hook, pacing, visuals, audio, CTA and video/content architecture belong exclusively to Reel Analyzer.',
+    importance: 1,
+    tags: ['performance os', 'reel analyzer', 'product boundary'],
+  },
+  {
+    type: 'strategic',
+    content: 'Elevate OS Supabase architecture separates predictions from reality: reel_analyses stores analysis/predictions, reel_performance stores actual published metrics, creator_targets stores goals and profiles stores account data; preserve RLS and user isolation.',
+    importance: 0.95,
+    tags: ['supabase', 'architecture', 'metrics', 'elevate os'],
+  },
+  {
+    type: 'strategic',
+    content: 'Instagram/Meta integration for Elevate OS should use official OAuth for eligible professional creator/business accounts, server-side token/secret handling and automatic performance sync into reel_performance; treat the integration as in progress unless current evidence confirms it is live.',
+    importance: 0.92,
+    tags: ['instagram', 'meta api', 'oauth', 'elevate os'],
+  },
+  {
+    type: 'strategic',
+    content: 'Elevate OS monetization explored Creator Upgrade Program tiers around ₹2,999, ₹8,999 and ₹18,999, with productized AI/subscription monetization considered after stronger product outcomes and traction.',
+    importance: 0.82,
+    tags: ['pricing', 'monetization', 'creator upgrade program', 'elevate os'],
+  },
+  {
+    type: 'decision',
+    content: 'Elevate OS strategic priority is to strengthen the analyzer, creator outcomes, paid programs/case studies, delivery automation and acquisition before over-investing in the brand marketplace.',
+    importance: 0.96,
+    tags: ['strategy', 'marketplace', 'acquisition', 'elevate os'],
+  },
+  {
+    type: 'preference',
+    content: 'Elevate OS should feel like a serious creator growth operating system rather than a generic marketing agency dashboard; product and advice should optimize for clarity, leverage, measurable creator growth and founder focus.',
+    importance: 0.88,
+    tags: ['positioning', 'product design', 'founder preference', 'elevate os'],
+  },
+];
+
 function latestUserMessage(messages = []) {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i]?.role === 'user') return String(messages[i].content || '');
@@ -69,14 +120,30 @@ function apply(messages = []) {
   });
 }
 
+function seedMemory(memoryModule) {
+  if (!memoryModule || typeof memoryModule.remember !== 'function') return { seeded: 0, errors: 0 };
+  let seeded = 0;
+  let errors = 0;
+  for (const seed of MEMORY_SEEDS) {
+    try {
+      const result = memoryModule.remember({ ...seed, source: 'founder-briefing', project: 'Elevate OS', confidence: 0.98 });
+      if (result?.action === 'SAVED') seeded += 1;
+    } catch {
+      errors += 1;
+    }
+  }
+  return { seeded, errors, total: MEMORY_SEEDS.length };
+}
+
 function status() {
   return {
     mode: 'founder-chief-of-staff',
     primaryAddress: 'Sir',
     cinematicAddress: 'Master Arya',
-    elevateContext: 'relevance-triggered',
+    elevateContext: 'relevance-triggered-plus-memory-seeded',
     genericCommandHandoff: false,
+    memorySeeds: MEMORY_SEEDS.length,
   };
 }
 
-module.exports = { FOUNDER_BEHAVIOR, ELEVATE_OS_BRIEF, elevateRelevant, apply, status };
+module.exports = { FOUNDER_BEHAVIOR, ELEVATE_OS_BRIEF, MEMORY_SEEDS, elevateRelevant, apply, seedMemory, status };
