@@ -4,6 +4,24 @@ const { readJson, writeJsonAtomic } = require('./persistence');
 const VERSION = 1;
 const BACKUP_COUNT = Math.max(1, Number(process.env.ULTRON_M3_LEAGUE_BACKUPS || 3));
 const RETEST_AFTER_MS = Math.max(60 * 60 * 1000, Number(process.env.ULTRON_M3_LEAGUE_RETEST_MS || 24 * 60 * 60 * 1000));
+const DIRECT_ENV_KEYS = [
+  'GEMINI_API_KEY', 'GEMINI_API_KEY2', 'GOOGLE_API_KEY', 'GOOGLE_API_KEY2',
+  'GROQ_API_KEY', 'GROQ_API_KEY2',
+  'NVIDIA_API_KEY', 'NVIDIA_API_KEY2', 'NVIDIA_NIM_API_KEY',
+];
+
+function directConfigured() {
+  if (/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DIRECT_ENABLED || '1'))) return false;
+  return DIRECT_ENV_KEYS.some((name) => String(process.env[name] || '').trim());
+}
+
+function isDirectModel(model) {
+  return /^(?:gemini|groq|nvidia)\//i.test(String(model || '').trim());
+}
+
+function directOnly(rows) {
+  return directConfigured() ? rows.filter((row) => isDirectModel(row.model || row)) : rows;
+}
 
 function template() {
   return {
@@ -80,12 +98,14 @@ function ranked(taskType = 'general') {
 function recommend(taskType = 'general') {
   const state = load();
   const task = taskState(state, taskType);
-  const list = ranked(taskType);
-  const primary = task.primary && list.some((row) => row.model === task.primary)
-    ? task.primary
+  const allRanked = ranked(taskType);
+  const list = directOnly(allRanked);
+  const storedPrimary = task.primary && (!directConfigured() || isDirectModel(task.primary)) ? task.primary : null;
+  const primary = storedPrimary && list.some((row) => row.model === storedPrimary)
+    ? storedPrimary
     : list[0]?.model || null;
   const backups = [
-    ...(task.backups || []),
+    ...(task.backups || []).filter((model) => !directConfigured() || isDirectModel(model)),
     ...list.map((row) => row.model),
   ].filter((model, index, all) => model && model !== primary && all.indexOf(model) === index)
     .slice(0, BACKUP_COUNT);
@@ -96,6 +116,7 @@ function recommend(taskType = 'general') {
     ranked: list.slice(0, BACKUP_COUNT + 3),
     rounds: Number(task.rounds || 0),
     lastTournamentAt: task.lastTournamentAt || null,
+    transportPolicy: directConfigured() ? 'direct-only-learning' : 'all-eligible-models',
   };
 }
 
@@ -159,12 +180,13 @@ function recordTrial({ model, provider = 'unknown', taskType = 'general', succes
 function promote(taskType = 'general') {
   const state = load();
   const task = taskState(state, taskType);
-  const list = Object.entries(task.models)
+  const all = Object.entries(task.models)
     .map(([model, row]) => ({ model, ...row, utility: utility(row) }))
     .filter((row) => Number(row.successes || 0) > 0)
     .sort((a, b) => b.utility - a.utility
       || Number(b.lastQuality || 0) - Number(a.lastQuality || 0)
       || Number(a.averageLatencyMs || Infinity) - Number(b.averageLatencyMs || Infinity));
+  const list = directOnly(all);
   const previous = task.primary || null;
   task.primary = list[0]?.model || null;
   task.backups = list.slice(1, BACKUP_COUNT + 1).map((row) => row.model);
@@ -187,7 +209,8 @@ function selectParticipants(catalog = [], taskType = 'general', limit = 4) {
   const task = taskState(state, taskType);
   const rec = recommend(taskType);
   const now = Date.now();
-  const unique = [...new Set((catalog || []).map(String).map((value) => value.trim()).filter(Boolean))];
+  let unique = [...new Set((catalog || []).map(String).map((value) => value.trim()).filter(Boolean))];
+  if (directConfigured()) unique = unique.filter(isDirectModel);
   const rows = unique.map((model) => {
     const observed = task.models[model] || {};
     const triedAt = Date.parse(observed.lastTriedAt || '');
@@ -216,7 +239,7 @@ function snapshot() {
   const state = load();
   const tasks = {};
   for (const key of Object.keys(state.tasks || {})) tasks[key] = recommend(key);
-  return { version: VERSION, tasks, updatedAt: state.updatedAt || null };
+  return { version: VERSION, tasks, updatedAt: state.updatedAt || null, directOnly: directConfigured() };
 }
 
 module.exports = {
@@ -228,4 +251,6 @@ module.exports = {
   selectParticipants,
   snapshot,
   utility,
+  isDirectModel,
+  directConfigured,
 };
