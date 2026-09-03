@@ -1,4 +1,4 @@
-const path = require('path');
+const path = require('./config') && require('path');
 const config = require('./config');
 const { readJson, writeJsonAtomic } = require('./persistence');
 const { emit } = require('./events');
@@ -13,7 +13,13 @@ let generation = 0;
 
 function clean(text) {
   return String(text || '')
+    // Code is useful on screen but should never be read aloud. Strip fenced and
+    // inline code before the generic Markdown cleanup so their contents disappear
+    // rather than merely losing the backtick delimiters.
     .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`\r\n]*`/g, ' ')
+    // For Markdown links keep the readable label, but never speak the URL.
+    .replace(/\[([^\]]+)\]\(https?:\/\/[^\s)]+\)/gi, '$1')
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/[#*_`>\[\]{}|~]/g, ' ')
     .replace(/\s+/g, ' ')
