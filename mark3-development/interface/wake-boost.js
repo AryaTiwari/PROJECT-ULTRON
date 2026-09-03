@@ -3,6 +3,8 @@
   if (!NativeRecognition) return;
 
   const TARGET = 'ultron';
+  const FAST_FINAL_SILENCE_MS = 2200;
+  let fastFinalizeTimer = null;
   const PHRASE_ALIASES = [
     /\bultra\s+on\b/gi,
     /\bultra\s+one\b/gi,
@@ -10,7 +12,7 @@
     /\bold\s+tron\b/gi,
     /\bulter\s+on\b/gi,
   ];
-  const DIRECT_ALIASES = new Set(['ultron', 'ultran', 'ultrone', 'altron', 'oltron', 'ultrun', 'ultron', 'ultronn']);
+  const DIRECT_ALIASES = new Set(['ultron', 'ultran', 'ultrone', 'altron', 'oltron', 'ultrun', 'ultronn']);
 
   function cleanToken(value) {
     return String(value || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -82,6 +84,28 @@
     return output;
   }
 
+  function scheduleFastFinalize(enhanced, resultIndex) {
+    if (fastFinalizeTimer) {
+      clearTimeout(fastFinalizeTimer);
+      fastFinalizeTimer = null;
+    }
+    let hasFinalSpeech = false;
+    for (let i = Number(resultIndex || 0); i < enhanced.length; i += 1) {
+      if (enhanced[i]?.isFinal && String(enhanced[i]?.[0]?.transcript || '').trim()) {
+        hasFinalSpeech = true;
+        break;
+      }
+    }
+    if (!hasFinalSpeech) return;
+    fastFinalizeTimer = setTimeout(() => {
+      const listening = document.querySelector('.globe-wrap.command-listening');
+      const text = String(document.querySelector('#voiceInterim')?.textContent || '').trim();
+      const orb = document.querySelector('#voiceOrb');
+      if (listening && text && orb && !orb.disabled) orb.click();
+      fastFinalizeTimer = null;
+    }, FAST_FINAL_SILENCE_MS);
+  }
+
   function EnhancedRecognition() {
     const native = new NativeRecognition();
     return new Proxy(native, {
@@ -95,12 +119,16 @@
           return true;
         }
         if (prop === 'onresult' && typeof value === 'function') {
-          target.onresult = (event) => value({
-            resultIndex: event.resultIndex,
-            results: enhanceResults(event.results),
-            type: event.type,
-            timeStamp: event.timeStamp,
-          });
+          target.onresult = (event) => {
+            const enhanced = enhanceResults(event.results);
+            value({
+              resultIndex: event.resultIndex,
+              results: enhanced,
+              type: event.type,
+              timeStamp: event.timeStamp,
+            });
+            scheduleFastFinalize(enhanced, event.resultIndex);
+          };
           return true;
         }
         try { target[prop] = value; } catch {}
@@ -116,6 +144,7 @@
     enabled: true,
     alternatives: 5,
     fuzzyDistance: 2,
+    fastFinalSilenceMs: FAST_FINAL_SILENCE_MS,
     normalizeTranscript,
   };
 })();
