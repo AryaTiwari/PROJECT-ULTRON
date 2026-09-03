@@ -25,6 +25,8 @@ const arena = require('../core/model-arena');
 const registry = require('../core/provider-registry');
 const conversation = require('../core/conversation');
 const web = require('../core/web');
+const codingBrain = require('../core/coding-brain');
+const codingInference = require('../core/coding-inference');
 const assistant = require('../core/assistant');
 const handoff = require('../core/assistant-handoff');
 const windowsVoice = require('../core/windows-voice');
@@ -56,6 +58,16 @@ if (!(arena.heuristicQuality('1. Check the evidence. 2. Verify the metric. 3. Co
 if (handoff.withCommandHandoff('Done.') !== "Done. What's your next command?") throw new Error('Ordinary assistant answers must end with a command handoff.');
 if (handoff.withCommandHandoff('What do you want me to do next?') !== 'What do you want me to do next?') throw new Error('Existing assistant follow-up questions must not be duplicated.');
 if (handoff.withCommandHandoff('```js\nconsole.log(1)\n```').includes('next command')) throw new Error('Code artifacts must not receive a spoken command suffix inside the artifact.');
+
+if (!codingBrain.shouldUse('Fix the wake word bug in ULTRON', 'coding')) throw new Error('Coding modifications must route through Cortex when available.');
+if (codingBrain.shouldUse('Explain what a promise is', 'coding')) throw new Error('Simple coding questions must stay on normal Mark 3 inference.');
+if (codingBrain.modeFor('Inspect the memory implementation') !== 'plan') throw new Error('Coding inspection must stay read-only.');
+if (codingBrain.modeFor('Refactor the memory implementation') !== 'apply') throw new Error('Explicit coding changes must use apply mode.');
+if (codingInference.roleTaskType('planner') !== 'planning') throw new Error('Coding planner must use planning/reasoning model policy.');
+if (codingInference.roleTaskType('editor') !== 'coding') throw new Error('Coding editor must use coding model policy.');
+if (codingInference.roleTaskType('reviewer') !== 'planning') throw new Error('Coding reviewer must use an independent reasoning policy.');
+const sanitizedCodingMessages = codingInference.sanitizeMessages([{ role:'system', content:'x' }, { role:'tool', content:'should become user' }]);
+if (sanitizedCodingMessages.length !== 2 || sanitizedCodingMessages[1].role !== 'user') throw new Error('Coding inference message sanitation invariant failed.');
 
 const fakeHistory = [
   { role: 'user', content: 'Review my Elevate website.' },
