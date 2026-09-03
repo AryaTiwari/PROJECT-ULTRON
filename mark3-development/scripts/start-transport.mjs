@@ -8,7 +8,11 @@ const projectRoot = path.resolve(mark3Dir, '..');
 const require = createRequire(import.meta.url);
 const credentialStore = require('../../core/credentials/local-store');
 
-const DIRECT_KEYS = ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'];
+const DIRECT_KEYS = [
+  'GEMINI_API_KEY', 'GEMINI_API_KEY2', 'GOOGLE_API_KEY', 'GOOGLE_API_KEY2',
+  'GROQ_API_KEY', 'GROQ_API_KEY2',
+  'NVIDIA_API_KEY', 'NVIDIA_API_KEY2', 'NVIDIA_NIM_API_KEY',
+];
 
 async function directConfigured() {
   if (/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DIRECT_ENABLED || '1'))) return false;
@@ -36,7 +40,7 @@ function launchOmniRoute() {
 
 async function main() {
   if (await directConfigured()) {
-    console.log('[Mark 3] Direct Gemini/Groq/NVIDIA transport detected. OmniRoute is armed as a lazy fallback and will stay off unless direct routes fail.');
+    console.log('[Mark 3] Direct Gemini/Groq/NVIDIA credential pool detected. ULTRON will use specialist direct APIs first; OmniRoute is armed as a lazy fallback and will stay off unless direct routes fail.');
     return;
   }
 
