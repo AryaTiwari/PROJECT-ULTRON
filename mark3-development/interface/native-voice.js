@@ -157,6 +157,17 @@
     button.title = state.enabled ? 'Recorded audio is authoritative; browser speech recognition is fallback only.' : 'Use browser speech recognition only.';
   }
 
+  async function warmIfAlreadyGranted() {
+    if (!state.enabled || !navigator.permissions?.query) return;
+    try {
+      const permission = await navigator.permissions.query({ name: 'microphone' });
+      if (permission.state === 'granted') await ensureRecorder();
+      permission.addEventListener?.('change', () => {
+        if (state.enabled && permission.state === 'granted') void ensureRecorder();
+      });
+    } catch {}
+  }
+
   window.addEventListener('DOMContentLoaded', () => {
     const top = document.querySelector('.top-actions');
     if (top) {
@@ -186,6 +197,11 @@
       observer.observe(wrap, { attributes: true, attributeFilter: ['class'] });
     }
 
+    // If the browser has already granted microphone permission, start the rolling
+    // audio buffer immediately without showing another prompt. Otherwise the first
+    // normal user gesture/wake interaction starts it and the browser transcript is
+    // still available as a fallback for that turn.
+    void warmIfAlreadyGranted();
     const warm = () => { if (state.enabled) void ensureRecorder(); };
     document.addEventListener('pointerdown', warm, { once: true, passive: true });
     document.addEventListener('keydown', warm, { once: true });
