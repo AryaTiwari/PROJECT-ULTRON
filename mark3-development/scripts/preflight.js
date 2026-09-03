@@ -90,7 +90,7 @@ if (fs.existsSync(packageFile)) {
   const start = String(pkg?.scripts?.start || '');
   if (/start-unified\.mjs/i.test(start)) throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
   if (!/start-transport\.mjs/i.test(start)) throw new Error('Mark 3 startup must use the direct-first transport selector.');
-  if (pkg.version !== '3.0.0-beta.18') throw new Error(`Unexpected Mark 3 package version: ${pkg.version}`);
+  if (pkg.version !== '3.0.0-beta.19') throw new Error(`Unexpected Mark 3 package version: ${pkg.version}`);
 }
 
 const mark3Launcher = fs.readFileSync(path.join(root, 'scripts', 'start-mark3.mjs'), 'utf8');
@@ -102,8 +102,11 @@ if (!/OMNIROUTE_MEMORY_MB/.test(mark3Launcher) || !/omniroute-production\.log/.t
 }
 
 const transportLauncher = fs.readFileSync(path.join(root, 'scripts', 'start-transport.mjs'), 'utf8');
-if (!/Direct Gemini\/Groq\/NVIDIA transport detected/.test(transportLauncher) || !/lazy fallback/i.test(transportLauncher)) {
+if (!/Direct Gemini\/Groq\/NVIDIA credential pool detected/.test(transportLauncher) || !/lazy fallback/i.test(transportLauncher)) {
   throw new Error('Direct-provider startup must leave OmniRoute as a lazy fallback.');
+}
+if (!/GEMINI_API_KEY2/.test(transportLauncher) || !/GROQ_API_KEY2/.test(transportLauncher)) {
+  throw new Error('Direct-provider startup must recognize secondary Gemini and Groq API keys.');
 }
 if (/detached:\s*true/.test(transportLauncher)) throw new Error('Direct-provider startup must not eagerly warm a detached OmniRoute process.');
 
@@ -138,18 +141,24 @@ const handoff = require('../core/assistant-handoff');
 
 // The shared root OmniRoute module still reads this selector, but Mark 3 routes direct APIs above it.
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Shared OmniRoute compatibility selector must remain omniroute.');
-if (config.disableNvidiaInference !== false) throw new Error('NVIDIA direct inference must be enabled in beta.18.');
+if (config.disableNvidiaInference !== false) throw new Error('NVIDIA direct inference must remain enabled.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
 if (!config.modelLeaguePath.startsWith(config.dataDir)) throw new Error('Model League state must live under Mark 3 data.');
 if (!/^https?:\/\/127\.0\.0\.1:8791|^https?:\/\/localhost:8791/i.test(config.codingBrainUrl) && !process.env.ULTRON_M3_CODING_BRAIN_URL) throw new Error('Coding Brain should default to the local sidecar endpoint.');
 if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''))) throw new Error('Experimental browser/CLI providers must be disabled by default.');
 if (!registry.PROVIDERS.nvidia || registry.PROVIDERS.nvidia.tier !== 'api') throw new Error('NVIDIA must be a first-class API provider.');
-if (typeof direct.chat !== 'function' || typeof direct.streamChat !== 'function' || typeof direct.candidates !== 'function' || typeof direct.health !== 'function') throw new Error('Direct-provider router API is incomplete.');
-if (!direct.isDirectModel('gemini/gemini-3.8-flash') || !direct.isDirectModel('groq/qwen/qwen3.8-27b') || !direct.isDirectModel('nvidia/openai/gpt-oss-120b')) throw new Error('Direct Gemini/Groq/NVIDIA model parsing is incomplete.');
+if (!registry.PROVIDERS.gemini.credentials.includes('GEMINI_API_KEY2') || !registry.PROVIDERS.groq.credentials.includes('GROQ_API_KEY2')) throw new Error('Provider registry must recognize secondary Gemini/Groq credentials.');
+if (typeof direct.chat !== 'function' || typeof direct.streamChat !== 'function' || typeof direct.candidates !== 'function' || typeof direct.health !== 'function' || typeof direct.credentialPool !== 'function') throw new Error('Multi-key direct-provider router API is incomplete.');
+if (!direct.PROVIDERS.gemini.keys.includes('GEMINI_API_KEY2') || !direct.PROVIDERS.groq.keys.includes('GROQ_API_KEY2')) throw new Error('Direct provider key pools are missing KEY2 slots.');
+if (direct.providerOrder('simple_qa')[0] !== 'groq') throw new Error('Simple Q&A must prefer Groq for low latency.');
+if (direct.providerOrder('coding')[0] !== 'nvidia' || direct.providerOrder('planning')[0] !== 'nvidia') throw new Error('Coding/planning must prefer NVIDIA specialist models.');
+if (direct.providerOrder('research')[0] !== 'gemini') throw new Error('Research must prefer Gemini.');
+if (!direct.isDirectModel('gemini/gemini-test') || !direct.isDirectModel('groq/model/test') || !direct.isDirectModel('nvidia/openai/gpt-oss-120b')) throw new Error('Direct Gemini/Groq/NVIDIA model parsing is incomplete.');
 if (router.isBlockedModel('nvidia/openai/gpt-oss-120b')) throw new Error('NVIDIA direct inference is still blocked by router policy.');
 if (typeof omniFallback.ensure !== 'function' || omniFallback.status().mode !== 'lazy-fallback') throw new Error('Lazy OmniRoute fallback API is incomplete.');
 if (typeof router.chatExact !== 'function' || typeof router.streamExact !== 'function' || typeof router.listNativeEligibleModels !== 'function') throw new Error('Model League requires exact-model router primitives.');
-if (typeof league.recommend !== 'function' || typeof league.selectParticipants !== 'function') throw new Error('Adaptive Model League API is incomplete.');
+if (typeof league.recommend !== 'function' || typeof league.selectParticipants !== 'function' || typeof league.directConfigured !== 'function' || typeof league.isDirectModel !== 'function') throw new Error('Adaptive direct-only Model League API is incomplete.');
+if (!league.isDirectModel('gemini/gemini-test') || league.isDirectModel('anthropic/claude-test')) throw new Error('Model League direct-model filter is invalid.');
 if (typeof arena.runTournament !== 'function' || typeof arena.start !== 'function') throw new Error('Model Arena API is incomplete.');
 if (typeof codingBrain.run !== 'function' || typeof codingBrain.health !== 'function' || typeof codingBrain.shouldUse !== 'function') throw new Error('Coding Brain bridge API is incomplete.');
 if (!codingBrain.shouldUse('Fix the wake-word bug in the interface', 'coding')) throw new Error('Repository implementation tasks must route to Coding Brain.');
