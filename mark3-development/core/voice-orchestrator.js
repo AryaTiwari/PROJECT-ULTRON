@@ -3,6 +3,7 @@ const config = require('./config');
 const { readJson, writeJsonAtomic } = require('./persistence');
 const { emit } = require('./events');
 const integrations = require('./integrations');
+const founderBehavior = require('./founder-behavior');
 
 const voiceStatePath = path.join(config.dataDir, 'voice-state.json');
 let voiceState = readJson(voiceStatePath, { enabled: true });
@@ -79,7 +80,7 @@ function enqueue(text) {
   if (!isEnabled()) return Promise.resolve({ skipped: true, reason: 'voice-disabled' });
   // Response finishing happens before this layer. Never silently append a generic
   // “next command” line here; spoken audio and transcript must remain identical.
-  const spokenText = String(text || '').trim();
+  const spokenText = founderBehavior.polishDeterministic(String(text || '').trim());
   const chunks = splitSpeech(spokenText);
   if (!chunks.length) return queue;
   const token = generation;
