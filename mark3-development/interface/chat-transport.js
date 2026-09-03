@@ -122,16 +122,55 @@
     }
   }
 
+  function normalizeArtifactMessage(message) {
+    const original = String(message || '').trim();
+    if (!original) return original;
+    const match = original.match(/^((?:hey\s+)?ultron\b[\s,:;.!-]*)?(.*)$/i);
+    const wake = match?.[1] || '';
+    const text = String(match?.[2] || original).trim();
+    const artifact = /\b(?:pdf|docx|word document|word file|document|report|brief|proposal|image|picture|poster|thumbnail|visual|wallpaper|artwork|logo|video|clip|animation|b-roll|broll)\b/i.test(text);
+    const alreadyGenerative = /\b(?:generate|create|make|render|design|produce|build)\b/i.test(text);
+    const informational = /^(?:what|why|how|when|where|who)\b|^(?:tell me|explain|describe|compare)\b/i.test(text);
+    if (!artifact || alreadyGenerative || informational) return original;
+
+    let rewritten = text
+      .replace(/^(?:can|could|would|will)\s+you\s+/i, '')
+      .replace(/^please\s+/i, '')
+      .replace(/^send\s+me\s+/i, 'create ')
+      .replace(/^give\s+me\s+/i, 'create ')
+      .replace(/^prepare(?:\s+me)?\s+/i, 'create ')
+      .replace(/^export\s+/i, 'create ')
+      .replace(/^save\s+(?:me\s+)?/i, 'create ')
+      .replace(/^i\s+(?:want|need)\s+/i, 'create ');
+
+    if (!/\b(?:generate|create|make|render|design|produce|build)\b/i.test(rewritten)) rewritten = `create ${rewritten}`;
+    return `${wake}${rewritten}`.trim();
+  }
+
+  function normalizeArtifactRequest(init = {}) {
+    if (!init.body) return init;
+    try {
+      const parsed = typeof init.body === 'string' ? JSON.parse(init.body) : { ...(init.body || {}) };
+      if (!parsed || typeof parsed !== 'object' || !parsed.message) return init;
+      const normalized = normalizeArtifactMessage(parsed.message);
+      if (normalized === parsed.message) return init;
+      return { ...init, body: JSON.stringify({ ...parsed, message: normalized, originalMessage: parsed.originalMessage || parsed.message }) };
+    } catch {
+      return init;
+    }
+  }
+
   window.fetch = (input, init = {}) => {
     const url = typeof input === 'string' ? input : String(input?.url || '');
     if (!/(?:^|\/)api\/chat(?:$|[?#])/.test(url)) return nativeFetch(input, init);
 
-    lastChatInputMode = requestInputMode(init);
+    const normalizedInit = normalizeArtifactRequest(init);
+    lastChatInputMode = requestInputMode(normalizedInit);
     voiceSynthesisComplete = false;
     lastSpeakingSeenAt = 0;
 
     const controller = new AbortController();
-    const next = { ...init, signal: controller.signal };
+    const next = { ...normalizedInit, signal: controller.signal };
     const timer = setTimeout(() => {
       controller.abort(new Error('ULTRON chat transport exceeded 10 minutes.'));
     }, CHAT_TRANSPORT_TIMEOUT_MS);
@@ -196,4 +235,5 @@
   window.__ULTRON_MIN_REPLY_WINDOW_MS = MIN_REPLY_WINDOW_MS;
   window.__ULTRON_FLOW_REPLY_WINDOW_MS = FLOW_REPLY_WINDOW_MS;
   window.__ULTRON_PLAYBACK_SETTLE_MS = PLAYBACK_SETTLE_MS;
+  window.__ULTRON_NORMALIZE_ARTIFACT_MESSAGE = normalizeArtifactMessage;
 })();
