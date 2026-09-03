@@ -4,6 +4,7 @@ const path = require('path');
 const config = require('./core/config');
 const assistant = require('./core/assistant');
 const { responseDelivery, REPLY_WINDOW_MS } = require('./core/assistant-handoff');
+const founderBehavior = require('./core/founder-behavior');
 const memory = require('./core/memory');
 const workspace = require('./core/workspace');
 const models = require('./core/model-intelligence');
@@ -28,6 +29,7 @@ subscribe((event) => {
     try { res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`); } catch {}
   }
 });
+const founderMemorySeed = founderBehavior.seedMemory(memory);
 proactive.start(config.proactiveIntervalMs);
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {
@@ -97,7 +99,7 @@ const server = http.createServer(async (req,res) => {
       const [router, brain] = await Promise.all([integrations.health(), codingBrain.health()]);
       return send(res, router.ok ? 200 : 503, {
         ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.20', interfaceMode:'voice-first-wake',
-        behavior:{ ...(integrations.founderBehaviorStatus ? integrations.founderBehaviorStatus() : {}), replyWindowMs:REPLY_WINDOW_MS },
+        behavior:{ ...(integrations.founderBehaviorStatus ? integrations.founderBehaviorStatus() : founderBehavior.status()), replyWindowMs:REPLY_WINDOW_MS, memorySeed:founderMemorySeed },
         inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, codingBrain:brain,
         web:web.status(), voice:voice.status(), pid:process.pid, port:config.port,
       });
@@ -192,7 +194,7 @@ server.listen(config.port,config.host,()=>{
   console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`);
   console.log('[Mark 3] Voice-first wake interface active: say "Ultron", speak the command, then pause for four seconds.');
   console.log(`[Mark 3] Conversational reply window: ${Math.round(REPLY_WINDOW_MS / 1000)} seconds after ULTRON asks a question; no repeated wake word required.`);
-  console.log('[Mark 3] Founder chief-of-staff behavior active: adaptive suggestions, direct disagreement and Elevate OS context when relevant.');
+  console.log(`[Mark 3] Founder chief-of-staff behavior active: ${founderMemorySeed.total || 0} Elevate OS operating memories available; ${founderMemorySeed.seeded || 0} newly seeded this run.`);
   console.log(`[Mark 3] Coding Brain bridge ${config.codingBrainEnabled ? 'enabled' : 'disabled'} at ${config.codingBrainUrl}.`);
   if (leagueEnabled) {
     modelArena.start();
