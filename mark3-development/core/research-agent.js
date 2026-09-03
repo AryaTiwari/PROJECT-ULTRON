@@ -159,8 +159,13 @@ function sourceLabel(source) {
   if (source === 'hootsuite') return 'Hootsuite';
   if (source === 'afluencer-india') return 'Afluencer India';
   if (source === 'afluencer-global') return 'Afluencer Global';
-  if (source === 'general') return 'TinyFish general web';
+  if (source === 'general') return 'TinyFish web';
   return source;
+}
+
+function sourceReceiptLine(completedSources = []) {
+  const labels = [...new Set(completedSources || [])].map(sourceLabel).filter(Boolean);
+  return labels.length ? `Checked: ${labels.join(' + ')}.` : 'Checked: no external research source completed.';
 }
 
 function provenanceAnswer(text, receipt = lastReceipt()) {
@@ -251,6 +256,7 @@ function deliveryInstruction(task, evidence = null) {
   const requested = new Set(evidence?.research?.requestedSources || receipt?.requestedSources || []);
   const completed = new Set(evidence?.research?.completedSources || receipt?.completedSources || []);
   const provenance = `SOURCE TRUTH: requested=[${[...requested].join(', ') || 'none'}]; completed=[${[...completed].join(', ') || 'none'}]. Never claim a source was used unless it appears in completed.`;
+  const receiptLine = sourceReceiptLine([...completed]);
 
   if (task.kind === 'research-provenance') {
     const exact = evidence?.research?.provenanceAnswer || provenanceAnswer(task.original, receipt)?.response || 'No verified research receipt is available.';
@@ -260,13 +266,15 @@ function deliveryInstruction(task, evidence = null) {
   const hootsuiteTruth = task.kind === 'content-trends' && requested.has('hootsuite') && !completed.has('hootsuite')
     ? ' Hootsuite did NOT complete. Briefly disclose that the Hootsuite signal was unavailable and that the themes are based on the completed broader web evidence; do not imply Hootsuite validation.'
     : '';
+  const receiptRule = ` End with this exact compact source receipt on its own final sentence: "${receiptLine}" Do not mention requested-but-failed sources inside that receipt.`;
+
   if (task.kind === 'content-trends') {
-    return `${execution} ${provenance}${hootsuiteTruth} For a trending-content request, give 4–6 concrete video themes the user's clients can actually use. For each: name the theme, one short reason it is timely, and one practical execution angle. Prefer useful themes over generic advice. Keep it concise enough for voice but valuable enough to act on.`;
+    return `${execution} ${provenance}${hootsuiteTruth} For a trending-content request, give 4–6 concrete video themes the user's clients can actually use. For each: name the theme, one short reason it is timely, and one practical execution angle. Prefer useful themes over generic advice. Keep it concise enough for voice but valuable enough to act on.${receiptRule}`;
   }
   if (task.kind === 'creator-collabs') {
-    return `${execution} ${provenance} For creator-collab research, surface the strongest current opportunities/signals, separate India/global context when evidence allows, and state clearly when public Afluencer coverage is incomplete.`;
+    return `${execution} ${provenance} For creator-collab research, surface the strongest current opportunities/signals, separate India/global context when evidence allows, and state clearly when public Afluencer coverage is incomplete.${receiptRule}`;
   }
-  return `${execution} ${provenance} Lead with the conclusion, cite the strongest current signals in plain language, and give one practical implication for Sir.`;
+  return `${execution} ${provenance} Lead with the conclusion, cite the strongest current signals in plain language, and give one practical implication for Sir.${receiptRule}`;
 }
 
 module.exports = {
@@ -282,6 +290,7 @@ module.exports = {
   run,
   isProvenanceQuestion,
   provenanceAnswer,
+  sourceReceiptLine,
   lastReceipt,
   saveReceipt,
   deliveryInstruction,
