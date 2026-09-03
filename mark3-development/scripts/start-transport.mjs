@@ -21,32 +21,28 @@ async function directConfigured() {
   }
 }
 
-function launch({ detached, stdio }) {
+function launchOmniRoute() {
   const script = path.join(mark3Dir, 'scripts', 'start-mark3.mjs');
   const args = [`--env-file=${path.join(projectRoot, '.env')}`, script];
-  const child = spawn(process.execPath, args, {
+  return spawn(process.execPath, args, {
     cwd: mark3Dir,
     env: process.env,
     windowsHide: true,
-    detached,
-    stdio,
+    detached: false,
+    stdio: 'inherit',
     shell: false,
   });
-  return child;
 }
 
 async function main() {
   if (await directConfigured()) {
-    const child = launch({ detached: true, stdio: 'ignore' });
-    child.once('error', (error) => console.warn(`[Mark 3] OmniRoute fallback warm-up could not start: ${error.message}`));
-    child.unref();
-    console.log('[Mark 3] Direct Gemini/Groq/NVIDIA transport detected. Starting immediately; OmniRoute is warming in the background as fallback.');
+    console.log('[Mark 3] Direct Gemini/Groq/NVIDIA transport detected. OmniRoute is armed as a lazy fallback and will stay off unless direct routes fail.');
     return;
   }
 
-  console.log('[Mark 3] No direct Gemini/Groq/NVIDIA credential detected. Waiting for OmniRoute fallback to become ready.');
+  console.log('[Mark 3] No direct Gemini/Groq/NVIDIA credential detected. Starting OmniRoute as the primary fallback transport.');
   await new Promise((resolve, reject) => {
-    const child = launch({ detached: false, stdio: 'inherit' });
+    const child = launchOmniRoute();
     child.once('error', reject);
     child.once('exit', (code, signal) => {
       if (code === 0) resolve();
