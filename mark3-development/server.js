@@ -10,6 +10,8 @@ const models = require('./core/model-intelligence');
 const modelArena = require('./core/model-arena');
 const integrations = require('./core/integrations');
 const web = require('./core/web');
+const codingBrain = require('./core/coding-brain');
+const codingInference = require('./core/coding-inference');
 const voice = require('./core/voice-orchestrator');
 const { subscribe } = require('./core/events');
 const proactive = require('./core/proactive');
@@ -43,7 +45,7 @@ function body(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
     req.setEncoding('utf8');
-    req.on('data', (chunk) => { raw += chunk; if (raw.length > 200000) reject(new Error('Request too large.')); });
+    req.on('data', (chunk) => { raw += chunk; if (raw.length > 1000000) reject(new Error('Request too large.')); });
     req.on('end', () => { try { resolve(JSON.parse(raw || '{}')); } catch { reject(new Error('Invalid JSON request.')); } });
     req.on('error', reject);
   });
@@ -82,13 +84,17 @@ function errorStatus(error) {
   if (upstream >= 500 && upstream <= 599) return 502;
   return 500;
 }
+function isLoopbackRequest(req) {
+  const remote = String(req.socket?.remoteAddress || '').toLowerCase();
+  return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+}
 
 const server = http.createServer(async (req,res) => {
   try {
     if (req.method === 'OPTIONS') return send(res,204,'');
     if (req.method === 'GET' && req.url === '/api/health') {
-      const router = await integrations.health();
-      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.15', interfaceMode:'voice-first-wake', inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
+      const [router, brain] = await Promise.all([integrations.health(), codingBrain.health()]);
+      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.16', interfaceMode:'voice-first-wake', inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, codingBrain:brain, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
     }
     if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
     if (req.method === 'POST' && req.url === '/api/web/fetch') {
@@ -100,6 +106,20 @@ const server = http.createServer(async (req,res) => {
       const data = await body(req);
       const result = await web.searchWeb(String(data.query || ''),{limit:data.limit||5});
       return send(res,200,{ok:true,...result});
+    }
+    if (req.method === 'GET' && req.url === '/api/coding/status') return send(res,200,{ok:true,...(await codingBrain.health())});
+    if (req.method === 'POST' && req.url === '/api/coding/run') {
+      const data = await body(req);
+      const task = String(data.task || '').trim();
+      if (!task) return send(res,400,{ok:false,error:'task is required.'});
+      const result = await codingBrain.run(task,{workspace:data.workspace,mode:data.mode});
+      return send(res,result.ok?200:422,result);
+    }
+    if (req.method === 'POST' && req.url === '/api/coding/infer') {
+      if (!isLoopbackRequest(req)) return send(res,403,{ok:false,error:'Coding inference is local-only.'});
+      const data = await body(req);
+      const result = await codingInference.infer(String(data.role || 'editor'), data.messages);
+      return send(res,200,result);
     }
     if (req.method === 'GET' && req.url === '/api/state') return send(res,200,{ ok:true, memory:memory.snapshot(), commitments:workspace.listCommitments({status:'open'}), projects:workspace.listProjects(), decisions:workspace.listDecisions() });
     if (req.method === 'GET' && req.url === '/api/models') return send(res,200,{ ok:true, ...(await models.intelligence()) });
@@ -115,7 +135,7 @@ const server = http.createServer(async (req,res) => {
       let catalog=null,catalogError=null;
       try { catalog=await models.catalog(); } catch(error) { catalogError=error instanceof Error?error.message:String(error); }
       const router=await integrations.health();
-      return send(res,router.ok?200:503,{ ok:Boolean(router.ok), endpoint:config.omnirouteBase, router, providers:await integrations.providerHealthSnapshot(), modelLeague:modelArena.status(), catalog, catalogError, credential:{ envConfigured:Boolean(config.omnirouteEndpointKey), resolved:Boolean(await integrations.resolveOmniRouteApiKey()) } });
+      return send(res,router.ok?200:503,{ ok:Boolean(router.ok), endpoint:config.omnirouteBase, router, providers:await integrations.providerHealthSnapshot(), modelLeague:modelArena.status(), codingBrain:await codingBrain.health(), catalog, catalogError, credential:{ envConfigured:Boolean(config.omnirouteEndpointKey), resolved:Boolean(await integrations.resolveOmniRouteApiKey()) } });
     }
     if (req.method === 'GET' && req.url === '/api/voice/status') return send(res,200,{ok:true,...voice.status()});
     if (req.method === 'POST' && req.url === '/api/voice/enabled') {
@@ -137,7 +157,7 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method === 'POST' && req.url === '/api/chat') {
       const data=await body(req);
-      const result=await assistant.handle(data.message,{model:data.model,history:data.history,taskType:data.taskType,inputMode:data.inputMode});
+      const result=await assistant.handle(data.message,{model:data.model,history:data.history,taskType:data.taskType,inputMode:data.inputMode,codingWorkspace:data.codingWorkspace});
       const delivered=withCommandHandoff(result.response||result.text||'');
       return send(res,200,{...result,response:delivered,text:delivered});
     }
@@ -155,6 +175,7 @@ const server = http.createServer(async (req,res) => {
 server.listen(config.port,config.host,()=>{
   console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`);
   console.log('[Mark 3] Voice-first wake interface active: say "Ultron", speak the command, then pause for four seconds.');
+  console.log(`[Mark 3] Coding Brain bridge ${config.codingBrainEnabled ? 'enabled' : 'disabled'} at ${config.codingBrainUrl}.`);
   if (leagueEnabled) {
     modelArena.start();
     console.log('[Mark 3] Model League enabled: adaptive primary + ranked backups; arena calibration scheduled.');
