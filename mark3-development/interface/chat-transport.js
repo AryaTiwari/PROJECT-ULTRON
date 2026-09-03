@@ -2,8 +2,8 @@
   const nativeFetch = window.fetch.bind(window);
   const CHAT_TRANSPORT_TIMEOUT_MS = 10 * 60 * 1000;
   const MIN_REPLY_WINDOW_MS = 7000;
-  const FLOW_REPLY_WINDOW_MS = 8000;
-  const REPLY_OPEN_GRACE_MS = 16000;
+  const FLOW_REPLY_WINDOW_MS = 10000;
+  const REPLY_OPEN_GRACE_MS = 18000;
   const PLAYBACK_SETTLE_MS = 700;
   let pendingReplyWindowMs = 0;
   let replyOpenDeadline = 0;
@@ -189,7 +189,7 @@
     }
 
     const shortcut = document.querySelector('.voice-shortcut');
-    if (shortcut) shortcut.textContent = 'Fuzzy wake · patient speech capture · 8 sec conversational flow';
+    if (shortcut) shortcut.textContent = 'Fuzzy wake · native audio command · 10 sec conversational flow';
   });
 
   window.__ULTRON_CHAT_TRANSPORT_TIMEOUT_MS = CHAT_TRANSPORT_TIMEOUT_MS;
