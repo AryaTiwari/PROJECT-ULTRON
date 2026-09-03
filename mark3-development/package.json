@@ -1,20 +1,21 @@
 {
   "name": "ultron-mark3",
-  "version": "3.0.0-beta.20",
+  "version": "3.0.0-beta.22",
   "private": true,
   "type": "commonjs",
-  "description": "ULTRON Mark 3 founder chief-of-staff assistant with multi-key direct models, adaptive research, voice flow, lazy OmniRoute fallback and evidence-driven Coding Brain",
+  "description": "ULTRON Mark 3 founder operating assistant with native-audio voice recognition, multimodal files/artifacts, direct primary models, research intelligence, lazy OmniRoute media/fallback and evidence-driven Coding Brain",
   "scripts": {
-    "start": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/start-transport.mjs && node --env-file=../.env server.js",
-    "check": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/smoke-test.js",
+    "start": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/multimodal-selftest.js && node --env-file=../.env scripts/start-transport.mjs && node --env-file=../.env server.js",
+    "check": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/multimodal-selftest.js && node --env-file=../.env scripts/smoke-test.js",
     "check:flow": "node --env-file=../.env scripts/flow-selftest.js",
     "check:research": "node --env-file=../.env scripts/research-selftest.js",
     "check:routing": "node --env-file=../.env scripts/routing-selftest.js",
+    "check:multimodal": "node --env-file=../.env scripts/multimodal-selftest.js",
     "check:memory": "node scripts/memory-test.js",
     "check:providers": "node --env-file=../.env scripts/provider-test.js",
     "check:models": "node --env-file=../.env scripts/model-test.js",
     "check:voice": "node --env-file=../.env scripts/voice-test.js",
     "check:runtime": "npm run check && npm run check:providers && npm run check:voice",
-    "preflight": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js"
+    "preflight": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/multimodal-selftest.js"
   }
 }
