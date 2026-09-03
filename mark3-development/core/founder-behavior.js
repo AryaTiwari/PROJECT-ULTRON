@@ -125,7 +125,7 @@ function elevateRelevant(text) {
 
 function polishDeterministic(text) {
   return String(text || '')
-    .replace(/^Morning,\s*Arya\./i, 'Good morning, Sir.')
+    .replace(/^Morning,\s*Arya\./i, 'Morning, Sir.')
     .replace(/^Hey\s+Arya\./i, 'Sir.')
     .replace(/^Arya,\s*/i, 'Sir, ')
     .trim();
