@@ -4,6 +4,7 @@ const { execFileSync } = require('child_process');
 const config = require('./config');
 const { load: loadCredentials } = require('../../core/credentials/local-store');
 const modelRouter = require('./model-router');
+const founderBehavior = require('./founder-behavior');
 const rootVoice = require('../../core/voice');
 const windowsVoice = require('./windows-voice');
 
@@ -66,17 +67,21 @@ async function selectMark2Model(model = 'auto') { return modelRouter.normalizeRe
 async function selectNonOpenCodeDirectModel() { return concreteModel(); }
 async function resolveModel(requestedModel = 'auto') { return modelRouter.normalizeRequestedModel(requestedModel); }
 
+function behavioralMessages(messages) {
+  return founderBehavior.apply(Array.isArray(messages) ? messages : []);
+}
+
 async function chat(messages, model = 'auto', tools = null, options = {}) {
-  return modelRouter.chat({ messages, model, tools, taskType: options.taskType || 'general' });
+  return modelRouter.chat({ messages: behavioralMessages(messages), model, tools, taskType: options.taskType || 'general' });
 }
 async function streamChat(messages, model = 'auto', tools = null, options = {}) {
-  return modelRouter.streamChat({ messages, model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
+  return modelRouter.streamChat({ messages: behavioralMessages(messages), model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
 async function chatExact(messages, model, tools = null, options = {}) {
-  return modelRouter.chatExact({ messages, model, tools, taskType: options.taskType || 'general', timeoutMs: options.timeoutMs });
+  return modelRouter.chatExact({ messages: behavioralMessages(messages), model, tools, taskType: options.taskType || 'general', timeoutMs: options.timeoutMs });
 }
 async function streamExact(messages, model, tools = null, options = {}) {
-  return modelRouter.streamExact({ messages, model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
+  return modelRouter.streamExact({ messages: behavioralMessages(messages), model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
 async function health() { return modelRouter.health(); }
 async function providerHealthSnapshot() { return modelRouter.providerSnapshot(); }
@@ -248,5 +253,6 @@ module.exports = {
   voiceStatus,
   selectMark2Model,
   selectNonOpenCodeDirectModel,
+  founderBehaviorStatus: founderBehavior.status,
   PROVIDER_PRIORITY: ['gemini', 'groq', 'deepseek', 'mistral', 'qwen', 'openai', 'anthropic', 'xai', 'vertex', 'zenmux', 'bytez', 'pollinations'],
 };
