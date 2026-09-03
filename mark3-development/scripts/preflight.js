@@ -14,6 +14,9 @@ const required = [
   'core/model-league.js',
   'core/model-arena.js',
   'core/provider-registry.js',
+  'core/direct-provider-router.js',
+  'core/omniroute-fallback.js',
+  'core/omniroute-lazy-hooks.js',
   'core/model-router.js',
   'core/planner.js',
   'core/verifier.js',
@@ -30,6 +33,7 @@ const required = [
   'core/voice-orchestrator.js',
   'core/windows-voice.js',
   'scripts/start-mark3.mjs',
+  'scripts/start-transport.mjs',
   'interface/index.html',
   'interface/style.css',
   'interface/chat-transport.js',
@@ -83,7 +87,10 @@ for (const file of js) {
 const packageFile = path.join(root, 'package.json');
 if (fs.existsSync(packageFile)) {
   const pkg = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
-  if (/start-unified\.mjs/i.test(String(pkg?.scripts?.start || ''))) throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
+  const start = String(pkg?.scripts?.start || '');
+  if (/start-unified\.mjs/i.test(start)) throw new Error('Mark 3 package start script must not launch the Mark 2 unified runtime.');
+  if (!/start-transport\.mjs/i.test(start)) throw new Error('Mark 3 startup must use the direct-first transport selector.');
+  if (pkg.version !== '3.0.0-beta.18') throw new Error(`Unexpected Mark 3 package version: ${pkg.version}`);
 }
 
 const mark3Launcher = fs.readFileSync(path.join(root, 'scripts', 'start-mark3.mjs'), 'utf8');
@@ -93,6 +100,12 @@ if (/run-next\.mjs[^\n\r]*['\"]?\s*,?\s*['\"]dev['\"]?/i.test(mark3Launcher)) {
 if (!/OMNIROUTE_MEMORY_MB/.test(mark3Launcher) || !/omniroute-production\.log/.test(mark3Launcher)) {
   throw new Error('Mark 3 OmniRoute launcher must keep the production low-memory runtime policy.');
 }
+
+const transportLauncher = fs.readFileSync(path.join(root, 'scripts', 'start-transport.mjs'), 'utf8');
+if (!/Direct Gemini\/Groq\/NVIDIA transport detected/.test(transportLauncher) || !/lazy fallback/i.test(transportLauncher)) {
+  throw new Error('Direct-provider startup must leave OmniRoute as a lazy fallback.');
+}
+if (/detached:\s*true/.test(transportLauncher)) throw new Error('Direct-provider startup must not eagerly warm a detached OmniRoute process.');
 
 const omniTransport = fs.readFileSync(path.join(projectRoot, 'core', 'omniroute.js'), 'utf8');
 if (/message\.reasoning_content|delta\.reasoning_content/.test(omniTransport)) {
@@ -110,6 +123,8 @@ if (!/10\s*\*\s*60\s*\*\s*1000/.test(chatTransport) || !/api\\\/chat|api\/chat/.
 
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
+const direct = require('../core/direct-provider-router');
+const omniFallback = require('../core/omniroute-fallback');
 const router = require('../core/model-router');
 const league = require('../core/model-league');
 const arena = require('../core/model-arena');
@@ -120,11 +135,19 @@ const codingInference = require('../core/coding-inference');
 const integrations = require('../core/integrations');
 const selfRepository = require('../core/self-repository');
 const handoff = require('../core/assistant-handoff');
-if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
+
+// The shared root OmniRoute module still reads this selector, but Mark 3 routes direct APIs above it.
+if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Shared OmniRoute compatibility selector must remain omniroute.');
+if (config.disableNvidiaInference !== false) throw new Error('NVIDIA direct inference must be enabled in beta.18.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
 if (!config.modelLeaguePath.startsWith(config.dataDir)) throw new Error('Model League state must live under Mark 3 data.');
 if (!/^https?:\/\/127\.0\.0\.1:8791|^https?:\/\/localhost:8791/i.test(config.codingBrainUrl) && !process.env.ULTRON_M3_CODING_BRAIN_URL) throw new Error('Coding Brain should default to the local sidecar endpoint.');
 if (registry.policyAllows('cloudflare-playground') && !/^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_ALLOW_EXPERIMENTAL_PROVIDERS || ''))) throw new Error('Experimental browser/CLI providers must be disabled by default.');
+if (!registry.PROVIDERS.nvidia || registry.PROVIDERS.nvidia.tier !== 'api') throw new Error('NVIDIA must be a first-class API provider.');
+if (typeof direct.chat !== 'function' || typeof direct.streamChat !== 'function' || typeof direct.candidates !== 'function' || typeof direct.health !== 'function') throw new Error('Direct-provider router API is incomplete.');
+if (!direct.isDirectModel('gemini/gemini-3.8-flash') || !direct.isDirectModel('groq/qwen/qwen3.8-27b') || !direct.isDirectModel('nvidia/openai/gpt-oss-120b')) throw new Error('Direct Gemini/Groq/NVIDIA model parsing is incomplete.');
+if (router.isBlockedModel('nvidia/openai/gpt-oss-120b')) throw new Error('NVIDIA direct inference is still blocked by router policy.');
+if (typeof omniFallback.ensure !== 'function' || omniFallback.status().mode !== 'lazy-fallback') throw new Error('Lazy OmniRoute fallback API is incomplete.');
 if (typeof router.chatExact !== 'function' || typeof router.streamExact !== 'function' || typeof router.listNativeEligibleModels !== 'function') throw new Error('Model League requires exact-model router primitives.');
 if (typeof league.recommend !== 'function' || typeof league.selectParticipants !== 'function') throw new Error('Adaptive Model League API is incomplete.');
 if (typeof arena.runTournament !== 'function' || typeof arena.start !== 'function') throw new Error('Model Arena API is incomplete.');
