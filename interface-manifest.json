@@ -1,8 +1,8 @@
 {
   "repository": "AryaTiwari/Interface1",
-  "ref": "461a1589aea7559ac879a71f9f8abfd62b29f243",
+  "ref": "5cf0aed2735a1fec828d97f59ec75c0d89421f86",
   "root": "interface",
-  "syncVersion": "2026-08-31-interface1-performance-model-voice-3",
+  "syncVersion": "2026-09-03-interface1-artifact-links-1",
   "files": [
     "index.html",
     "vite.config.ts",
