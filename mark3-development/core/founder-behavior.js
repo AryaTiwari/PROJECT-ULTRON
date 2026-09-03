@@ -1,3 +1,5 @@
+const operatingModes = require('./operating-modes');
+
 const NORMAL_ULTRON_SYSTEM = /\bYou are ULTRON Mark 3\b/i;
 
 const FOUNDER_BEHAVIOR = `
@@ -139,7 +141,8 @@ function apply(messages = []) {
     if (applied || message?.role !== 'system' || !NORMAL_ULTRON_SYSTEM.test(String(message.content || ''))) return message;
     applied = true;
     const startup = elevateRelevant(userMessage) ? `\n${ELEVATE_OS_BRIEF}` : '';
-    return { ...message, content: `${String(message.content || '').trim()}\n\n${FOUNDER_BEHAVIOR.trim()}${startup}` };
+    const mode = `\n${operatingModes.systemPrompt()}`;
+    return { ...message, content: `${String(message.content || '').trim()}\n\n${FOUNDER_BEHAVIOR.trim()}${mode}${startup}` };
   });
 }
 
@@ -168,6 +171,7 @@ function status() {
     elevateContext: 'relevance-triggered-plus-memory-seeded',
     genericCommandHandoff: false,
     memorySeeds: MEMORY_SEEDS.length,
+    operatingMode: operatingModes.status(),
   };
 }
 
