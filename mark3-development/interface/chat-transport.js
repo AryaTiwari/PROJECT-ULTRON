@@ -84,7 +84,10 @@
         const data = await response.clone().json();
         pendingReplyWindowMs = Math.max(0, Number(data?.listenAfterResponseMs || 0));
         replyOpenDeadline = pendingReplyWindowMs ? Date.now() + Math.max(REPLY_OPEN_GRACE_MS, pendingReplyWindowMs + 5000) : 0;
-        if (pendingReplyWindowMs && !audioEnabled()) scheduleReplyWindow(350);
+        // Event-driven voice_completed is the normal path. This delayed attempt
+        // covers extremely fast TTS, muted audio, or an event arriving just
+        // before the HTTP response exposes listenAfterResponseMs.
+        if (pendingReplyWindowMs) scheduleReplyWindow(audioEnabled() ? 1200 : 350);
       } catch {}
       return response;
     }).finally(() => clearTimeout(timer));
