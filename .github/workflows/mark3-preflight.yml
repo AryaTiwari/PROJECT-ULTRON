@@ -1,0 +1,32 @@
+name: Mark 3 Preflight
+
+on:
+  push:
+    branches: [mark3-development]
+    paths:
+      - 'mark3-development/**'
+      - 'core/omniroute.js'
+      - 'core/credentials/**'
+      - '.env.example'
+      - '.github/workflows/mark3-preflight.yml'
+  pull_request:
+    paths:
+      - 'mark3-development/**'
+      - 'core/omniroute.js'
+      - 'core/credentials/**'
+      - '.env.example'
+      - '.github/workflows/mark3-preflight.yml'
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Create non-secret test environment
+        run: cp .env.example .env
+      - name: Run Mark 3 preflight
+        working-directory: mark3-development
+        run: npm run preflight
