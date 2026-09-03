@@ -1,4 +1,4 @@
-const path = require('./config') && require('path');
+const path = require('path');
 const config = require('./config');
 const { readJson, writeJsonAtomic } = require('./persistence');
 const { emit } = require('./events');
