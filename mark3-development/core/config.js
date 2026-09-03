@@ -9,7 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 const PROJECT_ROOT = path.resolve(ROOT, '..');
 const DATA = path.join(ROOT, 'data');
 
-// Mark 3 owns its runtime. OmniRoute is only the inference transport.
+// Mark 3 owns its runtime. Direct APIs are primary; OmniRoute is a lazy fallback.
 process.env.ULTRON_MODEL_PROVIDER = 'omniroute';
 process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
 process.env.ULTRON_DISABLE_OPENCODE = '1';
@@ -34,6 +34,7 @@ const omniRouteBase = String(process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1
 
 module.exports = {
   root: ROOT,
+  mark3Root: ROOT,
   projectRoot: PROJECT_ROOT,
   dataDir: DATA,
   workspaceDir: path.join(ROOT, 'workspace'),
@@ -44,7 +45,7 @@ module.exports = {
   omniRouteStrict: false,
   disableBigPickle: true,
   disableOpenCode: true,
-  disableNvidiaInference: true,
+  disableNvidiaInference: false,
   agenticBridgeEnabled: /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DEVIN_BRIDGE_ENABLED || '1')),
   agenticBridgeModel: process.env.ULTRON_M3_DEVIN_BRIDGE_MODEL || 'dva/swe-1-7-lightning',
   agenticBridgeTimeoutMs: num('ULTRON_M3_DEVIN_BRIDGE_TIMEOUT_MS', 180000),
