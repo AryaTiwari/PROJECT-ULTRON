@@ -8,6 +8,7 @@
     preRoll: [],
     commandChunks: [],
     commandActive: false,
+    suppressPreRoll: false,
     ready: false,
     starting: null,
     mime: 'audio/webm',
@@ -31,7 +32,7 @@
         state.recorder.ondataavailable = (event) => {
           if (!event.data || !event.data.size) return;
           if (state.commandActive) state.commandChunks.push(event.data);
-          else {
+          else if (!state.suppressPreRoll) {
             state.preRoll.push(event.data);
             while (state.preRoll.length > 3) state.preRoll.shift();
           }
@@ -50,7 +51,7 @@
   }
 
   function beginCommand() {
-    if (!state.enabled || !state.ready || state.commandActive) return;
+    if (!state.enabled || !state.ready || state.commandActive || state.suppressPreRoll) return;
     state.commandActive = true;
     state.commandChunks = [...state.preRoll];
     state.preRoll = [];
@@ -190,6 +191,18 @@
     const wrap = document.querySelector('.globe-wrap');
     if (wrap) {
       const observer = new MutationObserver(() => {
+        const speaking = wrap.classList.contains('speaking');
+        if (speaking) {
+          // Do not feed ULTRON's own synthesized speech into the next command's
+          // rolling pre-roll. Echo cancellation is helpful, but provenance is better.
+          state.suppressPreRoll = true;
+          state.preRoll = [];
+          return;
+        }
+        if (state.suppressPreRoll) {
+          state.suppressPreRoll = false;
+          state.preRoll = [];
+        }
         if (wrap.classList.contains('command-listening')) {
           void ensureRecorder().then((ok) => { if (ok) beginCommand(); });
         }
