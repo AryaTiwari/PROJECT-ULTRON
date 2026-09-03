@@ -72,40 +72,19 @@ async function transcribeGroq(buffer, options = {}) {
     } catch (error) {
       lastError = error;
       const status = Number(error?.status || 0);
-      // Only rotate another Groq account for key/quota-specific failures. A provider
-      // outage should fall through to OmniRoute rather than burning both accounts.
       if (![401, 403, 429].includes(status)) break;
     } finally { done(); }
   }
   throw lastError || new Error('Groq transcription failed.');
 }
 
-function parseModels(payload) {
-  const raw = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-  return raw.map((item) => typeof item === 'string' ? item : String(item?.id || item?.model || item?.name || '')).filter(Boolean);
-}
-
-async function omniTranscriptionModel() {
-  const override = String(process.env.ULTRON_M3_OMNIROUTE_STT_MODEL || '').trim();
-  if (override) return override;
-  await omniFallback.ensure({ reason: 'native voice transcription requested' });
-  const key = await omniKey();
-  const { controller, done } = timeoutController(15000);
-  try {
-    const response = await fetch(`${config.omnirouteBase}/audio/transcriptions`, {
-      headers: key ? { Authorization: `Bearer ${key}` } : {},
-      signal: controller.signal,
-    });
-    const raw = await response.text();
-    if (!response.ok) throw new Error(`OmniRoute transcription catalog HTTP ${response.status}: ${raw.slice(0, 500)}`);
-    const models = parseModels(raw ? JSON.parse(raw) : {});
-    return models[0] || 'whisper-1';
-  } finally { done(); }
+function omniTranscriptionModel() {
+  return String(process.env.ULTRON_M3_OMNIROUTE_STT_MODEL || process.env.ULTRON_M3_VOICE_STT_MODEL || 'whisper-1').trim();
 }
 
 async function transcribeOmniRoute(buffer, options = {}) {
   await omniFallback.ensure({ reason: 'native voice transcription fallback' });
-  const model = await omniTranscriptionModel();
+  const model = omniTranscriptionModel();
   const key = await omniKey();
   const { controller, done } = timeoutController();
   try {
@@ -161,6 +140,7 @@ async function status() {
     primary: PROVIDER_MODE === 'omniroute' ? 'omniroute-stt' : 'groq-stt',
     groqKeys: keys.map((row) => row.slot),
     omnirouteFallback: true,
+    omnirouteModel: omniTranscriptionModel(),
     browserFallback: true,
   };
 }
