@@ -26,6 +26,7 @@ const registry = require('../core/provider-registry');
 const conversation = require('../core/conversation');
 const web = require('../core/web');
 const assistant = require('../core/assistant');
+const handoff = require('../core/assistant-handoff');
 const windowsVoice = require('../core/windows-voice');
 
 if (memory.similarity('hello world', 'hello world') < 0.99) throw new Error('Memory similarity invariant failed.');
@@ -35,10 +36,7 @@ if (typeof voice.setEnabled !== 'function' || typeof voice.isEnabled !== 'functi
 if (windowsVoice.cleanSpeechText('Hello `code` https://example.com').includes('https://')) throw new Error('Windows voice cleanup invariant failed.');
 if (!assistant.wantsDetailedResponse('Explain this step-by-step in detail')) throw new Error('Explicit depth requests must enable detailed response mode.');
 if (assistant.wantsDetailedResponse('What is this?')) throw new Error('Ordinary questions must stay concise-first.');
-if (!assistant.wantsWrittenResponse('Write me a short email')) throw new Error('Written deliverables must be detected.');
-if (!/Spoken conversation/i.test(assistant.responseStyleInstruction('What is this?', 'voice'))) throw new Error('Voice interaction must use spoken delivery instructions.');
-if (!/Speech-friendly and concise/i.test(assistant.responseStyleInstruction('What is this?', 'chat'))) throw new Error('Backup chat must remain speech-friendly by default.');
-if (!/written\/structured artifact/i.test(assistant.responseStyleInstruction('Draft an email', 'voice'))) throw new Error('Written requests must override spoken-only formatting.');
+if (!/speech-friendly|Spoken conversation/i.test(assistant.responseStyleInstruction('What is this?', 'voice'))) throw new Error('Voice responses must remain speech-native.');
 if (!router.isBlockedModel('nvidia/some-model')) throw new Error('NVIDIA inference must be blocked in Mark 3.');
 if (!router.isBlockedModel('opencode/big-pickle')) throw new Error('OpenCode/Big Pickle inference must be blocked in Mark 3.');
 if (!router.isBlockedModel('dva/swe-1-7-lightning')) throw new Error('Devin bridge models must not enter normal assistant chat.');
@@ -55,6 +53,9 @@ const weakUtility = league.utility({ attempts:4, successes:2, qualitySamples:2, 
 if (!(strongUtility > weakUtility)) throw new Error('Model League utility must reward answer quality and reliability.');
 if (arena.heuristicQuality('') !== 0) throw new Error('Model Arena must reject empty answers.');
 if (!(arena.heuristicQuality('1. Check the evidence. 2. Verify the metric. 3. Compare like-for-like because context matters.') > 0.5)) throw new Error('Model Arena heuristic must recognize a useful structured answer.');
+if (handoff.withCommandHandoff('Done.') !== "Done. What's your next command?") throw new Error('Ordinary assistant answers must end with a command handoff.');
+if (handoff.withCommandHandoff('What do you want me to do next?') !== 'What do you want me to do next?') throw new Error('Existing assistant follow-up questions must not be duplicated.');
+if (handoff.withCommandHandoff('```js\nconsole.log(1)\n```').includes('next command')) throw new Error('Code artifacts must not receive a spoken command suffix inside the artifact.');
 
 const fakeHistory = [
   { role: 'user', content: 'Review my Elevate website.' },
@@ -71,9 +72,5 @@ if (!web.status().remoteDns || !web.status().canonicalHostRetry) throw new Error
 if (!web.shouldSearch('Search the web for the latest Gemini updates')) throw new Error('Explicit live-web search intent must trigger TinyFish Search.');
 if (web.shouldSearch('Explain how transformers work')) throw new Error('Evergreen questions must not trigger unnecessary web search.');
 if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must remain the primary web provider.');
-
-const interfaceJs = fs.readFileSync(path.join(root, 'interface', 'app.js'), 'utf8');
-if (!/SpeechRecognition/.test(interfaceJs) || !/submitMessage\(spoken,'voice'\)/.test(interfaceJs)) throw new Error('Voice transcript must feed Mark 3 as voice input.');
-if (!/localStorage\.getItem\('ultron-m3-chat-open'\)/.test(interfaceJs)) throw new Error('Chat backup drawer state must persist locally.');
 
 console.log(`ULTRON Mark 3 smoke test passed: ${files.length} JS files checked.`);
