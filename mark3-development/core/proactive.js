@@ -5,6 +5,7 @@ const planner = require('./planner');
 const verifier = require('./verifier');
 const memory = require('./memory');
 const modelLeague = require('./model-league');
+const conversation = require('./conversation');
 
 let timer = null;
 let unsubscribe = null;
@@ -135,6 +136,8 @@ function finishExecution(result = null, fallbackStatus = 'partial') {
 }
 function onRuntimeEvent(event) {
   if (event.type === 'task_started') {
+    if (conversation.isGreeting(event.message)) return;
+    if (intent.isStateBriefRequest(event.message)) syncStateMemory();
     const mutation = intent.extractWorkspaceMutation(event.message);
     let stateChanged = false;
     if (mutation) {
