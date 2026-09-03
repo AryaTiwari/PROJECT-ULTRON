@@ -12,6 +12,7 @@ const integrations = require('./core/integrations');
 const web = require('./core/web');
 const codingBrain = require('./core/coding-brain');
 const codingInference = require('./core/coding-inference');
+const selfRepository = require('./core/self-repository');
 const voice = require('./core/voice-orchestrator');
 const { subscribe } = require('./core/events');
 const proactive = require('./core/proactive');
@@ -94,7 +95,7 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'OPTIONS') return send(res,204,'');
     if (req.method === 'GET' && req.url === '/api/health') {
       const [router, brain] = await Promise.all([integrations.health(), codingBrain.health()]);
-      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.16', interfaceMode:'voice-first-wake', inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, codingBrain:brain, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
+      return send(res, router.ok ? 200 : 503, { ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.17', interfaceMode:'voice-first-wake', inference:router, modelLeague:{enabled:leagueEnabled,...modelArena.status()}, codingBrain:brain, web:web.status(), voice:voice.status(), pid:process.pid, port:config.port });
     }
     if (req.method === 'GET' && req.url === '/api/web/status') return send(res,200,{ok:true,...web.status()});
     if (req.method === 'POST' && req.url === '/api/web/fetch') {
@@ -106,6 +107,10 @@ const server = http.createServer(async (req,res) => {
       const data = await body(req);
       const result = await web.searchWeb(String(data.query || ''),{limit:data.limit||5});
       return send(res,200,{ok:true,...result});
+    }
+    if (req.method === 'GET' && req.url === '/api/self/repository') {
+      const status = await integrations.githubSelfStatus();
+      return send(res,200,{ok:true,...status});
     }
     if (req.method === 'GET' && req.url === '/api/coding/status') return send(res,200,{ok:true,...(await codingBrain.health())});
     if (req.method === 'POST' && req.url === '/api/coding/run') {
@@ -157,6 +162,12 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method === 'POST' && req.url === '/api/chat') {
       const data=await body(req);
+      const selfResult=await selfRepository.handle(data.message,data.history);
+      if(selfResult){
+        const delivered=withCommandHandoff(selfResult.response||selfResult.text||'');
+        void voice.enqueue(delivered);
+        return send(res,200,{...selfResult,ok:true,response:delivered,text:delivered});
+      }
       const result=await assistant.handle(data.message,{model:data.model,history:data.history,taskType:data.taskType,inputMode:data.inputMode,codingWorkspace:data.codingWorkspace});
       const delivered=withCommandHandoff(result.response||result.text||'');
       return send(res,200,{...result,response:delivered,text:delivered});
