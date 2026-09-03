@@ -18,23 +18,30 @@ function isIdentityIntent(text) {
     || /\bwhere\s+(?:do you|are you)\s+(?:run|live|hosted)\b/.test(value);
 }
 
-function historyRows(supplied) {
-  // Persistent Mark 3 history is authoritative because the browser may have
-  // aborted a request before it added that failed command to its local history.
-  const persisted = conversation.recent(10)
+function cleanRows(rows) {
+  return (Array.isArray(rows) ? rows : [])
     .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
-  if (persisted.length) return persisted;
-  return (Array.isArray(supplied) ? supplied : [])
-    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+}
+
+function latestUserIsSelfRepository(rows) {
+  const clean = cleanRows(rows);
+  for (let i = clean.length - 1; i >= 0; i -= 1) {
+    if (clean[i].role === 'user') return isSelfRepositoryStatusIntent(clean[i].content);
+  }
+  return false;
 }
 
 function continuationTargetsSelfRepository(message, suppliedHistory) {
   if (!conversation.isContinuation(message)) return false;
-  const rows = historyRows(suppliedHistory);
-  for (let i = rows.length - 1; i >= 0; i -= 1) {
-    if (rows[i].role === 'user') return isSelfRepositoryStatusIntent(rows[i].content);
-  }
-  return false;
+
+  // Persistent Mark 3 history is authoritative after a real browser timeout,
+  // because the browser may never have added the failed command locally.
+  const persisted = cleanRows(conversation.recent(10));
+  if (latestUserIsSelfRepository(persisted)) return true;
+
+  // Explicit history must still be independently usable for deterministic
+  // tests and callers that provide a complete conversation snapshot.
+  return latestUserIsSelfRepository(suppliedHistory);
 }
 
 function shortSha(value) {
