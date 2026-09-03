@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const config = require('./config');
 const { load: loadCredentials } = require('../../core/credentials/local-store');
 const modelRouter = require('./model-router');
@@ -134,12 +135,20 @@ async function requestJson(url, options = {}, timeoutMs = 30000) {
 }
 const jsonRequest = requestJson;
 
+function githubHeaders() {
+  return {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    ...(config.githubToken ? { Authorization: `Bearer ${config.githubToken}` } : {}),
+  };
+}
+
 async function githubReadFile(pathname, ref) {
   if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
   const useRef = ref || config.githubBranch;
   const encodedPath = String(pathname || '').split('/').filter(Boolean).map(encodeURIComponent).join('/');
   const url = `https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents/${encodedPath}?ref=${encodeURIComponent(useRef)}`;
-  const data = await requestJson(url, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
+  const data = await requestJson(url, { headers: githubHeaders() }, 20000);
   if (data.type !== 'file' || !data.content) throw new Error(`GitHub path is not a readable file: ${pathname}`);
   return { path: pathname, ref: useRef, sha: data.sha, content: Buffer.from(String(data.content).replace(/\r?\n/g, ''), 'base64').toString('utf8'), size: Number(data.size) || 0 };
 }
@@ -148,7 +157,61 @@ async function githubList(pathname = '', ref) {
   if (!config.githubToken) throw new Error('GITHUB_TOKEN is not configured.');
   const useRef = ref || config.githubBranch;
   const suffix = pathname ? `/${String(pathname).split('/').filter(Boolean).map(encodeURIComponent).join('/')}` : '';
-  return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: `Bearer ${config.githubToken}` } }, 20000);
+  return requestJson(`https://api.github.com/repos/${encodeURIComponent(config.githubOwner)}/${encodeURIComponent(config.githubRepo)}/contents${suffix}?ref=${encodeURIComponent(useRef)}`, { headers: githubHeaders() }, 20000);
+}
+
+function gitText(args) {
+  try {
+    return String(execFileSync('git', args, { cwd: config.projectRoot, windowsHide: true, encoding: 'utf8', timeout: 8000 }) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function githubSelfStatus() {
+  const owner = config.githubOwner;
+  const repo = config.githubRepo;
+  const branch = config.githubBranch;
+  const base = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const branchData = await requestJson(`${base}/branches/${encodeURIComponent(branch)}`, { headers: githubHeaders() }, 12000);
+  const remoteHead = String(branchData?.commit?.sha || '').trim();
+  if (!remoteHead) throw new Error(`GitHub did not return a head commit for ${branch}.`);
+
+  const localHead = gitText(['rev-parse', 'HEAD']);
+  const localBranch = gitText(['branch', '--show-current']) || 'detached';
+  const dirty = Boolean(gitText(['status', '--porcelain']));
+  let relationship = localHead && localHead === remoteHead ? 'identical' : 'different';
+  let aheadBy = null;
+  let behindBy = null;
+
+  if (localHead && localHead !== remoteHead) {
+    try {
+      const comparison = await requestJson(`${base}/compare/${encodeURIComponent(localHead)}...${encodeURIComponent(remoteHead)}`, { headers: githubHeaders() }, 12000);
+      relationship = String(comparison?.status || relationship);
+      aheadBy = Number.isFinite(Number(comparison?.ahead_by)) ? Number(comparison.ahead_by) : null;
+      behindBy = Number.isFinite(Number(comparison?.behind_by)) ? Number(comparison.behind_by) : null;
+    } catch {}
+  }
+
+  const updateAvailable = relationship === 'ahead' || relationship === 'diverged' || (!localHead && Boolean(remoteHead));
+  return {
+    owner,
+    repo,
+    branch,
+    localHead: localHead || null,
+    localBranch,
+    remoteHead,
+    relationship,
+    updateAvailable,
+    aheadBy,
+    behindBy,
+    dirty,
+    latest: {
+      message: String(branchData?.commit?.commit?.message || '').split(/\r?\n/)[0].trim() || null,
+      date: branchData?.commit?.commit?.committer?.date || branchData?.commit?.commit?.author?.date || null,
+      url: branchData?.commit?.html_url || null,
+    },
+  };
 }
 
 module.exports = {
@@ -157,6 +220,7 @@ module.exports = {
   resolveOmniRouteApiKey,
   githubReadFile,
   githubList,
+  githubSelfStatus,
   models,
   payloadModels,
   payloadModelEntries,
