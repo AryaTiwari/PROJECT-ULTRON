@@ -22,6 +22,7 @@ const required = [
   'core/web.js',
   'core/coding-brain.js',
   'core/coding-inference.js',
+  'core/self-repository.js',
   'core/assistant.js',
   'core/assistant-handoff.js',
   'core/conversation.js',
@@ -31,6 +32,7 @@ const required = [
   'scripts/start-mark3.mjs',
   'interface/index.html',
   'interface/style.css',
+  'interface/chat-transport.js',
   'interface/app.js',
 ];
 const sharedTransport = ['core/omniroute.js', 'core/voice/index.js', 'core/credentials/local-store.js'];
@@ -103,6 +105,8 @@ if (!/WAKE_WORD=['\"]ultron['\"]/.test(interfaceJs) || !/wakeMatch\s*\(/.test(in
 if (!/COMMAND_SILENCE_MS=4000/.test(interfaceJs)) throw new Error('Voice command silence window must remain four seconds.');
 if (!/createMediaElementSource/.test(interfaceJs) || !/createAnalyser/.test(interfaceJs) || !/speechEnergy/.test(interfaceJs)) throw new Error('Audio-reactive speaking visualization is missing.');
 if (!/recognitionMode==='wake'/.test(interfaceJs) || !/recognitionMode==='command'/.test(interfaceJs)) throw new Error('Wake/command recognition state machine is missing.');
+const chatTransport = fs.readFileSync(path.join(root, 'interface', 'chat-transport.js'), 'utf8');
+if (!/10\s*\*\s*60\s*\*\s*1000/.test(chatTransport) || !/api\\\/chat|api\/chat/.test(chatTransport)) throw new Error('Chat transport must override the legacy 120-second UI cancellation with the managed long-task ceiling.');
 
 const config = require('../core/config');
 const registry = require('../core/provider-registry');
@@ -113,6 +117,8 @@ const conversation = require('../core/conversation');
 const web = require('../core/web');
 const codingBrain = require('../core/coding-brain');
 const codingInference = require('../core/coding-inference');
+const integrations = require('../core/integrations');
+const selfRepository = require('../core/self-repository');
 const handoff = require('../core/assistant-handoff');
 if (process.env.ULTRON_MODEL_PROVIDER !== 'omniroute') throw new Error('Mark 3 must force ULTRON_MODEL_PROVIDER=omniroute.');
 if (!config.voiceOutputDir.startsWith(config.projectRoot)) throw new Error('Mark 3 voice output must be anchored to the project root.');
@@ -128,6 +134,10 @@ if (codingBrain.shouldUse('What is a JavaScript closure?', 'coding')) throw new 
 if (codingBrain.modeFor('Inspect the wake-word implementation') !== 'plan') throw new Error('Read-only coding investigation must use plan mode.');
 if (codingBrain.modeFor('Fix the wake-word implementation') !== 'apply') throw new Error('Explicit coding modifications must use apply mode.');
 if (codingInference.roleTaskType('editor') !== 'coding' || codingInference.roleTaskType('reviewer') !== 'planning') throw new Error('Coding Brain role-to-model routing is invalid.');
+if (typeof integrations.githubSelfStatus !== 'function') throw new Error('Deterministic self-GitHub status API is missing.');
+if (!selfRepository.isSelfRepositoryStatusIntent('Ultron can you check your own get hub and tell me whether there is a new update')) throw new Error('Voice-transcribed self-GitHub update intent must use the deterministic fast path.');
+if (!conversation.isContinuation('finish it now')) throw new Error('Failed-task continuation phrase “finish it now” must preserve prior context.');
+if (!selfRepository.continuationTargetsSelfRepository('finish it now', [{ role:'user', content:'Check your own GitHub and tell me whether there is a new update.' }])) throw new Error('Self-GitHub task must survive a finish-it-now continuation.');
 if (!/next command/i.test(handoff.withCommandHandoff('Done.'))) throw new Error('Assistant command handoff must remain active for ordinary responses.');
 if (handoff.withCommandHandoff('What should I do next?') !== 'What should I do next?') throw new Error('Assistant handoff must not duplicate an existing follow-up question.');
 if (conversation.contextFor('hey ultron', [{ role:'assistant', content:'Old unrelated task' }]).length) throw new Error('Greeting context isolation invariant failed.');
