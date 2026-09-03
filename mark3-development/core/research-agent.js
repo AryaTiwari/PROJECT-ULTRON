@@ -65,7 +65,14 @@ function canonicalize(text) {
   return cleaned;
 }
 
+function isProvenanceQuestion(text) {
+  const value = String(text || '').trim();
+  return /\b(?:did\s+(?:you|u)\s+(?:use|search|check)|what\s+(?:source|sources|tools?|sites?)\s+did\s+(?:you|u)\s+use|where\s+did\s+(?:you|u)\s+get|was\s+(?:that|this)\s+(?:from|based\s+on)|did\s+(?:that|this)\s+use)\b/i.test(value)
+    || /\b(?:hootsuite|afluencer|tinyfish)\b.*\b(?:use|used|search|searched|check|checked|source)\b/i.test(value);
+}
+
 function qualifies(text) {
+  if (isProvenanceQuestion(text)) return true;
   const canonical = canonicalize(text);
   if (!canonical) return false;
   return isContentTrendTask(canonical) || isCreatorCollabTask(canonical) || web.researchProfile(canonical).shouldResearch;
@@ -80,6 +87,15 @@ function historyRows(history = []) {
 function resolve(message, history = []) {
   const current = String(message || '').trim();
   if (!current) return null;
+
+  if (isProvenanceQuestion(current)) {
+    return {
+      original: current,
+      query: normalizeVoiceIntent(current),
+      resumed: false,
+      kind: 'research-provenance',
+    };
+  }
 
   if (qualifies(current) && !isContinuation(current)) {
     const query = canonicalize(current);
@@ -96,7 +112,7 @@ function resolve(message, history = []) {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index];
     if (row.role !== 'user') continue;
-    if (!qualifies(row.content) || isContinuation(row.content)) continue;
+    if (!qualifies(row.content) || isContinuation(row.content) || isProvenanceQuestion(row.content)) continue;
     const query = canonicalize(row.content);
     return {
       original: row.content,
@@ -139,12 +155,6 @@ function saveReceipt(task, evidence) {
   return receipt;
 }
 
-function isProvenanceQuestion(text) {
-  const value = String(text || '').trim();
-  return /\b(?:did\s+(?:you|u)\s+(?:use|search|check)|what\s+(?:source|sources|tools?|sites?)\s+did\s+(?:you|u)\s+use|where\s+did\s+(?:you|u)\s+get|was\s+(?:that|this)\s+(?:from|based\s+on)|did\s+(?:that|this)\s+use)\b/i.test(value)
-    || /\b(?:hootsuite|afluencer|tinyfish)\b.*\b(?:use|used|search|searched|check|checked|source)\b/i.test(value);
-}
-
 function sourceLabel(source) {
   if (source === 'hootsuite') return 'Hootsuite';
   if (source === 'afluencer-india') return 'Afluencer India';
@@ -153,9 +163,8 @@ function sourceLabel(source) {
   return source;
 }
 
-function provenanceAnswer(text) {
+function provenanceAnswer(text, receipt = lastReceipt()) {
   if (!isProvenanceQuestion(text)) return null;
-  const receipt = lastReceipt();
   if (!receipt.available) return { response: 'No verified research receipt is available yet, Sir. I won’t guess about sources I cannot prove.', receipt };
 
   const requested = new Set(receipt.requestedSources || []);
@@ -165,10 +174,10 @@ function provenanceAnswer(text) {
   const wantsTinyFish = /\btinyfish\b/i.test(String(text || ''));
 
   if (wantsHootsuite) {
-    if (completed.has('hootsuite')) return { response: `Yes, Sir. Hootsuite completed in that research run, alongside ${completed.has('general') ? 'TinyFish web cross-checking' : 'the other completed sources'}.`, receipt };
+    if (completed.has('hootsuite')) return { response: `Yes, Sir. Hootsuite completed in that research run${completed.has('general') ? ', with TinyFish web cross-checking as well' : ''}.`, receipt };
     if (requested.has('hootsuite')) {
       const failure = (receipt.errors || []).find((item) => item?.source === 'hootsuite');
-      return { response: `No, Sir. Hootsuite was requested but did not complete${failure?.error ? `: ${String(failure.error).slice(0, 180)}` : ''}. The answer used the sources that did complete; it should have disclosed that.`, receipt };
+      return { response: `No, Sir. Hootsuite was requested but did not complete${failure?.error ? `: ${String(failure.error).slice(0, 180)}` : ''}. The answer used only the sources that completed.`, receipt };
     }
     return { response: 'No, Sir. Hootsuite was not requested for that research run.', receipt };
   }
@@ -189,8 +198,31 @@ function provenanceAnswer(text) {
   return { response, receipt };
 }
 
+function receiptEvidence(task, receipt) {
+  const answer = provenanceAnswer(task.original, receipt)?.response || 'No verified research provenance is available, Sir.';
+  return {
+    query: task.query,
+    provider: 'local-research-receipt',
+    results: [{ position: 1, title: 'ULTRON Research Receipt', snippet: answer, url: 'local://research-receipt', siteName: 'ULTRON', source: 'research-receipt', coverage: 'deterministic local provenance' }],
+    pages: [],
+    research: {
+      adaptive: false,
+      cached: false,
+      requestedSources: receipt.requestedSources || [],
+      completedSources: receipt.completedSources || [],
+      errors: receipt.errors || [],
+      receipt,
+      provenanceAnswer: answer,
+    },
+    researchReceipt: receipt,
+    researchTask: { kind: task.kind, original: task.original, query: task.query, resumed: false, continuation: null },
+  };
+}
+
 async function run(task, options = {}) {
   if (!task?.query) throw new Error('Research task query is required.');
+  if (task.kind === 'research-provenance') return receiptEvidence(task, lastReceipt());
+
   const evidence = await web.searchAndFetch(task.query, {
     searchLimit: options.searchLimit || 6,
     fetchTop: options.fetchTop ?? 3,
@@ -214,10 +246,17 @@ async function run(task, options = {}) {
 
 function deliveryInstruction(task, evidence = null) {
   if (!task) return '';
-  const execution = 'RESEARCH EXECUTION: The web research has ALREADY RUN. Do not say you are going to search, ask the user to rerun anything, or request a more specific prompt when the evidence can answer the task. Synthesize the evidence and give the result now.';
-  const requested = new Set(evidence?.research?.requestedSources || []);
-  const completed = new Set(evidence?.research?.completedSources || []);
+  const execution = 'RESEARCH EXECUTION: The research step has ALREADY RUN. Do not say you are going to search, ask the user to rerun anything, or request a more specific prompt when the supplied evidence can answer the task. Give the result now.';
+  const receipt = evidence?.researchReceipt || evidence?.research?.receipt || lastReceipt();
+  const requested = new Set(evidence?.research?.requestedSources || receipt?.requestedSources || []);
+  const completed = new Set(evidence?.research?.completedSources || receipt?.completedSources || []);
   const provenance = `SOURCE TRUTH: requested=[${[...requested].join(', ') || 'none'}]; completed=[${[...completed].join(', ') || 'none'}]. Never claim a source was used unless it appears in completed.`;
+
+  if (task.kind === 'research-provenance') {
+    const exact = evidence?.research?.provenanceAnswer || provenanceAnswer(task.original, receipt)?.response || 'No verified research receipt is available.';
+    return `${execution} This is a source-provenance question. Answer from the deterministic receipt, not model memory. The correct answer is: ${exact}`;
+  }
+
   const hootsuiteTruth = task.kind === 'content-trends' && requested.has('hootsuite') && !completed.has('hootsuite')
     ? ' Hootsuite did NOT complete. Briefly disclose that the Hootsuite signal was unavailable and that the themes are based on the completed broader web evidence; do not imply Hootsuite validation.'
     : '';
