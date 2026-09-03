@@ -8,6 +8,7 @@ const { readZipEntry } = require('./archive');
 const ROOT = path.join(config.dataDir, 'files');
 const INDEX = path.join(ROOT, 'index.json');
 const MAX_FILE_BYTES = Math.max(1024 * 1024, Number(process.env.ULTRON_M3_FILE_MAX_BYTES || 24 * 1024 * 1024));
+const MAX_GENERATED_BYTES = Math.max(MAX_FILE_BYTES, Number(process.env.ULTRON_M3_GENERATED_FILE_MAX_BYTES || 128 * 1024 * 1024));
 const MAX_CONTEXT_CHARS = Math.max(4000, Number(process.env.ULTRON_M3_FILE_CONTEXT_CHARS || 32000));
 
 fs.mkdirSync(ROOT, { recursive: true });
@@ -55,10 +56,12 @@ function makeId(prefix = 'file') {
 function saveBuffer(buffer, options = {}) {
   const data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || '');
   if (!data.length) throw new Error('File is empty.');
-  if (data.length > MAX_FILE_BYTES) throw new Error(`File exceeds the ${Math.round(MAX_FILE_BYTES / 1024 / 1024)} MB local attachment limit.`);
+  const kind = options.kind || 'upload';
+  const limit = kind === 'generated' ? MAX_GENERATED_BYTES : MAX_FILE_BYTES;
+  if (data.length > limit) throw new Error(`File exceeds the ${Math.round(limit / 1024 / 1024)} MB ${kind === 'generated' ? 'generated artifact' : 'local attachment'} limit.`);
   const name = safeName(options.name || 'attachment');
   const mime = String(options.mime || mimeFromName(name)).trim() || 'application/octet-stream';
-  const id = makeId(options.kind === 'generated' ? 'artifact' : 'file');
+  const id = makeId(kind === 'generated' ? 'artifact' : 'file');
   const ext = extensionForMime(mime, name);
   const diskName = `${id}${ext}`;
   const filePath = path.join(ROOT, diskName);
@@ -69,7 +72,7 @@ function saveBuffer(buffer, options = {}) {
     mime,
     size: data.length,
     diskName,
-    kind: options.kind || 'upload',
+    kind,
     createdAt: new Date().toISOString(),
     lastUsedAt: new Date().toISOString(),
     source: options.source || 'local',
@@ -158,7 +161,7 @@ function readLocal(id, options = {}) {
 }
 
 function status() {
-  return { root: ROOT, maxFileBytes: MAX_FILE_BYTES, maxContextChars: MAX_CONTEXT_CHARS, count: state().files.length };
+  return { root: ROOT, maxFileBytes: MAX_FILE_BYTES, maxGeneratedBytes: MAX_GENERATED_BYTES, maxContextChars: MAX_CONTEXT_CHARS, count: state().files.length };
 }
 
-module.exports = { ROOT, MAX_FILE_BYTES, MAX_CONTEXT_CHARS, safeName, mimeFromName, saveBuffer, saveBase64, get, touch, list, readLocal, status };
+module.exports = { ROOT, MAX_FILE_BYTES, MAX_GENERATED_BYTES, MAX_CONTEXT_CHARS, safeName, mimeFromName, saveBuffer, saveBase64, get, touch, list, readLocal, status };
