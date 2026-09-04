@@ -10,6 +10,7 @@
     "check:flow": "node --env-file=../.env scripts/flow-selftest.js",
     "check:reliability": "node --env-file=../.env scripts/reliability-selftest.js",
     "check:operator": "node --env-file=../.env scripts/operator-selftest.js",
+    "check:instagram": "node --env-file=../.env scripts/instagram-test.js",
     "check:forge": "node --env-file=../.env scripts/forge-selftest.js",
     "check:forge:live": "node --env-file=../.env scripts/forge-live-test.js",
     "check:research": "node --env-file=../.env scripts/research-selftest.js",
