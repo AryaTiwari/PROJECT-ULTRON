@@ -17,6 +17,25 @@ const plan = compiler.fallback(objective);
 assert(plan.jobs.length >= 6, 'Forge fallback must produce a multi-step mission DAG.');
 assert(plan.jobs.some((job) => job.worker === 'coding'), 'Forge mission must contain a coding worker.');
 assert(plan.jobs.some((job) => job.worker === 'review'), 'Forge mission must contain an independent review worker.');
+assert(plan.jobs.some((job) => !(job.dependsOn || []).length), 'Forge mission must always contain at least one runnable root job.');
+
+const cyclicPlan = compiler.validateGraph({
+  jobs: [
+    { id: 'a', title: 'A', objective: 'A', kind: 'architect', worker: 'reasoning', dependsOn: ['c'] },
+    { id: 'b', title: 'B', objective: 'B', kind: 'backend', worker: 'coding', dependsOn: ['a'] },
+    { id: 'c', title: 'C', objective: 'C', kind: 'qa', worker: 'review', dependsOn: ['b'] },
+  ],
+}, 'cycle regression');
+assert(cyclicPlan.jobs.some((job) => !(job.dependsOn || []).length), 'Forge validator must repair a graph with no runnable root.');
+let cyclePending = new Set(cyclicPlan.jobs.map((job) => job.id));
+const cycleResolved = new Set();
+while (cyclePending.size) {
+  const runnable = cyclicPlan.jobs.filter((job) => cyclePending.has(job.id) && (job.dependsOn || []).every((dep) => cycleResolved.has(dep)));
+  assert(runnable.length > 0, 'Forge validator must break dependency cycles instead of persisting a deadlocked mission.');
+  for (const job of runnable) { cyclePending.delete(job.id); cycleResolved.add(job.id); }
+}
+assert(cycleResolved.size === cyclicPlan.jobs.length, 'Every repaired Forge job must be topologically executable.');
+
 assert(supervisor.shouldUse('Ultron, build me a complete automated CRM system'), 'Large build requests must route to Forge.');
 assert(!supervisor.shouldUse('What is a CRM?'), 'Ordinary questions must not route to Forge.');
 assert(supervisor.externalSideEffect('deploy to production'), 'Production deployment must be approval-gated.');
@@ -86,4 +105,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
