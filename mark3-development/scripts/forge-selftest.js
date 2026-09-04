@@ -44,6 +44,7 @@ assert(modelStatus.localLlmAllowed === false, 'Forge must not allow local LLM in
 assert(modelStatus.paidFallbackAllowed === false, 'Forge must not allow paid fallback.');
 assert(modelStatus.secretRedaction === true, 'Forge cloud inference must report secret redaction enabled.');
 assert(modelStatus.externalWorkerBudgeting === true, 'External agent harnesses must be budgeted before they can consume free inference.');
+assert(modelStatus.asyncPolling === true && modelStatus.pollIntervalMs >= 250, 'Forge must support NVIDIA asynchronous 202 polling.');
 assert(modelStatus.roleModels.code_build[0] === 'poolside/laguna-xs-2.1', 'Laguna XS 2.1 must be the primary coding specialist.');
 const gooseStatus = goose.status();
 assert(gooseStatus.defaultWorker === false, 'Goose must remain optional rather than becoming a hard Forge dependency.');
@@ -85,4 +86,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
