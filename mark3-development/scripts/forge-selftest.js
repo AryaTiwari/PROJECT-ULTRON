@@ -22,8 +22,11 @@ assert(!supervisor.shouldUse('What is a CRM?'), 'Ordinary questions must not rou
 assert(supervisor.externalSideEffect('deploy to production'), 'Production deployment must be approval-gated.');
 assert(supervisor.isApprovalRequest('Approve Forge') === true, 'Natural Forge approval must target the latest mission.');
 
-const automationSpec = automation.create('Whenever a lead submits a form, qualify it, store it in Supabase and prepare outreach');
+const naturalAutomation = 'Whenever a lead submits a form, qualify it, store it in Supabase and prepare outreach';
+const automationSpec = automation.create(naturalAutomation);
 assert(automation.isAutomationObjective(automationSpec.objective), 'Automation objectives must be detected.');
+assert(automation.triggerFrom(naturalAutomation) === 'webhook', 'Natural form-submission automation must classify as a webhook trigger.');
+assert(!automation.isAutomationObjective('When is the next meeting?'), 'Ordinary when-questions must not be misclassified as automations.');
 assert(automationSpec.delivery.executableProgram === true && automationSpec.delivery.restartSafe === true, 'Automation missions must require executable restart-safe programs.');
 assert(automationSpec.contracts.idempotencyKey === true && automationSpec.contracts.persistentCheckpoint === true, 'Automation missions must require idempotency and checkpoints.');
 assert(automationSpec.contracts.externalSideEffectsApproval === true, 'Automation missions must gate external side effects.');
@@ -80,4 +83,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
