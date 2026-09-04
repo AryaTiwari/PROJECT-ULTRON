@@ -20,14 +20,22 @@ function shouldUse(message) {
   return action && (scale || delegation);
 }
 function isStatusRequest(message) {
-  return /\b(?:forge|mission)\b.*\b(?:status|progress|pending|running|resume|what.*doing)\b/i.test(String(message || ''));
+  return /\b(?:forge|mission)\b.*\b(?:status|progress|pending|running|what.*doing)\b/i.test(String(message || ''));
 }
 function isApprovalRequest(message) {
   const match = String(message || '').match(/\bapprove\s+(?:mission\s+)?([a-zA-Z0-9._-]+)/i);
   return match ? match[1] : null;
 }
+function isResumeRequest(message) {
+  const text = String(message || '').trim();
+  const match = text.match(/\bresume\s+(?:forge|mission)(?:\s+([a-zA-Z0-9._-]+))?/i);
+  return match ? (match[1] || true) : null;
+}
 function externalSideEffect(text) {
   return /\b(?:deploy\s+(?:to\s+)?production|publish\s+publicly|send\s+(?:emails?|messages?|dms?)|mass\s*(?:email|message|dm)|delete\s+(?:production|database)|drop\s+(?:table|database)|purchase|pay|charge|spend\s+money|transfer\s+money)\b/i.test(String(text || ''));
+}
+function inferenceResourceError(error) {
+  return /^FORGE_(?:BUDGET|NO_NVIDIA_KEY|NVIDIA_UNAVAILABLE)/.test(String(error?.message || error || ''));
 }
 function initWorkspace(workspace) {
   fs.mkdirSync(workspace, { recursive: true });
@@ -120,7 +128,7 @@ async function reviewWorker(mission, job, agent, jobs) {
 }
 async function runJob(mission, jobs, job) {
   const agent = agentFor(mission.id, job.id) || factory.create(job, mission);
-  if (externalSideEffect(job.objective)) {
+  if (externalSideEffect(job.objective) && !job.approvedAt) {
     saveJob(mission.id, jobs, job, { status: 'blocked_approval', blockedReason: 'external-side-effect', agentId: agent.id });
     return { blocked: true };
   }
@@ -133,7 +141,11 @@ async function runJob(mission, jobs, job) {
     saveJob(mission.id, jobs, job, { status: 'completed', output, completedAt: new Date().toISOString() });
     return { ok: true, output };
   } catch (error) {
-    const retry = Number(job.attempts || 0) < MAX_ATTEMPTS && !/^FORGE_(?:BUDGET|NO_NVIDIA_KEY)/.test(String(error.message || ''));
+    if (inferenceResourceError(error)) {
+      saveJob(mission.id, jobs, job, { status: 'paused', error: error.message, pausedReason: 'free-inference-unavailable' });
+      return { ok: false, paused: true, error };
+    }
+    const retry = Number(job.attempts || 0) < MAX_ATTEMPTS;
     saveJob(mission.id, jobs, job, { status: retry ? 'pending' : 'failed', error: error.message });
     return { ok: false, retry, error };
   }
@@ -150,12 +162,18 @@ async function execute(missionId) {
     let jobs = store.jobs(missionId);
     for (const job of jobs) if (job.status === 'running') job.status = 'pending';
     store.saveJobs(missionId, jobs);
-    mission = updateProgress(missionId, jobs, { status: 'running', phase: 'execute' });
+    mission = updateProgress(missionId, jobs, { status: 'running', phase: 'execute', error: null });
     emit('forge_mission_started', { missionId, objective: mission.objective, jobs: jobs.length });
 
     let idleRounds = 0;
     while (true) {
       jobs = store.jobs(missionId);
+      const paused = jobs.filter((job) => job.status === 'paused');
+      if (paused.length) {
+        mission = updateProgress(missionId, jobs, { status: 'paused_inference', phase: 'checkpoint', error: paused[0].error || null });
+        store.event(missionId, 'mission_paused', { reason: 'free-inference-unavailable', jobs: paused.map((job) => job.id) });
+        return mission;
+      }
       const blocked = jobs.filter((job) => job.status === 'blocked_approval');
       if (blocked.length) {
         mission = updateProgress(missionId, jobs, { status: 'awaiting_approval', phase: 'approval' });
@@ -182,9 +200,11 @@ async function execute(missionId) {
     jobs = store.jobs(missionId);
     const failed = jobs.filter((job) => ['failed', 'blocked'].includes(job.status));
     const completed = jobs.filter((job) => job.status === 'completed');
-    const status = failed.length ? 'partial' : completed.length === jobs.length ? 'completed' : 'partial';
+    const finalReviews = jobs.filter((job) => job.status === 'completed' && ['critic', 'qa', 'security'].includes(String(job.kind || '').toLowerCase()));
+    const unresolvedFinalReview = finalReviews.length && ['NEEDS_FIXES', 'BLOCKED', 'UNRESOLVED'].includes(String(finalReviews[finalReviews.length - 1]?.output?.verdict || ''));
+    const status = failed.length || unresolvedFinalReview ? 'partial' : completed.length === jobs.length ? 'completed' : 'partial';
     mission = updateProgress(missionId, jobs, { status, phase: 'done', completedAt: status === 'completed' ? new Date().toISOString() : null });
-    store.event(missionId, 'mission_finished', { status, completed: completed.length, failed: failed.length });
+    store.event(missionId, 'mission_finished', { status, completed: completed.length, failed: failed.length, unresolvedFinalReview });
     emit('forge_mission_finished', { missionId, status, progress: mission.progress });
     return mission;
   })().finally(() => active.delete(missionId));
@@ -242,10 +262,26 @@ function approve(missionId) {
   setImmediate(() => execute(missionId).catch(() => {}));
   return { missionId, approvedJobs: blocked.map((job) => job.id) };
 }
+function resume(missionId = null) {
+  const mission = missionId ? store.load(missionId) : store.list(1)[0];
+  if (!mission) throw new Error('No Forge mission is available to resume.');
+  const jobs = store.jobs(mission.id);
+  const paused = jobs.filter((job) => job.status === 'paused');
+  for (const job of paused) {
+    job.status = 'pending';
+    job.error = null;
+    job.pausedReason = null;
+  }
+  store.saveJobs(mission.id, jobs);
+  store.checkpoint(mission.id, { status: 'ready', phase: 'execute', error: null });
+  store.event(mission.id, 'mission_resumed', { jobs: paused.map((job) => job.id) });
+  setImmediate(() => execute(mission.id).catch(() => {}));
+  return { missionId: mission.id, resumedJobs: paused.map((job) => job.id) };
+}
 function recover() {
-  const candidates = store.list(30).filter((mission) => ['running', 'compiling'].includes(mission.status));
+  const candidates = store.list(30).filter((mission) => ['running', 'compiling', 'ready'].includes(mission.status));
   for (const mission of candidates) setImmediate(() => execute(mission.id).catch(() => {}));
   return candidates.map((mission) => mission.id);
 }
 
-module.exports = { shouldUse, isStatusRequest, isApprovalRequest, externalSideEffect, createMission, start, execute, status, approve, recover, readyJobs };
+module.exports = { shouldUse, isStatusRequest, isApprovalRequest, isResumeRequest, externalSideEffect, inferenceResourceError, createMission, start, execute, status, approve, resume, recover, readyJobs };
