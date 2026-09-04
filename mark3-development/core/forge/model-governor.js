@@ -7,37 +7,17 @@ const MAX_CALLS = Math.max(10, Number(process.env.ULTRON_M3_FORGE_MAX_CALLS_PER_
 const MAX_TOKENS = Math.max(50000, Number(process.env.ULTRON_M3_FORGE_MAX_TOKENS_PER_MISSION || 900000));
 
 const ROLE_MODELS = {
-  code_build: [
-    'poolside/laguna-xs-2.1',
-    'deepseek-ai/deepseek-v4-pro-0813',
-    'z-ai/glm-5.2',
-  ],
-  code_review: [
-    'z-ai/glm-5.2',
-    'deepseek-ai/deepseek-v4-pro-0813',
-    'poolside/laguna-xs-2.1',
-  ],
-  architecture: [
-    'z-ai/glm-5.2',
-    'poolside/laguna-xs-2.1',
-    'deepseek-ai/deepseek-v4-pro-0813',
-  ],
-  mission_compile: [
-    'poolside/laguna-xs-2.1',
-    'z-ai/glm-5.2',
-  ],
-  automation: [
-    'poolside/laguna-xs-2.1',
-    'z-ai/glm-5.2',
-  ],
+  code_build: ['poolside/laguna-xs-2.1', 'deepseek-ai/deepseek-v4-pro-0813', 'z-ai/glm-5.2'],
+  code_review: ['z-ai/glm-5.2', 'deepseek-ai/deepseek-v4-pro-0813', 'poolside/laguna-xs-2.1'],
+  architecture: ['z-ai/glm-5.2', 'poolside/laguna-xs-2.1', 'deepseek-ai/deepseek-v4-pro-0813'],
+  mission_compile: ['poolside/laguna-xs-2.1', 'z-ai/glm-5.2'],
+  automation: ['poolside/laguna-xs-2.1', 'z-ai/glm-5.2'],
 };
 
 let cursor = 0;
 const cooldowns = new Map();
 
-function csv(name) {
-  return String(process.env[name] || '').split(',').map((value) => value.trim()).filter(Boolean);
-}
+function csv(name) { return String(process.env[name] || '').split(',').map((value) => value.trim()).filter(Boolean); }
 function configuredModels(role) {
   const override = csv(`ULTRON_M3_FORGE_${String(role || '').toUpperCase()}_MODELS`);
   return override.length ? override : ROLE_MODELS[role] || ROLE_MODELS.code_build;
@@ -86,24 +66,61 @@ function assertBudget(missionId) {
   if (current.calls >= MAX_CALLS) throw new Error(`FORGE_BUDGET: mission reached ${MAX_CALLS} model calls.`);
   if (current.totalTokens >= MAX_TOKENS) throw new Error(`FORGE_BUDGET: mission reached ${MAX_TOKENS} tokens.`);
 }
-function recordUsage(missionId, model, slot, delta) {
+function applyUsage(missionId, model, slot, delta, calls = 1) {
   if (!missionId) return;
   const current = store.usage(missionId);
+  const addCalls = Math.max(0, Number(calls || 0));
+  const inputTokens = Math.max(0, Number(delta?.inputTokens || 0));
+  const outputTokens = Math.max(0, Number(delta?.outputTokens || 0));
+  const totalTokens = Math.max(0, Number(delta?.totalTokens || inputTokens + outputTokens));
+  if (Number(current.calls || 0) + addCalls > MAX_CALLS) throw new Error(`FORGE_BUDGET: projected usage exceeds ${MAX_CALLS} model calls.`);
+  if (Number(current.totalTokens || 0) + totalTokens > MAX_TOKENS) throw new Error(`FORGE_BUDGET: projected usage exceeds ${MAX_TOKENS} tokens.`);
   const next = {
     ...current,
-    calls: Number(current.calls || 0) + 1,
-    inputTokens: Number(current.inputTokens || 0) + delta.inputTokens,
-    outputTokens: Number(current.outputTokens || 0) + delta.outputTokens,
-    totalTokens: Number(current.totalTokens || 0) + delta.totalTokens,
-    byModel: { ...(current.byModel || {}) },
-    byKeySlot: { ...(current.byKeySlot || {}) },
+    calls: Number(current.calls || 0) + addCalls,
+    inputTokens: Number(current.inputTokens || 0) + inputTokens,
+    outputTokens: Number(current.outputTokens || 0) + outputTokens,
+    totalTokens: Number(current.totalTokens || 0) + totalTokens,
+    byModel: { ...(current.byModel || {}) }, byKeySlot: { ...(current.byKeySlot || {}) },
   };
   next.byModel[model] = {
-    calls: Number(next.byModel[model]?.calls || 0) + 1,
-    tokens: Number(next.byModel[model]?.tokens || 0) + delta.totalTokens,
+    calls: Number(next.byModel[model]?.calls || 0) + addCalls,
+    tokens: Number(next.byModel[model]?.tokens || 0) + totalTokens,
   };
-  next.byKeySlot[slot] = Number(next.byKeySlot[slot] || 0) + 1;
+  next.byKeySlot[slot] = Number(next.byKeySlot[slot] || 0) + addCalls;
   store.saveUsage(missionId, next);
+}
+function recordUsage(missionId, model, slot, delta) { applyUsage(missionId, model, slot, delta, 1); }
+function reserveExternalUsage(missionId, model, slot, estimate = {}) {
+  const calls = Math.max(1, Number(estimate.calls || 1));
+  applyUsage(missionId, model, slot, estimate, calls);
+  if (missionId) store.event(missionId, 'external_inference_budget_reserved', { model, slot, calls, totalTokens: Number(estimate.totalTokens || 0) });
+  return { calls, totalTokens: Number(estimate.totalTokens || 0) };
+}
+async function requestModel(model, row, safeMessages, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const body = {
+      model, messages: safeMessages, temperature: options.temperature,
+      max_tokens: options.maxTokens, stream: false,
+    };
+    if (options.json) body.response_format = { type: 'json_object' };
+    const response = await fetch(`${NVIDIA_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${row.value}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body), signal: controller.signal,
+    });
+    const raw = await response.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+    if (!response.ok) {
+      const error = new Error(`NVIDIA ${model} HTTP ${response.status}: ${raw.slice(0, 600)}`);
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  } finally { clearTimeout(timer); }
 }
 async function nvidiaChat({ missionId, role = 'code_build', messages, temperature = 0.2, maxTokens = 8192, json = false }) {
   assertBudget(missionId);
@@ -116,30 +133,14 @@ async function nvidiaChat({ missionId, role = 'code_build', messages, temperatur
 
   for (const model of models) {
     for (const row of keys) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
       try {
-        const body = {
-          model,
-          messages: safeMessages,
-          temperature,
-          max_tokens: maxTokens,
-          stream: false,
-        };
-        if (json) body.response_format = { type: 'json_object' };
-        const response = await fetch(`${NVIDIA_BASE}/chat/completions`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${row.value}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-        const raw = await response.text();
-        let data = {};
-        try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
-        if (!response.ok) {
-          const error = new Error(`NVIDIA ${model} HTTP ${response.status}: ${raw.slice(0, 600)}`);
-          error.status = response.status;
-          throw error;
+        let data;
+        try {
+          data = await requestModel(model, row, safeMessages, { temperature, maxTokens, json });
+        } catch (firstError) {
+          // Some otherwise-compatible free endpoints reject OpenAI response_format.
+          if (json && Number(firstError?.status || 0) === 400) data = await requestModel(model, row, safeMessages, { temperature, maxTokens, json: false });
+          else throw firstError;
         }
         const text = parseText(data);
         if (!text) throw new Error(`NVIDIA ${model} returned no text.`);
@@ -150,8 +151,6 @@ async function nvidiaChat({ missionId, role = 'code_build', messages, temperatur
       } catch (error) {
         cooldown(row, error);
         failures.push(`${model}/${row.slot}: ${error.message}`);
-      } finally {
-        clearTimeout(timer);
       }
     }
   }
@@ -159,17 +158,12 @@ async function nvidiaChat({ missionId, role = 'code_build', messages, temperatur
 }
 function status() {
   return {
-    zeroCostOnly: true,
-    localLlmAllowed: false,
-    paidFallbackAllowed: false,
-    provider: 'nvidia',
-    endpoint: NVIDIA_BASE,
-    configuredKeySlots: keyRows().map((row) => row.slot),
-    roleModels: ROLE_MODELS,
-    maxCallsPerMission: MAX_CALLS,
-    maxTokensPerMission: MAX_TOKENS,
-    secretRedaction: true,
+    zeroCostOnly: true, localLlmAllowed: false, paidFallbackAllowed: false,
+    provider: 'nvidia', endpoint: NVIDIA_BASE,
+    configuredKeySlots: keyRows().map((row) => row.slot), roleModels: ROLE_MODELS,
+    maxCallsPerMission: MAX_CALLS, maxTokensPerMission: MAX_TOKENS,
+    secretRedaction: true, externalWorkerBudgeting: true,
   };
 }
 
-module.exports = { ROLE_MODELS, configuredModels, keyRows, nvidiaChat, status, assertBudget };
+module.exports = { ROLE_MODELS, configuredModels, keyRows, nvidiaChat, status, assertBudget, reserveExternalUsage };
