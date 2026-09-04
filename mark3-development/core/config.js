@@ -14,12 +14,16 @@ process.env.ULTRON_MODEL_PROVIDER = 'omniroute';
 process.env.ULTRON_M3_DISABLE_OPENCODE = '1';
 process.env.ULTRON_DISABLE_OPENCODE = '1';
 process.env.ULTRON_ENABLE_OPENCODE = '0';
+// Model League/Arena are diagnostics only. Normal assistant routing must stay simple,
+// deterministic and provider-health driven unless explicitly re-enabled by a developer.
+if (process.env.ULTRON_M3_LEAGUE_ENABLED == null) process.env.ULTRON_M3_LEAGUE_ENABLED = '0';
+if (process.env.ULTRON_M3_LEAGUE_ARENA_ENABLED == null) process.env.ULTRON_M3_LEAGUE_ARENA_ENABLED = '0';
 delete process.env.ULTRON_DIRECT_DEFAULT_MODEL;
 delete process.env.OPENCODE_API_KEY;
 delete process.env.OPENCODE_GO_API_KEY;
 
 // Patch only Mark 3's in-process shared OmniRoute chat calls. Catalog/health reads stay
-// passive, so Model League does not wake the fallback simply by inspecting models.
+// passive, so diagnostics never wake the fallback simply by inspecting models.
 require('./omniroute-lazy-hooks');
 
 function anchorProjectPathEnv(name, fallback) {
@@ -75,6 +79,9 @@ module.exports = {
   commitmentsPath: path.join(DATA, 'commitments.json'),
   decisionsPath: path.join(DATA, 'decisions.json'),
   projectsPath: path.join(DATA, 'projects.json'),
+  tasksPath: path.join(DATA, 'tasks.json'),
+  goalsPath: path.join(DATA, 'goals.json'),
+  executionsPath: path.join(DATA, 'executions.json'),
   conversationPath: path.join(DATA, 'conversation.jsonl'),
   performancePath: path.join(DATA, 'model-performance.jsonl'),
   eventsPath: path.join(DATA, 'events.jsonl'),
