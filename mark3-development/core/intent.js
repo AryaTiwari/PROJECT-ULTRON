@@ -23,12 +23,19 @@ function priorityFromText(message) {
 function cleanTitle(value) {
   return String(value || '').replace(/\b(?:today|tomorrow|this week|by the end of the week)\b/gi, '').replace(/[.!?]+$/, '').replace(/\s+/g, ' ').trim();
 }
+function stripAssistantInvocation(message) {
+  return String(message || '')
+    .trim()
+    .replace(/^(?:(?:hello|hey|hi|good\s+(?:morning|afternoon|evening))[,!\s-]*)?/i, '')
+    .replace(/^ultron\b[\s,:;.!-]*/i, '')
+    .trim();
+}
 function extractProject(message) {
   const match = String(message || '').match(/\b(?:for|on|in|with)\s+(Elevate(?: OS)?|Project ULTRON|ULTRON(?: Mark 3)?|BSc Physics|Physics|CU)\b/i);
   return match ? match[1] : null;
 }
 function extractWorkspaceMutation(message) {
-  const text = String(message || '').trim();
+  const text = stripAssistantInvocation(message);
   if (!text) return null;
   const project = extractProject(text);
   const priority = priorityFromText(text);
@@ -56,13 +63,6 @@ function extractCommitment(message) {
   return mutation?.type === 'create_commitment'
     ? { title: mutation.title, priority: mutation.priority, dueAt: mutation.dueAt, project: mutation.project }
     : null;
-}
-function stripAssistantInvocation(message) {
-  return String(message || '')
-    .trim()
-    .replace(/^(?:(?:hello|hey|hi|good\s+(?:morning|afternoon|evening))[,!\s-]*)?/i, '')
-    .replace(/^ultron\b[\s,:;.!-]*/i, '')
-    .trim();
 }
 function isStateBriefRequest(message) {
   const text = stripAssistantInvocation(message);
