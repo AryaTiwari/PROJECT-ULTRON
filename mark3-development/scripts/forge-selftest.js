@@ -55,6 +55,8 @@ assert(codingInference.allowGeneralFallback() === false, 'General-purpose coding
 assert(codingInference.missionIdFromMessages([{ role: 'system', content: 'workspace=C:\\Users\\arya\\Project-Ultron\\.ultron\\forge\\workspaces\\20260904-test-ab12' }]) === '20260904-test-ab12', 'Coding Brain must recover the Forge mission id from its isolated workspace for token accounting.');
 const redacted = redactor.redactText('NVIDIA_API_KEY=nvapi-super-secret-value\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz');
 assert(!redacted.includes('super-secret-value') && !redacted.includes('abcdefghijklmnopqrstuvwxyz'), 'Forge must redact credentials before cloud inference.');
+const redactedStructured = redactor.redactText('{"apiKey":"json-super-secret-value","client_secret":"client-secret-value"}\nAuthorization: Basic YmFzZTY0LXNlY3JldC12YWx1ZQ==');
+assert(!redactedStructured.includes('json-super-secret-value') && !redactedStructured.includes('client-secret-value') && !redactedStructured.includes('YmFzZTY0LXNlY3JldC12YWx1ZQ=='), 'Forge must redact quoted JSON secrets and Basic authorization credentials.');
 
 const mission = store.create('Forge offline self-test', { source: 'selftest' });
 const missionDir = path.join(store.MISSIONS, mission.id);
