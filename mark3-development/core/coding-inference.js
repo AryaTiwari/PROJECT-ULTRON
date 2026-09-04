@@ -1,6 +1,7 @@
 const integrations = require('./integrations');
 const modelLeague = require('./model-league');
 const models = require('./model-intelligence');
+const forgeGovernor = require('./forge/model-governor');
 
 function roleTaskType(role) {
   const value = String(role || '').toLowerCase();
@@ -8,12 +9,20 @@ function roleTaskType(role) {
   if (['reviewer', 'planner', 'investigator', 'scope-planner', 'architect', 'dx-planner'].includes(value)) return 'planning';
   return 'coding';
 }
-
+function forgeRole(role) {
+  const value = String(role || '').toLowerCase();
+  if (value === 'editor') return 'code_build';
+  if (value === 'reviewer') return 'code_review';
+  if (['planner', 'investigator', 'scope-planner', 'architect', 'dx-planner'].includes(value)) return 'architecture';
+  return 'code_build';
+}
+function allowGeneralFallback() {
+  return /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_CODING_ALLOW_GENERAL_FALLBACK || '0'));
+}
 function nativeModelForTask(taskType) {
   if (taskType === 'coding') return 'auto/best-coding';
   return 'auto/best-reasoning';
 }
-
 function textFromResponse(data) {
   const direct = data?.content ?? data?.response ?? data?.text ?? data?.output_text
     ?? data?.choices?.[0]?.message?.content
@@ -25,7 +34,6 @@ function textFromResponse(data) {
   if (direct && typeof direct === 'object') return String(direct.text || direct.content || direct.value || '').trim();
   return '';
 }
-
 function sanitizeMessages(messages) {
   const rows = Array.isArray(messages) ? messages.slice(-10) : [];
   let remaining = 190000;
@@ -41,10 +49,37 @@ function sanitizeMessages(messages) {
   if (!result.length) throw new Error('Coding inference requires messages.');
   return result;
 }
-
-async function infer(role, messages) {
+async function inferWithForge(role, safeMessages) {
+  const started = Date.now();
   const taskType = roleTaskType(role);
-  const safeMessages = sanitizeMessages(messages);
+  const selectedRole = forgeRole(role);
+  try {
+    const result = await forgeGovernor.nvidiaChat({
+      role: selectedRole,
+      messages: safeMessages,
+      temperature: selectedRole === 'code_build' ? 0.15 : 0.1,
+      maxTokens: selectedRole === 'code_build' ? 12000 : 8000,
+    });
+    models.record({ provider: 'nvidia', model: result.model, taskType, success: true, latencyMs: Date.now() - started });
+    return {
+      ok: true,
+      role,
+      taskType,
+      text: result.text,
+      model: result.model,
+      provider: 'nvidia',
+      exact: true,
+      candidates: forgeGovernor.configuredModels(selectedRole),
+      forge: true,
+      usage: result.usage,
+    };
+  } catch (error) {
+    models.record({ provider: 'nvidia', model: forgeGovernor.configuredModels(selectedRole)[0], taskType, success: false, latencyMs: Date.now() - started, reason: error.message });
+    throw error;
+  }
+}
+async function inferGeneralFallback(role, safeMessages) {
+  const taskType = roleTaskType(role);
   const recommendation = modelLeague.recommend(taskType);
   const native = nativeModelForTask(taskType);
   const candidates = recommendation.primary
@@ -64,23 +99,27 @@ async function infer(role, messages) {
       if (!text) throw new Error('Model returned no visible content.');
       const observedModel = data?.model || data?.raw?.model || candidate;
       const observedProvider = data?.provider || data?.raw?.provider || integrations.providerFromModel(observedModel) || provider;
-      if (exact) {
-        modelLeague.recordTrial({ model: candidate, provider, taskType, success: true, latencyMs: Date.now() - started, tournament: false });
-        modelLeague.promote(taskType);
-      }
       models.record({ provider: observedProvider, model: observedModel, taskType, success: true, latencyMs: Date.now() - started });
-      return { ok: true, role, taskType, text, model: observedModel, provider: observedProvider, exact, candidates };
+      return { ok: true, role, taskType, text, model: observedModel, provider: observedProvider, exact, candidates, forge: false };
     } catch (error) {
       const latencyMs = Date.now() - started;
       failures.push({ model: candidate, provider, error: error.message });
       models.record({ provider, model: candidate, taskType, success: false, latencyMs, reason: error.message });
-      if (exact) modelLeague.recordTrial({ model: candidate, provider, taskType, success: false, latencyMs, error: error.message, tournament: false });
     }
   }
-
-  const error = new Error(`Coding inference failed for role ${role}.`);
+  const error = new Error(`General coding fallback failed for role ${role}.`);
   error.failures = failures;
   throw error;
 }
+async function infer(role, messages) {
+  const safeMessages = sanitizeMessages(messages);
+  try {
+    return await inferWithForge(role, safeMessages);
+  } catch (forgeError) {
+    if (!allowGeneralFallback()) throw forgeError;
+    const fallback = await inferGeneralFallback(role, safeMessages);
+    return { ...fallback, forgeFailure: forgeError.message };
+  }
+}
 
-module.exports = { infer, roleTaskType, textFromResponse, sanitizeMessages };
+module.exports = { infer, inferWithForge, inferGeneralFallback, roleTaskType, forgeRole, textFromResponse, sanitizeMessages, allowGeneralFallback };
