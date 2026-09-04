@@ -6,7 +6,10 @@ const { emit } = require('./events');
 function isSelfRepositoryStatusIntent(text) {
   const value = String(text || '').toLowerCase().replace(/get\s+hub/g, 'github');
   const self = /\b(?:your|your own|own|ultron(?:'s)?|yourself|self)\b/.test(value);
-  const repo = /\b(?:github|repo|repository|codebase|source|branch)\b/.test(value);
+  // Do not treat bare business words like "source" as repository language. That caused
+  // prompts such as "lead source" + "change history" to hijack large Forge missions.
+  const repo = /\b(?:github|repo|repository|codebase|branch)\b/.test(value)
+    || /\bsource\s+code\b/.test(value);
   const status = /\b(?:check|status|update|updated|latest|new|newer|version|commit|up[ -]?to[ -]?date|changes?)\b/.test(value);
   return self && repo && status;
 }
@@ -64,7 +67,7 @@ function repositoryResponse(status) {
     return `I checked my GitHub. There isn’t a newer remote update; this local checkout is actually ahead of ${status.branch}. GitHub is on ${shortSha(status.remoteHead)}, while this machine is on ${shortSha(status.localHead)}.${dirty} What’s your next command?`;
   }
   if (status.relationship === 'diverged') {
-    return `I checked my GitHub. The local checkout and ${status.branch} have diverged, so there are remote changes to sync as well as local changes to preserve. Local is ${shortSha(status.localHead)} and GitHub is ${shortSha(status.remoteHead)}.${latest}${dirty} What’s your next command?`;
+    return `I checked my GitHub. The local checkout and ${status.branch} have diverged, so there are remote changes to sync as well as local changes to preserve. Local is ${shortSha(status.localHead)} and GitHub is on ${shortSha(status.remoteHead)}.${latest}${dirty} What’s your next command?`;
   }
   return `I checked my GitHub. The local commit ${shortSha(status.localHead)} differs from the ${status.branch} commit ${shortSha(status.remoteHead)}, but I couldn’t safely determine the direction of the difference.${latest}${dirty} What’s your next command?`;
 }
