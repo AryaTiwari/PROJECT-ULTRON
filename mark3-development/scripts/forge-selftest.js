@@ -6,6 +6,7 @@ const governor = require('../core/forge/model-governor');
 const supervisor = require('../core/forge/supervisor');
 const store = require('../core/forge/mission-store');
 const automation = require('../core/forge/automation-blueprint');
+const goose = require('../core/forge/goose-worker');
 const codingInference = require('../core/coding-inference');
 const redactor = require('../core/forge/redactor');
 
@@ -39,7 +40,12 @@ assert(modelStatus.zeroCostOnly === true, 'Forge must enforce zero-cost inferenc
 assert(modelStatus.localLlmAllowed === false, 'Forge must not allow local LLM inference.');
 assert(modelStatus.paidFallbackAllowed === false, 'Forge must not allow paid fallback.');
 assert(modelStatus.secretRedaction === true, 'Forge cloud inference must report secret redaction enabled.');
+assert(modelStatus.externalWorkerBudgeting === true, 'External agent harnesses must be budgeted before they can consume free inference.');
 assert(modelStatus.roleModels.code_build[0] === 'poolside/laguna-xs-2.1', 'Laguna XS 2.1 must be the primary coding specialist.');
+const gooseStatus = goose.status();
+assert(gooseStatus.defaultWorker === false, 'Goose must remain optional rather than becoming a hard Forge dependency.');
+assert(gooseStatus.separateGooseApiRequired === false && gooseStatus.requiredApi === 'NVIDIA_API_KEY', 'Goose must reuse Forge NVIDIA inference rather than require another paid API.');
+assert(gooseStatus.model === 'poolside/laguna-xs-2.1', 'Goose coding worker must target the same specialist coding model by default.');
 assert(codingInference.forgeRole('editor') === 'code_build', 'Coding Brain editor must route through the Forge code-build role.');
 assert(codingInference.forgeRole('reviewer') === 'code_review', 'Coding Brain reviewer must route through the Forge code-review role.');
 assert(codingInference.allowGeneralFallback() === false, 'General-purpose coding fallback must be disabled by default.');
@@ -74,4 +80,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost model policy, Laguna Coding Brain route, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
