@@ -16,6 +16,21 @@ function forgeRole(role) {
   if (['planner', 'investigator', 'scope-planner', 'architect', 'dx-planner'].includes(value)) return 'architecture';
   return 'code_build';
 }
+function expectsStructured(role) {
+  return ['editor', 'reviewer', 'planner', 'investigator', 'scope-planner', 'architect', 'dx-planner'].includes(String(role || '').toLowerCase());
+}
+function validJsonObject(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return false;
+  try {
+    const value = JSON.parse(raw.slice(start, end + 1));
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  } catch {
+    return false;
+  }
+}
 function allowGeneralFallback() {
   return /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_CODING_ALLOW_GENERAL_FALLBACK || '0'));
 }
@@ -60,13 +75,36 @@ async function inferWithForge(role, safeMessages, missionId = null) {
   const taskType = roleTaskType(role);
   const selectedRole = forgeRole(role);
   try {
-    const result = await forgeGovernor.nvidiaChat({
+    let result = await forgeGovernor.nvidiaChat({
       missionId,
       role: selectedRole,
       messages: safeMessages,
       temperature: selectedRole === 'code_build' ? 0.15 : 0.1,
       maxTokens: selectedRole === 'code_build' ? 12000 : 8000,
     });
+    let formatRepaired = false;
+    let firstModel = null;
+    if (expectsStructured(role) && !validJsonObject(result.text)) {
+      firstModel = result.model;
+      const repairMessages = [
+        ...safeMessages,
+        { role: 'assistant', content: String(result.text || '').slice(0, 24000) },
+        {
+          role: 'user',
+          content: 'FORMAT REPAIR ONLY. Your previous response violated the required JSON-only contract. Return exactly one valid JSON object matching the schema requested in the system message. No markdown fences, explanation, commentary, or text before/after the JSON. Preserve the intended substance; only repair structure.',
+        },
+      ];
+      result = await forgeGovernor.nvidiaChat({
+        missionId,
+        role: selectedRole,
+        messages: repairMessages,
+        temperature: 0,
+        maxTokens: selectedRole === 'code_build' ? 12000 : 8000,
+        json: true,
+      });
+      formatRepaired = true;
+      if (!validJsonObject(result.text)) throw new Error(`Structured coding response remained invalid JSON after one format-repair retry for role ${role}.`);
+    }
     models.record({ provider: 'nvidia', model: result.model, taskType, success: true, latencyMs: Date.now() - started });
     return {
       ok: true,
@@ -80,6 +118,8 @@ async function inferWithForge(role, safeMessages, missionId = null) {
       forge: true,
       missionId,
       usage: result.usage,
+      formatRepaired,
+      firstModel,
     };
   } catch (error) {
     models.record({ provider: 'nvidia', model: forgeGovernor.configuredModels(selectedRole)[0], taskType, success: false, latencyMs: Date.now() - started, reason: error.message });
@@ -131,4 +171,4 @@ async function infer(role, messages) {
   }
 }
 
-module.exports = { infer, inferWithForge, inferGeneralFallback, roleTaskType, forgeRole, missionIdFromMessages, textFromResponse, sanitizeMessages, allowGeneralFallback };
+module.exports = { infer, inferWithForge, inferGeneralFallback, roleTaskType, forgeRole, expectsStructured, validJsonObject, missionIdFromMessages, textFromResponse, sanitizeMessages, allowGeneralFallback };
