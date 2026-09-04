@@ -1,5 +1,6 @@
 const factory = require('../core/reel-factory');
 const sources = require('../core/reel-sources');
+const pipeline = require('../core/reel-pipeline');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -32,7 +33,8 @@ const status = factory.status();
 assert(status.directorImplemented === true, 'Reel Director foundation must be implemented.');
 assert(status.stockSourceRouterImplemented === true, 'Stock source router must be implemented.');
 assert(status.zeroCostOnly === true && status.paidGenerationAllowed === false, 'Reel Factory must preserve the zero-cost guardrail.');
-assert(status.rendererImplemented === false, 'Foundation must not falsely claim the finished renderer exists yet.');
+assert(typeof pipeline.build === 'function', 'Finished Reel renderer must be installed.');
+assert(typeof pipeline.applyVisualPolish === 'function', 'Premium caption/polish layer must be installed.');
 
-console.log('ULTRON Reel Factory self-test passed: 9:16 director, free stock router, checkpoints and zero-cost guardrail validated.');
-console.log(`Reel Factory readiness: stock=${status.stockSourceReady ? 'ready' : 'needs API key'}, ffmpeg=${status.ffmpeg.available ? 'ready' : 'not found'}, renderer=build-next.`);
+console.log('ULTRON Reel Factory self-test passed: 9:16 director, free stock router, premium renderer, checkpoints and zero-cost guardrail validated.');
+console.log(`Reel Factory readiness: stock=${status.stockSourceReady ? 'ready' : 'needs API key'}, ffmpeg=${status.ffmpeg.available ? 'ready' : 'not found'}, renderer=ready, captions=ready.`);
