@@ -10,6 +10,10 @@ const DIRECT_ENV_KEYS = [
   'NVIDIA_API_KEY', 'NVIDIA_API_KEY2', 'NVIDIA_NIM_API_KEY',
 ];
 
+function enabled() {
+  return /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_LEAGUE_ENABLED || '0'));
+}
+
 function directConfigured() {
   if (/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DIRECT_ENABLED || '1'))) return false;
   return DIRECT_ENV_KEYS.some((name) => String(process.env[name] || '').trim());
@@ -24,11 +28,7 @@ function directOnly(rows) {
 }
 
 function template() {
-  return {
-    version: VERSION,
-    tasks: {},
-    updatedAt: null,
-  };
+  return { version: VERSION, tasks: {}, updatedAt: null };
 }
 
 function load() {
@@ -51,14 +51,7 @@ function taskKey(taskType = 'general') {
 
 function taskState(state, taskType = 'general') {
   const key = taskKey(taskType);
-  state.tasks[key] ||= {
-    primary: null,
-    backups: [],
-    models: {},
-    rounds: 0,
-    lastTournamentAt: null,
-    lastPromotionAt: null,
-  };
+  state.tasks[key] ||= { primary: null, backups: [], models: {}, rounds: 0, lastTournamentAt: null, lastPromotionAt: null };
   state.tasks[key].models ||= {};
   state.tasks[key].backups ||= [];
   return state.tasks[key];
@@ -85,6 +78,7 @@ function utility(row = {}) {
 }
 
 function ranked(taskType = 'general') {
+  if (!enabled()) return [];
   const state = load();
   const task = taskState(state, taskType);
   return Object.entries(task.models)
@@ -95,27 +89,25 @@ function ranked(taskType = 'general') {
       || Number(a.averageLatencyMs || Infinity) - Number(b.averageLatencyMs || Infinity));
 }
 
+function disabledRecommendation(taskType = 'general') {
+  return { taskType: taskKey(taskType), primary: null, backups: [], ranked: [], rounds: 0, lastTournamentAt: null, transportPolicy: 'diagnostic-opt-in' };
+}
+
 function recommend(taskType = 'general') {
+  if (!enabled()) return disabledRecommendation(taskType);
   const state = load();
   const task = taskState(state, taskType);
   const allRanked = ranked(taskType);
   const list = directOnly(allRanked);
   const storedPrimary = task.primary && (!directConfigured() || isDirectModel(task.primary)) ? task.primary : null;
-  const primary = storedPrimary && list.some((row) => row.model === storedPrimary)
-    ? storedPrimary
-    : list[0]?.model || null;
+  const primary = storedPrimary && list.some((row) => row.model === storedPrimary) ? storedPrimary : list[0]?.model || null;
   const backups = [
     ...(task.backups || []).filter((model) => !directConfigured() || isDirectModel(model)),
     ...list.map((row) => row.model),
-  ].filter((model, index, all) => model && model !== primary && all.indexOf(model) === index)
-    .slice(0, BACKUP_COUNT);
+  ].filter((model, index, all) => model && model !== primary && all.indexOf(model) === index).slice(0, BACKUP_COUNT);
   return {
-    taskType: taskKey(taskType),
-    primary,
-    backups,
-    ranked: list.slice(0, BACKUP_COUNT + 3),
-    rounds: Number(task.rounds || 0),
-    lastTournamentAt: task.lastTournamentAt || null,
+    taskType: taskKey(taskType), primary, backups, ranked: list.slice(0, BACKUP_COUNT + 3),
+    rounds: Number(task.rounds || 0), lastTournamentAt: task.lastTournamentAt || null,
     transportPolicy: directConfigured() ? 'direct-only-learning' : 'all-eligible-models',
   };
 }
@@ -129,37 +121,21 @@ function updateAverage(current, next, previousCount) {
 }
 
 function recordTrial({ model, provider = 'unknown', taskType = 'general', success, quality = null, latencyMs = null, error = null, tournament = false } = {}) {
+  if (!enabled()) return null;
   const id = String(model || '').trim();
   if (!id) return null;
   const state = load();
   const task = taskState(state, taskType);
   const row = task.models[id] || {
-    provider,
-    attempts: 0,
-    successes: 0,
-    failures: 0,
-    qualitySamples: 0,
-    qualityTotal: 0,
-    averageLatencyMs: null,
-    lastQuality: null,
-    lastTriedAt: null,
-    lastSuccessAt: null,
-    lastFailureAt: null,
-    lastError: null,
-    tournamentTrials: 0,
+    provider, attempts: 0, successes: 0, failures: 0, qualitySamples: 0, qualityTotal: 0,
+    averageLatencyMs: null, lastQuality: null, lastTriedAt: null, lastSuccessAt: null,
+    lastFailureAt: null, lastError: null, tournamentTrials: 0,
   };
   const previousLatencySamples = Number(row.latencySamples || 0);
   row.provider = provider || row.provider || 'unknown';
   row.attempts += 1;
-  if (success) {
-    row.successes += 1;
-    row.lastSuccessAt = new Date().toISOString();
-    row.lastError = null;
-  } else {
-    row.failures += 1;
-    row.lastFailureAt = new Date().toISOString();
-    row.lastError = String(error || '').slice(0, 500) || null;
-  }
+  if (success) { row.successes += 1; row.lastSuccessAt = new Date().toISOString(); row.lastError = null; }
+  else { row.failures += 1; row.lastFailureAt = new Date().toISOString(); row.lastError = String(error || '').slice(0, 500) || null; }
   if (Number.isFinite(Number(latencyMs))) {
     row.averageLatencyMs = updateAverage(row.averageLatencyMs, Number(latencyMs), previousLatencySamples);
     row.latencySamples = previousLatencySamples + 1;
@@ -178,6 +154,7 @@ function recordTrial({ model, provider = 'unknown', taskType = 'general', succes
 }
 
 function promote(taskType = 'general') {
+  if (!enabled()) return { previous: null, ...disabledRecommendation(taskType) };
   const state = load();
   const task = taskState(state, taskType);
   const all = Object.entries(task.models)
@@ -197,6 +174,7 @@ function promote(taskType = 'general') {
 }
 
 function markTournament(taskType = 'general') {
+  if (!enabled()) return;
   const state = load();
   const task = taskState(state, taskType);
   task.rounds = Number(task.rounds || 0) + 1;
@@ -205,6 +183,7 @@ function markTournament(taskType = 'general') {
 }
 
 function selectParticipants(catalog = [], taskType = 'general', limit = 4) {
+  if (!enabled()) return [];
   const state = load();
   const task = taskState(state, taskType);
   const rec = recommend(taskType);
@@ -218,16 +197,11 @@ function selectParticipants(catalog = [], taskType = 'general', limit = 4) {
     const stale = !Number.isFinite(triedAt) || now - triedAt >= RETEST_AFTER_MS;
     return { model, observed, neverTried, stale, utility: utility(observed) };
   });
-
   const selected = [];
   if (rec.primary && unique.includes(rec.primary)) selected.push(rec.primary);
-
   const unseen = rows.filter((row) => row.neverTried && row.model !== rec.primary);
-  const stale = rows.filter((row) => !row.neverTried && row.stale && row.model !== rec.primary)
-    .sort((a, b) => a.utility - b.utility);
-  const proven = rows.filter((row) => !row.neverTried && !row.stale && row.model !== rec.primary)
-    .sort((a, b) => b.utility - a.utility);
-
+  const stale = rows.filter((row) => !row.neverTried && row.stale && row.model !== rec.primary).sort((a, b) => a.utility - b.utility);
+  const proven = rows.filter((row) => !row.neverTried && !row.stale && row.model !== rec.primary).sort((a, b) => b.utility - a.utility);
   for (const row of [...unseen, ...stale, ...proven]) {
     if (selected.length >= Math.max(2, Number(limit || 4))) break;
     if (!selected.includes(row.model)) selected.push(row.model);
@@ -236,21 +210,11 @@ function selectParticipants(catalog = [], taskType = 'general', limit = 4) {
 }
 
 function snapshot() {
+  if (!enabled()) return { version: VERSION, tasks: {}, updatedAt: load().updatedAt || null, directOnly: directConfigured(), enabled: false };
   const state = load();
   const tasks = {};
   for (const key of Object.keys(state.tasks || {})) tasks[key] = recommend(key);
-  return { version: VERSION, tasks, updatedAt: state.updatedAt || null, directOnly: directConfigured() };
+  return { version: VERSION, tasks, updatedAt: state.updatedAt || null, directOnly: directConfigured(), enabled: true };
 }
 
-module.exports = {
-  recommend,
-  ranked,
-  recordTrial,
-  promote,
-  markTournament,
-  selectParticipants,
-  snapshot,
-  utility,
-  isDirectModel,
-  directConfigured,
-};
+module.exports = { enabled, recommend, ranked, recordTrial, promote, markTournament, selectParticipants, snapshot, utility, isDirectModel, directConfigured };
