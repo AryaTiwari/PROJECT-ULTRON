@@ -1,5 +1,8 @@
+const fs = require('fs');
+const path = require('path');
 const factory = require('./reel-factory');
 const pipeline = require('./reel-pipeline');
+const fileVault = require('./file-vault');
 
 let installed = false;
 let originalHandle = null;
@@ -48,6 +51,41 @@ function statusText() {
   return `Sir, Reel Factory is active: ${stock}, ${ffmpeg}, AI direction ready, narration ready, and the finished MP4 renderer is installed. Generation stays zero-cost-only; publishing remains a separate Instagram action.`;
 }
 
+function artifactName(result) {
+  const raw = String(result?.job?.id || `reel-${Date.now()}`)
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 90);
+  return `${raw || 'ultron-reel'}.mp4`;
+}
+
+function registerReelArtifact(result, brief) {
+  const outputPath = path.resolve(String(result?.output?.path || ''));
+  if (!outputPath || !fs.existsSync(outputPath) || !fs.statSync(outputPath).isFile()) {
+    throw new Error('Rendered Reel file is unavailable for chat attachment.');
+  }
+  const buffer = fs.readFileSync(outputPath);
+  const entry = fileVault.saveBuffer(buffer, {
+    name: artifactName(result),
+    mime: 'video/mp4',
+    kind: 'generated',
+    source: 'reel-factory',
+    metadata: {
+      jobId: result?.job?.id || null,
+      brief: String(brief || '').slice(0, 1200),
+      durationSec: Number(result?.output?.durationSec || result?.plan?.durationSec || 0) || null,
+      captionsApplied: Boolean(result?.polish?.captionsApplied),
+      musicApplied: Boolean(result?.polish?.musicApplied),
+      originalPath: outputPath,
+    },
+  });
+  return {
+    ...entry,
+    downloadUrl: `/api/files/download?id=${encodeURIComponent(entry.id)}`,
+    inlineUrl: `/api/files/download?id=${encodeURIComponent(entry.id)}&inline=1`,
+  };
+}
+
 async function buildReelResponse(text) {
   const brief = extractBrief(text);
   const durationSec = parseDuration(text);
@@ -58,16 +96,27 @@ async function buildReelResponse(text) {
       ok: false,
       text: `Sir, Reel Factory stopped safely before completion. Blocker: ${result.blocker || 'unknown production blocker'}`,
       result,
+      artifact: null,
     };
   }
+
+  let artifact = null;
+  let artifactError = null;
+  try {
+    artifact = registerReelArtifact(result, brief);
+  } catch (error) {
+    artifactError = error.message;
+  }
+
   const mb = (Number(result.output?.bytes || 0) / 1024 / 1024).toFixed(2);
   const captions = result.polish?.captionsApplied ? 'captions applied' : 'caption overlay skipped';
   const music = result.polish?.musicApplied ? 'background music mixed' : 'no local music track configured';
-  return {
-    ok: true,
-    text: `Done, Sir. I created the Reel at ${result.output.path}. ${mb} MB, ${Math.round(result.output.durationSec || durationSec)} seconds, ${captions}, ${music}. It is rendered locally and verified. I have not published it to Instagram.`,
-    result,
-  };
+  const duration = Math.round(result.output?.durationSec || durationSec);
+  const text = artifact
+    ? `Done, Sir. I created the Reel and attached it here for preview or download. ${mb} MB, ${duration} seconds, ${captions}, ${music}. It is rendered and verified. I have not published it to Instagram.`
+    : `Done, Sir. I created and verified the Reel, but I could not attach it in chat: ${artifactError || 'file delivery failed'}. The local file is at ${result.output.path}. I have not published it to Instagram.`;
+
+  return { ok: true, text, result, artifact, artifactError };
 }
 
 function install() {
@@ -98,16 +147,42 @@ function install() {
     emit('reel_factory_started', { inputMode, brief: extractBrief(text), durationSec: parseDuration(text), style: parseStyle(text) });
     try {
       const built = await buildReelResponse(text);
-      conversation.append('assistant', built.text, { model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', inputMode, ok: built.ok });
-      emit(built.ok ? 'reel_factory_completed' : 'reel_factory_blocked', built.ok ? { inputMode, output: built.result.output?.path, jobId: built.result.job?.id } : { inputMode, blocker: built.result.blocker });
+      const artifacts = built.artifact ? [built.artifact] : [];
+      conversation.append('assistant', built.text, {
+        model: 'reel-factory',
+        provider: 'local+free-stock',
+        taskType: 'reel-factory',
+        inputMode,
+        ok: built.ok,
+        artifactId: built.artifact?.id || null,
+      });
+      emit(
+        built.ok ? 'reel_factory_completed' : 'reel_factory_blocked',
+        built.ok
+          ? { inputMode, output: built.result.output?.path, jobId: built.result.job?.id, artifactId: built.artifact?.id || null, artifactError: built.artifactError || null }
+          : { inputMode, blocker: built.result.blocker }
+      );
       void voice.enqueue(built.text);
-      return { ok: built.ok, response: built.text, text: built.text, model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', mode: 'operator', inputMode, reel: built.result, toolRounds: 0 };
+      return {
+        ok: built.ok,
+        response: built.text,
+        text: built.text,
+        model: 'reel-factory',
+        provider: 'local+free-stock',
+        taskType: 'reel-factory',
+        mode: 'operator',
+        inputMode,
+        reel: built.result,
+        artifacts,
+        artifactError: built.artifactError || null,
+        toolRounds: 0,
+      };
     } catch (error) {
       const response = `Sir, Reel Factory failed safely: ${error.message}`;
       conversation.append('assistant', response, { model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', inputMode, ok: false });
       emit('reel_factory_failed', { inputMode, error: error.message });
       void voice.enqueue(response);
-      return { ok: false, response, text: response, model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', mode: 'operator', inputMode, error: error.message, toolRounds: 0 };
+      return { ok: false, response, text: response, model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', mode: 'operator', inputMode, error: error.message, artifacts: [], toolRounds: 0 };
     }
   };
 
@@ -136,5 +211,7 @@ module.exports = {
   parseStyle,
   extractBrief,
   statusText,
+  artifactName,
+  registerReelArtifact,
   buildReelResponse,
 };
