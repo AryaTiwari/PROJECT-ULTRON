@@ -1,4 +1,5 @@
 const operator = require('./operator');
+const instagram = require('./instagram');
 
 let installed = false;
 let originalHandle = null;
@@ -33,6 +34,28 @@ function isStatusRequest(text) {
     || /\boperator\s+(?:status|capabilities)\b/i.test(String(text || ''));
 }
 
+function isInstagramCheckRequest(text) {
+  return /\b(?:check|verify|test|confirm)\b[\s\S]{0,50}\binstagram\b[\s\S]{0,30}\b(?:connection|api|account|token)?\b/i.test(String(text || ''))
+    || /\binstagram\b[\s\S]{0,40}\b(?:connection|api)\s+(?:status|check|test)\b/i.test(String(text || ''));
+}
+
+async function instagramCheckResponse() {
+  try {
+    const result = await instagram.verifyConnection();
+    return {
+      ok: true,
+      text: `Connected, Sir. Instagram API verified @${result.username || 'unknown'} with account ID ${result.accountId}. The token and configured account ID match.`,
+      result,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      text: `Sir, the Instagram connection check failed: ${error.message}`,
+      error: error.message,
+    };
+  }
+}
+
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true };
   const assistant = require('./assistant');
@@ -45,6 +68,16 @@ function install() {
   assistant.handle = async (message, options = {}) => {
     const text = String(message || '').trim();
     const inputMode = String(options.inputMode || 'chat').toLowerCase() === 'voice' ? 'voice' : 'chat';
+
+    if (isInstagramCheckRequest(text)) {
+      conversation.append('user', text, { taskType: 'instagram-check', inputMode });
+      emit('instagram_check_started', { inputMode });
+      const checked = await instagramCheckResponse();
+      conversation.append('assistant', checked.text, { model: 'instagram-connector', provider: 'meta', taskType: 'instagram-check', inputMode, ok: checked.ok });
+      emit(checked.ok ? 'instagram_check_completed' : 'instagram_check_failed', checked.ok ? { accountId: checked.result.accountId, username: checked.result.username, inputMode } : { error: checked.error, inputMode });
+      void voice.enqueue(checked.text);
+      return { ok: checked.ok, response: checked.text, text: checked.text, model: 'instagram-connector', provider: 'meta', taskType: 'instagram-check', mode: 'operator', inputMode, instagram: checked.result || null, error: checked.error || null, toolRounds: 0 };
+    }
 
     if (isStatusRequest(text)) {
       const response = statusResponse();
@@ -82,8 +115,8 @@ function install() {
   };
 
   installed = true;
-  emit('operator_ready', { status: operator.summary() });
-  return { installed: true, status: operator.summary() };
+  emit('operator_ready', { status: operator.summary(), instagram: instagram.status() });
+  return { installed: true, status: operator.summary(), instagram: instagram.status() };
 }
 
 function uninstall() {
@@ -94,6 +127,6 @@ function uninstall() {
   installed = false;
 }
 
-function status() { return { installed, capabilities: operator.status() }; }
+function status() { return { installed, capabilities: operator.status(), instagram: instagram.status() }; }
 
-module.exports = { install, uninstall, status, statusResponse, blockedResponse, tradingBoundary, isStatusRequest };
+module.exports = { install, uninstall, status, statusResponse, blockedResponse, tradingBoundary, isStatusRequest, isInstagramCheckRequest, instagramCheckResponse };
