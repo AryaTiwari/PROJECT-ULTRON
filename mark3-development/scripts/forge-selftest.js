@@ -21,6 +21,7 @@ assert(plan.jobs.some((job) => job.worker === 'coding'), 'Forge mission must con
 assert(plan.jobs.some((job) => job.worker === 'review'), 'Forge mission must contain an independent review worker.');
 assert(plan.jobs.some((job) => !(job.dependsOn || []).length), 'Forge mission must always contain at least one runnable root job.');
 assert(/Forge Command Center/.test(dashboard.page()), 'Forge must render its local visual Command Center.');
+assert(/Resume Forge/.test(dashboard.page()), 'Forge Command Center must expose a local resume action for paused work.');
 
 const cyclicPlan = compiler.validateGraph({
   jobs: [
@@ -67,7 +68,12 @@ assert(modelStatus.paidFallbackAllowed === false, 'Forge must not allow paid fal
 assert(modelStatus.secretRedaction === true, 'Forge cloud inference must report secret redaction enabled.');
 assert(modelStatus.externalWorkerBudgeting === true, 'External agent harnesses must be budgeted before they can consume free inference.');
 assert(modelStatus.asyncPolling === true && modelStatus.pollIntervalMs >= 250, 'Forge must support NVIDIA asynchronous 202 polling.');
-assert(modelStatus.roleModels.code_build[0] === 'poolside/laguna-xs-2.1', 'Laguna XS 2.1 must be the primary coding specialist.');
+assert(modelStatus.roleModels.code_build[0] === 'poolside/laguna-xs-2.1', 'Laguna XS 2.1 must remain the primary coding specialist.');
+assert(modelStatus.roleModels.code_build.includes('deepseek-ai/deepseek-v4-pro-0813'), 'DeepSeek V4 Pro must remain a coding failover route.');
+assert(modelStatus.roleModels.code_build.includes('minimaxai/minimax-m3'), 'MiniMax M3 must be available only as an emergency coding failover while its free endpoint remains live.');
+assert(!Object.values(modelStatus.roleModels).flat().includes('z-ai/glm-5.2'), 'Retired GLM-5.2 must not return to the default Forge model pool.');
+assert(governor.classifyFailure('retired-test-model', { slot: 'NVIDIA_API_KEY' }, Object.assign(new Error('model reached end of life'), { status: 410 })) === 'model-disabled', 'HTTP 410/EOL failures must disable only the retired model.');
+assert(governor.classifyFailure('overload-test-model', { slot: 'NVIDIA_API_KEY' }, Object.assign(new Error('ResourceExhausted: worker request limit'), { status: 503 })) === 'model-transient', 'Provider worker overload must cool the model rather than poisoning the API key.');
 const gooseStatus = goose.status();
 assert(gooseStatus.defaultWorker === false, 'Goose must remain optional rather than becoming a hard Forge dependency.');
 assert(gooseStatus.separateGooseApiRequired === false && gooseStatus.requiredApi === 'NVIDIA_API_KEY', 'Goose must reuse Forge NVIDIA inference rather than require another paid API.');
@@ -124,4 +130,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, checkpoint-preserving partial retries, visual Command Center rendering, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, checkpoint-preserving partial retries, actionable visual Command Center, model-specific failover hygiene, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
