@@ -1,6 +1,6 @@
 // Loaded only by the Mark 3 server process. Forge installs two lightweight local
-// read-only endpoints before server.js creates its HTTP server, then wraps the
-// normal assistant after server modules finish loading.
+// read-only endpoints before server.js creates its HTTP server, then Operator Mode
+// and Forge wrap the normal assistant after server modules finish loading.
 const http = require('http');
 
 const originalCreateServer = http.createServer.bind(http);
@@ -47,6 +47,13 @@ http.createServer = (...args) => {
 };
 
 setImmediate(() => {
+  try {
+    const operator = require('../operator-bootstrap').install();
+    console.log(`[Mark 3] Operator Mode ready; ${operator.status.ready.length} capability/capabilities executable now.`);
+  } catch (error) {
+    console.error(`[Mark 3] Operator Mode bootstrap failed: ${error.message}`);
+  }
+
   try {
     const result = require('./bootstrap').install();
     console.log(`[Mark 3] ULTRON Forge ready${result.recovered?.length ? `; recovered ${result.recovered.length} mission(s)` : ''}. Command Center: http://127.0.0.1:8790/forge`);
