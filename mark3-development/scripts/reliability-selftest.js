@@ -41,7 +41,8 @@ try {
 
   const commitmentMutation = intent.extractWorkspaceMutation("I'll review the reliability results tomorrow");
   assert(commitmentMutation?.type === 'create_commitment', 'Will-language must create a commitment.');
-  assert(intent.extractWorkspaceMutation('I’ll review the reliability results tomorrow')?.type === 'create_commitment', 'Curly-apostrophe commitment language must be recognized.');
+  const curlyCommitmentMutation = intent.extractWorkspaceMutation('I’ll review the reliability results tomorrow');
+  assert(curlyCommitmentMutation?.type === 'create_commitment', 'Curly-apostrophe will-language must create a commitment.');
   workspace.applyMutation(commitmentMutation);
   assert(workspace.listCommitments().length === 1, 'Commitment was not persisted.');
 
@@ -67,6 +68,13 @@ try {
   assert(proactive.scoreItem(overdue, 'task') >= 80, 'Critical overdue work must reach interrupt-level attention.');
   assert(proactive.attentionLevel(proactive.scoreItem(overdue, 'task')) === 'critical', 'Attention classification failed.');
 
+  const todayTask = workspace.createTask({ title: 'Today reliability task', priority: 'high', dueAt: intent.dueAtFromText('today') });
+  const naturalStateQuestion = 'Hello Ultron, what is the pending task for today?';
+  assert(intent.isStateBriefRequest(naturalStateQuestion), 'Natural today-task question must route to local workspace state.');
+  const localStateAnswer = proactive.stateResponse(naturalStateQuestion);
+  assert(localStateAnswer.includes(todayTask.title), 'Today-task state answer must name the locally persisted due-today task.');
+  assert(!/TinyFish|calendar|task manager/i.test(localStateAnswer), 'Local state answers must not claim web research or redirect to an external task manager.');
+
   proactive.syncStateMemory();
   const stateMemory = memory.retrieve('what are my work priorities and what is next', { limit: 4 });
   assert(stateMemory.some((item) => item.key === 'ultron workspace current state'), 'Live workspace state must be retrievable for priority/status questions.');
@@ -80,7 +88,7 @@ try {
 
   const snapshot = workspace.stateSnapshot();
   assert(snapshot.counts.goals === 1 && snapshot.counts.tasks >= 1, 'Workspace state snapshot is incomplete.');
-  console.log('ULTRON reliability self-test passed: entity-aware memory updates, idempotent tasks/goals/commitments, completion resolution, execution verification, proactive attention and diagnostic-only Model League validated.');
+  console.log('ULTRON reliability self-test passed: entity-aware memory updates, idempotent tasks/goals/commitments, local-first today status, completion resolution, execution verification, proactive attention and diagnostic-only Model League validated.');
 } finally {
   try { proactive.stop(); } catch {}
   for (const [file, backup] of backups.entries()) {
