@@ -1,6 +1,6 @@
 // Loaded only by the Mark 3 server process. Forge installs two lightweight local
-// read-only endpoints before server.js creates its HTTP server, then Operator Mode
-// and Forge wrap the normal assistant after server modules finish loading.
+// read-only endpoints before server.js creates its HTTP server, then Operator Mode,
+// Reel Factory and Forge wrap the normal assistant after server modules finish loading.
 const http = require('http');
 
 const originalCreateServer = http.createServer.bind(http);
@@ -52,6 +52,14 @@ setImmediate(() => {
     console.log(`[Mark 3] Operator Mode ready; ${operator.status.ready.length} capability/capabilities executable now.`);
   } catch (error) {
     console.error(`[Mark 3] Operator Mode bootstrap failed: ${error.message}`);
+  }
+
+  try {
+    const reels = require('../reel-operator-bootstrap').install();
+    const ready = reels.status.stockSourceReady && reels.status.ffmpeg.available;
+    console.log(`[Mark 3] Reel Factory Operator ${ready ? 'ready' : 'installed with blocker'}; natural make-a-reel commands enabled.`);
+  } catch (error) {
+    console.error(`[Mark 3] Reel Factory bootstrap failed: ${error.message}`);
   }
 
   try {
