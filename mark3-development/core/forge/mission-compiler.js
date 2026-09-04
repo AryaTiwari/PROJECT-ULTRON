@@ -24,9 +24,62 @@ function normalizeJob(job, index) {
     evidence: [],
   };
 }
+function uniqueJobIds(jobs) {
+  const used = new Set();
+  const aliases = new Map();
+  const rows = jobs.map((job, index) => {
+    const original = String(job.id || `job-${index + 1}`);
+    let next = original;
+    let suffix = 2;
+    while (used.has(next)) next = `${original}-${suffix++}`;
+    used.add(next);
+    if (!aliases.has(original)) aliases.set(original, next);
+    return { ...job, id: next };
+  });
+  return rows.map((job) => ({
+    ...job,
+    dependsOn: (job.dependsOn || []).map((dep) => aliases.get(String(dep)) || String(dep)),
+  }));
+}
 function repairDependencies(jobs) {
-  const ids = new Set(jobs.map((job) => job.id));
-  return jobs.map((job) => ({ ...job, dependsOn: job.dependsOn.filter((dep) => dep !== job.id && ids.has(dep)) }));
+  const rows = uniqueJobIds(jobs);
+  const ids = new Set(rows.map((job) => job.id));
+  return rows.map((job) => ({
+    ...job,
+    dependsOn: [...new Set((job.dependsOn || []).filter((dep) => dep !== job.id && ids.has(dep)))],
+  }));
+}
+function ensureRunnableDag(jobs) {
+  const rows = repairDependencies(jobs);
+  if (!rows.length) return rows;
+
+  // A Forge mission must always have at least one runnable root. If a model
+  // accidentally makes every job depend on another job, make the first job a root.
+  if (!rows.some((job) => !(job.dependsOn || []).length)) rows[0] = { ...rows[0], dependsOn: [] };
+
+  // Kahn-style validation with deterministic cycle repair. Whenever no unresolved
+  // job can run, remove only dependencies that point to still-unresolved jobs from
+  // the earliest blocked job. This preserves already-valid ordering while breaking
+  // the minimum cycle needed to make forward progress.
+  const resolved = new Set();
+  const unresolved = new Set(rows.map((job) => job.id));
+  while (unresolved.size) {
+    let progressed = false;
+    for (const job of rows) {
+      if (!unresolved.has(job.id)) continue;
+      if ((job.dependsOn || []).every((dep) => resolved.has(dep))) {
+        unresolved.delete(job.id);
+        resolved.add(job.id);
+        progressed = true;
+      }
+    }
+    if (progressed) continue;
+
+    const blocked = rows.find((job) => unresolved.has(job.id));
+    if (!blocked) break;
+    blocked.dependsOn = (blocked.dependsOn || []).filter((dep) => resolved.has(dep));
+  }
+  return rows;
 }
 function fallback(objective) {
   const jobs = [
@@ -43,18 +96,18 @@ function fallback(objective) {
     requirements: [],
     deliverables: ['Runnable implementation', 'Validation evidence', 'Final review'],
     risks: ['Free provider availability can pause inference', 'External side effects require explicit approval'],
-    jobs,
+    jobs: ensureRunnableDag(jobs),
     compiler: 'deterministic-fallback',
   };
 }
 function validateGraph(compiled, objective) {
   const source = Array.isArray(compiled?.jobs) && compiled.jobs.length ? compiled.jobs : fallback(objective).jobs;
-  let jobs = repairDependencies(source.slice(0, 40).map(normalizeJob));
+  let jobs = ensureRunnableDag(source.slice(0, 40).map(normalizeJob));
   const hasCoding = jobs.some((job) => job.worker === 'coding');
   const hasReview = jobs.some((job) => job.worker === 'review');
   if (!hasCoding) jobs.push(normalizeJob({ id: id('build'), title: 'Implementation', objective: 'Implement the mission deliverable.', kind: 'backend', worker: 'coding', dependsOn: jobs.length ? [jobs[jobs.length - 1].id] : [] }, jobs.length));
   if (!hasReview) jobs.push(normalizeJob({ id: id('review'), title: 'Final QA', objective: 'Independently verify the completed mission and identify remaining failures.', kind: 'qa', worker: 'review', dependsOn: jobs.length ? [jobs[jobs.length - 1].id] : [] }, jobs.length));
-  jobs = repairDependencies(jobs);
+  jobs = ensureRunnableDag(jobs);
   return {
     summary: String(compiled?.summary || `Build and verify: ${objective}`),
     requirements: Array.isArray(compiled?.requirements) ? compiled.requirements.map(String).slice(0, 20) : [],
@@ -68,7 +121,7 @@ function validateGraph(compiled, objective) {
 async function compile(mission) {
   const objective = String(mission?.objective || '').trim();
   if (!objective) throw new Error('Mission objective is required.');
-  const system = `You are ULTRON FORGE Mission Compiler. Convert a large project objective into a dependency-aware execution DAG for a multi-agent software/automation team. Return ONLY one JSON object. Keep jobs independently executable and avoid unnecessary model calls. Every mission that builds software must end with QA and an independent review. Never include production deployment, mass messaging, purchases, destructive database actions or other external side effects without an approval gate. Worker must be reasoning, coding, or review. kind should be one of product, architect, researcher, automation, backend, frontend, database, integration, qa, security, critic. Maximum 24 jobs. Schema: {summary:string,requirements:string[],deliverables:string[],risks:string[],jobs:[{id:string,title:string,objective:string,kind:string,worker:string,dependsOn:string[],acceptance:string[]}]}`;
+  const system = `You are ULTRON FORGE Mission Compiler. Convert a large project objective into a dependency-aware execution DAG for a multi-agent software/automation team. Return ONLY one JSON object. Keep jobs independently executable and avoid unnecessary model calls. Every mission that builds software must end with QA and an independent review. At least one job must have an empty dependsOn array so execution can start. Dependencies must form an acyclic graph and may only reference earlier prerequisite jobs. Never include production deployment, mass messaging, purchases, destructive database actions or other external side effects without an approval gate. Worker must be reasoning, coding, or review. kind should be one of product, architect, researcher, automation, backend, frontend, database, integration, qa, security, critic. Maximum 24 jobs. Schema: {summary:string,requirements:string[],deliverables:string[],risks:string[],jobs:[{id:string,title:string,objective:string,kind:string,worker:string,dependsOn:string[],acceptance:string[]}]}`;
   try {
     const result = await governor.nvidiaChat({
       missionId: mission.id,
@@ -89,4 +142,4 @@ async function compile(mission) {
   }
 }
 
-module.exports = { compile, fallback, validateGraph, cleanJson };
+module.exports = { compile, fallback, validateGraph, cleanJson, normalizeJob, repairDependencies, ensureRunnableDag };
