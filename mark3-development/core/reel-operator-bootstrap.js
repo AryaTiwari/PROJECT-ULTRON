@@ -67,12 +67,13 @@ function artifactName(result) {
 }
 
 function registerReelArtifact(result, brief) {
-  const outputPath = path.resolve(String(result?.output?.path || ''));
-  if (!outputPath || !fs.existsSync(outputPath) || !fs.statSync(outputPath).isFile()) {
+  const rawPath = String(result?.output?.path || '').trim();
+  if (!rawPath) throw new Error('Rendered Reel file path is unavailable for chat attachment.');
+  const outputPath = path.resolve(rawPath);
+  if (!fs.existsSync(outputPath) || !fs.statSync(outputPath).isFile()) {
     throw new Error('Rendered Reel file is unavailable for chat attachment.');
   }
-  const buffer = fs.readFileSync(outputPath);
-  const entry = fileVault.saveBuffer(buffer, {
+  const entry = fileVault.saveBuffer(fs.readFileSync(outputPath), {
     name: artifactName(result),
     mime: 'video/mp4',
     kind: 'generated',
@@ -114,6 +115,7 @@ function latestRenderedReel() {
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const latest = candidates[0];
   if (!latest) return null;
+
   const job = readJsonIfPresent(path.join(latest.dir, 'job.json')) || { id: latest.name };
   const plan = readJsonIfPresent(path.join(latest.dir, 'plan.json')) || {};
   return {
@@ -130,9 +132,7 @@ function latestRenderedReel() {
 
 function attachLatestReelResponse() {
   const result = latestRenderedReel();
-  if (!result) {
-    return { ok: false, text: 'Sir, I could not find a previously rendered Reel to attach.', result: null, artifact: null };
-  }
+  if (!result) return { ok: false, text: 'Sir, I could not find a previously rendered Reel to attach.', result: null, artifact: null };
   try {
     const artifact = registerReelArtifact(result, result?.job?.brief || result?.plan?.title || 'latest rendered reel');
     const mb = (Number(result.output?.bytes || 0) / 1024 / 1024).toFixed(2);
@@ -153,10 +153,10 @@ function attachLatestReelResponse() {
   }
 }
 
-async function buildReelResponse(text) {
-  const brief = extractBrief(text);
-  const durationSec = parseDuration(text);
-  const style = parseStyle(text);
+async function buildReelResponse(requestText) {
+  const brief = extractBrief(requestText);
+  const durationSec = parseDuration(requestText);
+  const style = parseStyle(requestText);
   const result = await pipeline.build(brief, { durationSec, style, polish: true, music: true });
   if (!result.ok) {
     return {
@@ -179,11 +179,11 @@ async function buildReelResponse(text) {
   const captions = result.polish?.captionsApplied ? 'captions applied' : 'caption overlay skipped';
   const music = result.polish?.musicApplied ? 'background music mixed' : 'no local music track configured';
   const duration = Math.round(result.output?.durationSec || durationSec);
-  const text = artifact
+  const responseText = artifact
     ? `Done, Sir. I created the Reel and attached it here for preview or download. ${mb} MB, ${duration} seconds, ${captions}, ${music}. It is rendered and verified. I have not published it to Instagram.`
     : `Done, Sir. I created and verified the Reel, but I could not attach it in chat: ${artifactError || 'file delivery failed'}. The local file is at ${result.output.path}. I have not published it to Instagram.`;
 
-  return { ok: true, text, result, artifact, artifactError };
+  return { ok: true, text: responseText, result, artifact, artifactError };
 }
 
 function install() {
@@ -213,12 +213,8 @@ function install() {
       const attached = attachLatestReelResponse();
       const artifacts = attached.artifact ? [attached.artifact] : [];
       conversation.append('assistant', attached.text, {
-        model: 'reel-factory',
-        provider: 'local',
-        taskType: 'reel-factory-attachment',
-        inputMode,
-        ok: attached.ok,
-        artifactId: attached.artifact?.id || null,
+        model: 'reel-factory', provider: 'local', taskType: 'reel-factory-attachment', inputMode,
+        ok: attached.ok, artifactId: attached.artifact?.id || null,
       });
       emit(attached.ok ? 'reel_factory_artifact_attached' : 'reel_factory_artifact_failed', {
         inputMode,
@@ -251,12 +247,8 @@ function install() {
       const built = await buildReelResponse(text);
       const artifacts = built.artifact ? [built.artifact] : [];
       conversation.append('assistant', built.text, {
-        model: 'reel-factory',
-        provider: 'local+free-stock',
-        taskType: 'reel-factory',
-        inputMode,
-        ok: built.ok,
-        artifactId: built.artifact?.id || null,
+        model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', inputMode,
+        ok: built.ok, artifactId: built.artifact?.id || null,
       });
       emit(
         built.ok ? 'reel_factory_completed' : 'reel_factory_blocked',
