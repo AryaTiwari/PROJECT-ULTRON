@@ -16,9 +16,12 @@ function latestStatusResponse() {
   const progress = mission.progress || {};
   const usageText = usage ? ` Inference usage: ${usage.calls || 0} calls, ${usage.totalTokens || 0} tokens.` : '';
   const running = state.running || mission.status === 'running' ? 'running' : mission.status;
-  const paused = mission.status === 'paused_inference' ? ' Free inference is paused; add/restore an allowed key or wait for quota recovery, then say “Resume Forge”.' : '';
+  const paused = mission.status === 'paused_inference' ? ' Free inference is paused; restore an allowed free key or wait for quota recovery, then say “Resume Forge”.' : '';
+  const approval = mission.status === 'awaiting_approval' ? ' A gated external side effect is waiting; say “Approve Forge” only if you want it executed.' : '';
+  const automation = mission.automation ? ' Automation durability contract is active.' : '';
+  const repair = mission.repairCycles ? ` Repair cycles used: ${mission.repairCycles}.` : '';
   const workspace = mission.status === 'completed' || mission.status === 'partial' ? ` Workspace: ${mission.workspace}.` : '';
-  return `Sir, Forge mission ${mission.id} is ${running}: ${progress.completed || 0}/${progress.total || 0} jobs complete (${progress.percent || 0}%).${mission.error ? ` Current issue: ${mission.error}` : ''}${paused}${usageText}${workspace}`;
+  return `Sir, Forge mission ${mission.id} is ${running}: ${progress.completed || 0}/${progress.total || 0} jobs complete (${progress.percent || 0}%).${mission.error ? ` Current issue: ${mission.error}` : ''}${paused}${approval}${automation}${repair}${usageText}${workspace}`;
 }
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true };
@@ -55,12 +58,13 @@ function install() {
 
     const approvalId = supervisor.isApprovalRequest(text);
     if (approvalId) {
-      const result = supervisor.approve(approvalId);
+      const result = supervisor.approve(approvalId === true ? null : approvalId);
       const response = result.approvedJobs.length
         ? `Approved, Sir. Forge resumed mission ${result.missionId} with ${result.approvedJobs.length} gated job${result.approvedJobs.length === 1 ? '' : 's'}.`
         : `Sir, mission ${result.missionId} has no jobs waiting for approval.`;
       conversation.append('user', text, { taskType: 'forge-approval', inputMode });
       conversation.append('assistant', response, { model: 'forge-supervisor', provider: 'local', taskType: 'forge-approval', inputMode });
+      emit('forge_approval_requested', { missionId: result.missionId, approvedJobs: result.approvedJobs, inputMode });
       void voice.enqueue(response);
       return { ok: true, response, text: response, model: 'forge-supervisor', provider: 'local', taskType: 'forge-approval', mode: 'forge', inputMode, streamed: false, toolRounds: 0 };
     }
@@ -71,9 +75,10 @@ function install() {
     conversation.append('user', text, { taskType: 'forge', inputMode });
     try {
       const mission = await supervisor.start(text, { source: inputMode === 'voice' ? 'voice' : 'conversation' });
-      const response = `Understood, Sir. Forge opened mission ${mission.id} with ${mission.progress?.total || 0} specialist jobs in an isolated workspace. It is executing with checkpoints, independent review and zero-cost cloud inference only. Say “Forge status” for progress.`;
+      const automationText = mission.automation ? ' Its automation durability contract is active.' : '';
+      const response = `Understood, Sir. Forge opened mission ${mission.id} with ${mission.progress?.total || 0} specialist jobs in an isolated workspace. It is executing with checkpoints, independent review, bounded repair cycles and zero-cost cloud inference only.${automationText} Say “Forge status” for progress.`;
       conversation.append('assistant', response, { model: 'forge-supervisor', provider: 'local+nvidia', taskType: 'forge', missionId: mission.id, inputMode });
-      emit('forge_mission_accepted', { missionId: mission.id, jobs: mission.progress?.total || 0, workspace: mission.workspace });
+      emit('forge_mission_accepted', { missionId: mission.id, jobs: mission.progress?.total || 0, workspace: mission.workspace, automation: Boolean(mission.automation) });
       void voice.enqueue(response);
       return { ok: true, response, text: response, model: 'forge-supervisor', provider: 'local+nvidia', taskType: 'forge', mode: 'forge', missionId: mission.id, workspace: mission.workspace, inputMode, streamed: false, toolRounds: 0 };
     } catch (error) {
@@ -98,4 +103,4 @@ function uninstall() {
 }
 function status() { return { installed, governor: governor.status(), latestMission: supervisor.status() }; }
 
-module.exports = { install, uninstall, status, executionRequest };
+module.exports = { install, uninstall, status, executionRequest, latestStatusResponse };
