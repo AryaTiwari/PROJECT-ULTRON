@@ -14,6 +14,13 @@ function isReelFactoryRequest(text) {
   return /\b(?:make|create|generate|produce|craft|prepare)\b[\s\S]{0,100}\b(?:reel|instagram video|short-form video|short form video)\b|\b(?:reel|instagram video)\b[\s\S]{0,80}\b(?:make|create|generate|produce)\b/i.test(value);
 }
 
+function isReelAttachmentRequest(text) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (/\b(?:post|publish|schedule|upload)\b[\s\S]{0,80}\b(?:instagram|ig)\b|\b(?:instagram|ig)\b[\s\S]{0,80}\b(?:post|publish|schedule|upload)\b/i.test(value)) return false;
+  return /\b(?:attach|send|show|give|open|download|share)\b[\s\S]{0,60}\b(?:last|latest|recent|previous)?\s*reel\b|\b(?:last|latest|recent|previous)\s+reel\b[\s\S]{0,50}\b(?:file|attach|send|show|download|open)\b/i.test(value);
+}
+
 function isReelStatusRequest(text) {
   return /\b(?:reel factory|reel generator|reel engine)\b[\s\S]{0,30}\b(?:status|ready|readiness|working)\b|\b(?:status|check)\b[\s\S]{0,30}\b(?:reel factory|reel generator)\b/i.test(String(text || ''));
 }
@@ -86,6 +93,66 @@ function registerReelArtifact(result, brief) {
   };
 }
 
+function readJsonIfPresent(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function latestRenderedReel() {
+  if (!fs.existsSync(factory.REEL_ROOT)) return null;
+  const candidates = [];
+  for (const name of fs.readdirSync(factory.REEL_ROOT)) {
+    const dir = path.join(factory.REEL_ROOT, name);
+    let stat;
+    try { stat = fs.statSync(dir); } catch { continue; }
+    if (!stat.isDirectory()) continue;
+    const outputPath = path.join(dir, 'reel.mp4');
+    if (!fs.existsSync(outputPath)) continue;
+    const outputStat = fs.statSync(outputPath);
+    if (!outputStat.isFile() || outputStat.size < 100 * 1024) continue;
+    candidates.push({ name, dir, outputPath, mtimeMs: outputStat.mtimeMs, bytes: outputStat.size });
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const latest = candidates[0];
+  if (!latest) return null;
+  const job = readJsonIfPresent(path.join(latest.dir, 'job.json')) || { id: latest.name };
+  const plan = readJsonIfPresent(path.join(latest.dir, 'plan.json')) || {};
+  return {
+    job: { ...job, id: job.id || latest.name },
+    plan,
+    output: {
+      path: latest.outputPath,
+      bytes: Number(job?.output?.bytes || latest.bytes),
+      durationSec: Number(job?.output?.durationSec || plan?.durationSec || 0) || null,
+    },
+    polish: job?.polish || {},
+  };
+}
+
+function attachLatestReelResponse() {
+  const result = latestRenderedReel();
+  if (!result) {
+    return { ok: false, text: 'Sir, I could not find a previously rendered Reel to attach.', result: null, artifact: null };
+  }
+  try {
+    const artifact = registerReelArtifact(result, result?.job?.brief || result?.plan?.title || 'latest rendered reel');
+    const mb = (Number(result.output?.bytes || 0) / 1024 / 1024).toFixed(2);
+    return {
+      ok: true,
+      text: `Attached, Sir. This is the latest rendered Reel (${mb} MB). You can preview it here or open/save the MP4. I have not published it to Instagram.`,
+      result,
+      artifact,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      text: `Sir, I found the latest Reel but could not attach it: ${error.message}`,
+      result,
+      artifact: null,
+      artifactError: error.message,
+    };
+  }
+}
+
 async function buildReelResponse(text) {
   const brief = extractBrief(text);
   const durationSec = parseDuration(text);
@@ -139,6 +206,41 @@ function install() {
       emit('reel_factory_status_requested', { inputMode, status: factory.status() });
       void voice.enqueue(response);
       return { ok: true, response, text: response, model: 'reel-factory', provider: 'local', taskType: 'reel-factory-status', mode: 'operator', inputMode, toolRounds: 0 };
+    }
+
+    if (isReelAttachmentRequest(text)) {
+      conversation.append('user', text, { taskType: 'reel-factory-attachment', inputMode });
+      const attached = attachLatestReelResponse();
+      const artifacts = attached.artifact ? [attached.artifact] : [];
+      conversation.append('assistant', attached.text, {
+        model: 'reel-factory',
+        provider: 'local',
+        taskType: 'reel-factory-attachment',
+        inputMode,
+        ok: attached.ok,
+        artifactId: attached.artifact?.id || null,
+      });
+      emit(attached.ok ? 'reel_factory_artifact_attached' : 'reel_factory_artifact_failed', {
+        inputMode,
+        artifactId: attached.artifact?.id || null,
+        output: attached.result?.output?.path || null,
+        error: attached.artifactError || null,
+      });
+      void voice.enqueue(attached.text);
+      return {
+        ok: attached.ok,
+        response: attached.text,
+        text: attached.text,
+        model: 'reel-factory',
+        provider: 'local',
+        taskType: 'reel-factory-attachment',
+        mode: 'operator',
+        inputMode,
+        reel: attached.result,
+        artifacts,
+        error: attached.artifactError || null,
+        toolRounds: 0,
+      };
     }
 
     if (!isReelFactoryRequest(text)) return originalHandle(message, options);
@@ -206,6 +308,7 @@ module.exports = {
   uninstall,
   status,
   isReelFactoryRequest,
+  isReelAttachmentRequest,
   isReelStatusRequest,
   parseDuration,
   parseStyle,
@@ -213,5 +316,7 @@ module.exports = {
   statusText,
   artifactName,
   registerReelArtifact,
+  latestRenderedReel,
+  attachLatestReelResponse,
   buildReelResponse,
 };
