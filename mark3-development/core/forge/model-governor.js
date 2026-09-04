@@ -3,6 +3,7 @@ const { redactMessages } = require('./redactor');
 
 const NVIDIA_BASE = String(process.env.ULTRON_M3_FORGE_NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1').replace(/\/$/, '');
 const TIMEOUT_MS = Math.max(15000, Number(process.env.ULTRON_M3_FORGE_MODEL_TIMEOUT_MS || 90000));
+const POLL_INTERVAL_MS = Math.max(250, Number(process.env.ULTRON_M3_FORGE_NVIDIA_POLL_INTERVAL_MS || 1000));
 const MAX_CALLS = Math.max(10, Number(process.env.ULTRON_M3_FORGE_MAX_CALLS_PER_MISSION || 120));
 const MAX_TOKENS = Math.max(50000, Number(process.env.ULTRON_M3_FORGE_MAX_TOKENS_PER_MISSION || 900000));
 
@@ -45,7 +46,7 @@ function cooldown(row, error) {
   const text = String(error?.message || '').toLowerCase();
   if (status === 429 || /rate.?limit|quota|exhaust/.test(text)) cooldowns.set(row.slot, Date.now() + 90_000);
   else if ([401, 403].includes(status)) cooldowns.set(row.slot, Date.now() + 30 * 60_000);
-  else if (status >= 500 || /timeout|timed out|upstream/.test(text)) cooldowns.set(row.slot, Date.now() + 30_000);
+  else if (status >= 500 || status === 408 || /timeout|timed out|upstream|aborted/.test(text)) cooldowns.set(row.slot, Date.now() + 30_000);
 }
 function parseText(data) {
   const value = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
@@ -97,30 +98,99 @@ function reserveExternalUsage(missionId, model, slot, estimate = {}) {
   if (missionId) store.event(missionId, 'external_inference_budget_reserved', { model, slot, calls, totalTokens: Number(estimate.totalTokens || 0) });
   return { calls, totalTokens: Number(estimate.totalTokens || 0) };
 }
-async function requestModel(model, row, safeMessages, options) {
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function requestIdFrom(response, data = {}) {
+  return String(
+    response?.headers?.get?.('nvcf-reqid')
+    || response?.headers?.get?.('x-request-id')
+    || data?.requestId
+    || data?.request_id
+    || data?.id
+    || ''
+  ).trim();
+}
+async function fetchWithDeadline(url, options, deadline, label) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    const error = new Error(`${label} timed out after ${TIMEOUT_MS}ms.`);
+    error.status = 408;
+    throw error;
+  }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), remaining);
   try {
-    const body = {
-      model, messages: safeMessages, temperature: options.temperature,
-      max_tokens: options.maxTokens, stream: false,
-    };
-    if (options.json) body.response_format = { type: 'json_object' };
-    const response = await fetch(`${NVIDIA_BASE}/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${row.value}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(body), signal: controller.signal,
-    });
-    const raw = await response.text();
-    let data = {};
-    try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (cause) {
+    if (cause?.name === 'AbortError') {
+      const error = new Error(`${label} timed out after ${TIMEOUT_MS}ms.`);
+      error.status = 408;
+      error.cause = cause;
+      throw error;
+    }
+    throw cause;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function responseData(response) {
+  const raw = await response.text();
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+  return { raw, data };
+}
+async function pollPending(requestId, row, model, deadline) {
+  if (!requestId) {
+    const error = new Error(`NVIDIA ${model} returned HTTP 202 without a request id.`);
+    error.status = 502;
+    throw error;
+  }
+  while (Date.now() < deadline) {
+    await sleep(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+    const response = await fetchWithDeadline(
+      `${NVIDIA_BASE}/status/${encodeURIComponent(requestId)}`,
+      { method: 'GET', headers: { Authorization: `Bearer ${row.value}`, Accept: 'application/json' } },
+      deadline,
+      `NVIDIA ${model} async status polling`,
+    );
+    const { raw, data } = await responseData(response);
+    if (response.status === 202) continue;
     if (!response.ok) {
-      const error = new Error(`NVIDIA ${model} HTTP ${response.status}: ${raw.slice(0, 600)}`);
+      const error = new Error(`NVIDIA ${model} status HTTP ${response.status}: ${raw.slice(0, 600)}`);
       error.status = response.status;
       throw error;
     }
     return data;
-  } finally { clearTimeout(timer); }
+  }
+  const error = new Error(`NVIDIA ${model} async request ${requestId} timed out after ${TIMEOUT_MS}ms.`);
+  error.status = 408;
+  throw error;
+}
+async function requestModel(model, row, safeMessages, options) {
+  const deadline = Date.now() + TIMEOUT_MS;
+  const body = {
+    model, messages: safeMessages, temperature: options.temperature,
+    max_tokens: options.maxTokens, stream: false,
+  };
+  if (options.json) body.response_format = { type: 'json_object' };
+
+  const response = await fetchWithDeadline(
+    `${NVIDIA_BASE}/chat/completions`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${row.value}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    },
+    deadline,
+    `NVIDIA ${model} initial inference`,
+  );
+  const { raw, data } = await responseData(response);
+  if (response.status === 202) return pollPending(requestIdFrom(response, data), row, model, deadline);
+  if (!response.ok) {
+    const error = new Error(`NVIDIA ${model} HTTP ${response.status}: ${raw.slice(0, 600)}`);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
 }
 async function nvidiaChat({ missionId, role = 'code_build', messages, temperature = 0.2, maxTokens = 8192, json = false }) {
   assertBudget(missionId);
@@ -163,7 +233,11 @@ function status() {
     configuredKeySlots: keyRows().map((row) => row.slot), roleModels: ROLE_MODELS,
     maxCallsPerMission: MAX_CALLS, maxTokensPerMission: MAX_TOKENS,
     secretRedaction: true, externalWorkerBudgeting: true,
+    asyncPolling: true, pollIntervalMs: POLL_INTERVAL_MS, timeoutMs: TIMEOUT_MS,
   };
 }
 
-module.exports = { ROLE_MODELS, configuredModels, keyRows, nvidiaChat, status, assertBudget, reserveExternalUsage };
+module.exports = {
+  ROLE_MODELS, configuredModels, keyRows, nvidiaChat, status, assertBudget, reserveExternalUsage,
+  requestIdFrom, pollPending,
+};
