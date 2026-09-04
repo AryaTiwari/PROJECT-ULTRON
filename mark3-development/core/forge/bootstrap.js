@@ -13,6 +13,7 @@ function latestStatusResponse() {
   const state = supervisor.status();
   if (!state.available) return 'Sir, no Forge mission exists yet.';
   const { mission, usage } = state;
+  const jobs = Array.isArray(state.jobs) ? state.jobs : [];
   const progress = mission.progress || {};
   const usageText = usage ? ` Inference usage: ${usage.calls || 0} calls, ${usage.totalTokens || 0} tokens.` : '';
   const running = state.running || mission.status === 'running' ? 'running' : mission.status;
@@ -20,8 +21,14 @@ function latestStatusResponse() {
   const approval = mission.status === 'awaiting_approval' ? ' A gated external side effect is waiting; say “Approve Forge” only if you want it executed.' : '';
   const automation = mission.automation ? ' Automation durability contract is active.' : '';
   const repair = mission.repairCycles ? ` Repair cycles used: ${mission.repairCycles}.` : '';
-  const workspace = mission.status === 'completed' || mission.status === 'partial' ? ` Workspace: ${mission.workspace}.` : '';
-  return `Sir, Forge mission ${mission.id} is ${running}: ${progress.completed || 0}/${progress.total || 0} jobs complete (${progress.percent || 0}%).${mission.error ? ` Current issue: ${mission.error}` : ''}${paused}${approval}${automation}${repair}${usageText}${workspace}`;
+  const blockedJobs = jobs.filter((job) => ['blocked', 'failed', 'paused', 'blocked_approval'].includes(String(job.status || '')));
+  const activeJobs = jobs.filter((job) => job.status === 'running');
+  const blockerText = blockedJobs.length
+    ? ` Blocked/failed jobs: ${blockedJobs.slice(0, 3).map((job) => `${job.title || job.id} [${job.status}: ${job.blockedReason || job.error || 'no reason recorded'}]`).join('; ')}${blockedJobs.length > 3 ? `; +${blockedJobs.length - 3} more` : ''}.`
+    : '';
+  const activeText = activeJobs.length ? ` Active job: ${activeJobs[0].title || activeJobs[0].id}.` : '';
+  const workspace = ['completed', 'partial', 'failed', 'paused_inference'].includes(mission.status) ? ` Workspace: ${mission.workspace}.` : '';
+  return `Sir, Forge mission ${mission.id} is ${running}: ${progress.completed || 0}/${progress.total || 0} jobs complete (${progress.percent || 0}%).${activeText}${mission.error ? ` Current issue: ${mission.error}` : ''}${blockerText}${paused}${approval}${automation}${repair}${usageText}${workspace}`;
 }
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true };
