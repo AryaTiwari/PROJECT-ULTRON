@@ -44,7 +44,7 @@ function extractWorkspaceMutation(message) {
   match = text.match(/^(?:todo\s*:\s*|task\s*:\s*|i\s+need\s+to\s+|we\s+need\s+to\s+|i\s+must\s+|we\s+must\s+)(.{3,180})$/i);
   if (match) return { type: 'create_task', title: cleanTitle(match[1]), project, priority, dueAt, source: 'conversation' };
 
-  match = text.match(/^(?:remind me to\s+|remember that i need to\s+|i\s+(?:will|'ll)\s+)(.{3,180})$/i);
+  match = text.match(/^(?:remind me to\s+|remember that i need to\s+|i\s+will\s+|i['’]ll\s+)(.{3,180})$/i);
   if (match) return { type: 'create_commitment', title: cleanTitle(match[1]), project, priority, dueAt, source: 'conversation' };
 
   match = text.match(/^(?:project\s*:\s*)(.{2,80})$/i);
