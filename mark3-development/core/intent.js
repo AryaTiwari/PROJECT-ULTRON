@@ -68,6 +68,13 @@ function isStateBriefRequest(message) {
   const text = stripAssistantInvocation(message);
   if (!text) return false;
   if (/^(?:status|brief me|give me (?:a )?brief|what should i (?:do|work on)(?: first)?|what'?s next|what are my priorities|show my tasks|show my goals|what am i waiting (?:for|on)|what is pending)[?.!\s]*$/i.test(text)) return true;
+
+  const externalResearch = /\b(?:search|research|web|online|latest|news|trend|trending|price|weather|market update|current market)\b/i.test(text);
+  const advisorQuestion = /\bwhat should (?:i|we) (?:do|work on|start)(?:\s+(?:today|first|now))?\b/i.test(text)
+    || /\bwhat do (?:i|we) (?:do|start|work on) today\b/i.test(text)
+    || /\bwhere should (?:i|we) start today\b/i.test(text);
+  if (advisorQuestion && !externalResearch) return true;
+
   const asks = /\b(?:what|which|show|list|tell me|give me|do i have|are there|any)\b/i.test(text);
   const stateNoun = /\b(?:pending|task|tasks|todo|to-do|goal|goals|commitment|commitments|priority|priorities|blocked|waiting|deadline|deadlines|due|overdue|workspace|work)\b/i.test(text);
   const personal = /\b(?:my|our|i|we|for me|for us|today|tomorrow|this week|pending)\b/i.test(text);
