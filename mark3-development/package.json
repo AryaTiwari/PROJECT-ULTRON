@@ -12,6 +12,7 @@
     "check:operator": "node --env-file=../.env scripts/operator-selftest.js",
     "check:instagram": "node --env-file=../.env scripts/instagram-test.js",
     "check:reels": "node --env-file=../.env scripts/reel-selftest.js",
+    "check:reels:live": "node --env-file=../.env scripts/reel-live-test.js",
     "check:forge": "node --env-file=../.env scripts/forge-selftest.js",
     "check:forge:live": "node --env-file=../.env scripts/forge-live-test.js",
     "check:research": "node --env-file=../.env scripts/research-selftest.js",
