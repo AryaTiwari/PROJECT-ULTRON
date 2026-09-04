@@ -1,5 +1,6 @@
 const supervisor = require('./supervisor');
 const governor = require('./model-governor');
+const retry = require('./retry');
 
 let installed = false;
 let originalHandle = null;
@@ -45,11 +46,27 @@ function install() {
 
     const resumeId = supervisor.isResumeRequest(text);
     if (resumeId) {
-      const result = supervisor.resume(resumeId === true ? null : resumeId);
-      const response = `Resumed, Sir. Forge mission ${result.missionId} is continuing from its last checkpoint${result.resumedJobs.length ? ` with ${result.resumedJobs.length} paused job${result.resumedJobs.length === 1 ? '' : 's'} restored` : ''}.`;
+      const requestedId = resumeId === true ? null : resumeId;
+      const current = supervisor.status(requestedId);
+      let result;
+      let retriedJobs = [];
+      if (current.available && ['partial', 'failed'].includes(String(current.mission?.status || ''))) {
+        const retried = retry.resetRetryable(current.mission.id);
+        retriedJobs = retried.resetJobs;
+        result = { missionId: retried.missionId, resumedJobs: [] };
+        if (retriedJobs.length) setImmediate(() => supervisor.execute(retried.missionId).catch(() => {}));
+      } else {
+        result = supervisor.resume(requestedId);
+      }
+      const detail = retriedJobs.length
+        ? ` with ${retriedJobs.length} failed or dependency-blocked job${retriedJobs.length === 1 ? '' : 's'} reset while preserving completed work`
+        : result.resumedJobs.length
+          ? ` with ${result.resumedJobs.length} paused job${result.resumedJobs.length === 1 ? '' : 's'} restored`
+          : '';
+      const response = `Resumed, Sir. Forge mission ${result.missionId} is continuing from its last checkpoint${detail}.`;
       conversation.append('user', text, { taskType: 'forge-resume', inputMode });
       conversation.append('assistant', response, { model: 'forge-supervisor', provider: 'local', taskType: 'forge-resume', inputMode });
-      emit('forge_resume_requested', { missionId: result.missionId, inputMode });
+      emit('forge_resume_requested', { missionId: result.missionId, inputMode, resumedJobs: result.resumedJobs, retriedJobs });
       void voice.enqueue(response);
       return { ok: true, response, text: response, model: 'forge-supervisor', provider: 'local', taskType: 'forge-resume', mode: 'forge', inputMode, streamed: false, toolRounds: 0 };
     }
