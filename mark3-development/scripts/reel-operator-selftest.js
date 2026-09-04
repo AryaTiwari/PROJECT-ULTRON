@@ -16,5 +16,7 @@ assert(reels.extractBrief('Ultron, make me a reel about why creators plateau at 
 assert(typeof pipeline.build === 'function', 'Finished Reel pipeline must be installed.');
 assert(typeof pipeline.applyVisualPolish === 'function', 'Premium visual polish layer must be installed.');
 assert(typeof pipeline.localMusicTrack === 'function', 'Zero-cost local music layer must be installed.');
+assert(typeof reels.registerReelArtifact === 'function', 'Rendered Reels must support File Vault artifact delivery.');
+assert(/\.mp4$/i.test(reels.artifactName({ job: { id: 'test-reel-job' } })), 'Reel chat artifact must preserve MP4 delivery.');
 
-console.log('ULTRON Reel Operator self-test passed: natural generation, duration/style parsing, premium renderer and publish separation validated.');
+console.log('ULTRON Reel Operator self-test passed: natural generation, duration/style parsing, premium renderer, chat MP4 artifact delivery and publish separation validated.');
