@@ -31,6 +31,7 @@ assert(modelStatus.roleModels.code_build[0] === 'poolside/laguna-xs-2.1', 'Lagun
 assert(codingInference.forgeRole('editor') === 'code_build', 'Coding Brain editor must route through the Forge code-build role.');
 assert(codingInference.forgeRole('reviewer') === 'code_review', 'Coding Brain reviewer must route through the Forge code-review role.');
 assert(codingInference.allowGeneralFallback() === false, 'General-purpose coding fallback must be disabled by default.');
+assert(codingInference.missionIdFromMessages([{ role: 'system', content: 'workspace=C:\\Users\\arya\\Project-Ultron\\.ultron\\forge\\workspaces\\20260904-test-ab12' }]) === '20260904-test-ab12', 'Coding Brain must recover the Forge mission id from its isolated workspace for token accounting.');
 
 const mission = store.create('Forge offline self-test', { source: 'selftest' });
 const missionDir = path.join(store.MISSIONS, mission.id);
@@ -47,4 +48,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, approval gates, zero-cost model policy, Laguna Coding Brain route and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, approval gates, zero-cost model policy, Laguna Coding Brain route, mission token accounting and no-general-fallback policy validated.');
