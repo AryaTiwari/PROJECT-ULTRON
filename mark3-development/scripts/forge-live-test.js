@@ -1,3 +1,9 @@
+// Keep the health probe fast and deterministic. These overrides affect only this
+// one test process; real Forge missions retain their normal production timeout
+// and fallback model pool.
+process.env.ULTRON_M3_FORGE_MODEL_TIMEOUT_MS = '20000';
+process.env.ULTRON_M3_FORGE_CODE_BUILD_MODELS = 'poolside/laguna-xs-2.1';
+
 const governor = require('../core/forge/model-governor');
 
 (async () => {
@@ -5,6 +11,7 @@ const governor = require('../core/forge/model-governor');
   if (!status.configuredKeySlots.length) {
     throw new Error('No NVIDIA key is configured. Add NVIDIA_API_KEY to ../.env; do not paste the key into chat or commit it.');
   }
+  console.log(`Probing NVIDIA Forge coding route: model=poolside/laguna-xs-2.1; keySlots=${status.configuredKeySlots.join(',')}; timeout=20s.`);
   const result = await governor.nvidiaChat({
     role: 'code_build',
     temperature: 0,
