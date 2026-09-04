@@ -115,6 +115,12 @@ const CAPABILITIES = [
 function match(message) {
   const text = String(message || '').trim();
   if (!text) return null;
+
+  // Explicit extraction/qualification requests are more specific than generic DM handling,
+  // so route them to the lead pipeline before the broader Instagram DM matcher.
+  const leadExtraction = CAPABILITIES.find((capability) => capability.id === 'lead_extraction');
+  if (leadExtraction?.detects.test(text)) return leadExtraction;
+
   return CAPABILITIES.find((capability) => capability.detects.test(text)) || null;
 }
 
