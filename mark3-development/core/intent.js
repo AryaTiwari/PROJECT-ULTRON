@@ -57,7 +57,20 @@ function extractCommitment(message) {
     ? { title: mutation.title, priority: mutation.priority, dueAt: mutation.dueAt, project: mutation.project }
     : null;
 }
-function isStateBriefRequest(message) {
-  return /^(?:ultron[, ]+)?(?:status|brief me|give me (?:a )?brief|what should i (?:do|work on)(?: first)?|what'?s next|what are my priorities|show my tasks|show my goals|what am i waiting (?:for|on)|what is pending)[?.!\s]*$/i.test(String(message || '').trim());
+function stripAssistantInvocation(message) {
+  return String(message || '')
+    .trim()
+    .replace(/^(?:(?:hello|hey|hi|good\s+(?:morning|afternoon|evening))[,!\s-]*)?/i, '')
+    .replace(/^ultron\b[\s,:;.!-]*/i, '')
+    .trim();
 }
-module.exports = { extractCommitment, extractProject, extractWorkspaceMutation, dueAtFromText, priorityFromText, isStateBriefRequest };
+function isStateBriefRequest(message) {
+  const text = stripAssistantInvocation(message);
+  if (!text) return false;
+  if (/^(?:status|brief me|give me (?:a )?brief|what should i (?:do|work on)(?: first)?|what'?s next|what are my priorities|show my tasks|show my goals|what am i waiting (?:for|on)|what is pending)[?.!\s]*$/i.test(text)) return true;
+  const asks = /\b(?:what|which|show|list|tell me|give me|do i have|are there|any)\b/i.test(text);
+  const stateNoun = /\b(?:pending|task|tasks|todo|to-do|goal|goals|commitment|commitments|priority|priorities|blocked|waiting|deadline|deadlines|due|overdue|workspace|work)\b/i.test(text);
+  const personal = /\b(?:my|our|i|we|for me|for us|today|tomorrow|this week|pending)\b/i.test(text);
+  return asks && stateNoun && personal;
+}
+module.exports = { extractCommitment, extractProject, extractWorkspaceMutation, dueAtFromText, priorityFromText, isStateBriefRequest, stripAssistantInvocation };
