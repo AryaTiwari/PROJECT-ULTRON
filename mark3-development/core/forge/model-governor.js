@@ -7,21 +7,26 @@ const POLL_INTERVAL_MS = Math.max(250, Number(process.env.ULTRON_M3_FORGE_NVIDIA
 const MAX_CALLS = Math.max(10, Number(process.env.ULTRON_M3_FORGE_MAX_CALLS_PER_MISSION || 120));
 const MAX_TOKENS = Math.max(50000, Number(process.env.ULTRON_M3_FORGE_MAX_TOKENS_PER_MISSION || 900000));
 
+// Keep the pool limited to currently useful zero-cost coding/agentic endpoints.
+// MiniMax M3 is a temporary emergency route only because NVIDIA currently marks it for deprecation.
 const ROLE_MODELS = {
-  code_build: ['poolside/laguna-xs-2.1', 'deepseek-ai/deepseek-v4-pro-0813', 'z-ai/glm-5.2'],
-  code_review: ['z-ai/glm-5.2', 'deepseek-ai/deepseek-v4-pro-0813', 'poolside/laguna-xs-2.1'],
-  architecture: ['z-ai/glm-5.2', 'poolside/laguna-xs-2.1', 'deepseek-ai/deepseek-v4-pro-0813'],
-  mission_compile: ['poolside/laguna-xs-2.1', 'z-ai/glm-5.2'],
-  automation: ['poolside/laguna-xs-2.1', 'z-ai/glm-5.2'],
+  code_build: ['poolside/laguna-xs-2.1', 'deepseek-ai/deepseek-v4-pro-0813', 'minimaxai/minimax-m3'],
+  code_review: ['deepseek-ai/deepseek-v4-pro-0813', 'poolside/laguna-xs-2.1', 'minimaxai/minimax-m3'],
+  architecture: ['poolside/laguna-xs-2.1', 'deepseek-ai/deepseek-v4-pro-0813', 'minimaxai/minimax-m3'],
+  mission_compile: ['poolside/laguna-xs-2.1', 'deepseek-ai/deepseek-v4-pro-0813'],
+  automation: ['poolside/laguna-xs-2.1', 'deepseek-ai/deepseek-v4-pro-0813', 'minimaxai/minimax-m3'],
 };
 
 let cursor = 0;
-const cooldowns = new Map();
+const keyCooldowns = new Map();
+const modelCooldowns = new Map();
+const disabledModels = new Map();
 
 function csv(name) { return String(process.env[name] || '').split(',').map((value) => value.trim()).filter(Boolean); }
 function configuredModels(role) {
   const override = csv(`ULTRON_M3_FORGE_${String(role || '').toUpperCase()}_MODELS`);
-  return override.length ? override : ROLE_MODELS[role] || ROLE_MODELS.code_build;
+  const source = override.length ? override : ROLE_MODELS[role] || ROLE_MODELS.code_build;
+  return source.filter((model) => !disabledModels.has(model) && Number(modelCooldowns.get(model) || 0) <= Date.now());
 }
 function keyRows() {
   const names = ['NVIDIA_API_KEY', 'NVIDIA_NIM_API_KEY'];
@@ -31,8 +36,8 @@ function keyRows() {
     .filter((row) => row.value && !seen.has(row.value) && seen.add(row.value));
 }
 function keyAvailable(row) {
-  const until = cooldowns.get(row.slot) || 0;
-  if (until <= Date.now()) { cooldowns.delete(row.slot); return true; }
+  const until = keyCooldowns.get(row.slot) || 0;
+  if (until <= Date.now()) { keyCooldowns.delete(row.slot); return true; }
   return false;
 }
 function orderedKeys() {
@@ -41,12 +46,26 @@ function orderedKeys() {
   const start = cursor % rows.length;
   return [...rows.slice(start), ...rows.slice(0, start)].filter(keyAvailable);
 }
-function cooldown(row, error) {
+function classifyFailure(model, row, error) {
   const status = Number(error?.status || 0);
   const text = String(error?.message || '').toLowerCase();
-  if (status === 429 || /rate.?limit|quota|exhaust/.test(text)) cooldowns.set(row.slot, Date.now() + 90_000);
-  else if ([401, 403].includes(status)) cooldowns.set(row.slot, Date.now() + 30 * 60_000);
-  else if (status >= 500 || status === 408 || /timeout|timed out|upstream|aborted/.test(text)) cooldowns.set(row.slot, Date.now() + 30_000);
+  if (status === 404 || status === 410 || /end of life|deprecated|no longer available|model .* gone/.test(text)) {
+    disabledModels.set(model, { reason: error.message, at: new Date().toISOString() });
+    return 'model-disabled';
+  }
+  if ([401, 403].includes(status)) {
+    keyCooldowns.set(row.slot, Date.now() + 30 * 60_000);
+    return 'key-auth';
+  }
+  if (status === 429 || /account quota|api quota|rate.?limit.*key|quota exceeded/.test(text)) {
+    keyCooldowns.set(row.slot, Date.now() + 90_000);
+    return 'key-quota';
+  }
+  if (status >= 500 || status === 408 || /resourceexhausted|worker .*limit|timeout|timed out|upstream|aborted|service unavailable/.test(text)) {
+    modelCooldowns.set(model, Date.now() + (status === 503 || /resourceexhausted|worker .*limit/.test(text) ? 120_000 : 60_000));
+    return 'model-transient';
+  }
+  return 'unknown';
 }
 function parseText(data) {
   const value = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
@@ -197,6 +216,7 @@ async function nvidiaChat({ missionId, role = 'code_build', messages, temperatur
   const keys = orderedKeys();
   if (!keys.length) throw new Error('FORGE_NO_NVIDIA_KEY: configure NVIDIA_API_KEY (or another supported NVIDIA key slot).');
   const models = configuredModels(role);
+  if (!models.length) throw new Error(`FORGE_NVIDIA_UNAVAILABLE: all configured ${role} models are temporarily unavailable or disabled.`);
   const failures = [];
   const safeMessages = redactMessages(messages || []);
   const inputText = JSON.stringify(safeMessages);
@@ -208,7 +228,6 @@ async function nvidiaChat({ missionId, role = 'code_build', messages, temperatur
         try {
           data = await requestModel(model, row, safeMessages, { temperature, maxTokens, json });
         } catch (firstError) {
-          // Some otherwise-compatible free endpoints reject OpenAI response_format.
           if (json && Number(firstError?.status || 0) === 400) data = await requestModel(model, row, safeMessages, { temperature, maxTokens, json: false });
           else throw firstError;
         }
@@ -219,18 +238,22 @@ async function nvidiaChat({ missionId, role = 'code_build', messages, temperatur
         cursor = (keyRows().findIndex((entry) => entry.slot === row.slot) + 1) % Math.max(1, keyRows().length);
         return { ok: true, provider: 'nvidia', model, keySlot: row.slot, text, usage: delta, raw: data };
       } catch (error) {
-        cooldown(row, error);
-        failures.push(`${model}/${row.slot}: ${error.message}`);
+        const classification = classifyFailure(model, row, error);
+        failures.push(`${model}/${row.slot} [${classification}]: ${error.message}`);
+        if (classification === 'model-disabled' || classification === 'model-transient') break;
       }
     }
   }
   throw new Error(`FORGE_NVIDIA_UNAVAILABLE: ${failures.slice(-6).join(' | ')}`);
 }
 function status() {
+  const now = Date.now();
   return {
     zeroCostOnly: true, localLlmAllowed: false, paidFallbackAllowed: false,
     provider: 'nvidia', endpoint: NVIDIA_BASE,
     configuredKeySlots: keyRows().map((row) => row.slot), roleModels: ROLE_MODELS,
+    activeModelCooldowns: Object.fromEntries([...modelCooldowns.entries()].filter(([, until]) => until > now).map(([model, until]) => [model, new Date(until).toISOString()])),
+    disabledModels: Object.fromEntries(disabledModels.entries()),
     maxCallsPerMission: MAX_CALLS, maxTokensPerMission: MAX_TOKENS,
     secretRedaction: true, externalWorkerBudgeting: true,
     asyncPolling: true, pollIntervalMs: POLL_INTERVAL_MS, timeoutMs: TIMEOUT_MS,
@@ -239,5 +262,5 @@ function status() {
 
 module.exports = {
   ROLE_MODELS, configuredModels, keyRows, nvidiaChat, status, assertBudget, reserveExternalUsage,
-  requestIdFrom, pollPending,
+  requestIdFrom, pollPending, classifyFailure,
 };
