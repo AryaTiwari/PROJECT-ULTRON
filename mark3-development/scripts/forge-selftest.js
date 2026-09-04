@@ -5,18 +5,28 @@ const factory = require('../core/forge/agent-factory');
 const governor = require('../core/forge/model-governor');
 const supervisor = require('../core/forge/supervisor');
 const store = require('../core/forge/mission-store');
+const automation = require('../core/forge/automation-blueprint');
 const codingInference = require('../core/coding-inference');
 const redactor = require('../core/forge/redactor');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
-const plan = compiler.fallback('Build a complete automated creator CRM with a dashboard and workflows');
+const objective = 'Build a complete automated creator CRM with a dashboard and workflows';
+const plan = compiler.fallback(objective);
 assert(plan.jobs.length >= 6, 'Forge fallback must produce a multi-step mission DAG.');
 assert(plan.jobs.some((job) => job.worker === 'coding'), 'Forge mission must contain a coding worker.');
 assert(plan.jobs.some((job) => job.worker === 'review'), 'Forge mission must contain an independent review worker.');
 assert(supervisor.shouldUse('Ultron, build me a complete automated CRM system'), 'Large build requests must route to Forge.');
 assert(!supervisor.shouldUse('What is a CRM?'), 'Ordinary questions must not route to Forge.');
 assert(supervisor.externalSideEffect('deploy to production'), 'Production deployment must be approval-gated.');
+assert(supervisor.isApprovalRequest('Approve Forge') === true, 'Natural Forge approval must target the latest mission.');
+
+const automationSpec = automation.create('Whenever a lead submits a form, qualify it, store it in Supabase and prepare outreach');
+assert(automation.isAutomationObjective(automationSpec.objective), 'Automation objectives must be detected.');
+assert(automationSpec.delivery.executableProgram === true && automationSpec.delivery.restartSafe === true, 'Automation missions must require executable restart-safe programs.');
+assert(automationSpec.contracts.idempotencyKey === true && automationSpec.contracts.persistentCheckpoint === true, 'Automation missions must require idempotency and checkpoints.');
+assert(automationSpec.contracts.externalSideEffectsApproval === true, 'Automation missions must gate external side effects.');
+assert(/actual executable automation program/i.test(automation.workerInstruction(automationSpec.objective)), 'Coding workers must receive the automation program contract.');
 
 const fakeMission = { id: 'selftest-mission', objective: 'test', workspace: 'test' };
 const agents = factory.staff(plan.jobs, fakeMission);
@@ -47,9 +57,21 @@ try {
   assert(store.jobs(mission.id).length === plan.jobs.length, 'Mission jobs must persist across reads.');
   store.checkpoint(mission.id, { status: 'running', phase: 'execute' });
   assert(store.load(mission.id).status === 'running', 'Mission checkpoints must persist state.');
+
+  const failedReview = {
+    id: 'selftest-review', title: 'Self-test critic', objective: 'Review the build', kind: 'critic', worker: 'review',
+    dependsOn: [], acceptance: [], status: 'completed', attempts: 1,
+    output: { summary: 'A concrete defect remains.', verdict: 'NEEDS_FIXES' }, evidence: [],
+  };
+  store.saveJobs(mission.id, [failedReview]);
+  store.saveAgents(mission.id, [factory.create(failedReview, loaded)]);
+  assert(supervisor.appendRepairCycle(store.load(mission.id), store.jobs(mission.id), failedReview) === true, 'Failed independent review must create an autonomous repair cycle.');
+  const repairedGraph = store.jobs(mission.id);
+  assert(repairedGraph.some((job) => job.id.startsWith('auto-repair-') && job.worker === 'coding'), 'Repair cycle must create a coding repair agent.');
+  assert(repairedGraph.some((job) => job.id.startsWith('auto-review-') && job.worker === 'review'), 'Repair cycle must create a fresh independent reviewer.');
 } finally {
   try { fs.rmSync(missionDir, { recursive: true, force: true }); } catch {}
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, approval gates, zero-cost model policy, Laguna Coding Brain route, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost model policy, Laguna Coding Brain route, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
