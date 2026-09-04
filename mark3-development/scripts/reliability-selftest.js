@@ -78,6 +78,11 @@ try {
   assert(localStateAnswer.includes(todayTask.title), 'Today-task state answer must name the locally persisted due-today task.');
   assert(!/TinyFish|calendar|task manager/i.test(localStateAnswer), 'Local state answers must not claim web research or redirect to an external task manager.');
 
+  const advisorQuestion = 'So what should we start today? Like what should we do?';
+  assert(intent.isStateBriefRequest(advisorQuestion), 'Natural today advisor question must route to local workspace state.');
+  const advisorAnswer = proactive.stateResponse(advisorQuestion);
+  assert(!/TinyFish|Checked:|search the web/i.test(advisorAnswer), 'Today advisor answer must remain local unless external research is explicitly requested.');
+
   proactive.syncStateMemory();
   const stateMemory = memory.retrieve('what are my work priorities and what is next', { limit: 4 });
   assert(stateMemory.some((item) => item.key === 'ultron workspace current state'), 'Live workspace state must be retrievable for priority/status questions.');
@@ -91,7 +96,7 @@ try {
 
   const snapshot = workspace.stateSnapshot();
   assert(snapshot.counts.goals === 1 && snapshot.counts.tasks >= 1, 'Workspace state snapshot is incomplete.');
-  console.log('ULTRON reliability self-test passed: entity-aware memory updates, voice-prefixed task capture, idempotent tasks/goals/commitments, local-first today status, completion resolution, execution verification, proactive attention and diagnostic-only Model League validated.');
+  console.log('ULTRON reliability self-test passed: entity-aware memory updates, voice-prefixed task capture, idempotent tasks/goals/commitments, local-first today status/advice, completion resolution, execution verification, proactive attention and diagnostic-only Model League validated.');
 } finally {
   try { proactive.stop(); } catch {}
   for (const [file, backup] of backups.entries()) {
