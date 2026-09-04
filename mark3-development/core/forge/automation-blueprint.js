@@ -1,7 +1,16 @@
 const crypto = require('crypto');
 
 function isAutomationObjective(text) {
-  return /\b(?:automat(?:e|ed|ion)|workflow|pipeline|scheduled job|webhook|agentic process|background job|integration flow|sync job|bot)\b/i.test(String(text || ''));
+  const value = String(text || '').trim();
+  if (/\b(?:automat(?:e|ed|ion)|workflow|pipeline|scheduled job|webhook|agentic process|background job|integration flow|sync job|bot)\b/i.test(value)) return true;
+
+  // Users naturally describe automations as event -> action rules without saying
+  // "automation" or "workflow". Require both an event signal and a downstream
+  // action so ordinary questions containing "when" are not misclassified.
+  const eventDriven = /\bwhenever\b|\bwhen\s+(?:a|an|the|someone|somebody|user|lead|customer|client|creator|email|message|form|file|record|row|event)\b/i.test(value);
+  const eventVerb = /\b(?:submit(?:s|ted|ting)?|arriv(?:e|es|ed|ing)|receiv(?:e|es|ed|ing)|repl(?:y|ies|ied|ying)|creat(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|upload(?:s|ed|ing)?|send(?:s|ing)?|sent|chang(?:e|es|ed|ing)|add(?:s|ed|ing)?|enter(?:s|ed|ing)?|complet(?:e|es|ed|ing)|fail(?:s|ed|ing)?|succeed(?:s|ed|ing)?)\b/i.test(value);
+  const actionVerb = /\b(?:qualif(?:y|ies|ied|ying)|store(?:s|d|ing)?|save(?:s|d|ing)?|send(?:s|ing)?|create(?:s|d|ing)?|update(?:s|d|ing)?|notif(?:y|ies|ied|ying)|run(?:s|ning)?|start(?:s|ed|ing)?|trigger(?:s|ed|ing)?|process(?:es|ed|ing)?|prepare(?:s|d|ing)?|write(?:s|written|writing)?|move(?:s|d|ing)?|sync(?:s|ed|ing)?|log(?:s|ged|ging)?|call(?:s|ed|ing)?|execute(?:s|d|ing)?)\b/i.test(value);
+  return eventDriven && eventVerb && actionVerb;
 }
 
 function systemsFrom(text) {
@@ -23,9 +32,9 @@ function systemsFrom(text) {
 
 function triggerFrom(text) {
   const value = String(text || '');
-  if (/\bwhen(?:ever)?\b|\bon\s+(?:new|incoming|received|created|updated)\b/i.test(value)) return 'event';
+  if (/\bwebhook\b|\bform\s+(?:is\s+)?submit(?:ted|s)?\b|\bsubmit(?:s|ted|ting)?\s+(?:a|the)?\s*form\b/i.test(value)) return 'webhook';
   if (/\bevery\s+(?:day|hour|week|month)|\bdaily\b|\bweekly\b|\bhourly\b|\bschedule(?:d)?\b/i.test(value)) return 'schedule';
-  if (/\bwebhook\b|\bform\s+(?:submit|submission)\b/i.test(value)) return 'webhook';
+  if (/\bwhen(?:ever)?\b|\bon\s+(?:new|incoming|received|created|updated)\b/i.test(value)) return 'event';
   return 'manual-or-api';
 }
 
