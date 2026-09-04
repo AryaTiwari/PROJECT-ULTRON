@@ -11,11 +11,22 @@ assert(operator.match('Automate the Creator Upgrade Program onboarding')?.id ===
 assert(operator.match('Build a new creator analytics feature')?.id === 'software_build', 'Software builds must route to Forge capability.');
 assert(operator.match('Build me a gold trading bot')?.id === 'trading_research', 'Trading requests must route to trading research/paper execution safety mode.');
 
-const trading = operator.status().find((row) => row.id === 'trading_research');
+const rows = operator.status();
+const trading = rows.find((row) => row.id === 'trading_research');
 assert(trading?.mode === 'research-paper-only', 'Trading operator must not enable autonomous real-money execution.');
 assert(/Real-money autonomous execution is disabled/i.test(trading?.purpose || ''), 'Trading operator status must clearly state the real-money execution boundary.');
+assert(trading?.ready === true, 'Trading research and paper execution should remain available without a broker connector.');
 
-const research = operator.status().find((row) => row.id === 'creator_research');
+const research = rows.find((row) => row.id === 'creator_research');
 assert(research?.ready === true, 'Public creator research should be available with the existing web/research layer.');
 
-console.log('ULTRON Operator self-test passed: Instagram publishing, DMs, creator research, lead extraction, LinkedIn, CUP, Forge and paper-trading capability routing validated.');
+const forge = rows.find((row) => row.id === 'software_build');
+assert(forge?.ready === true, 'Forge software building must remain an operator capability.');
+
+for (const id of ['instagram_publish', 'instagram_dm', 'lead_extraction', 'linkedin_publish', 'cup_automation']) {
+  const row = rows.find((item) => item.id === id);
+  assert(row && row.implemented === false, `${id} must not claim connector implementation before its deterministic connector exists.`);
+  assert(row.ready === false, `${id} must not claim it can execute merely because credentials may exist.`);
+}
+
+console.log('ULTRON Operator self-test passed: founder-work routing, honest connector readiness, creator research, Forge and paper-trading boundaries validated.');
