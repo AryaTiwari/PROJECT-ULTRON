@@ -122,6 +122,59 @@
     });
   }
 
+  function transcriptTokens(text) {
+    let value = String(text || '').normalize('NFKC').toLowerCase().trim();
+    value = value
+      .replace(/^(?:hello|hey|hi|good\s+(?:morning|afternoon|evening))\b[\s,:;.!-]*/i, '')
+      .replace(/^(?:ultron|ultran|altron|oltron|ultra\s+on)\b[\s,:;.!-]*/i, '');
+    return value.match(/[a-z0-9]+(?:'[a-z0-9]+)?/g) || [];
+  }
+
+  function commonPrefixCount(a, b) {
+    const limit = Math.min(a.length, b.length);
+    let count = 0;
+    while (count < limit && a[count] === b[count]) count += 1;
+    return count;
+  }
+
+  function reconcileTranscripts(nativeText, browserText) {
+    const native = String(nativeText || '').trim();
+    const browser = String(browserText || '').trim();
+    if (!native) return { text: browser, source: 'browser-only', trimmed: false };
+    if (!browser) return { text: native, source: 'native-only', trimmed: false };
+
+    const nativeTokens = transcriptTokens(native);
+    const browserTokens = transcriptTokens(browser);
+    const shorterLength = Math.min(nativeTokens.length, browserTokens.length);
+    const prefix = commonPrefixCount(nativeTokens, browserTokens);
+    const coverage = shorterLength ? prefix / shorterLength : 0;
+    const extraWords = Math.abs(nativeTokens.length - browserTokens.length);
+
+    // Two independent recognizers strongly agree on the utterance, but one keeps
+    // listening and appends unrelated trailing speech/noise. Prefer the shorter
+    // agreed transcript instead of feeding unsupported words into ULTRON.
+    if (shorterLength >= 4 && coverage >= 0.8 && extraWords >= 3) {
+      const nativeIsShorter = nativeTokens.length <= browserTokens.length;
+      return {
+        text: nativeIsShorter ? native : browser,
+        source: 'dual-transcript-trim',
+        trimmed: true,
+        nativeWords: nativeTokens.length,
+        browserWords: browserTokens.length,
+        agreement: Number(coverage.toFixed(2)),
+      };
+    }
+
+    return {
+      text: native,
+      source: 'native-authoritative',
+      trimmed: false,
+      nativeWords: nativeTokens.length,
+      browserWords: browserTokens.length,
+      agreement: Number(coverage.toFixed(2)),
+    };
+  }
+
   function updateVisibleTranscript(text, provider) {
     const messages = document.querySelectorAll('#messages .msg.user');
     const last = messages[messages.length - 1];
@@ -138,6 +191,17 @@
       activity.prepend(row);
       while (activity.children.length > 10) activity.lastElementChild?.remove();
     }
+  }
+
+  function logTranscriptTrim(result) {
+    if (!result?.trimmed) return;
+    const activity = document.querySelector('#activityList');
+    if (!activity) return;
+    const row = document.createElement('div');
+    row.className = 'event';
+    row.innerHTML = `<div class="event-state">voice guard</div><div class="event-label">Unsupported trailing transcript removed</div><div class="event-tool">dual transcript agreement ${Math.round((result.agreement || 0) * 100)}%</div>`;
+    activity.prepend(row);
+    while (activity.children.length > 10) activity.lastElementChild?.remove();
   }
 
   async function transcribe(blob, browserTranscript) {
@@ -177,10 +241,19 @@
     if (!blob) return baseFetch(input, init);
     try {
       const recognized = await transcribe(blob, parsed.message);
+      const reconciled = reconcileTranscripts(recognized.text, parsed.message);
       parsed.browserTranscript = parsed.message;
-      parsed.message = recognized.text;
-      parsed.voiceRecognition = { provider: recognized.provider, model: recognized.model, nativeAudio: true };
-      updateVisibleTranscript(recognized.text, recognized.provider);
+      parsed.message = reconciled.text;
+      parsed.voiceRecognition = {
+        provider: recognized.provider,
+        model: recognized.model,
+        nativeAudio: true,
+        transcriptSource: reconciled.source,
+        transcriptTrimmed: Boolean(reconciled.trimmed),
+        agreement: reconciled.agreement ?? null,
+      };
+      logTranscriptTrim(reconciled);
+      updateVisibleTranscript(reconciled.text, recognized.provider);
       return baseFetch(input, { ...init, body: JSON.stringify(parsed) });
     } catch (error) {
       const activity = document.querySelector('#activityList');
@@ -199,7 +272,7 @@
     if (!button) return;
     button.classList.toggle('active', state.enabled);
     button.textContent = state.enabled ? (state.ready ? 'VOICE AI ON' : 'VOICE AI') : 'VOICE AI OFF';
-    button.title = state.enabled ? 'Recorded audio is authoritative; browser speech recognition is fallback only.' : 'Use browser speech recognition only.';
+    button.title = state.enabled ? 'Recorded audio is authoritative; browser speech recognition cross-checks unsupported trailing words.' : 'Use browser speech recognition only.';
   }
 
   async function warmIfAlreadyGranted() {
@@ -259,5 +332,5 @@
     document.addEventListener('keydown', warm, { once: true });
   });
 
-  window.__ULTRON_NATIVE_VOICE = { state, ensureRecorder, beginCommand, captureCommand };
+  window.__ULTRON_NATIVE_VOICE = { state, ensureRecorder, beginCommand, captureCommand, reconcileTranscripts };
 })();
