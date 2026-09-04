@@ -7,6 +7,7 @@ const supervisor = require('../core/forge/supervisor');
 const store = require('../core/forge/mission-store');
 const automation = require('../core/forge/automation-blueprint');
 const goose = require('../core/forge/goose-worker');
+const retry = require('../core/forge/retry');
 const codingInference = require('../core/coding-inference');
 const redactor = require('../core/forge/redactor');
 
@@ -89,6 +90,22 @@ try {
   store.checkpoint(mission.id, { status: 'running', phase: 'execute' });
   assert(store.load(mission.id).status === 'running', 'Mission checkpoints must persist state.');
 
+  const partialJobs = plan.jobs.slice(0, 3).map((job, index) => ({
+    ...job,
+    status: index === 0 ? 'completed' : index === 1 ? 'failed' : 'blocked',
+    attempts: index === 0 ? 1 : 2,
+    error: index === 1 ? 'Specialist did not return a JSON object.' : null,
+    blockedReason: index === 2 ? 'dependency-not-satisfied' : null,
+  }));
+  store.saveJobs(mission.id, partialJobs);
+  store.checkpoint(mission.id, { status: 'partial', phase: 'done' });
+  const retryResult = retry.resetRetryable(mission.id);
+  const retried = store.jobs(mission.id);
+  assert(retryResult.resetJobs.length === 2, 'Partial retry must reset only failed and dependency-blocked jobs.');
+  assert(retried[0].status === 'completed', 'Partial retry must preserve completed Forge work.');
+  assert(retried[1].status === 'pending' && retried[1].attempts === 0 && !retried[1].error, 'Failed Forge job must become a clean pending retry.');
+  assert(retried[2].status === 'pending' && !retried[2].blockedReason, 'Dependency-blocked Forge job must become pending after retry.');
+
   const failedReview = {
     id: 'selftest-review', title: 'Self-test critic', objective: 'Review the build', kind: 'critic', worker: 'review',
     dependsOn: [], acceptance: [], status: 'completed', attempts: 1,
@@ -105,4 +122,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, checkpoint-preserving partial retries, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
