@@ -1,6 +1,10 @@
+const fs = require('fs');
+const path = require('path');
 const PEXELS_BASE = 'https://api.pexels.com/v1/videos/search';
 const PIXABAY_BASE = 'https://pixabay.com/api/videos/';
 const DEFAULT_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_REEL_SOURCE_TIMEOUT_MS || 20000));
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = Math.max(15000, Number(process.env.ULTRON_M3_REEL_DOWNLOAD_TIMEOUT_MS || 120000));
+const MAX_DOWNLOAD_BYTES = Math.max(5 * 1024 * 1024, Number(process.env.ULTRON_M3_REEL_MAX_ASSET_BYTES || 120 * 1024 * 1024));
 
 function firstEnv(...names) {
   for (const name of names) {
@@ -136,6 +140,46 @@ async function searchVideos(query, options = {}) {
   return { ok: false, provider: null, query, items: [], errors };
 }
 
+function safeAssetName(asset, index = 1) {
+  const provider = String(asset?.provider || 'stock').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'stock';
+  const id = String(asset?.id || index).replace(/[^a-z0-9_-]/gi, '').slice(0, 48) || String(index);
+  return `${String(index).padStart(2, '0')}-${provider}-${id}.mp4`;
+}
+
+async function downloadAsset(asset, destination, options = {}) {
+  if (!asset?.url) throw new Error('Stock asset has no downloadable URL.');
+  const target = path.resolve(destination);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const controller = new AbortController();
+  const timeoutMs = Math.max(15000, Number(options.timeoutMs || DEFAULT_DOWNLOAD_TIMEOUT_MS));
+  const maxBytes = Math.max(5 * 1024 * 1024, Number(options.maxBytes || MAX_DOWNLOAD_BYTES));
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(asset.url, { headers: { Accept: 'video/mp4,application/octet-stream;q=0.9,*/*;q=0.1' }, signal: controller.signal });
+    if (!response.ok) throw new Error(`Stock asset download HTTP ${response.status}.`);
+    const declared = Number(response.headers.get('content-length') || 0);
+    if (declared && declared > maxBytes) throw new Error(`Stock asset is too large (${declared} bytes > ${maxBytes}).`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length) throw new Error('Stock asset download returned an empty file.');
+    if (bytes.length > maxBytes) throw new Error(`Stock asset is too large (${bytes.length} bytes > ${maxBytes}).`);
+    fs.writeFileSync(target, bytes);
+    return {
+      ok: true,
+      path: target,
+      bytes: bytes.length,
+      provider: asset.provider || null,
+      id: asset.id || null,
+      attribution: asset.attribution || null,
+      sourcePage: asset.sourcePage || null,
+    };
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`Stock asset download timed out after ${timeoutMs}ms.`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function status() {
   const creds = credentials();
   return {
@@ -157,5 +201,7 @@ module.exports = {
   searchPexels,
   searchPixabay,
   searchVideos,
+  safeAssetName,
+  downloadAsset,
   status,
 };
