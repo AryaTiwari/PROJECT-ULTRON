@@ -49,12 +49,19 @@ function sanitizeMessages(messages) {
   if (!result.length) throw new Error('Coding inference requires messages.');
   return result;
 }
-async function inferWithForge(role, safeMessages) {
+function missionIdFromMessages(messages) {
+  const text = (Array.isArray(messages) ? messages : []).map((row) => String(row?.content || '')).join('\n');
+  const match = text.match(/[\\/]\.ultron[\\/]forge[\\/]workspaces[\\/]([A-Za-z0-9._-]+)/i)
+    || text.match(/[\\/]forge[\\/]workspaces[\\/]([A-Za-z0-9._-]+)/i);
+  return match ? match[1] : null;
+}
+async function inferWithForge(role, safeMessages, missionId = null) {
   const started = Date.now();
   const taskType = roleTaskType(role);
   const selectedRole = forgeRole(role);
   try {
     const result = await forgeGovernor.nvidiaChat({
+      missionId,
       role: selectedRole,
       messages: safeMessages,
       temperature: selectedRole === 'code_build' ? 0.15 : 0.1,
@@ -71,6 +78,7 @@ async function inferWithForge(role, safeMessages) {
       exact: true,
       candidates: forgeGovernor.configuredModels(selectedRole),
       forge: true,
+      missionId,
       usage: result.usage,
     };
   } catch (error) {
@@ -113,13 +121,14 @@ async function inferGeneralFallback(role, safeMessages) {
 }
 async function infer(role, messages) {
   const safeMessages = sanitizeMessages(messages);
+  const missionId = missionIdFromMessages(messages) || missionIdFromMessages(safeMessages);
   try {
-    return await inferWithForge(role, safeMessages);
+    return await inferWithForge(role, safeMessages, missionId);
   } catch (forgeError) {
     if (!allowGeneralFallback()) throw forgeError;
     const fallback = await inferGeneralFallback(role, safeMessages);
-    return { ...fallback, forgeFailure: forgeError.message };
+    return { ...fallback, forgeFailure: forgeError.message, missionId };
   }
 }
 
-module.exports = { infer, inferWithForge, inferGeneralFallback, roleTaskType, forgeRole, textFromResponse, sanitizeMessages, allowGeneralFallback };
+module.exports = { infer, inferWithForge, inferGeneralFallback, roleTaskType, forgeRole, missionIdFromMessages, textFromResponse, sanitizeMessages, allowGeneralFallback };
