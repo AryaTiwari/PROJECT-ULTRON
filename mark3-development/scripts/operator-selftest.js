@@ -1,4 +1,6 @@
 const operator = require('../core/operator');
+const operatorBootstrap = require('../core/operator-bootstrap');
+const instagram = require('../core/instagram');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -10,6 +12,11 @@ assert(operator.match('Publish a founder post on LinkedIn')?.id === 'linkedin_pu
 assert(operator.match('Automate the Creator Upgrade Program onboarding')?.id === 'cup_automation', 'CUP automation must be recognized.');
 assert(operator.match('Build a new creator analytics feature')?.id === 'software_build', 'Software builds must route to Forge capability.');
 assert(operator.match('Build me a gold trading bot')?.id === 'trading_research', 'Trading requests must route to trading research/paper execution safety mode.');
+assert(operatorBootstrap.isInstagramCheckRequest('Ultron, check Instagram connection') === true, 'Natural Instagram connection checks must route deterministically.');
+assert(operatorBootstrap.isInstagramCheckRequest('Verify my Instagram API') === true, 'Instagram API verification wording must route deterministically.');
+
+const igStatus = instagram.status();
+assert(typeof igStatus.tokenConfigured === 'boolean' && typeof igStatus.accountIdConfigured === 'boolean', 'Instagram connector status must expose credential readiness without exposing secret values.');
 
 const rows = operator.status();
 const trading = rows.find((row) => row.id === 'trading_research');
@@ -29,4 +36,4 @@ for (const id of ['instagram_publish', 'instagram_dm', 'lead_extraction', 'linke
   assert(row.ready === false, `${id} must not claim it can execute merely because credentials may exist.`);
 }
 
-console.log('ULTRON Operator self-test passed: founder-work routing, honest connector readiness, creator research, Forge and paper-trading boundaries validated.');
+console.log('ULTRON Operator self-test passed: founder-work routing, natural Instagram verification, honest connector readiness, creator research, Forge and paper-trading boundaries validated.');
