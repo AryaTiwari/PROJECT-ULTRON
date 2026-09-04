@@ -6,11 +6,12 @@
   "description": "ULTRON Mark 3 founder operating assistant with persistent state, verified execution, proactive attention, native voice, multimodal artifacts, direct primary models, Forge multi-agent missions and evidence-driven coding/research",
   "scripts": {
     "start": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/reliability-selftest.js && node --env-file=../.env scripts/operator-selftest.js && node --env-file=../.env scripts/forge-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/multimodal-selftest.js && node --env-file=../.env scripts/start-transport.mjs && node --env-file=../.env --require ./core/forge/preload.js server.js",
-    "check": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/reliability-selftest.js && node --env-file=../.env scripts/operator-selftest.js && node --env-file=../.env scripts/forge-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/multimodal-selftest.js && node --env-file=../.env scripts/smoke-test.js",
+    "check": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/reliability-selftest.js && node --env-file=../.env scripts/operator-selftest.js && node --env-file=../.env scripts/forge-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/multimodal-selftest.js && node --env-file=../.env scripts/reel-selftest.js && node --env-file=../.env scripts/smoke-test.js",
     "check:flow": "node --env-file=../.env scripts/flow-selftest.js",
     "check:reliability": "node --env-file=../.env scripts/reliability-selftest.js",
     "check:operator": "node --env-file=../.env scripts/operator-selftest.js",
     "check:instagram": "node --env-file=../.env scripts/instagram-test.js",
+    "check:reels": "node --env-file=../.env scripts/reel-selftest.js",
     "check:forge": "node --env-file=../.env scripts/forge-selftest.js",
     "check:forge:live": "node --env-file=../.env scripts/forge-live-test.js",
     "check:research": "node --env-file=../.env scripts/research-selftest.js",
