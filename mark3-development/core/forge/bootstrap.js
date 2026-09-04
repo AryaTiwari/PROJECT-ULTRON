@@ -10,26 +10,37 @@ function executionRequest(message) {
   if (/\b(?:how do i|how can i|how should i|explain|teach me|guide me|what is|what are)\b/i.test(text)) return false;
   return supervisor.shouldUse(text);
 }
+function internalProjectStatusIntent(text) {
+  const value = String(text || '').trim().toLowerCase();
+  if (!/\b(?:status|progress|how(?:'s| is)|where (?:is|are)|what(?:'s| is) happening)\b/.test(value)) return false;
+  const state = supervisor.status();
+  if (!state.available) return false;
+  const objective = String(state.mission?.objective || '').toLowerCase();
+  const crmRequest = /\b(?:crm|creator lead|lead command center|creator command center)\b/.test(value);
+  const crmMission = /\b(?:crm|creator lead|lead command center|creator command center)\b/.test(objective);
+  return crmRequest && crmMission;
+}
 function latestStatusResponse() {
   const state = supervisor.status();
   if (!state.available) return 'Sir, no Forge mission exists yet.';
   const { mission, usage } = state;
   const jobs = Array.isArray(state.jobs) ? state.jobs : [];
   const progress = mission.progress || {};
-  const usageText = usage ? ` Inference usage: ${usage.calls || 0} calls, ${usage.totalTokens || 0} tokens.` : '';
+  const objective = String(mission.objective || 'current project');
+  const isCrm = /\b(?:crm|creator lead|lead command center|creator command center)\b/i.test(objective);
+  const usageText = usage ? ` AI usage so far: ${usage.calls || 0} calls and ${usage.totalTokens || 0} tokens.` : '';
   const running = state.running || mission.status === 'running' ? 'running' : mission.status;
   const paused = mission.status === 'paused_inference' ? ' Free inference is paused; restore an allowed free key or wait for quota recovery, then say “Resume Forge”.' : '';
   const approval = mission.status === 'awaiting_approval' ? ' A gated external side effect is waiting; say “Approve Forge” only if you want it executed.' : '';
-  const automation = mission.automation ? ' Automation durability contract is active.' : '';
-  const repair = mission.repairCycles ? ` Repair cycles used: ${mission.repairCycles}.` : '';
   const blockedJobs = jobs.filter((job) => ['blocked', 'failed', 'paused', 'blocked_approval'].includes(String(job.status || '')));
   const activeJobs = jobs.filter((job) => job.status === 'running');
+  const activeText = activeJobs.length ? ` Right now it is working on: ${activeJobs[0].title || activeJobs[0].id}.` : '';
   const blockerText = blockedJobs.length
-    ? ` Blocked/failed jobs: ${blockedJobs.slice(0, 3).map((job) => `${job.title || job.id} [${job.status}: ${job.blockedReason || job.error || 'no reason recorded'}]`).join('; ')}${blockedJobs.length > 3 ? `; +${blockedJobs.length - 3} more` : ''}.`
+    ? ` ${blockedJobs.length} job${blockedJobs.length === 1 ? '' : 's'} currently need attention; the first is ${blockedJobs[0].title || blockedJobs[0].id}: ${blockedJobs[0].blockedReason || blockedJobs[0].error || 'reason not recorded'}.`
     : '';
-  const activeText = activeJobs.length ? ` Active job: ${activeJobs[0].title || activeJobs[0].id}.` : '';
-  const workspace = ['completed', 'partial', 'failed', 'paused_inference'].includes(mission.status) ? ` Workspace: ${mission.workspace}.` : '';
-  return `Sir, Forge mission ${mission.id} is ${running}: ${progress.completed || 0}/${progress.total || 0} jobs complete (${progress.percent || 0}%).${activeText}${mission.error ? ` Current issue: ${mission.error}` : ''}${blockerText}${paused}${approval}${automation}${repair}${usageText}${workspace}`;
+  const workspace = mission.workspace ? ` Project files: ${mission.workspace}.` : '';
+  const label = isCrm ? 'your internal Elevate CRM build' : `Forge mission ${mission.id}`;
+  return `Sir, ${label} is ${running}. ${progress.completed || 0} of ${progress.total || 0} build jobs are complete (${progress.percent || 0}%).${activeText}${blockerText}${paused}${approval}${usageText}${workspace}`;
 }
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true };
@@ -71,7 +82,7 @@ function install() {
       return { ok: true, response, text: response, model: 'forge-supervisor', provider: 'local', taskType: 'forge-resume', mode: 'forge', inputMode, streamed: false, toolRounds: 0 };
     }
 
-    if (supervisor.isStatusRequest(text) || /^(?:forge\s+status|mission\s+status)[?.!\s]*$/i.test(text)) {
+    if (supervisor.isStatusRequest(text) || /^(?:forge\s+status|mission\s+status)[?.!\s]*$/i.test(text) || internalProjectStatusIntent(text)) {
       const response = latestStatusResponse();
       conversation.append('user', text, { taskType: 'forge-status', inputMode });
       conversation.append('assistant', response, { model: 'forge-supervisor', provider: 'local', taskType: 'forge-status', inputMode });
@@ -127,4 +138,4 @@ function uninstall() {
 }
 function status() { return { installed, governor: governor.status(), latestMission: supervisor.status() }; }
 
-module.exports = { install, uninstall, status, executionRequest, latestStatusResponse };
+module.exports = { install, uninstall, status, executionRequest, internalProjectStatusIntent, latestStatusResponse };
