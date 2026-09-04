@@ -13,6 +13,8 @@ let lastFingerprint = '';
 let lastAlertAt = 0;
 let activeExecution = null;
 let originalLeagueRecommend = null;
+let originalWebShouldSearch = null;
+let originalAssistantHandle = null;
 const QUIET_REPEAT_MS = Math.max(5 * 60 * 1000, Number(process.env.ULTRON_M3_PROACTIVE_REPEAT_MS || 60 * 60 * 1000));
 
 function hoursUntil(value) { return value ? (Date.parse(value) - Date.now()) / 3600000 : Infinity; }
@@ -71,13 +73,79 @@ function evaluate() {
   return { emitted: false, attention: feed };
 }
 
+function localDayKey(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+function taskLabel(item) {
+  return `${item.title}${item.project ? ` (${item.project})` : ''}`;
+}
+function listPhrase(items, limit = 4) {
+  const rows = items.slice(0, limit).map(taskLabel);
+  if (!rows.length) return '';
+  return rows.join('; ');
+}
+function stateResponse(message) {
+  const text = intent.stripAssistantInvocation ? intent.stripAssistantInvocation(message) : String(message || '').trim();
+  const lower = text.toLowerCase();
+  const state = workspace.stateSnapshot();
+  const tasks = state.tasks.filter((item) => !['completed', 'cancelled', 'archived'].includes(String(item.status || '').toLowerCase()));
+  const goals = state.goals.filter((item) => !['completed', 'cancelled', 'archived'].includes(String(item.status || '').toLowerCase()));
+  const commitments = state.commitments.filter((item) => !['completed', 'cancelled', 'archived'].includes(String(item.status || '').toLowerCase()));
+  const now = new Date();
+  const today = localDayKey(now);
+  const startToday = new Date(now); startToday.setHours(0, 0, 0, 0);
+  const dueToday = tasks.filter((item) => item.dueAt && localDayKey(item.dueAt) === today);
+  const overdue = tasks.filter((item) => item.dueAt && Date.parse(item.dueAt) < startToday.getTime());
+
+  if (/\btoday\b/.test(lower) && /\b(?:task|tasks|todo|to-do|pending|due|work)\b/.test(lower)) {
+    if (dueToday.length) return `Sir, you have ${dueToday.length} pending task${dueToday.length === 1 ? '' : 's'} due today: ${listPhrase(dueToday)}.`;
+    if (overdue.length) return `Sir, nothing is due today, but you have ${overdue.length} overdue task${overdue.length === 1 ? '' : 's'}: ${listPhrase(overdue)}.`;
+    if (tasks.length) return `Sir, no task is due today. You still have ${tasks.length} open task${tasks.length === 1 ? '' : 's'}: ${listPhrase(tasks)}.`;
+    return 'Sir, there are no active tasks recorded in your ULTRON workspace today.';
+  }
+
+  if (/\b(?:goal|goals)\b/.test(lower)) {
+    return goals.length
+      ? `Sir, you have ${goals.length} active goal${goals.length === 1 ? '' : 's'}: ${listPhrase(goals)}.`
+      : 'Sir, there are no active goals recorded.';
+  }
+
+  if (/\b(?:waiting|blocked)\b/.test(lower)) {
+    return state.blocked.length
+      ? `Sir, ${state.blocked.length} item${state.blocked.length === 1 ? ' is' : 's are'} blocked: ${listPhrase(state.blocked)}.`
+      : 'Sir, nothing is currently marked blocked or waiting.';
+  }
+
+  if (/\b(?:task|tasks|todo|to-do|pending)\b/.test(lower)) {
+    return tasks.length
+      ? `Sir, you have ${tasks.length} open task${tasks.length === 1 ? '' : 's'}: ${listPhrase(tasks)}.`
+      : 'Sir, there are no active tasks recorded.';
+  }
+
+  if (/\b(?:commitment|commitments|deadline|deadlines)\b/.test(lower)) {
+    return commitments.length
+      ? `Sir, you have ${commitments.length} open commitment${commitments.length === 1 ? '' : 's'}: ${listPhrase(commitments)}.`
+      : 'Sir, there are no open commitments recorded.';
+  }
+
+  if (/\b(?:priority|priorities|what should i|what'?s next|next)\b/.test(lower)) {
+    return state.topAction
+      ? `Sir, your next priority is ${taskLabel(state.topAction)}.`
+      : 'Sir, no next priority is currently recorded.';
+  }
+
+  return `Sir, ${workspace.renderBriefing(state)}`;
+}
+
 function syncStateMemory() {
   const state = workspace.stateSnapshot();
   const content = [
     `Current workspace status: ${state.counts.projects} active project(s), ${state.counts.goals} active goal(s), ${state.counts.tasks} active task(s), ${state.counts.commitments} open commitment(s).`,
     state.topAction ? `Next priority: ${state.topAction.title}${state.topAction.project ? ` for ${state.topAction.project}` : ''}.` : 'No next priority is currently recorded.',
     state.goals.length ? `Active goals: ${state.goals.slice(0, 5).map((item) => item.title).join('; ')}.` : '',
-    state.tasks.length ? `Active tasks: ${state.tasks.slice(0, 8).map((item) => `${item.title}${item.project ? ` [${item.project}]` : ''}`).join('; ')}.` : '',
+    state.tasks.length ? `Active tasks: ${state.tasks.slice(0, 8).map((item) => `${item.title}${item.project ? ` [${item.project}]` : ''}${item.dueAt ? ` due ${item.dueAt}` : ''}`).join('; ')}.` : '',
     state.blocked.length ? `Waiting/blocked: ${state.blocked.slice(0, 5).map((item) => `${item.title}${item.blockedBy ? ` -> ${item.blockedBy}` : ''}`).join('; ')}.` : '',
   ].filter(Boolean).join(' ');
   return memory.remember({
@@ -196,9 +264,42 @@ function restoreModelLeague() {
   if (originalLeagueRecommend) modelLeague.recommend = originalLeagueRecommend;
   originalLeagueRecommend = null;
 }
+function installLocalStateFastpath() {
+  const web = require('./web');
+  const assistant = require('./assistant');
+  if (!originalWebShouldSearch) {
+    originalWebShouldSearch = web.shouldSearch;
+    web.shouldSearch = (text) => intent.isStateBriefRequest(text) ? false : originalWebShouldSearch(text);
+  }
+  if (!originalAssistantHandle) {
+    originalAssistantHandle = assistant.handle;
+    assistant.handle = async (message, options = {}) => {
+      if (!intent.isStateBriefRequest(message)) return originalAssistantHandle(message, options);
+      const userMessage = String(message || '').trim();
+      const inputMode = String(options.inputMode || 'chat').toLowerCase() === 'voice' ? 'voice' : 'chat';
+      syncStateMemory();
+      const response = stateResponse(userMessage);
+      conversation.append('user', userMessage, { taskType: 'state', inputMode });
+      conversation.append('assistant', response, { model: 'mark3-state-engine', provider: 'local', taskType: 'state', mode: 'state-fastpath', inputMode });
+      emit('context_ready', { contextMode: 'local-workspace-state', taskCount: workspace.listTasks().length, goalCount: workspace.listGoals().length, inputMode });
+      emit('response_ready', { model: 'mark3-state-engine', provider: 'local', taskType: 'state', mode: 'state-fastpath', inputMode });
+      void require('./voice-orchestrator').enqueue(response);
+      return { ok: true, response, text: response, model: 'mark3-state-engine', provider: 'local', taskType: 'state', mode: 'state-fastpath', inputMode, plan: null, toolRounds: 0, streamed: false };
+    };
+  }
+}
+function restoreLocalStateFastpath() {
+  const web = require('./web');
+  const assistant = require('./assistant');
+  if (originalWebShouldSearch) web.shouldSearch = originalWebShouldSearch;
+  if (originalAssistantHandle) assistant.handle = originalAssistantHandle;
+  originalWebShouldSearch = null;
+  originalAssistantHandle = null;
+}
 function start(intervalMs) {
   stop();
   demoteModelLeague();
+  installLocalStateFastpath();
   unsubscribe = subscribe(onRuntimeEvent);
   syncStateMemory();
   timer = setInterval(evaluate, intervalMs);
@@ -211,6 +312,7 @@ function stop() {
   if (unsubscribe) unsubscribe();
   unsubscribe = null;
   activeExecution = null;
+  restoreLocalStateFastpath();
   restoreModelLeague();
 }
-module.exports = { start, stop, evaluate, attentionFeed, briefing, scoreItem, attentionLevel, onRuntimeEvent, syncStateMemory };
+module.exports = { start, stop, evaluate, attentionFeed, briefing, scoreItem, attentionLevel, onRuntimeEvent, syncStateMemory, stateResponse };
