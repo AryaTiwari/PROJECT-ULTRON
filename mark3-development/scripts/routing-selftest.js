@@ -3,6 +3,7 @@ const path = require('path');
 const direct = require('../core/direct-provider-router');
 const arena = require('../core/model-arena');
 const fallback = require('../core/omniroute-fallback');
+const selfRepository = require('../core/self-repository');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -19,6 +20,13 @@ assert(direct.PROVIDERS.groq.keys.includes('GROQ_API_KEY2'), 'Groq secondary acc
 assert(direct.providerOrder('research')[0] === 'gemini', 'Research must still prefer Gemini.');
 assert(direct.providerOrder('simple_qa')[0] === 'groq', 'Fast simple Q&A must still prefer Groq.');
 
+// Self-repository routing must stay precise. Business/project prompts can naturally
+// contain "Ultron", "lead source" and "changes" and must not be hijacked by GitHub status.
+assert(selfRepository.isSelfRepositoryStatusIntent('Ultron, check your GitHub repository status and latest commit.'), 'Explicit self-repository status requests must still route deterministically.');
+assert(selfRepository.isSelfRepositoryStatusIntent('Ultron, check your source code changes on the current branch.'), 'Explicit source-code repository checks must still route deterministically.');
+assert(!selfRepository.isSelfRepositoryStatusIntent('Ultron, build me a Creator Lead Command Center with lead source filters and an activity history for meaningful changes.'), 'Elevate-style Forge build prompts must not be hijacked by self-repository status routing.');
+assert(!selfRepository.isSelfRepositoryStatusIntent('Ultron, create a CRM with lead source, source attribution, and change history.'), 'Bare business uses of source/change must not count as repository status intent.');
+
 const arenaStatus = arena.status();
 if (!process.env.ULTRON_M3_LEAGUE_ARENA_AUTORUN) {
   assert(arenaStatus.autoRun === false, 'Background Model Arena must be off by default to conserve free-tier quota.');
@@ -31,4 +39,4 @@ assert(fallbackStatus.timeoutMs >= 180000, 'Lazy OmniRoute needs enough time to 
 assert(fallbackStatus.maxLaunchAttempts >= 2, 'Lazy OmniRoute must retry a failed launcher at least once.');
 assert(/omniroute-lazy-launch\.log/i.test(fallbackStatus.launchLog || ''), 'Lazy OmniRoute startup must expose a diagnostic log path.');
 
-console.log('ULTRON routing self-test passed: passive catalogs, quota-only key cooldowns, passive Model League and retryable OmniRoute fallback validated.');
+console.log('ULTRON routing self-test passed: passive catalogs, quota-only key cooldowns, precise self-repository intent, passive Model League and retryable OmniRoute fallback validated.');
