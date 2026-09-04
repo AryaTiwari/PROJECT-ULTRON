@@ -80,6 +80,8 @@ assert(gooseStatus.separateGooseApiRequired === false && gooseStatus.requiredApi
 assert(gooseStatus.model === 'poolside/laguna-xs-2.1', 'Goose coding worker must target the same specialist coding model by default.');
 assert(codingInference.forgeRole('editor') === 'code_build', 'Coding Brain editor must route through the Forge code-build role.');
 assert(codingInference.forgeRole('reviewer') === 'code_review', 'Coding Brain reviewer must route through the Forge code-review role.');
+assert(codingInference.expectsStructured('editor') === true && codingInference.expectsStructured('planner') === true, 'Coding roles with JSON contracts must be marked as structured.');
+assert(codingInference.validJsonObject('{"summary":"ok"}') === true && codingInference.validJsonObject('plain prose') === false, 'Coding inference must detect malformed structured responses before Coding Brain receives them.');
 assert(codingInference.allowGeneralFallback() === false, 'General-purpose coding fallback must be disabled by default.');
 assert(codingInference.missionIdFromMessages([{ role: 'system', content: 'workspace=C:\\Users\\arya\\Project-Ultron\\.ultron\\forge\\workspaces\\20260904-test-ab12' }]) === '20260904-test-ab12', 'Coding Brain must recover the Forge mission id from its isolated workspace for token accounting.');
 const redacted = redactor.redactText('NVIDIA_API_KEY=nvapi-super-secret-value\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz');
@@ -130,4 +132,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, checkpoint-preserving partial retries, actionable visual Command Center, model-specific failover hygiene, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, checkpoint-preserving partial retries, actionable visual Command Center, model-specific failover hygiene, structured coding response repair guard, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
