@@ -16,7 +16,9 @@ function latestStatusResponse() {
   const progress = mission.progress || {};
   const usageText = usage ? ` Inference usage: ${usage.calls || 0} calls, ${usage.totalTokens || 0} tokens.` : '';
   const running = state.running || mission.status === 'running' ? 'running' : mission.status;
-  return `Sir, Forge mission ${mission.id} is ${running}: ${progress.completed || 0}/${progress.total || 0} jobs complete (${progress.percent || 0}%).${mission.error ? ` Current issue: ${mission.error}` : ''}${usageText}`;
+  const paused = mission.status === 'paused_inference' ? ' Free inference is paused; add/restore an allowed key or wait for quota recovery, then say “Resume Forge”.' : '';
+  const workspace = mission.status === 'completed' || mission.status === 'partial' ? ` Workspace: ${mission.workspace}.` : '';
+  return `Sir, Forge mission ${mission.id} is ${running}: ${progress.completed || 0}/${progress.total || 0} jobs complete (${progress.percent || 0}%).${mission.error ? ` Current issue: ${mission.error}` : ''}${paused}${usageText}${workspace}`;
 }
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true };
@@ -30,6 +32,17 @@ function install() {
   assistant.handle = async (message, options = {}) => {
     const text = String(message || '').trim();
     const inputMode = String(options.inputMode || 'chat').toLowerCase() === 'voice' ? 'voice' : 'chat';
+
+    const resumeId = supervisor.isResumeRequest(text);
+    if (resumeId) {
+      const result = supervisor.resume(resumeId === true ? null : resumeId);
+      const response = `Resumed, Sir. Forge mission ${result.missionId} is continuing from its last checkpoint${result.resumedJobs.length ? ` with ${result.resumedJobs.length} paused job${result.resumedJobs.length === 1 ? '' : 's'} restored` : ''}.`;
+      conversation.append('user', text, { taskType: 'forge-resume', inputMode });
+      conversation.append('assistant', response, { model: 'forge-supervisor', provider: 'local', taskType: 'forge-resume', inputMode });
+      emit('forge_resume_requested', { missionId: result.missionId, inputMode });
+      void voice.enqueue(response);
+      return { ok: true, response, text: response, model: 'forge-supervisor', provider: 'local', taskType: 'forge-resume', mode: 'forge', inputMode, streamed: false, toolRounds: 0 };
+    }
 
     if (supervisor.isStatusRequest(text) || /^(?:forge\s+status|mission\s+status)[?.!\s]*$/i.test(text)) {
       const response = latestStatusResponse();
