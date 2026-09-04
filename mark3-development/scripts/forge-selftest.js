@@ -8,6 +8,7 @@ const store = require('../core/forge/mission-store');
 const automation = require('../core/forge/automation-blueprint');
 const goose = require('../core/forge/goose-worker');
 const retry = require('../core/forge/retry');
+const dashboard = require('../core/forge/dashboard');
 const codingInference = require('../core/coding-inference');
 const redactor = require('../core/forge/redactor');
 
@@ -19,6 +20,7 @@ assert(plan.jobs.length >= 6, 'Forge fallback must produce a multi-step mission 
 assert(plan.jobs.some((job) => job.worker === 'coding'), 'Forge mission must contain a coding worker.');
 assert(plan.jobs.some((job) => job.worker === 'review'), 'Forge mission must contain an independent review worker.');
 assert(plan.jobs.some((job) => !(job.dependsOn || []).length), 'Forge mission must always contain at least one runnable root job.');
+assert(/Forge Command Center/.test(dashboard.page()), 'Forge must render its local visual Command Center.');
 
 const cyclicPlan = compiler.validateGraph({
   jobs: [
@@ -122,4 +124,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, checkpoint-preserving partial retries, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, runnable acyclic DAG repair, checkpoint-preserving partial retries, visual Command Center rendering, dynamic agents, natural event-driven automation detection, executable automation contracts, approval gates, bounded autonomous repair/re-review, zero-cost NVIDIA specialist routing with async polling, optional budgeted Goose worker, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
