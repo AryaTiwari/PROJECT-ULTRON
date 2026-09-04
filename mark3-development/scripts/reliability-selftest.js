@@ -30,6 +30,9 @@ try {
   assert(taskMutation?.type === 'create_task', 'Need-to language must create a task.');
   assert(taskMutation.project === 'Elevate OS', 'Task project extraction failed.');
   assert(Boolean(taskMutation.dueAt), 'Tomorrow deadline was not captured.');
+  const voiceTaskMutation = intent.extractWorkspaceMutation('Hello Ultron, I need to finish Instagram integration for Elevate OS tomorrow');
+  assert(voiceTaskMutation?.type === 'create_task', 'Voice-prefixed need-to language must create a task.');
+  assert(voiceTaskMutation.project === 'Elevate OS' && Boolean(voiceTaskMutation.dueAt), 'Voice-prefixed task must preserve project and deadline extraction.');
   workspace.applyMutation(taskMutation);
   workspace.applyMutation(taskMutation);
   assert(workspace.listTasks().length === 1, 'Repeated task capture must be idempotent.');
@@ -88,7 +91,7 @@ try {
 
   const snapshot = workspace.stateSnapshot();
   assert(snapshot.counts.goals === 1 && snapshot.counts.tasks >= 1, 'Workspace state snapshot is incomplete.');
-  console.log('ULTRON reliability self-test passed: entity-aware memory updates, idempotent tasks/goals/commitments, local-first today status, completion resolution, execution verification, proactive attention and diagnostic-only Model League validated.');
+  console.log('ULTRON reliability self-test passed: entity-aware memory updates, voice-prefixed task capture, idempotent tasks/goals/commitments, local-first today status, completion resolution, execution verification, proactive attention and diagnostic-only Model League validated.');
 } finally {
   try { proactive.stop(); } catch {}
   for (const [file, backup] of backups.entries()) {
