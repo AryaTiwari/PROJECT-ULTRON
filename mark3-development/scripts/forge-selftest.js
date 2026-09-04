@@ -6,6 +6,7 @@ const governor = require('../core/forge/model-governor');
 const supervisor = require('../core/forge/supervisor');
 const store = require('../core/forge/mission-store');
 const codingInference = require('../core/coding-inference');
+const redactor = require('../core/forge/redactor');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -27,11 +28,14 @@ const modelStatus = governor.status();
 assert(modelStatus.zeroCostOnly === true, 'Forge must enforce zero-cost inference mode.');
 assert(modelStatus.localLlmAllowed === false, 'Forge must not allow local LLM inference.');
 assert(modelStatus.paidFallbackAllowed === false, 'Forge must not allow paid fallback.');
+assert(modelStatus.secretRedaction === true, 'Forge cloud inference must report secret redaction enabled.');
 assert(modelStatus.roleModels.code_build[0] === 'poolside/laguna-xs-2.1', 'Laguna XS 2.1 must be the primary coding specialist.');
 assert(codingInference.forgeRole('editor') === 'code_build', 'Coding Brain editor must route through the Forge code-build role.');
 assert(codingInference.forgeRole('reviewer') === 'code_review', 'Coding Brain reviewer must route through the Forge code-review role.');
 assert(codingInference.allowGeneralFallback() === false, 'General-purpose coding fallback must be disabled by default.');
 assert(codingInference.missionIdFromMessages([{ role: 'system', content: 'workspace=C:\\Users\\arya\\Project-Ultron\\.ultron\\forge\\workspaces\\20260904-test-ab12' }]) === '20260904-test-ab12', 'Coding Brain must recover the Forge mission id from its isolated workspace for token accounting.');
+const redacted = redactor.redactText('NVIDIA_API_KEY=nvapi-super-secret-value\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz');
+assert(!redacted.includes('super-secret-value') && !redacted.includes('abcdefghijklmnopqrstuvwxyz'), 'Forge must redact credentials before cloud inference.');
 
 const mission = store.create('Forge offline self-test', { source: 'selftest' });
 const missionDir = path.join(store.MISSIONS, mission.id);
@@ -48,4 +52,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, approval gates, zero-cost model policy, Laguna Coding Brain route, mission token accounting and no-general-fallback policy validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, approval gates, zero-cost model policy, Laguna Coding Brain route, mission token accounting, cloud secret redaction and no-general-fallback policy validated.');
