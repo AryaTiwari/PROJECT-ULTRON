@@ -5,6 +5,7 @@ const factory = require('../core/forge/agent-factory');
 const governor = require('../core/forge/model-governor');
 const supervisor = require('../core/forge/supervisor');
 const store = require('../core/forge/mission-store');
+const codingInference = require('../core/coding-inference');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -27,6 +28,9 @@ assert(modelStatus.zeroCostOnly === true, 'Forge must enforce zero-cost inferenc
 assert(modelStatus.localLlmAllowed === false, 'Forge must not allow local LLM inference.');
 assert(modelStatus.paidFallbackAllowed === false, 'Forge must not allow paid fallback.');
 assert(modelStatus.roleModels.code_build[0] === 'poolside/laguna-xs-2.1', 'Laguna XS 2.1 must be the primary coding specialist.');
+assert(codingInference.forgeRole('editor') === 'code_build', 'Coding Brain editor must route through the Forge code-build role.');
+assert(codingInference.forgeRole('reviewer') === 'code_review', 'Coding Brain reviewer must route through the Forge code-review role.');
+assert(codingInference.allowGeneralFallback() === false, 'General-purpose coding fallback must be disabled by default.');
 
 const mission = store.create('Forge offline self-test', { source: 'selftest' });
 const missionDir = path.join(store.MISSIONS, mission.id);
@@ -43,4 +47,4 @@ try {
   try { fs.rmSync(path.join(store.WORKSPACES, mission.id), { recursive: true, force: true }); } catch {}
 }
 
-console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, approval gates, zero-cost model policy and Laguna coding route validated.');
+console.log('ULTRON Forge self-test passed: persistent missions, DAG decomposition, dynamic agents, approval gates, zero-cost model policy, Laguna Coding Brain route and no-general-fallback policy validated.');
