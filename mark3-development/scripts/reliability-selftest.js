@@ -41,6 +41,7 @@ try {
 
   const commitmentMutation = intent.extractWorkspaceMutation("I'll review the reliability results tomorrow");
   assert(commitmentMutation?.type === 'create_commitment', 'Will-language must create a commitment.');
+  assert(intent.extractWorkspaceMutation('I’ll review the reliability results tomorrow')?.type === 'create_commitment', 'Curly-apostrophe commitment language must be recognized.');
   workspace.applyMutation(commitmentMutation);
   assert(workspace.listCommitments().length === 1, 'Commitment was not persisted.');
 
