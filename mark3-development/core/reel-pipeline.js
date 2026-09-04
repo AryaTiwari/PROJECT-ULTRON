@@ -27,6 +27,58 @@ function extensionFromAudio(file) {
   return ['.wav', '.mp3', '.m4a', '.aac', '.ogg', '.flac'].includes(ext) ? ext : '.wav';
 }
 
+function findCaptionFont() {
+  const candidates = process.platform === 'win32'
+    ? [
+      'C:\\Windows\\Fonts\\arialbd.ttf',
+      'C:\\Windows\\Fonts\\segoeuib.ttf',
+      'C:\\Windows\\Fonts\\calibrib.ttf',
+    ]
+    : [
+      '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+      '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
+    ];
+  return candidates.find((file) => fs.existsSync(file)) || null;
+}
+
+function ffmpegPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1\\:').replace(/'/g, "\\'");
+}
+
+function drawtextEscape(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'")
+    .replace(/%/g, '\\%')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function captionText(scene, plan, index) {
+  const explicit = String(scene?.onScreenText || '').trim();
+  if (explicit) return explicit;
+  const narration = String(scene?.narration || '').trim();
+  if (narration) return narration;
+  if (index === 0) return String(plan?.hook || plan?.title || '').trim();
+  return String(scene?.purpose || '').trim();
+}
+
+function localMusicTrack() {
+  const configured = String(process.env.ULTRON_M3_REEL_MUSIC || '').trim();
+  if (configured && fs.existsSync(configured)) return configured;
+  const dir = path.resolve(factory.REEL_ROOT, 'music');
+  try {
+    const files = fs.readdirSync(dir)
+      .filter((name) => /\.(?:mp3|wav|m4a|aac|ogg|flac)$/i.test(name))
+      .map((name) => path.join(dir, name));
+    return files[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 async function materializeAssets(plan, paths, options = {}) {
   fs.mkdirSync(paths.assets, { recursive: true });
   const scenes = [];
@@ -77,9 +129,9 @@ function renderScene(scene, index, tempDir) {
     '-stream_loop', '-1',
     '-i', scene.localAsset,
     '-t', duration.toFixed(3),
-    '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30',
+    '-vf', 'scale=1160:2062:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.04:saturation=1.06,fps=30',
     '-an',
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p',
     '-movflags', '+faststart',
     output,
   ], { timeoutMs: 240000 });
@@ -99,22 +151,72 @@ function concatScenes(sceneFiles, tempDir) {
   return output;
 }
 
-function muxNarration(videoPath, narrationPath, outputPath, durationSec) {
-  if (!narrationPath) {
-    fs.copyFileSync(videoPath, outputPath);
-    return;
+function applyVisualPolish(videoPath, plan, tempDir) {
+  const font = findCaptionFont();
+  if (!font) return { path: videoPath, captionsApplied: false, reason: 'caption-font-not-found' };
+  const filters = ['vignette=PI/7'];
+  plan.scenes.forEach((scene, index) => {
+    const text = drawtextEscape(captionText(scene, plan, index));
+    if (!text) return;
+    const start = Math.max(0, Number(scene.start || 0));
+    const end = Math.max(start + 0.1, Number(scene.end || plan.durationSec || 30));
+    const hook = index === 0;
+    const size = hook ? 86 : 66;
+    const y = hook ? 1170 : 1370;
+    filters.push([
+      `drawtext=fontfile='${ffmpegPath(font)}'`,
+      `text='${text.slice(0, hook ? 90 : 120)}'`,
+      `fontsize=${size}`,
+      'fontcolor=white',
+      'borderw=4',
+      'bordercolor=black@0.78',
+      'box=1',
+      'boxcolor=black@0.28',
+      'boxborderw=24',
+      'x=(w-text_w)/2',
+      `y=${y}`,
+      `enable='between(t,${start.toFixed(2)},${end.toFixed(2)})'`,
+    ].join(':'));
+  });
+  const output = path.join(tempDir, 'polished.mp4');
+  try {
+    run('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', videoPath,
+      '-vf', filters.join(','),
+      '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+      '-movflags', '+faststart', output,
+    ], { timeoutMs: 240000 });
+    return { path: output, captionsApplied: filters.length > 1, font };
+  } catch (error) {
+    return { path: videoPath, captionsApplied: false, reason: error.message };
   }
-  run('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-y',
-    '-i', videoPath,
-    '-i', narrationPath,
-    '-filter_complex', '[1:a]apad[a]',
-    '-map', '0:v:0', '-map', '[a]',
-    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
-    '-t', Number(durationSec || 30).toFixed(3),
-    '-movflags', '+faststart',
-    outputPath,
-  ], { timeoutMs: 180000 });
+}
+
+function muxAudio(videoPath, narrationPath, outputPath, durationSec, musicPath = null) {
+  if (!narrationPath && !musicPath) {
+    fs.copyFileSync(videoPath, outputPath);
+    return { musicApplied: false };
+  }
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath];
+  if (narrationPath) args.push('-i', narrationPath);
+  if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
+
+  let filter = '';
+  let audioMap = null;
+  if (narrationPath && musicPath) {
+    filter = '[1:a]volume=1.0[n];[2:a]volume=0.10[m];[n][m]amix=inputs=2:duration=first:dropout_transition=2[a]';
+    audioMap = '[a]';
+  } else if (narrationPath) {
+    filter = '[1:a]apad[a]';
+    audioMap = '[a]';
+  } else {
+    filter = '[1:a]volume=0.10,apad[a]';
+    audioMap = '[a]';
+  }
+  args.push('-filter_complex', filter, '-map', '0:v:0', '-map', audioMap, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-t', Number(durationSec || 30).toFixed(3), '-movflags', '+faststart', outputPath);
+  run('ffmpeg', args, { timeoutMs: 180000 });
+  return { musicApplied: Boolean(musicPath), musicPath: musicPath || null };
 }
 
 function verifyOutput(outputPath) {
@@ -169,7 +271,9 @@ async function build(brief, options = {}) {
   fs.mkdirSync(tempDir, { recursive: true });
   const sceneFiles = plan.scenes.map((scene, index) => renderScene(scene, index, tempDir));
   const silent = concatScenes(sceneFiles, tempDir);
-  muxNarration(silent, narration?.path || null, paths.output, plan.durationSec);
+  const polish = options.polish === false ? { path: silent, captionsApplied: false, reason: 'disabled' } : applyVisualPolish(silent, plan, tempDir);
+  const music = options.music === false ? null : localMusicTrack();
+  const audio = muxAudio(polish.path, narration?.path || null, paths.output, plan.durationSec, music);
   const verified = verifyOutput(paths.output);
 
   job.state = 'rendered';
@@ -177,18 +281,23 @@ async function build(brief, options = {}) {
   job.rendererImplemented = true;
   job.narration = narration;
   job.output = verified;
+  job.polish = { captionsApplied: polish.captionsApplied, font: polish.font || null, reason: polish.reason || null, musicApplied: audio.musicApplied, musicPath: audio.musicPath };
   job.attributions = materialized.downloads.map((item) => ({ attribution: item.attribution, sourcePage: item.sourcePage }));
   writeJsonAtomic(paths.job, job);
-  return { ok: true, job, plan, paths, output: verified, narration };
+  return { ok: true, job, plan, paths, output: verified, narration, polish: job.polish };
 }
 
 module.exports = {
   run,
+  findCaptionFont,
+  captionText,
+  localMusicTrack,
   materializeAssets,
   synthesizeNarration,
   renderScene,
   concatScenes,
-  muxNarration,
+  applyVisualPolish,
+  muxAudio,
   verifyOutput,
   build,
 };
