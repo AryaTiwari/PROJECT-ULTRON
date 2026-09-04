@@ -1,4 +1,5 @@
 const store = require('./mission-store');
+const { redactMessages } = require('./redactor');
 
 const NVIDIA_BASE = String(process.env.ULTRON_M3_FORGE_NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1').replace(/\/$/, '');
 const TIMEOUT_MS = Math.max(15000, Number(process.env.ULTRON_M3_FORGE_MODEL_TIMEOUT_MS || 90000));
@@ -110,7 +111,8 @@ async function nvidiaChat({ missionId, role = 'code_build', messages, temperatur
   if (!keys.length) throw new Error('FORGE_NO_NVIDIA_KEY: configure NVIDIA_API_KEY (or another supported NVIDIA key slot).');
   const models = configuredModels(role);
   const failures = [];
-  const inputText = JSON.stringify(messages || []);
+  const safeMessages = redactMessages(messages || []);
+  const inputText = JSON.stringify(safeMessages);
 
   for (const model of models) {
     for (const row of keys) {
@@ -119,7 +121,7 @@ async function nvidiaChat({ missionId, role = 'code_build', messages, temperatur
       try {
         const body = {
           model,
-          messages,
+          messages: safeMessages,
           temperature,
           max_tokens: maxTokens,
           stream: false,
@@ -166,6 +168,7 @@ function status() {
     roleModels: ROLE_MODELS,
     maxCallsPerMission: MAX_CALLS,
     maxTokensPerMission: MAX_TOKENS,
+    secretRedaction: true,
   };
 }
 
