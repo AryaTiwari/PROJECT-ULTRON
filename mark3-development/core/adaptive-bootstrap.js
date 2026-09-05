@@ -27,6 +27,20 @@ function isInstagramAestheticRequest(text = '') {
     || /\b(?:my\s+)?instagram\b[\s\S]{0,70}\b(?:aesthetic|style|feed|pfp|visuals?|look|branding)\b[\s\S]{0,50}\b(?:analy[sz]e|check|learn|understand)\b/i.test(value);
 }
 
+function proposalDecisionIntent(text = '') {
+  const value = String(text || '').trim();
+  if (/\b(?:reject|decline|skip|cancel|don'?t do|do not do)\b[\s\S]{0,45}\b(?:adaptive|suggestion|proposal|recommended action|recommendation)\b/i.test(value)
+    || /\b(?:adaptive|suggestion|proposal|recommended action|recommendation)\b[\s\S]{0,45}\b(?:reject|decline|skip|cancel)\b/i.test(value)) return 'reject';
+  if (/\b(?:approve|execute|do|proceed with|go ahead with)\b[\s\S]{0,45}\b(?:adaptive|suggestion|proposal|recommended action|recommendation)\b/i.test(value)
+    || /\b(?:adaptive|suggestion|proposal|recommended action|recommendation)\b[\s\S]{0,45}\b(?:approve|execute|do it|proceed|go ahead)\b/i.test(value)) return 'approve';
+  const pending = adaptive.pendingProposals();
+  const latest = pending[0];
+  const recent = latest?.createdAt && Date.now() - Date.parse(latest.createdAt) <= 15 * 60 * 1000;
+  if (recent && /^(?:approve|approved|yes,? do it|yes do it|go ahead|proceed)$/i.test(value)) return 'approve';
+  if (recent && /^(?:reject|no,? skip it|skip it|cancel it)$/i.test(value)) return 'reject';
+  return null;
+}
+
 function learnedResponse() {
   const status = adaptive.status();
   const signals = adaptive.topSignals(null, 8);
@@ -57,7 +71,38 @@ function aestheticResponse(data) {
   return `Sir, your current Instagram visual signature reads as ${tags || 'mixed'}, with a sampled palette of ${palette || 'no stable palette yet'}. ${caption} Reel Intelligence will use this as a soft creative constraint, not a permanent style lock.`;
 }
 
+async function executeProposalDecision(message, options = {}) {
+  const decision = proposalDecisionIntent(message);
+  if (!decision) return null;
+  const pending = adaptive.pendingProposals();
+  if (!pending.length) {
+    const response = 'Sir, there is no pending Adaptive Intelligence proposal to approve or reject.';
+    return { ok: true, response, text: response, model: 'adaptive-intelligence', provider: 'local', taskType: 'adaptive-decision', mode: 'fastpath', inputMode: options.inputMode || 'chat' };
+  }
+  const proposal = adaptive.resolveLatestProposal(decision, { userMessage: message });
+  if (!proposal) return null;
+  if (decision === 'reject') {
+    const response = `Rejected, Sir. I recorded that feedback and will reduce the weight of similar ${proposal.domain || 'adaptive'} suggestions.`;
+    return { ok: true, response, text: response, model: 'adaptive-intelligence', provider: 'local', taskType: 'adaptive-decision', mode: 'adaptive-rejected', inputMode: options.inputMode || 'chat', adaptiveProposal: proposal };
+  }
+  if (!originalHandle) {
+    const response = `Approved, Sir. The proposal is recorded as approved, but the execution wrapper is not active in this process.`;
+    return { ok: false, response, text: response, model: 'adaptive-intelligence', provider: 'local', taskType: 'adaptive-decision', mode: 'adaptive-approved-no-runtime', inputMode: options.inputMode || 'chat', adaptiveProposal: proposal };
+  }
+  const executionPrompt = [
+    'USER-APPROVED ADAPTIVE ACTION. Execute it now through normal ULTRON tools/capabilities if executable.',
+    `Proposal: ${proposal.title}`,
+    `Rationale: ${proposal.rationale || 'none'}`,
+    `Approved action: ${proposal.action}`,
+    'The user explicitly approved this proposal in the immediately preceding message. Do not ask for the same approval again unless the underlying tool itself requires a distinct confirmation for a more consequential action not described in the proposal. Verify execution normally.',
+  ].join('\n');
+  const result = await originalHandle(executionPrompt, { ...options, adaptiveApprovedProposalId: proposal.id });
+  return { ...result, mode: 'adaptive-approved-execution', adaptiveProposal: proposal };
+}
+
 async function handleSpecial(message, options = {}) {
+  const proposalDecision = await executeProposalDecision(message, options);
+  if (proposalDecision) return proposalDecision;
   if (isLearningStatusRequest(message)) {
     const response = learnedResponse();
     adaptive.observeTurn(message, response, { taskType: 'adaptive-status', mode: 'local' });
@@ -120,4 +165,4 @@ function uninstall() {
 
 function status() { return { installed, adaptive: adaptive.status(), reelIntelligence: reelIntelligence.status(), instagramAesthetic: instagramAesthetic.status() }; }
 
-module.exports = { isLearningStatusRequest, isReelIdeaRequest, isTrendRefreshRequest, isInstagramAestheticRequest, learnedResponse, ideaResponse, aestheticResponse, handleSpecial, install, uninstall, status };
+module.exports = { isLearningStatusRequest, isReelIdeaRequest, isTrendRefreshRequest, isInstagramAestheticRequest, proposalDecisionIntent, learnedResponse, ideaResponse, aestheticResponse, executeProposalDecision, handleSpecial, install, uninstall, status };
