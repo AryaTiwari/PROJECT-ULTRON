@@ -13,6 +13,11 @@ assert(negative.explicit === true && negative.confidence >= 0.8, 'Explicit feedb
 
 const positive = adaptive.extractPreference('I prefer clean minimal typography and want more like this.');
 assert(positive && positive.polarity === 1, 'Positive explicit preference must be captured.');
+const ordinaryTask = adaptive.extractPreference('I want you to send an email to the client tomorrow.');
+assert(ordinaryTask === null, 'Ordinary executable task requests must not become permanent preferences.');
+const styleWant = adaptive.extractPreference('I want the response style to be shorter and cleaner.');
+assert(styleWant && styleWant.domain === 'communication', 'I want should count only when it clearly describes style or behavior.');
+
 assert(adaptive.approvalIntent('approve') === 'approve', 'Approval intent must be recognized.');
 assert(adaptive.approvalIntent('do it') === 'approve', 'Natural approval must be recognized.');
 assert(adaptive.approvalIntent('reject') === 'reject', 'Rejection intent must be recognized.');
@@ -22,4 +27,4 @@ const status = adaptive.status();
 assert(status.policy.externalActionsRequireApproval === true, 'Adaptive external actions must remain approval-gated.');
 assert(status.policy.inferSensitiveTraits === false, 'Adaptive Intelligence must not infer sensitive traits.');
 
-console.log('ULTRON Adaptive Intelligence self-test passed: explicit preference learning, domain routing and approval-gated autonomy validated.');
+console.log('ULTRON Adaptive Intelligence self-test passed: explicit preference learning, task-vs-preference separation, domain routing and approval-gated autonomy validated.');
