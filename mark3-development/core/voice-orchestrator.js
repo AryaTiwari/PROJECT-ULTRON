@@ -1,4 +1,5 @@
 const path = require('path');
+const { AsyncLocalStorage } = require('async_hooks');
 const config = require('./config');
 const { readJson, writeJsonAtomic } = require('./persistence');
 const { emit } = require('./events');
@@ -6,6 +7,7 @@ const integrations = require('./integrations');
 const founderBehavior = require('./founder-behavior');
 
 const voiceStatePath = path.join(config.dataDir, 'voice-state.json');
+const deliveryContext = new AsyncLocalStorage();
 let voiceState = readJson(voiceStatePath, { enabled: true });
 let queue = Promise.resolve();
 let speaking = false;
@@ -13,12 +15,8 @@ let generation = 0;
 
 function clean(text) {
   return String(text || '')
-    // Code is useful on screen but should never be read aloud. Strip fenced and
-    // inline code before the generic Markdown cleanup so their contents disappear
-    // rather than merely losing the backtick delimiters.
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`\r\n]*`/g, ' ')
-    // For Markdown links keep the readable label, but never speak the URL.
     .replace(/\[([^\]]+)\]\(https?:\/\/[^\s)]+\)/gi, '$1')
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/[#*_`>\[\]{}|~]/g, ' ')
@@ -47,8 +45,11 @@ function splitSpeech(text, maxChars = 260) {
   return chunks;
 }
 
-function isEnabled() {
-  return voiceState.enabled !== false;
+function isEnabled() { return voiceState.enabled !== false; }
+function localVoiceSuppressed() { return Boolean(deliveryContext.getStore()?.suppressLocalVoice); }
+function runWithDeliveryContext(context = {}, fn) {
+  if (typeof fn !== 'function') throw new Error('Voice delivery context requires a function.');
+  return deliveryContext.run({ ...(deliveryContext.getStore() || {}), ...context }, fn);
 }
 
 function setEnabled(enabled) {
@@ -83,9 +84,11 @@ async function speakChunk(text, index, total, token) {
 }
 
 function enqueue(text) {
+  if (localVoiceSuppressed()) {
+    emit('voice_suppressed', { reason: 'request-context', source: deliveryContext.getStore()?.source || null });
+    return Promise.resolve({ skipped: true, reason: 'request-context-suppressed' });
+  }
   if (!isEnabled()) return Promise.resolve({ skipped: true, reason: 'voice-disabled' });
-  // Response finishing happens before this layer. Never silently append a generic
-  // “next command” line here; spoken audio and transcript must remain identical.
   const spokenText = founderBehavior.polishDeterministic(String(text || '').trim());
   const chunks = splitSpeech(spokenText);
   if (!chunks.length) return queue;
@@ -111,7 +114,7 @@ function enqueue(text) {
 }
 
 function status() {
-  return { enabled: isEnabled(), speaking, statePath: voiceStatePath, ...integrations.voiceStatus() };
+  return { enabled: isEnabled(), speaking, requestScopedSuppression: true, statePath: voiceStatePath, ...integrations.voiceStatus() };
 }
 
-module.exports = { enqueue, splitSpeech, clean, status, setEnabled, isEnabled };
+module.exports = { enqueue, splitSpeech, clean, status, setEnabled, isEnabled, localVoiceSuppressed, runWithDeliveryContext };
