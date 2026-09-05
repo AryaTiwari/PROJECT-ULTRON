@@ -11,7 +11,7 @@ assert(finisher.transitionDuration(3) >= 0.08 && finisher.transitionDuration(3) 
 const intents = narrator.inferIntent({
   style: 'dark cinematic premium',
   brief: 'why creators stop growing after a viral reel',
-  transcript: 'Explain retention, conversion and invite creators to a free strategy session with Elevate OS.',
+  purpose: 'Explain retention, conversion and invite creators to a free strategy session with Elevate OS.',
 });
 assert(intents.includes('educational') && intents.includes('strategy'), 'Creator strategy narration should infer educational/strategy intent.');
 assert(intents.includes('premium') && intents.includes('credible'), 'Elevate business narration should infer premium/credible intent.');
@@ -35,7 +35,15 @@ const good = finalQuality.audit({
   plan: mockPlan,
   output: { width: 1080, height: 1920, audioPresent: true },
   narration: { narratorProfile: 'Verity', metallicApplied: false },
-  polish: { captionsApplied: true, safeZoneApplied: true },
+  polish: {
+    captionsApplied: true,
+    safeZoneApplied: true,
+    visualStyle: 'minimal-clean-v3',
+    textBoxes: false,
+    headlineSubtitleOverlapAvoided: true,
+    maxHeadlineWords: 5,
+    maxSubtitleWords: 4,
+  },
   finisher: { applied: true, transitionsApplied: true, sfxApplied: true },
 }, 'why creators stop growing after a viral reel');
 assert(good.ok, `Complete Reel should pass final quality gate: ${good.issues.join('; ')}`);
@@ -44,9 +52,9 @@ const bad = finalQuality.audit({
   plan: mockPlan,
   output: { width: 1080, height: 1920, audioPresent: true },
   narration: { narratorProfile: null, metallicApplied: false },
-  polish: { captionsApplied: true, safeZoneApplied: false },
+  polish: { captionsApplied: true, safeZoneApplied: false, visualStyle: 'boxed', textBoxes: true },
   finisher: { applied: false, transitionsApplied: false, sfxApplied: false },
 }, 'why creators stop growing after a viral reel');
-assert(!bad.ok && bad.issues.length >= 3, 'Unfinished Reel must be rejected by final quality gate.');
+assert(!bad.ok && bad.issues.length >= 6, 'Dense unfinished Reel must be rejected by final quality gate.');
 
-console.log('ULTRON Reel Finisher self-test passed: intent-aware narrator routing, cinematic transitions, procedural SFX and final production gate validated.');
+console.log('ULTRON Reel Finisher self-test passed: intent-aware narrator routing, minimal boxless typography, cinematic transitions, procedural SFX and final production gate validated.');
