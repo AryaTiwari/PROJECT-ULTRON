@@ -68,8 +68,9 @@ function feedbackPolarity(text = '') {
 function isExplicitPreference(text = '') {
   const value = String(text || '');
   if (/\b(?:i prefer|i like|i love|i don'?t like|do not like|never use|always use|avoid|stop using|too much|too many|more like this|less of|not like this|should be|shouldn'?t|instead of|keep this style|use this style)\b/i.test(value)) return true;
-  return /\bi want\b/i.test(value)
-    && /\b(?:style|text|tone|format|design|way|voice|layout|behavior|behaviour|response|answer|video|reel|typography|graphics|effects|editing|pacing|aesthetic|presentation|structure)\b/i.test(value);
+  const hasPreferenceObject = /\b(?:style|text|tone|format|design|way|voice|layout|behavior|behaviour|response|answer|video style|reel style|typography|graphics|effects|editing|pacing|aesthetic|presentation|structure)\b/i.test(value);
+  const hasQualitativeDirection = /\b(?:to be|more|less|cleaner|shorter|longer|simpler|bolder|softer|faster|slower|minimal|cinematic|premium|professional|natural|human|without|with fewer|with more|like this|like that|instead)\b/i.test(value);
+  return /\bi want\b/i.test(value) && hasPreferenceObject && hasQualitativeDirection;
 }
 
 function extractPreference(text = '') {
