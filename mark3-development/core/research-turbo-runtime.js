@@ -28,6 +28,24 @@ async function jsonRequest(url, options = {}, timeoutMs = TIMEOUT_MS) {
   } finally { clearTimeout(timer); }
 }
 
+async function textRequest(url, options = {}, timeoutMs = TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const raw = await response.text();
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}: ${raw.slice(0, 700)}`);
+      error.status = response.status;
+      throw error;
+    }
+    return { raw, response };
+  } catch (error) {
+    if (controller.signal.aborted || error?.name === 'AbortError') throw new Error(`Research provider timed out after ${timeoutMs}ms.`);
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+
 function tavilyKey() { return String(process.env.TAVILY_API_KEY || '').trim(); }
 function braveKey() { return String(process.env.BRAVE_SEARCH_API_KEY || '').trim(); }
 function firecrawlKey() { return String(process.env.FIRECRAWL_API_KEY || '').trim(); }
@@ -77,6 +95,33 @@ async function braveSearch(query, options = {}) {
   return { query, provider: 'brave-fallback', results, pages: [], research: { adaptive: true, requestedSources: ['brave'], completedSources: ['brave'], errors: [], fallback: true } };
 }
 
+async function jinaReaderFetch(input, options = {}) {
+  const target = web.normalizeUrl(input).toString();
+  const endpoint = `https://r.jina.ai/${target}`;
+  const { raw, response } = await textRequest(endpoint, {
+    headers: {
+      Accept: 'text/markdown,text/plain;q=0.9,*/*;q=0.5',
+      'X-Return-Format': 'markdown',
+      'X-No-Cache': options.noCache ? 'true' : 'false',
+    },
+  }, Math.max(TIMEOUT_MS, Number(options.timeoutMs || 0)));
+  const text = String(raw || '').trim();
+  if (!text) throw new Error('Jina Reader returned no readable content.');
+  const maxText = Number(options.maxTextChars || 24000);
+  return {
+    requestedUrl: target,
+    url: target,
+    status: response.status,
+    contentType: String(response.headers.get('content-type') || 'text/markdown'),
+    title: '',
+    text: text.slice(0, maxText),
+    truncated: text.length > maxText,
+    provider: 'jina-reader-fallback',
+    format: 'markdown',
+    zeroKey: true,
+  };
+}
+
 async function firecrawlFetch(input, options = {}) {
   const key = firecrawlKey();
   if (!key) throw new Error('FIRECRAWL_API_KEY is not configured.');
@@ -114,6 +159,17 @@ async function fallbackSearch(query, options = {}) {
   throw new Error(`No configured zero-cost research fallback succeeded.${failures.length ? ` ${failures.join(' | ')}` : ''}`);
 }
 
+async function fallbackFetch(input, options = {}) {
+  const failures = [];
+  try { return await jinaReaderFetch(input, options); }
+  catch (error) { failures.push(`jina-reader: ${error.message}`); }
+  if (firecrawlKey()) {
+    try { return await firecrawlFetch(input, options); }
+    catch (error) { failures.push(`firecrawl: ${error.message}`); }
+  }
+  throw new Error(`No zero-cost extraction fallback succeeded. ${failures.join(' | ')}`);
+}
+
 function install() {
   if (installed) return status();
   originalSearchAndFetch = web.searchAndFetch;
@@ -147,13 +203,12 @@ function install() {
   web.fetchPage = async (input, options = {}) => {
     try { return await originalFetchPage(input, options); }
     catch (primaryError) {
-      if (!firecrawlKey()) throw primaryError;
       try {
-        const page = await firecrawlFetch(input, options);
+        const page = await fallbackFetch(input, options);
         page.primaryError = primaryError.message;
         return page;
       } catch (fallbackError) {
-        const error = new Error(`Primary fetch failed: ${primaryError.message} | Firecrawl fallback failed: ${fallbackError.message}`);
+        const error = new Error(`Primary fetch failed: ${primaryError.message} | Turbo extraction fallbacks failed: ${fallbackError.message}`);
         error.primaryError = primaryError;
         error.fallbackError = fallbackError;
         throw error;
@@ -180,14 +235,16 @@ function status() {
     installed,
     primary: 'tinyfish/direct-http',
     searchFallbacks: providerSequence(),
-    fetchFallback: firecrawlKey() ? 'firecrawl' : null,
+    fetchFallbacks: ['jina-reader', ...(firecrawlKey() ? ['firecrawl'] : [])],
+    fetchFallback: 'jina-reader',
     zeroCostOnly: true,
     toolRegistry: {
-      tavily: tools.byId('tavily')?.configured || false,
-      firecrawl: tools.byId('firecrawl')?.configured || false,
-      brave: tools.byId('brave-search')?.configured || false,
+      tavily: tools.byId('tavily')?.credentialsReady || false,
+      firecrawl: tools.byId('firecrawl')?.credentialsReady || false,
+      brave: tools.byId('brave-search')?.credentialsReady || false,
+      jinaReaderNoKey: true,
     },
   };
 }
 
-module.exports = { tavilySearch, braveSearch, firecrawlFetch, fallbackSearch, providerSequence, install, uninstall, status };
+module.exports = { tavilySearch, braveSearch, jinaReaderFetch, firecrawlFetch, fallbackSearch, fallbackFetch, providerSequence, install, uninstall, status };
