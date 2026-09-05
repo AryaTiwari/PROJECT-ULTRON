@@ -1,6 +1,7 @@
-// Loaded only by the Mark 3 server process. Forge installs two lightweight local
-// read-only endpoints before server.js creates its HTTP server, then Operator Mode,
-// Reel Intelligence, Reel Factory, Forge and Adaptive Intelligence wrap the normal assistant.
+// Loaded only by the Mark 3 server process. Forge installs lightweight local
+// read-only endpoints before server.js creates its HTTP server, then Turbo,
+// Operator Mode, Reel Intelligence, Reel Factory, Forge and Adaptive Intelligence
+// wrap the normal assistant in a deliberate order.
 const http = require('http');
 
 const originalCreateServer = http.createServer.bind(http);
@@ -23,12 +24,25 @@ http.createServer = (...args) => {
         res.end(payload);
         return;
       }
+      if (req.method === 'GET' && pathname === '/api/turbo/status') {
+        const data = require('../turbo-engine').audit();
+        const payload = JSON.stringify(data);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Length': Buffer.byteLength(payload),
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(payload);
+        return;
+      }
       if (req.method === 'GET' && ['/forge', '/forge/', '/forge-dashboard'].includes(pathname)) {
         const payload = require('./dashboard').page();
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Length': Buffer.byteLength(payload),
           'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
         });
         res.end(payload);
         return;
@@ -47,6 +61,14 @@ http.createServer = (...args) => {
 };
 
 setImmediate(() => {
+  try {
+    const turbo = require('../turbo-bootstrap').install();
+    const fallbacks = turbo.research?.searchFallbacks?.join(', ') || 'none configured';
+    console.log(`[Mark 3] Turbo Engine ready; zero-cost research fallbacks=${fallbacks}. Health API: http://127.0.0.1:8790/api/turbo/status`);
+  } catch (error) {
+    console.error(`[Mark 3] Turbo Engine bootstrap failed: ${error.message}`);
+  }
+
   try {
     const operator = require('../operator-bootstrap').install();
     console.log(`[Mark 3] Operator Mode ready; ${operator.status.ready.length} capability/capabilities executable now.`);
@@ -83,6 +105,8 @@ setImmediate(() => {
     console.error(`[Mark 3] ULTRON Forge bootstrap failed: ${error.message}`);
   }
 
+  // Adaptive installs last so it can observe the final behavior of every upstream
+  // runtime wrapper without changing their execution/approval semantics.
   try {
     const adaptive = require('../adaptive-bootstrap').install();
     console.log(`[Mark 3] Adaptive Intelligence ready; ${adaptive.status.totalObservations || 0} learned observation(s), approval-gated proposals enabled.`);
