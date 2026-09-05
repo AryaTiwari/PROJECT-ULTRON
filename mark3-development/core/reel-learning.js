@@ -99,6 +99,46 @@ function bumpWeight(map, key, score) {
   map[key] = Number(Math.max(-12, Math.min(12, current + score)).toFixed(2));
 }
 
+function publishStructuredLearning(render, score, explicit) {
+  if (!render || !score) return;
+  const direction = score > 0 ? 'prefer' : 'avoid';
+  const confidence = explicit ? 0.84 : 0.68;
+  for (const format of render.selectedFormats || []) {
+    adaptive.recordSignal({
+      domain: 'creator-content',
+      text: `Creative recipe feedback: ${direction} Reel format "${format}" based on feedback to job ${render.jobId}.`,
+      polarity: score > 0 ? 1 : -1,
+      explicit: false,
+      confidence,
+    }, { source: 'reel-creative-learning' });
+  }
+  if (render.captionsStyle) {
+    adaptive.recordSignal({
+      domain: 'creator-content',
+      text: `Creative recipe feedback: ${direction} caption style "${render.captionsStyle}" for Reels.`,
+      polarity: score > 0 ? 1 : -1,
+      explicit: false,
+      confidence,
+    }, { source: 'reel-creative-learning' });
+  }
+  adaptive.recordSignal({
+    domain: 'creator-content',
+    text: `Creative recipe feedback: ${direction} ${render.textBoxes ? 'boxed/translucent text containers' : 'boxless text treatment'} for Reels.`,
+    polarity: score > 0 ? 1 : -1,
+    explicit: false,
+    confidence,
+  }, { source: 'reel-creative-learning' });
+  if (render.narrator) {
+    adaptive.recordSignal({
+      domain: 'creator-content',
+      text: `Creative recipe feedback: ${direction} narrator profile "${render.narrator}" for similar Reels.`,
+      polarity: score > 0 ? 1 : -1,
+      explicit: false,
+      confidence: Math.max(0.55, confidence - 0.08),
+    }, { source: 'reel-creative-learning' });
+  }
+}
+
 function recordFeedback(text = '', options = {}) {
   if (!isReelFeedback(text)) return null;
   const data = load();
@@ -126,6 +166,7 @@ function recordFeedback(text = '', options = {}) {
   bumpWeight(data.styleWeights, render.sfxApplied ? 'sfx' : 'no-sfx', strength * 0.5);
   bumpWeight(data.styleWeights, render.transitionsApplied ? 'transitions' : 'hard-cuts', strength * 0.5);
   save(data);
+  publishStructuredLearning(render, score, feedback.explicit);
   return { feedback, render: { jobId: render.jobId, brief: render.brief, userScore: render.userScore } };
 }
 
@@ -153,6 +194,7 @@ function recordOutcome(jobId, metrics = {}) {
   for (const format of render.selectedFormats || []) bumpWeight(data.formatWeights, format, strength);
   if (render.narrator) bumpWeight(data.narratorWeights, render.narrator, strength * 0.5);
   save(data);
+  if (Math.abs(strength) >= 0.35) publishStructuredLearning(render, strength > 0 ? 1 : -1, false);
   return { jobId, score, metrics };
 }
 
@@ -190,8 +232,9 @@ function status() {
     rendersTracked: (data.renders || []).length,
     feedbackTracked: (data.feedback || []).length,
     outcomeLearningImplemented: true,
+    structuredAdaptiveLearning: true,
     path: LEARNING_PATH,
   };
 }
 
-module.exports = { LEARNING_PATH, recipeFromResult, recordRender, latestRender, feedbackScore, isReelFeedback, recordFeedback, scoreOutcome, recordOutcome, preferences, context, status };
+module.exports = { LEARNING_PATH, recipeFromResult, recordRender, latestRender, feedbackScore, isReelFeedback, publishStructuredLearning, recordFeedback, scoreOutcome, recordOutcome, preferences, context, status };
