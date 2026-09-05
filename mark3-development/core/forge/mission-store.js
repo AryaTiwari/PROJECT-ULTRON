@@ -40,6 +40,7 @@ function create(objective, options = {}) {
     updatedAt: now,
     workspace: options.workspace || workspacePath(id),
     source: options.source || 'conversation',
+    forgeProfile: options.forgeProfile || null,
     constraints: {
       zeroCostOnly: true,
       localLlmAllowed: false,
@@ -53,7 +54,7 @@ function create(objective, options = {}) {
   writeJsonAtomic(jobsFile(id), []);
   writeJsonAtomic(agentsFile(id), []);
   writeJsonAtomic(usageFile(id), { calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, byModel: {}, byKeySlot: {} });
-  event(id, 'mission_created', { objective: mission.objective, workspace: mission.workspace });
+  event(id, 'mission_created', { objective: mission.objective, workspace: mission.workspace, forgeProfile: mission.forgeProfile });
   return mission;
 }
 function load(id) { return readJson(missionFile(id), null); }
@@ -74,7 +75,7 @@ function checkpoint(id, patch = {}) {
   const current = load(id);
   if (!current) throw new Error(`Mission ${id} was not found.`);
   const next = save({ ...current, ...patch });
-  event(id, 'checkpoint', { status: next.status, phase: next.phase, progress: next.progress });
+  event(id, 'checkpoint', { status: next.status, phase: next.phase, progress: next.progress, forgeProfile: next.forgeProfile || null });
   return next;
 }
 function list(limit = 20) {
