@@ -1,6 +1,7 @@
 const pipeline = require('./reel-pipeline');
 const finisher = require('./reel-finisher');
 const finalQuality = require('./reel-final-quality');
+const reelLearning = require('./reel-learning');
 const { writeJsonAtomic } = require('./persistence');
 
 let installed = false;
@@ -48,7 +49,14 @@ function install() {
     job.state = 'rendered';
     job.finishedProduction = true;
     if (finished?.paths?.job) writeJsonAtomic(finished.paths.job, job);
-    return { ...finished, ok: true, job, finalQuality: audit };
+    const result = { ...finished, ok: true, job, finalQuality: audit };
+    try {
+      const recipe = reelLearning.recordRender(result);
+      if (recipe) result.creativeLearning = { tracked: true, jobId: recipe.jobId };
+    } catch (error) {
+      result.creativeLearning = { tracked: false, error: error.message };
+    }
+    return result;
   };
   installed = true;
   return { installed: true };
@@ -62,6 +70,6 @@ function uninstall() {
   return { installed: false };
 }
 
-function status() { return { installed, premiumFinisherRequired: true, finalQualityGateRequired: true }; }
+function status() { return { installed, premiumFinisherRequired: true, finalQualityGateRequired: true, creativeRecipeLearning: reelLearning.status() }; }
 
 module.exports = { install, uninstall, status };
