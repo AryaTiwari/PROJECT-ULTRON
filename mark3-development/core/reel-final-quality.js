@@ -18,15 +18,20 @@ function audit(result, brief, options = {}) {
   if (narration.metallicApplied) issues.push('Ultron metallic voice processing leaked into Reel narration');
   if (!polish.captionsApplied) issues.push('captions were not applied');
   if (!polish.safeZoneApplied) issues.push('Instagram-safe text layout was not confirmed');
+  if (polish.visualStyle !== 'minimal-clean-v3') issues.push('minimal clean Reel typography was not confirmed');
+  if (polish.textBoxes !== false) issues.push('translucent caption boxes are not allowed in the premium text system');
+  if (!polish.headlineSubtitleOverlapAvoided) issues.push('headline and subtitle timing separation was not confirmed');
+  if (Number(polish.maxHeadlineWords || 99) > 5) issues.push('headline text density exceeds five words');
+  if (Number(polish.maxSubtitleWords || 99) > 4) issues.push('subtitle cue density exceeds four words');
   if (quality.shouldBrand(brief, options) && !plan.brandPromotion) issues.push('creator-growth Reel is missing Elevate OS promotion');
   if (quality.shouldBrand(brief, options) && !/free strategy session/i.test(`${plan.cta || ''} ${plan.voiceover || ''}`)) issues.push('Free Strategy Session CTA is missing');
   if (quality.shouldBrand(brief, options) && !/elevateos\.in/i.test(`${plan.cta || ''} ${plan.voiceover || ''}`)) issues.push('elevateos.in is missing from the CTA');
   if (!finisher.applied) issues.push('premium finishing pass was not applied');
   if (!finisher.transitionsApplied) issues.push('scene transition finishing was not applied');
 
-  const score = Math.max(0, 100 - issues.length * 12);
+  const score = Math.max(0, 100 - issues.length * 10);
   return {
-    ok: issues.length === 0 && score >= 88,
+    ok: issues.length === 0 && score >= 90,
     score,
     issues,
     contentScore: content.score,
@@ -34,6 +39,9 @@ function audit(result, brief, options = {}) {
     transitionsApplied: Boolean(finisher.transitionsApplied),
     sfxApplied: Boolean(finisher.sfxApplied),
     safeZoneApplied: Boolean(polish.safeZoneApplied),
+    visualStyle: polish.visualStyle || null,
+    textBoxes: polish.textBoxes,
+    headlineSubtitleOverlapAvoided: Boolean(polish.headlineSubtitleOverlapAvoided),
     brandPromotion: Boolean(plan.brandPromotion),
   };
 }
