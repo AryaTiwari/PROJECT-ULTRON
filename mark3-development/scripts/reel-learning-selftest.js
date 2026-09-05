@@ -1,4 +1,6 @@
 const learning = require('../core/reel-learning');
+const instagram = require('../core/instagram');
+const performance = require('../core/reel-performance');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -40,7 +42,15 @@ assert(learning.isReelFeedback('the captions are too cluttered and ugly'), 'Capt
 assert(!learning.isReelFeedback('remind me to call the client tomorrow'), 'Unrelated commands must not enter Reel creative learning.');
 assert(learning.scoreOutcome({ reach: 1000, likes: 80, comments: 10, saves: 20, shares: 15, follows: 12 }) > 0, 'Strong performance metrics must produce positive creative outcome score.');
 
-const status = learning.status();
-assert(status.outcomeLearningImplemented === true && status.structuredAdaptiveLearning === true, 'Reel learning must support feedback and outcome-based adaptation.');
+const normalized = instagram.normalizeInsightMetrics({ views: 5000, reach: 3200, likes: 240, comments: 19, shares: 52, saved: 71, total_interactions: 382, ig_reels_avg_watch_time: 8300 });
+assert(normalized.views === 5000 && normalized.saves === 71, 'Instagram insight metrics must normalize current API field names.');
+assert(normalized.averageWatchTimeMs === 8300, 'Average Reel watch time must survive insights normalization.');
+assert(instagram.status().mediaInsightsImplemented === true, 'Instagram connector must expose media insights capability.');
 
-console.log('ULTRON Reel Learning self-test passed: creative recipes, user feedback, trend provenance and performance-outcome scoring validated.');
+const status = learning.status();
+const performanceStatus = performance.status();
+assert(status.outcomeLearningImplemented === true && status.structuredAdaptiveLearning === true, 'Reel learning must support feedback and outcome-based adaptation.');
+assert(performanceStatus.closedLoopLearning === true, 'Published Reel links must support closed-loop Instagram performance learning.');
+assert(performanceStatus.insightsPermissionRequired === 'instagram_business_manage_insights', 'Insights permission requirement must remain explicit.');
+
+console.log('ULTRON Reel Learning self-test passed: creative recipes, user feedback, Hootsuite provenance, Instagram insights and performance-outcome learning validated.');
