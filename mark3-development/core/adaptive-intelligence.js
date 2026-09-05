@@ -57,8 +57,8 @@ function normalizeSignalText(text = '') {
 
 function feedbackPolarity(text = '') {
   const value = String(text || '').toLowerCase();
-  const negative = /\b(?:don'?t like|do not like|hate|bad|ugly|unfinished|too much|too many|overloaded|unorganised|unorganized|not good|not clean|avoid|stop using|never use|less of|remove|wrong|worse)\b/.test(value);
-  const positive = /\b(?:i like|i love|i prefer|this is good|looks good|better|keep this|use this|more like this|exactly|perfect|works well|i want|always use)\b/.test(value);
+  const negative = /\b(?:don'?t like|do not like|hate|bad|ugly|unfinished|too much|too many|overloaded|unorganised|unorganized|not good|not clean|avoid|stop using|never use|less of|remove|wrong|worse|not like this|shouldn'?t)\b/.test(value);
+  const positive = /\b(?:i like|i love|i prefer|this is good|looks good|better|keep this|use this|more like this|exactly|perfect|works well|always use)\b/.test(value);
   if (negative && !positive) return -1;
   if (positive && !negative) return 1;
   if (negative && positive) return 0;
@@ -66,7 +66,10 @@ function feedbackPolarity(text = '') {
 }
 
 function isExplicitPreference(text = '') {
-  return /\b(?:i want|i prefer|i like|i love|i don'?t like|do not like|never|always|keep|avoid|stop using|use this|too much|too many|less|more|make it|should be|shouldn'?t|not like this|instead)\b/i.test(String(text || ''));
+  const value = String(text || '');
+  if (/\b(?:i prefer|i like|i love|i don'?t like|do not like|never use|always use|avoid|stop using|too much|too many|more like this|less of|not like this|should be|shouldn'?t|instead of|keep this style|use this style)\b/i.test(value)) return true;
+  return /\bi want\b/i.test(value)
+    && /\b(?:style|text|tone|format|design|way|voice|layout|behavior|behaviour|response|answer|video|reel|typography|graphics|effects|editing|pacing|aesthetic|presentation|structure)\b/i.test(value);
 }
 
 function extractPreference(text = '') {
