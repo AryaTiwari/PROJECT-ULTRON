@@ -1,14 +1,13 @@
 const supervisor = require('./supervisor');
 const governor = require('./model-governor');
 const retry = require('./retry');
+const preferences = require('./preferences');
 
 let installed = false;
 let originalHandle = null;
 
 function executionRequest(message) {
-  const text = String(message || '').trim();
-  if (/\b(?:how do i|how can i|how should i|explain|teach me|guide me|what is|what are)\b/i.test(text)) return false;
-  return supervisor.shouldUse(text);
+  return preferences.shouldDelegate(String(message || '').trim());
 }
 function internalProjectStatusIntent(text) {
   const value = String(text || '').trim().toLowerCase();
@@ -16,9 +15,8 @@ function internalProjectStatusIntent(text) {
   const state = supervisor.status();
   if (!state.available) return false;
   const objective = String(state.mission?.objective || '').toLowerCase();
-  const crmRequest = /\b(?:crm|creator lead|lead command center|creator command center)\b/.test(value);
-  const crmMission = /\b(?:crm|creator lead|lead command center|creator command center)\b/.test(objective);
-  return crmRequest && crmMission;
+  const named = value.split(/\s+/).filter((word) => word.length > 4).some((word) => objective.includes(word));
+  return named && /\b(?:build|mission|project|automation|integration|operator|reel|creator|forge)\b/.test(value);
 }
 function latestStatusResponse() {
   const state = supervisor.status();
@@ -27,23 +25,23 @@ function latestStatusResponse() {
   const jobs = Array.isArray(state.jobs) ? state.jobs : [];
   const progress = mission.progress || {};
   const objective = String(mission.objective || 'current project');
-  const isCrm = /\b(?:crm|creator lead|lead command center|creator command center)\b/i.test(objective);
-  const usageText = usage ? ` AI usage so far: ${usage.calls || 0} calls and ${usage.totalTokens || 0} tokens.` : '';
+  const profile = mission.forgeProfile || preferences.classify(objective).id;
+  const usageText = usage ? ` AI usage: ${usage.calls || 0} calls, ${usage.totalTokens || 0} tokens.` : '';
   const running = state.running || mission.status === 'running' ? 'running' : mission.status;
-  const paused = mission.status === 'paused_inference' ? ' Free inference is paused; restore an allowed free key or wait for quota recovery, then say “Resume Forge”.' : '';
-  const approval = mission.status === 'awaiting_approval' ? ' A gated external side effect is waiting; say “Approve Forge” only if you want it executed.' : '';
+  const paused = mission.status === 'paused_inference' ? ' Free inference is paused; completed work is checkpointed. Restore a free provider/key or wait for quota recovery, then say “Resume Forge”.' : '';
+  const approval = mission.status === 'awaiting_approval' ? ' A real external side effect is gated; say “Approve Forge” only if you want that exact action.' : '';
   const blockedJobs = jobs.filter((job) => ['blocked', 'failed', 'paused', 'blocked_approval'].includes(String(job.status || '')));
   const activeJobs = jobs.filter((job) => job.status === 'running');
-  const activeText = activeJobs.length ? ` Right now it is working on: ${activeJobs[0].title || activeJobs[0].id}.` : '';
+  const activeText = activeJobs.length ? ` Active job: ${activeJobs[0].title || activeJobs[0].id}.` : '';
   const blockerText = blockedJobs.length
-    ? ` ${blockedJobs.length} job${blockedJobs.length === 1 ? '' : 's'} currently need attention; the first is ${blockedJobs[0].title || blockedJobs[0].id}: ${blockedJobs[0].blockedReason || blockedJobs[0].error || 'reason not recorded'}.`
+    ? ` ${blockedJobs.length} job${blockedJobs.length === 1 ? '' : 's'} need attention; first blocker: ${blockedJobs[0].title || blockedJobs[0].id} — ${blockedJobs[0].blockedReason || blockedJobs[0].error || 'reason not recorded'}.`
     : '';
-  const workspace = mission.workspace ? ` Project files: ${mission.workspace}.` : '';
-  const label = isCrm ? 'your internal Elevate CRM build' : `Forge mission ${mission.id}`;
-  return `Sir, ${label} is ${running}. ${progress.completed || 0} of ${progress.total || 0} build jobs are complete (${progress.percent || 0}%).${activeText}${blockerText}${paused}${approval}${usageText}${workspace}`;
+  const workspace = mission.workspace ? ` Workspace: ${mission.workspace}.` : '';
+  return `Sir, Forge is ${running} on a ${profile} mission. ${progress.completed || 0}/${progress.total || 0} jobs complete (${progress.percent || 0}%).${activeText}${blockerText}${paused}${approval}${usageText}${workspace}`;
 }
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true };
+  preferences.applyCurrentModelPool(governor);
   const assistant = require('../assistant');
   const conversation = require('../conversation');
   const voice = require('../voice-orchestrator');
@@ -106,16 +104,17 @@ function install() {
 
     if (!executionRequest(text)) return originalHandle(message, options);
 
-    emit('forge_request_received', { objective: text, inputMode });
-    conversation.append('user', text, { taskType: 'forge', inputMode });
+    const profile = preferences.classify(text);
+    emit('forge_request_received', { objective: text, inputMode, forgeProfile: profile.id });
+    conversation.append('user', text, { taskType: 'forge', inputMode, forgeProfile: profile.id });
     try {
-      const mission = await supervisor.start(text, { source: inputMode === 'voice' ? 'voice' : 'conversation' });
+      const mission = await supervisor.start(text, { source: inputMode === 'voice' ? 'voice' : 'conversation', forgeProfile: profile.id });
       const automationText = mission.automation ? ' Its automation durability contract is active.' : '';
-      const response = `Understood, Sir. Forge opened mission ${mission.id} with ${mission.progress?.total || 0} specialist jobs in an isolated workspace. It is executing with checkpoints, independent review, bounded repair cycles and zero-cost cloud inference only.${automationText} Say “Forge status” for progress.`;
-      conversation.append('assistant', response, { model: 'forge-supervisor', provider: 'local+nvidia', taskType: 'forge', missionId: mission.id, inputMode });
-      emit('forge_mission_accepted', { missionId: mission.id, jobs: mission.progress?.total || 0, workspace: mission.workspace, automation: Boolean(mission.automation) });
+      const response = `Understood, Sir. Forge opened a ${profile.label.toLowerCase()} mission with ${mission.progress?.total || 0} focused jobs. It is executing with checkpoints, independent review, bounded repair and zero-cost cloud inference only.${automationText} Say “Forge status” for progress.`;
+      conversation.append('assistant', response, { model: 'forge-supervisor', provider: 'local+nvidia', taskType: 'forge', missionId: mission.id, inputMode, forgeProfile: profile.id });
+      emit('forge_mission_accepted', { missionId: mission.id, jobs: mission.progress?.total || 0, workspace: mission.workspace, automation: Boolean(mission.automation), forgeProfile: profile.id });
       void voice.enqueue(response);
-      return { ok: true, response, text: response, model: 'forge-supervisor', provider: 'local+nvidia', taskType: 'forge', mode: 'forge', missionId: mission.id, workspace: mission.workspace, inputMode, streamed: false, toolRounds: 0 };
+      return { ok: true, response, text: response, model: 'forge-supervisor', provider: 'local+nvidia', taskType: 'forge', mode: 'forge', missionId: mission.id, workspace: mission.workspace, inputMode, forgeProfile: profile.id, streamed: false, toolRounds: 0 };
     } catch (error) {
       const response = `Sir, Forge could not open the mission: ${error.message}`;
       conversation.append('assistant', response, { model: 'forge-supervisor', provider: 'local', taskType: 'forge', inputMode, error: true });
@@ -126,8 +125,8 @@ function install() {
 
   installed = true;
   const recovered = supervisor.recover();
-  emit('forge_ready', { recovered, governor: governor.status() });
-  return { installed: true, recovered, governor: governor.status() };
+  emit('forge_ready', { recovered, governor: governor.status(), profiles: Object.keys(preferences.PROFILES) });
+  return { installed: true, recovered, governor: governor.status(), profiles: Object.keys(preferences.PROFILES) };
 }
 function uninstall() {
   if (!installed) return;
@@ -136,6 +135,6 @@ function uninstall() {
   originalHandle = null;
   installed = false;
 }
-function status() { return { installed, governor: governor.status(), latestMission: supervisor.status() }; }
+function status() { return { installed, governor: governor.status(), latestMission: supervisor.status(), missionProfiles: Object.keys(preferences.PROFILES) }; }
 
 module.exports = { install, uninstall, status, executionRequest, internalProjectStatusIntent, latestStatusResponse };
