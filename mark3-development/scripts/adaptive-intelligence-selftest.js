@@ -6,6 +6,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
 assert(adaptive.domainFor('the reel has too much text') === 'creator-content', 'Reel feedback must route to creator-content learning.');
 assert(adaptive.domainFor('this dashboard typography is ugly') === 'design', 'Visual UI feedback must route to design learning.');
 assert(adaptive.domainFor('fix the GitHub repository bug') === 'development', 'Repository feedback must route to development learning.');
+assert(adaptive.domainFor('fix the Instagram API bug in the reel publisher') === 'development', 'Technical Instagram work must remain development, not inherit Reel taste.');
 
 const negative = adaptive.extractPreference('I do not like translucent boxes behind Reel text; use less text.');
 assert(negative && negative.domain === 'creator-content', 'Explicit Reel correction must be captured.');
@@ -35,4 +36,4 @@ const status = adaptive.status();
 assert(status.policy.externalActionsRequireApproval === true, 'Adaptive external actions must remain approval-gated.');
 assert(status.policy.inferSensitiveTraits === false, 'Adaptive Intelligence must not infer sensitive traits.');
 
-console.log('ULTRON Adaptive Intelligence self-test passed: explicit preference learning, task-vs-preference separation, domain routing, Instagram aesthetic intent and approval-gated execution validated.');
+console.log('ULTRON Adaptive Intelligence self-test passed: explicit preference learning, task-vs-preference separation, domain isolation, Instagram aesthetic intent and approval-gated execution validated.');
