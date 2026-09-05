@@ -38,11 +38,13 @@ function saveProposals(data) { ensureRoot(); writeJsonAtomic(PROPOSALS_PATH, dat
 
 function domainFor(text = '') {
   const value = String(text || '').toLowerCase();
+  // Technical work wins over product nouns such as Instagram/reel so coding feedback
+  // cannot accidentally inherit creator-content preferences.
   if (/\b(?:code|coding|github|repo|repository|bug|developer|software|api|architecture|endpoint|database|typescript|javascript|node|supabase schema)\b/.test(value)) return 'development';
   if (/\b(?:ui|ux|design|font|typography|layout|aesthetic|color|visual|dashboard|website style)\b/.test(value)) return 'design';
-  if (/\b(?:reel|reels|instagram|creator|content|caption|hook|b-roll|broll|short-form|short form|video edit|social media)\b/.test(value)) return 'creator-content';
+  if (/\b(?:reel|reels|instagram|creator|content|captions?|hooks?|b-roll|broll|short-form|short form|video edit|social media)\b/.test(value)) return 'creator-content';
   if (/\b(?:elevate os|business|client|lead|sales|pricing|revenue|founder|strategy|marketplace|outreach)\b/.test(value)) return 'business';
-  if (/\b(?:voice|tone|reply|answer|message|email|write|wording|short|long|detailed|concise)\b/.test(value)) return 'communication';
+  if (/\b(?:voice|tone|reply|answer|message|email|write|wording|short|shorter|long|longer|detailed|concise|response)\b/.test(value)) return 'communication';
   if (/\b(?:research|source|trend|hootsuite|market|compare|evidence)\b/.test(value)) return 'research';
   return 'general';
 }
@@ -57,20 +59,32 @@ function normalizeSignalText(text = '') {
 
 function feedbackPolarity(text = '') {
   const value = String(text || '').toLowerCase();
-  const negative = /\b(?:don'?t like|do not like|hate|bad|ugly|unfinished|too much|too many|overloaded|unorganised|unorganized|not good|not clean|avoid|stop using|never use|less of|remove|wrong|worse|not like this|shouldn'?t)\b/.test(value);
-  const positive = /\b(?:i like|i love|i prefer|this is good|looks good|better|keep this|use this|more like this|exactly|perfect|works well|always use)\b/.test(value);
+  const negative = /\b(?:don'?t like|do not like|hate|bad|ugly|unfinished|too much|too many|overloaded|unorganised|unorganized|not good|not clean|avoid|stop using|never use|less of|remove|wrong|worse|not like this|shouldn'?t|hard to read|distracting|cluttered)\b/.test(value);
+  const positive = /\b(?:i like|i love|i prefer|this is good|looks good|better|keep this|use this|more like this|exactly|perfect|works well|always use|cleaner|more polished)\b/.test(value);
   if (negative && !positive) return -1;
   if (positive && !negative) return 1;
   if (negative && positive) return 0;
   return null;
 }
 
+function directPreferenceStatement(value = '') {
+  return /\b(?:i prefer|i like|i love|i don'?t like|do not like|never use|always use|avoid|stop using|too much|too many|more like this|less of|not like this|should be|shouldn'?t|instead of|keep this style|use this style)\b/i.test(value);
+}
+
+function qualitativeWantStatement(value = '') {
+  if (!/\bi want\b/i.test(value)) return false;
+  // Requiring both a preference object and a qualitative modifier prevents normal
+  // commands such as “I want you to create a Reel” from becoming permanent taste.
+  const object = /\b(?:style|text|tone|format|design|way|voice|layout|behavio(?:u)?r|response|answer|video style|reel style|typography|graphics?|effects?|editing|pacing|aesthetic|presentation|structure)\b/i.test(value);
+  const qualifier = /\b(?:clean|cleaner|short|shorter|long|longer|simple|simpler|bold|bolder|soft|softer|fast|faster|slow|slower|minimal|cinematic|premium|professional|natural|human|polished|organized|organised|informative|entertaining|subtle|sparse|dense|more|less|fewer)\b/i.test(value)
+    || /\b(?:to\s+be|without|with\s+fewer|with\s+more|like\s+this|like\s+that|instead)\b/i.test(value);
+  return object && qualifier;
+}
+
 function isExplicitPreference(text = '') {
-  const value = String(text || '');
-  if (/\b(?:i prefer|i like|i love|i don'?t like|do not like|never use|always use|avoid|stop using|too much|too many|more like this|less of|not like this|should be|shouldn'?t|instead of|keep this style|use this style)\b/i.test(value)) return true;
-  const hasPreferenceObject = /\b(?:style|text|tone|format|design|way|voice|layout|behavior|behaviour|response|answer|video style|reel style|typography|graphics|effects|editing|pacing|aesthetic|presentation|structure)\b/i.test(value);
-  const hasQualitativeDirection = /\b(?:to be|more|less|cleaner|shorter|longer|simpler|bolder|softer|faster|slower|minimal|cinematic|premium|professional|natural|human|without|with fewer|with more|like this|like that|instead)\b/i.test(value);
-  return /\bi want\b/i.test(value) && hasPreferenceObject && hasQualitativeDirection;
+  const value = normalizeSignalText(text);
+  if (!value) return false;
+  return directPreferenceStatement(value) || qualitativeWantStatement(value);
 }
 
 function extractPreference(text = '') {
@@ -166,16 +180,18 @@ function approvalIntent(text = '') {
 function observeTurn(userMessage, assistantResponse = '', meta = {}) {
   const signal = extractPreference(userMessage);
   if (signal) recordSignal(signal, meta);
+  const decision = approvalIntent(userMessage);
   appendObservation({
     kind: 'turn',
     domain: domainFor(userMessage),
     user: normalizeSignalText(userMessage),
     assistant: normalizeSignalText(assistantResponse).slice(0, 600),
-    approvalIntent: approvalIntent(userMessage),
+    approvalIntent: decision,
     meta: { taskType: meta.taskType || null, mode: meta.mode || null },
   });
-  const decision = approvalIntent(userMessage);
-  if (decision) resolveLatestProposal(decision, { userMessage });
+  // IMPORTANT: do not auto-resolve a pending proposal merely because a normal turn
+  // says “do it”, “post it” or “send it”. adaptive-bootstrap owns contextual proposal
+  // approval and only resolves an explicit/recent proposal decision.
   return { signal, decision };
 }
 
@@ -247,8 +263,8 @@ function resolveLatestProposal(decision, meta = {}) {
 }
 
 function dailySuggestion() {
-  const signals = topSignals(null, 6);
-  if (signals.length < 2) return null;
+  const signals = topSignals(null, 8).filter((item) => Number(item.confidence || 0) >= 0.68 && (Number(item.score || 0) !== 0 || Number(item.hits || 0) >= 2));
+  if (!signals.length) return null;
   const state = workspace.stateSnapshot();
   const strongest = signals[0];
   const topAction = state?.topAction?.title || null;
