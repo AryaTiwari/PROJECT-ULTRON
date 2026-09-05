@@ -38,9 +38,9 @@ function saveProposals(data) { ensureRoot(); writeJsonAtomic(PROPOSALS_PATH, dat
 
 function domainFor(text = '') {
   const value = String(text || '').toLowerCase();
-  if (/\b(?:reel|reels|instagram|creator|content|caption|hook|b-roll|broll|short-form|short form|video edit|social media)\b/.test(value)) return 'creator-content';
+  if (/\b(?:code|coding|github|repo|repository|bug|developer|software|api|architecture|endpoint|database|typescript|javascript|node|supabase schema)\b/.test(value)) return 'development';
   if (/\b(?:ui|ux|design|font|typography|layout|aesthetic|color|visual|dashboard|website style)\b/.test(value)) return 'design';
-  if (/\b(?:code|coding|github|repo|repository|bug|developer|software|api|architecture)\b/.test(value)) return 'development';
+  if (/\b(?:reel|reels|instagram|creator|content|caption|hook|b-roll|broll|short-form|short form|video edit|social media)\b/.test(value)) return 'creator-content';
   if (/\b(?:elevate os|business|client|lead|sales|pricing|revenue|founder|strategy|marketplace|outreach)\b/.test(value)) return 'business';
   if (/\b(?:voice|tone|reply|answer|message|email|write|wording|short|long|detailed|concise)\b/.test(value)) return 'communication';
   if (/\b(?:research|source|trend|hootsuite|market|compare|evidence)\b/.test(value)) return 'research';
