@@ -1,5 +1,6 @@
 const reelIntel = require('../core/reel-intelligence');
 const aesthetic = require('../core/instagram-aesthetic');
+const youtube = require('../core/youtube-intelligence');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -22,8 +23,15 @@ assert(Array.isArray(palette) && palette.length >= 1, 'Instagram aesthetic analy
 const tags = aesthetic.classifyVisual({ r: 25, g: 28, b: 32 }, 0.1);
 assert(tags.includes('dark') && tags.includes('muted'), 'Dark muted account aesthetics must be classified correctly.');
 
+const ytScoreFast = youtube.performanceScore({ views: 250000, likes: 18000, comments: 600, publishedAt: new Date(Date.now() - 2 * 86400000).toISOString() });
+const ytScoreSlow = youtube.performanceScore({ views: 5000, likes: 100, comments: 5, publishedAt: new Date(Date.now() - 30 * 86400000).toISOString() });
+assert(ytScoreFast > ytScoreSlow, 'YouTube momentum scorer must prefer strong recent public performance over weak stale metadata.');
+const terms = youtube.titleTerms([{ title: 'Creators Need Better Hooks' }, { title: 'Better Hooks For Creators' }, { title: 'Why Hooks Drive Retention' }]);
+assert(terms.some((item) => item.term === 'hooks' && item.hits >= 3), 'YouTube intelligence must extract repeated title-language patterns.');
+assert(youtube.status().implemented === true && youtube.status().readOnly === true, 'YouTube intelligence connector must be implemented as read-only research.');
+
 const status = reelIntel.status();
 assert(status.implemented === true, 'Reel Intelligence must report implemented.');
 assert(status.adaptive?.policy?.externalActionsRequireApproval === true, 'Reel Intelligence must inherit Adaptive Intelligence approval policy.');
 
-console.log('ULTRON Reel Intelligence self-test passed: Hootsuite references, format selection, account-aesthetic signals and adaptive context validated.');
+console.log('ULTRON Reel Intelligence self-test passed: Hootsuite references, YouTube cross-platform signals, format selection, account-aesthetic signals and adaptive context validated.');
