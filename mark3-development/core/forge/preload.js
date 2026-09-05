@@ -1,6 +1,6 @@
 // Loaded only by the Mark 3 server process. Forge installs two lightweight local
 // read-only endpoints before server.js creates its HTTP server, then Operator Mode,
-// Reel Factory and Forge wrap the normal assistant after server modules finish loading.
+// Reel Intelligence, Reel Factory, Forge and Adaptive Intelligence wrap the normal assistant.
 const http = require('http');
 
 const originalCreateServer = http.createServer.bind(http);
@@ -55,6 +55,13 @@ setImmediate(() => {
   }
 
   try {
+    const intel = require('../reel-intelligence-runtime').install();
+    console.log(`[Mark 3] Reel Intelligence ready; trend=${intel.status.trendMode || 'refresh-on-demand'}, adaptive account-fit enabled.`);
+  } catch (error) {
+    console.error(`[Mark 3] Reel Intelligence bootstrap failed: ${error.message}`);
+  }
+
+  try {
     require('../reel-v2-runtime').install();
     console.log('[Mark 3] Reel Factory v2 premium finisher + final quality gate ready.');
   } catch (error) {
@@ -74,5 +81,12 @@ setImmediate(() => {
     console.log(`[Mark 3] ULTRON Forge ready${result.recovered?.length ? `; recovered ${result.recovered.length} mission(s)` : ''}. Command Center: http://127.0.0.1:8790/forge`);
   } catch (error) {
     console.error(`[Mark 3] ULTRON Forge bootstrap failed: ${error.message}`);
+  }
+
+  try {
+    const adaptive = require('../adaptive-bootstrap').install();
+    console.log(`[Mark 3] Adaptive Intelligence ready; ${adaptive.status.totalObservations || 0} learned observation(s), approval-gated proposals enabled.`);
+  } catch (error) {
+    console.error(`[Mark 3] Adaptive Intelligence bootstrap failed: ${error.message}`);
   }
 });
