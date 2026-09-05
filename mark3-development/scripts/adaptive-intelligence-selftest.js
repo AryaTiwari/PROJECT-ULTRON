@@ -16,8 +16,12 @@ const positive = adaptive.extractPreference('I prefer clean minimal typography a
 assert(positive && positive.polarity === 1, 'Positive explicit preference must be captured.');
 const ordinaryTask = adaptive.extractPreference('I want you to send an email to the client tomorrow.');
 assert(ordinaryTask === null, 'Ordinary executable task requests must not become permanent preferences.');
+const reelTask = adaptive.extractPreference('I want you to create a 20 second Reel about creator growth.');
+assert(reelTask === null, 'Ordinary Reel-generation requests must not become style preferences.');
 const styleWant = adaptive.extractPreference('I want the response style to be shorter and cleaner.');
 assert(styleWant && styleWant.domain === 'communication', 'I want should count only when it clearly describes style or behavior.');
+const reelStyleWant = adaptive.extractPreference('I want the Reel style to be cleaner with less text and more natural editing.');
+assert(reelStyleWant && reelStyleWant.domain === 'creator-content', 'Qualitative Reel-style directions must be learned.');
 
 assert(adaptive.approvalIntent('approve') === 'approve', 'Approval intent must be recognized.');
 assert(adaptive.approvalIntent('do it') === 'approve', 'Natural approval must be recognized.');
