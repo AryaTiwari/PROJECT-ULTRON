@@ -55,6 +55,13 @@ setImmediate(() => {
   }
 
   try {
+    require('../reel-v2-runtime').install();
+    console.log('[Mark 3] Reel Factory v2 premium finisher + final quality gate ready.');
+  } catch (error) {
+    console.error(`[Mark 3] Reel Factory v2 finishing bootstrap failed: ${error.message}`);
+  }
+
+  try {
     const reels = require('../reel-operator-bootstrap').install();
     const ready = reels.status.stockSourceReady && reels.status.ffmpeg.available;
     console.log(`[Mark 3] Reel Factory Operator ${ready ? 'ready' : 'installed with blocker'}; natural make-a-reel commands enabled.`);
