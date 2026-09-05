@@ -4,6 +4,8 @@ const { spawnSync } = require('child_process');
 const config = require('./config');
 const integrations = require('./integrations');
 const sources = require('./reel-sources');
+const quality = require('./reel-quality');
+const narrator = require('./reel-narrator');
 const { writeJsonAtomic } = require('./persistence');
 
 const REEL_ROOT = path.resolve(config.projectRoot, '.ultron', 'reels');
@@ -66,79 +68,102 @@ function extractJson(text) {
 
 function fallbackPlan(brief, options = {}) {
   const durationSec = clamp(options.durationSec, 15, 60, 30);
-  const sceneCount = Math.max(4, Math.min(8, Math.round(durationSec / 5)));
-  const step = durationSec / sceneCount;
-  const cleanBrief = String(brief || '').trim() || 'a useful creator-growth insight';
-  const scenes = Array.from({ length: sceneCount }, (_, index) => {
-    const start = Number((index * step).toFixed(2));
-    const end = Number(((index + 1) * step).toFixed(2));
-    const labels = ['Pattern interrupt', 'Problem', 'Why it happens', 'Proof/visual', 'Fix', 'Payoff', 'CTA', 'Brand close'];
-    return {
-      index: index + 1,
-      start,
-      end,
-      purpose: labels[index] || `Beat ${index + 1}`,
-      visualQuery: index === 0 ? `${cleanBrief} dramatic vertical` : `${cleanBrief} creator b-roll vertical`,
-      onScreenText: index === 0 ? cleanBrief.slice(0, 70) : '',
-      narration: '',
-      transition: index === 0 ? 'hard-cut' : 'fast-cut',
-      energy: index < 2 ? 'high' : 'medium',
-    };
-  });
-  return {
-    version: 1,
+  const cleanBrief = String(brief || '').trim() || 'why creators struggle to turn reach into repeatable growth';
+  const req = quality.requirements(durationSec);
+  const creatorTopic = quality.creatorGrowthBrief(cleanBrief);
+  const base = creatorTopic ? [
+    ['Pattern interrupt', 'Viral Reach ≠ Real Growth', 'A viral reel can spike reach without building a loyal audience.', 'creator looking at phone analytics surprised vertical'],
+    ['Context', 'One Topic Won', 'Many viewers liked one topic, not necessarily your whole page.', 'social media creator scrolling profile analytics vertical'],
+    ['Cause', 'Reach Must Convert', 'If they do not follow, save, visit your profile, or return, the spike dies.', 'creator analytics follower conversion phone vertical'],
+    ['Cause', 'Next Reel Resets', 'When the next post feels unrelated, repeat-viewer and retention signals weaken.', 'content creator disappointed analytics vertical'],
+    ['Action', 'Build Repeatable Pillars', 'Turn the winning promise into a series with sharper hooks and a clear reason to come back.', 'creator planning content calendar notebook vertical'],
+    ['Brand CTA', 'Free Strategy Session', 'Want a growth system built around your account? Book a free strategy session with Elevate OS at elevateos.in.', 'creator strategy consultation modern workspace vertical'],
+  ] : [
+    ['Pattern interrupt', 'Here Is What Most People Miss', `The important part of ${cleanBrief} is not the surface-level result; it is the system behind it.`, `${cleanBrief} cinematic vertical`],
+    ['Context', 'Start With The Real Problem', 'Separate the visible symptom from the cause before deciding what to change.', `${cleanBrief} problem analysis vertical`],
+    ['Insight', 'Look For The Pattern', 'One result can be random; repeated signals show what is actually working or failing.', `${cleanBrief} pattern data vertical`],
+    ['Insight', 'Remove The Bottleneck', 'Fix the constraint that blocks the next step instead of adding more noise.', `${cleanBrief} focused work vertical`],
+    ['Action', 'Build A Repeatable System', 'Turn the useful insight into a simple process you can measure and improve.', `${cleanBrief} system planning vertical`],
+    ['Close', 'Use The System, Not Luck', 'The goal is a repeatable result, not a one-time win.', `${cleanBrief} confident outcome vertical`],
+  ];
+
+  if (durationSec > 24) {
+    base[2][2] += ' Track the conversion point, not just the headline number.';
+    base[3][2] += ' Consistency helps both the audience and the platform understand what to expect.';
+  }
+  if (durationSec > 38) {
+    base.splice(base.length - 1, 0, ['Action', 'Measure The Follow-Through', 'Watch what happens after the first view: profile visits, saves, follows, repeat viewers, and the next post.', `${cleanBrief} analytics dashboard vertical`]);
+  }
+
+  while (base.length < req.minScenes) {
+    base.splice(base.length - 1, 0, ['Proof', 'Make The Signal Clear', 'Each post should make the next action obvious for the right audience.', `${cleanBrief} creator workflow vertical`]);
+  }
+
+  const scenes = base.map((row, index) => ({
+    index: index + 1,
+    start: 0,
+    end: 0,
+    purpose: row[0],
+    onScreenText: row[1],
+    subText: '',
+    narration: row[2],
+    visualQuery: row[3],
+    transition: index === 0 ? 'hard-cut' : 'fast-cut',
+    energy: index < 2 ? 'high' : 'medium',
+    isBrandCta: creatorTopic && index === base.length - 1,
+  }));
+
+  let plan = {
+    version: 2,
     title: cleanBrief.slice(0, 90),
-    angle: 'Clear creator-first explanation with a strong hook and practical payoff.',
-    hook: cleanBrief,
-    voiceover: cleanBrief,
-    caption: cleanBrief,
-    cta: 'Follow for the next breakdown.',
-    style: String(options.style || 'cinematic-fast'),
+    angle: 'A complete creator-first explanation: hook, cause, consequence, fix and a clear next action.',
+    hook: scenes[0].narration,
+    voiceover: scenes.map((scene) => scene.narration).join(' '),
+    caption: `${cleanBrief}\n\n${creatorTopic ? 'Want a personalized growth system? Book a free strategy session at elevateos.in.' : ''}`.trim(),
+    cta: creatorTopic ? 'Free Strategy Session — Elevate OS — elevateos.in' : 'Use the system, not luck.',
+    style: String(options.style || 'cinematic, fast-paced, premium creator reel'),
     durationSec,
     aspectRatio: '9:16',
     width: 1080,
     height: 1920,
     fps: 30,
-    musicMood: 'modern, energetic, low under voice',
+    musicMood: 'modern, cinematic, energetic but low under narration',
     scenes,
-    directorSource: 'deterministic-fallback',
+    directorSource: 'deterministic-v2-fallback',
   };
+  plan = quality.ensureBrandScene(plan, cleanBrief, options);
+  return plan;
 }
 
 function normalizePlan(raw, brief, options = {}) {
   const fallback = fallbackPlan(brief, options);
   const durationSec = clamp(raw?.durationSec, 15, 60, fallback.durationSec);
-  const rawScenes = Array.isArray(raw?.scenes) ? raw.scenes : [];
-  const scenes = (rawScenes.length ? rawScenes : fallback.scenes).slice(0, 10).map((scene, index, all) => {
-    const defaultStart = index === 0 ? 0 : Number(all[index - 1]?.end ?? fallback.scenes[Math.min(index, fallback.scenes.length - 1)]?.start ?? 0);
-    const start = clamp(scene?.start, 0, durationSec, defaultStart);
-    const defaultEnd = index === all.length - 1 ? durationSec : Math.min(durationSec, start + Math.max(2.5, durationSec / Math.max(1, all.length)));
-    const end = clamp(scene?.end, start + 0.25, durationSec, defaultEnd);
-    return {
-      index: index + 1,
-      start: Number(start.toFixed(2)),
-      end: Number(end.toFixed(2)),
-      purpose: String(scene?.purpose || `Beat ${index + 1}`).slice(0, 100),
-      visualQuery: String(scene?.visualQuery || scene?.visual_query || fallback.scenes[index]?.visualQuery || brief).slice(0, 100),
-      onScreenText: String(scene?.onScreenText || scene?.on_screen_text || '').slice(0, 140),
-      narration: String(scene?.narration || '').slice(0, 500),
-      transition: String(scene?.transition || (index ? 'fast-cut' : 'hard-cut')).slice(0, 40),
-      energy: String(scene?.energy || 'medium').slice(0, 30),
-    };
-  });
-  if (scenes.length) {
-    scenes[0].start = 0;
-    scenes[scenes.length - 1].end = durationSec;
-  }
-  return {
-    version: 1,
+  const req = quality.requirements(durationSec);
+  let rawScenes = Array.isArray(raw?.scenes) ? raw.scenes : [];
+  if (!rawScenes.length) rawScenes = fallback.scenes;
+  const scenes = rawScenes.slice(0, 10).map((scene, index) => ({
+    index: index + 1,
+    start: 0,
+    end: 0,
+    purpose: String(scene?.purpose || `Beat ${index + 1}`).slice(0, 100),
+    visualQuery: String(scene?.visualQuery || scene?.visual_query || fallback.scenes[index % fallback.scenes.length]?.visualQuery || brief).slice(0, 120),
+    onScreenText: String(scene?.onScreenText || scene?.on_screen_text || '').replace(/\s+/g, ' ').trim().slice(0, req.maxOnScreenChars),
+    subText: String(scene?.subText || scene?.sub_text || '').replace(/\s+/g, ' ').trim().slice(0, 90),
+    narration: String(scene?.narration || '').replace(/\s+/g, ' ').trim().slice(0, 600),
+    transition: String(scene?.transition || (index ? 'fast-cut' : 'hard-cut')).slice(0, 40),
+    energy: String(scene?.energy || 'medium').slice(0, 30),
+    isBrandCta: Boolean(scene?.isBrandCta || scene?.is_brand_cta),
+  }));
+
+  let plan = {
+    version: 2,
     title: String(raw?.title || fallback.title).slice(0, 120),
     angle: String(raw?.angle || fallback.angle).slice(0, 500),
-    hook: String(raw?.hook || fallback.hook).slice(0, 300),
-    voiceover: String(raw?.voiceover || fallback.voiceover).slice(0, 4000),
+    hook: String(raw?.hook || scenes[0]?.narration || fallback.hook).slice(0, 300),
+    voiceover: String(raw?.voiceover || '').replace(/\s+/g, ' ').trim().slice(0, 5000),
     caption: String(raw?.caption || fallback.caption).slice(0, 2200),
     cta: String(raw?.cta || fallback.cta).slice(0, 300),
-    style: String(raw?.style || options.style || fallback.style).slice(0, 80),
+    style: String(raw?.style || options.style || fallback.style).slice(0, 120),
     durationSec,
     aspectRatio: '9:16',
     width: 1080,
@@ -146,33 +171,67 @@ function normalizePlan(raw, brief, options = {}) {
     fps: 30,
     musicMood: String(raw?.musicMood || raw?.music_mood || fallback.musicMood).slice(0, 160),
     scenes,
-    directorSource: String(raw?.directorSource || 'cloud-ai'),
+    directorSource: String(raw?.directorSource || 'cloud-ai-v2'),
   };
+  plan = quality.ensureBrandScene(plan, brief, options);
+  return plan;
+}
+
+function directorPrompt(brief, durationSec, style, options = {}) {
+  const req = quality.requirements(durationSec);
+  const branded = quality.shouldBrand(brief, options);
+  return [
+    'You are ULTRON Reel Director v2. Create a FINISHED, information-dense Instagram Reel production plan, not vague motivational fragments.',
+    'Return ONLY one valid JSON object. No markdown.',
+    `Topic: ${String(brief || '').trim()}`,
+    `Duration: ${durationSec} seconds. Style: ${style}.`,
+    `Narration target: ${req.targetWords} words; acceptable range ${req.minWords}-${req.maxWords} words. Every sentence must add new information.`,
+    `Use at least ${req.minScenes} scenes. Structure: 0-2s pattern-interrupt hook → explain the real cause → show consequence/mechanism → actionable fix → payoff → final CTA.`,
+    'Each scene must contain narration plus onScreenText of 2-8 short words. Do not use long sentences as on-screen text.',
+    'Make stock-search visualQuery concrete and visually varied. Avoid celebrity likenesses, copyrighted characters, logos and unverifiable claims.',
+    'Do not repeat the same idea in different words. The viewer should learn WHY the problem happens and WHAT to do next.',
+    branded
+      ? 'MANDATORY final scene: promote Elevate OS. On-screen text: "Free Strategy Session". Subtext must include "Elevate OS • elevateos.in". Narration must naturally invite the viewer to book the free strategy session. Do not make the entire Reel an ad; value first, CTA last.'
+      : 'Do not add a brand promotion unless the topic explicitly asks for one.',
+    'The voiceover field must contain the full narration in scene order. Scene timings will be normalized by the renderer; do not overlap scenes.',
+    'JSON schema:',
+    '{"title":"","angle":"","hook":"","voiceover":"","caption":"","cta":"","style":"","durationSec":20,"musicMood":"","scenes":[{"purpose":"","visualQuery":"","onScreenText":"","subText":"","narration":"","transition":"fast-cut","energy":"high","isBrandCta":false}]}',
+  ].join('\n');
+}
+
+async function askDirector(prompt) {
+  const result = await integrations.chat([
+    { role: 'system', content: 'You are a senior short-form video strategist and editor. Produce complete, useful, retention-focused plans and obey JSON-only output.' },
+    { role: 'user', content: prompt },
+  ], 'auto', null, { taskType: 'planning' });
+  return extractJson(extractText(result));
 }
 
 async function directPlan(brief, options = {}) {
   if (options.localOnly) return fallbackPlan(brief, options);
   const durationSec = clamp(options.durationSec, 15, 60, 30);
   const style = String(options.style || 'cinematic, fast-paced, premium creator reel');
-  const prompt = [
-    'You are ULTRON Reel Director. Design a polished vertical social reel for Instagram.',
-    'Return ONLY one valid JSON object. No markdown.',
-    `Brief: ${String(brief || '').trim()}`,
-    `Target duration: ${durationSec} seconds. Style: ${style}.`,
-    'Optimize the first 2 seconds for retention. Keep cuts visually varied and feasible with stock footage plus motion graphics.',
-    'Use concrete stock-search phrases in visualQuery. Avoid copyrighted characters, logos, celebrity likenesses, or unverifiable claims.',
-    'JSON schema:',
-    '{"title":"","angle":"","hook":"","voiceover":"","caption":"","cta":"","style":"","durationSec":30,"musicMood":"","scenes":[{"start":0,"end":4,"purpose":"","visualQuery":"","onScreenText":"","narration":"","transition":"hard-cut","energy":"high"}]}',
-  ].join('\n');
   try {
-    const result = await integrations.chat([
-      { role: 'system', content: 'You create concise, high-retention social-video production plans and obey JSON-only output requirements.' },
-      { role: 'user', content: prompt },
-    ], 'auto', null, { taskType: 'general' });
-    const parsed = extractJson(extractText(result));
-    return normalizePlan(parsed, brief, { ...options, durationSec });
+    const first = normalizePlan(await askDirector(directorPrompt(brief, durationSec, style, options)), brief, { ...options, durationSec, style });
+    let audit = quality.auditPlan(first, brief, options);
+    if (audit.ok) return { ...first, qualityAudit: audit };
+
+    const repairPrompt = [
+      directorPrompt(brief, durationSec, style, options),
+      'The previous plan failed these quality checks:',
+      ...audit.issues.map((issue) => `- ${issue}`),
+      'Rewrite the WHOLE JSON plan. Make the script more complete and informative while staying inside the narration word range.',
+      `Previous plan: ${JSON.stringify(first)}`,
+    ].join('\n');
+    const repaired = normalizePlan(await askDirector(repairPrompt), brief, { ...options, durationSec, style });
+    audit = quality.auditPlan(repaired, brief, options);
+    if (audit.ok) return { ...repaired, qualityAudit: audit, repaired: true };
+
+    const fallback = fallbackPlan(brief, { ...options, durationSec, style });
+    return { ...fallback, qualityAudit: quality.auditPlan(fallback, brief, options), directorError: `AI plan remained below quality threshold: ${audit.issues.join('; ')}` };
   } catch (error) {
-    return { ...fallbackPlan(brief, { ...options, durationSec }), directorError: error.message };
+    const fallback = fallbackPlan(brief, { ...options, durationSec, style });
+    return { ...fallback, qualityAudit: quality.auditPlan(fallback, brief, options), directorError: error.message };
   }
 }
 
@@ -180,7 +239,7 @@ async function sourceScenes(plan, options = {}) {
   const used = new Set();
   const scenes = [];
   for (const scene of plan.scenes) {
-    const found = await sources.searchVideos(scene.visualQuery, { perPage: 8, orientation: 'portrait' });
+    const found = await sources.searchVideos(scene.visualQuery, { perPage: 10, orientation: 'portrait' });
     const candidate = found.items.find((item) => !used.has(`${item.provider}:${item.id}`)) || found.items[0] || null;
     if (candidate) used.add(`${candidate.provider}:${candidate.id}`);
     scenes.push({
@@ -216,14 +275,16 @@ async function createJob(brief, options = {}) {
   const paths = jobPaths(id);
   fs.mkdirSync(paths.assets, { recursive: true });
   let plan = await directPlan(cleanBrief, options);
+  const audit = quality.auditPlan(plan, cleanBrief, options);
+  plan.qualityAudit = audit;
   writeJsonAtomic(paths.plan, plan);
 
-  let state = 'planned';
-  if (options.fetchAssets !== false && sources.status().anyConfigured) {
+  let state = audit.ok ? 'planned' : 'waiting_quality';
+  if (audit.ok && options.fetchAssets !== false && sources.status().anyConfigured) {
     plan = await sourceScenes(plan, options);
     writeJsonAtomic(paths.plan, plan);
-    state = plan.scenes.some((scene) => scene.asset) ? 'assets_selected' : 'waiting_assets';
-  } else if (options.fetchAssets !== false) {
+    state = plan.scenes.every((scene) => scene.asset) ? 'assets_selected' : 'waiting_assets';
+  } else if (audit.ok && options.fetchAssets !== false) {
     state = 'waiting_source_credentials';
   }
 
@@ -238,8 +299,10 @@ async function createJob(brief, options = {}) {
     aspectRatio: '9:16',
     planPath: paths.plan,
     outputPath: paths.output,
-    rendererImplemented: false,
+    rendererImplemented: true,
+    qualityAudit: audit,
     sourceStatus: sources.status(),
+    narrator: narrator.status(plan.style),
     ffmpeg: ffmpegStatus(),
   };
   writeJsonAtomic(paths.job, job);
@@ -249,15 +312,21 @@ async function createJob(brief, options = {}) {
 function status() {
   const sourceStatus = sources.status();
   const ffmpeg = ffmpegStatus();
+  const narratorStatus = narrator.status();
   return {
     root: REEL_ROOT,
+    version: 2,
     directorImplemented: true,
+    contentQualityGateImplemented: true,
     stockSourceRouterImplemented: true,
     stockSourceReady: sourceStatus.anyConfigured,
     sourceStatus,
     ffmpeg,
-    rendererImplemented: false,
-    voiceoverBridgeImplemented: false,
+    rendererImplemented: true,
+    safeCaptionLayoutImplemented: true,
+    brandCtaImplemented: true,
+    narrator: narratorStatus,
+    voiceoverBridgeImplemented: true,
     instagramPublishConnected: Boolean(String(process.env.INSTAGRAM_TOKEN || process.env.INSTAGRAM_ACCESS_TOKEN || '').trim() && String(process.env.INSTAGRAM_ACCOUNT_ID || '').trim()),
     zeroCostOnly: true,
     paidGenerationAllowed: false,
@@ -265,7 +334,9 @@ function status() {
       ? 'Add PEXELS_API_KEY or PIXABAY_API_KEY.'
       : !ffmpeg.available
         ? 'FFmpeg is not available on PATH.'
-        : 'Finished Reel renderer is the next implementation step.',
+        : !narratorStatus.configured
+          ? 'Configure a separate Reel narrator voice profile; Ultron voice fallback is disabled.'
+          : null,
   };
 }
 
@@ -277,6 +348,7 @@ module.exports = {
   extractJson,
   fallbackPlan,
   normalizePlan,
+  directorPrompt,
   directPlan,
   sourceScenes,
   jobPaths,
