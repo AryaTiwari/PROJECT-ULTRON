@@ -2,6 +2,7 @@ const assistant = require('./assistant');
 const adaptive = require('./adaptive-intelligence');
 const reelIntelligence = require('./reel-intelligence');
 const instagramAesthetic = require('./instagram-aesthetic');
+const reelLearning = require('./reel-learning');
 
 let installed = false;
 let originalHandle = null;
@@ -143,6 +144,7 @@ function install() {
     const result = await originalHandle(message, options);
     const response = String(result?.response || result?.text || '').trim();
     try { adaptive.observeTurn(message, response, { taskType: result?.taskType || options.taskType || null, mode: result?.mode || null }); } catch {}
+    try { reelLearning.recordFeedback(message); } catch {}
     return result;
   };
   installed = true;
@@ -163,6 +165,6 @@ function uninstall() {
   return { installed: false };
 }
 
-function status() { return { installed, adaptive: adaptive.status(), reelIntelligence: reelIntelligence.status(), instagramAesthetic: instagramAesthetic.status() }; }
+function status() { return { installed, adaptive: adaptive.status(), reelIntelligence: reelIntelligence.status(), instagramAesthetic: instagramAesthetic.status(), reelLearning: reelLearning.status() }; }
 
 module.exports = { isLearningStatusRequest, isReelIdeaRequest, isTrendRefreshRequest, isInstagramAestheticRequest, proposalDecisionIntent, learnedResponse, ideaResponse, aestheticResponse, executeProposalDecision, handleSpecial, install, uninstall, status };
