@@ -1,6 +1,7 @@
 const assistant = require('./assistant');
 const adaptive = require('./adaptive-intelligence');
 const reelIntelligence = require('./reel-intelligence');
+const instagramAesthetic = require('./instagram-aesthetic');
 
 let installed = false;
 let originalHandle = null;
@@ -18,6 +19,12 @@ function isReelIdeaRequest(text = '') {
 
 function isTrendRefreshRequest(text = '') {
   return /\b(?:refresh|update|check|research|scan)\b[\s\S]{0,80}\b(?:hootsuite|reel trends?|instagram trends?|short-form trends?|content trends?)\b/i.test(String(text || ''));
+}
+
+function isInstagramAestheticRequest(text = '') {
+  const value = String(text || '');
+  return /\b(?:analy[sz]e|check|read|inspect|learn|understand|scan)\b[\s\S]{0,90}\b(?:my\s+)?instagram\b[\s\S]{0,70}\b(?:aesthetic|style|feed|profile|pfp|visuals?|look|branding)\b/i.test(value)
+    || /\b(?:my\s+)?instagram\b[\s\S]{0,70}\b(?:aesthetic|style|feed|pfp|visuals?|look|branding)\b[\s\S]{0,50}\b(?:analy[sz]e|check|learn|understand)\b/i.test(value);
 }
 
 function learnedResponse() {
@@ -38,11 +45,33 @@ function ideaResponse(data) {
   return `Sir, these are the strongest account-fit Reel ideas right now:\n${top.join('\n')}\n${sourceTruth}`;
 }
 
+function aestheticResponse(data) {
+  if (!data) return 'Sir, I could not obtain enough Instagram profile/media evidence to build an aesthetic snapshot, so I will not invent one.';
+  const visual = data.visual || {};
+  const palette = (visual.palette || []).slice(0, 5).map((item) => item.hex).join(', ');
+  const tags = (visual.tags || []).join(', ');
+  const caption = data.captions?.available
+    ? `Your recent captions average ${data.captions.averageChars} characters; CTA rate ${Math.round(Number(data.captions.ctaRate || 0) * 100)}%.`
+    : 'Recent caption-pattern data was unavailable.';
+  if (!visual.available) return `Sir, I could read the Instagram account metadata, but the API did not expose enough profile/feed imagery for a reliable visual aesthetic analysis. ${caption}`;
+  return `Sir, your current Instagram visual signature reads as ${tags || 'mixed'}, with a sampled palette of ${palette || 'no stable palette yet'}. ${caption} Reel Intelligence will use this as a soft creative constraint, not a permanent style lock.`;
+}
+
 async function handleSpecial(message, options = {}) {
   if (isLearningStatusRequest(message)) {
     const response = learnedResponse();
     adaptive.observeTurn(message, response, { taskType: 'adaptive-status', mode: 'local' });
     return { ok: true, response, text: response, model: 'adaptive-intelligence', provider: 'local', taskType: 'adaptive-status', mode: 'fastpath', inputMode: options.inputMode || 'chat' };
+  }
+  if (isInstagramAestheticRequest(message)) {
+    let data = null;
+    let error = null;
+    try { data = await instagramAesthetic.analyze({ limit: 10 }); }
+    catch (cause) { error = cause.message; data = instagramAesthetic.latest(); }
+    let response = aestheticResponse(data);
+    if (error && !data) response += ` Instagram analysis error: ${error}`;
+    adaptive.observeTurn(message, response, { taskType: 'instagram-aesthetic', mode: 'official-instagram-api' });
+    return { ok: Boolean(data), response, text: response, model: 'instagram-aesthetic', provider: 'official-instagram-api+local-ffmpeg', taskType: 'analysis', mode: 'instagram-aesthetic', inputMode: options.inputMode || 'chat', aesthetic: data || null, error };
   }
   if (isTrendRefreshRequest(message)) {
     const intel = await reelIntelligence.refreshTrends({});
@@ -89,6 +118,6 @@ function uninstall() {
   return { installed: false };
 }
 
-function status() { return { installed, adaptive: adaptive.status(), reelIntelligence: reelIntelligence.status() }; }
+function status() { return { installed, adaptive: adaptive.status(), reelIntelligence: reelIntelligence.status(), instagramAesthetic: instagramAesthetic.status() }; }
 
-module.exports = { isLearningStatusRequest, isReelIdeaRequest, isTrendRefreshRequest, learnedResponse, ideaResponse, handleSpecial, install, uninstall, status };
+module.exports = { isLearningStatusRequest, isReelIdeaRequest, isTrendRefreshRequest, isInstagramAestheticRequest, learnedResponse, ideaResponse, aestheticResponse, handleSpecial, install, uninstall, status };
