@@ -1,4 +1,5 @@
 const adaptive = require('../core/adaptive-intelligence');
+const adaptiveBootstrap = require('../core/adaptive-bootstrap');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -22,9 +23,12 @@ assert(adaptive.approvalIntent('approve') === 'approve', 'Approval intent must b
 assert(adaptive.approvalIntent('do it') === 'approve', 'Natural approval must be recognized.');
 assert(adaptive.approvalIntent('reject') === 'reject', 'Rejection intent must be recognized.');
 assert(adaptive.approvalIntent('tell me more') === null, 'Normal conversation must not be mistaken for approval.');
+assert(adaptiveBootstrap.proposalDecisionIntent('approve the adaptive suggestion') === 'approve', 'Explicit adaptive proposal approval must be recognized.');
+assert(adaptiveBootstrap.proposalDecisionIntent('reject that adaptive proposal') === 'reject', 'Explicit adaptive proposal rejection must be recognized.');
+assert(adaptiveBootstrap.isInstagramAestheticRequest('Ultron, analyze my Instagram aesthetic and feed style'), 'Natural Instagram aesthetic analysis request must be recognized.');
 
 const status = adaptive.status();
 assert(status.policy.externalActionsRequireApproval === true, 'Adaptive external actions must remain approval-gated.');
 assert(status.policy.inferSensitiveTraits === false, 'Adaptive Intelligence must not infer sensitive traits.');
 
-console.log('ULTRON Adaptive Intelligence self-test passed: explicit preference learning, task-vs-preference separation, domain routing and approval-gated autonomy validated.');
+console.log('ULTRON Adaptive Intelligence self-test passed: explicit preference learning, task-vs-preference separation, domain routing, Instagram aesthetic intent and approval-gated execution validated.');
