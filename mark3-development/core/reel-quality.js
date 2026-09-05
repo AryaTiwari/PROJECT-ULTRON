@@ -53,7 +53,7 @@ function retimeScenes(scenes, durationSec, brandPromotion) {
   });
 }
 
-function brandScene(durationSec) {
+function brandScene() {
   return {
     purpose: 'Brand CTA',
     visualQuery: 'creator strategy consultation modern workspace vertical video',
@@ -66,16 +66,47 @@ function brandScene(durationSec) {
   };
 }
 
+function trimToWords(value, limit) {
+  const words = String(value || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length <= limit) return words.join(' ');
+  const selected = words.slice(0, Math.max(1, limit));
+  let text = selected.join(' ').replace(/[,:;!?-]+$/, '');
+  if (!/[.!?]$/.test(text)) text += '.';
+  return text;
+}
+
+function fitNarrationBudget(scenes, durationSec) {
+  const list = Array.isArray(scenes) ? scenes.map((scene) => ({ ...scene })) : [];
+  const req = requirements(durationSec);
+  const total = list.reduce((sum, scene) => sum + wordCount(scene.narration), 0);
+  if (total <= req.maxWords || !list.length) return list;
+
+  const ctaIndex = list.findIndex((scene) => scene.isBrandCta);
+  const ctaWords = ctaIndex >= 0 ? wordCount(list[ctaIndex].narration) : 0;
+  const bodyIndexes = list.map((_, index) => index).filter((index) => index !== ctaIndex);
+  const bodyBudget = Math.max(bodyIndexes.length * 5, req.maxWords - ctaWords);
+  const base = Math.max(5, Math.floor(bodyBudget / Math.max(1, bodyIndexes.length)));
+  let remainder = Math.max(0, bodyBudget - base * bodyIndexes.length);
+
+  bodyIndexes.forEach((index) => {
+    const allowance = base + (remainder > 0 ? 1 : 0);
+    if (remainder > 0) remainder -= 1;
+    list[index].narration = trimToWords(list[index].narration, allowance);
+  });
+  return list;
+}
+
 function ensureBrandScene(plan, brief, options = {}) {
   const enabled = shouldBrand(brief, options);
-  const scenes = Array.isArray(plan?.scenes) ? plan.scenes.map((scene) => ({ ...scene })) : [];
+  let scenes = Array.isArray(plan?.scenes) ? plan.scenes.map((scene) => ({ ...scene })) : [];
   if (enabled) {
     const existing = scenes.findIndex((scene) => scene.isBrandCta || /free strategy session|elevate os/i.test(`${scene.onScreenText || ''} ${scene.subText || ''} ${scene.narration || ''}`));
-    const cta = brandScene(plan?.durationSec || options.durationSec);
+    const cta = brandScene();
     if (existing >= 0) scenes[existing] = { ...scenes[existing], ...cta };
     else if (scenes.length) scenes[scenes.length - 1] = { ...scenes[scenes.length - 1], ...cta };
     else scenes.push(cta);
   }
+  scenes = fitNarrationBudget(scenes, plan?.durationSec || options.durationSec);
   const retimed = retimeScenes(scenes, plan?.durationSec || options.durationSec, enabled);
   const voiceover = retimed.map((scene) => String(scene.narration || '').trim()).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   return {
@@ -126,6 +157,8 @@ module.exports = {
   shouldBrand,
   retimeScenes,
   brandScene,
+  trimToWords,
+  fitNarrationBudget,
   ensureBrandScene,
   auditPlan,
 };
