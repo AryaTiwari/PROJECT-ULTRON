@@ -70,16 +70,20 @@ function audit() {
   if (ig.configured) {
     const publish = operator.status().find((row) => row.id === 'instagram_publish');
     if (publish && !publish.implemented) opportunities.push({ id: 'instagram-publisher', priority: 1, reason: 'Instagram identity is connected but the publishing connector is still scaffolded.' });
-    if (!freeTools.byId('cloudflare-r2')?.configured) opportunities.push({ id: 'cloudflare-r2', priority: 1, reason: 'R2 would provide public Reel URLs required by Instagram publishing while staying inside a generous free tier.' });
+    if (!freeTools.byId('cloudflare-r2')?.credentialsReady) opportunities.push({ id: 'cloudflare-r2', priority: 1, reason: 'R2 credentials would unlock the next public-media-hosting build needed for Instagram publishing.' });
+    else if (!freeTools.byId('cloudflare-r2')?.implemented) opportunities.push({ id: 'cloudflare-r2-connector', priority: 1, reason: 'R2 credentials are present but the Ultron storage connector is not implemented yet.' });
   }
 
   const research = researchTurbo.status();
   if (!research.searchFallbacks.length) opportunities.push({ id: 'tavily', priority: 1, reason: 'TinyFish currently has no independent zero-cost search fallback.' });
   if (!research.fetchFallback) opportunities.push({ id: 'firecrawl', priority: 2, reason: 'Dynamic/hard-to-read pages currently lack a dedicated extraction fallback.' });
 
-  if (!freeTools.byId('youtube-data')?.configured) opportunities.push({ id: 'youtube-data', priority: 1, reason: 'Cross-platform Shorts metadata would make creator trend intelligence less Instagram-only.' });
-  if (!freeTools.byId('telegram-bot')?.configured) opportunities.push({ id: 'telegram-bot', priority: 2, reason: 'A Telegram bot would give Ultron a lightweight phone command/notification surface.' });
-  if (!freeTools.byId('posthog')?.configured) opportunities.push({ id: 'posthog', priority: 2, reason: 'Elevate OS product decisions currently lack a dedicated product-analytics feedback stream.' });
+  if (!freeTools.byId('youtube-data')?.credentialsReady) opportunities.push({ id: 'youtube-data', priority: 1, reason: 'A YouTube API key would let us build cross-platform Shorts intelligence instead of keeping trend analysis Instagram/web-heavy.' });
+  else if (!freeTools.byId('youtube-data')?.implemented) opportunities.push({ id: 'youtube-intelligence-connector', priority: 1, reason: 'YouTube credentials exist; connector implementation is the next step.' });
+  if (!freeTools.byId('telegram-bot')?.credentialsReady) opportunities.push({ id: 'telegram-bot', priority: 2, reason: 'A Telegram bot token would unlock a lightweight phone command/notification surface.' });
+  else if (!freeTools.byId('telegram-bot')?.implemented) opportunities.push({ id: 'telegram-remote-interface', priority: 2, reason: 'Telegram credentials exist; remote command interface still needs implementation.' });
+  if (!freeTools.byId('posthog')?.credentialsReady) opportunities.push({ id: 'posthog', priority: 2, reason: 'PostHog credentials would unlock a product-analytics feedback stream for Elevate OS.' });
+  else if (!freeTools.byId('posthog')?.implemented) opportunities.push({ id: 'posthog-connector', priority: 2, reason: 'PostHog credentials exist; analytics connector still needs implementation.' });
 
   const gov = forgeGovernor.status();
   if (!gov.zeroCostOnly || gov.paidFallbackAllowed || gov.localLlmAllowed) issues.push({ component: 'forge-governor', reason: 'Zero-cost/no-local-LLM policy regressed.' });
@@ -116,7 +120,8 @@ function compact(report = audit()) {
     operatorReady: operator.summary().ready.map((row) => row.id),
     operatorScaffolded: operator.summary().buildNext.map((row) => row.id),
     researchFallbacks: researchTurbo.status().searchFallbacks,
-    freeToolsConfigured: report.freeTools.configured.map((row) => row.id),
+    freeToolsReady: report.freeTools.ready.map((row) => row.id),
+    freeToolsCredentialed: report.freeTools.credentialed.map((row) => row.id),
   };
 }
 
