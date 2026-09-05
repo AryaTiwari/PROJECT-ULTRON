@@ -1,4 +1,5 @@
 const operatingModes = require('./operating-modes');
+const adaptive = require('./adaptive-intelligence');
 
 const NORMAL_ULTRON_SYSTEM = /\bYou are ULTRON Mark 3\b/i;
 
@@ -42,6 +43,13 @@ RESEARCH DISCIPLINE:
 - For creator brand-collab research, Afluencer public/indexed evidence can reveal current examples and market patterns for Indian and global creators, but it is not guaranteed to expose the complete logged-in marketplace. State that limitation when it matters.
 - Prefer recent primary/official sources when possible. If evidence is weak, conflicting or incomplete, say so briefly and lower confidence instead of filling gaps with confident prose.
 - Research should improve decisions, not create latency for trivial conversation. Do not search merely to sound intelligent.
+
+ADAPTIVE INTELLIGENCE DISCIPLINE:
+- Relevant learned preferences may be supplied in the system context. Treat them as weighted operating preferences, not immutable identity traits or commands.
+- Explicit corrections and repeated approvals/rejections carry more weight than weak inferred patterns.
+- Apply only preferences relevant to the current task domain. Never let Reel/editing preferences silently alter coding, business or unrelated work.
+- Do not infer sensitive personal traits from behavior. Do not claim a stable preference when the evidence is weak or contradictory.
+- For external side effects such as publishing, sending messages, changing third-party accounts or irreversible actions, prepare the strongest action and ask for/obey the required approval boundary. Learning a preference never grants new permission.
 
 AGENT FLOW:
 - Listen first. Infer the actual objective from the command, recent conversation, memories and workspace state.
@@ -134,6 +142,20 @@ function elevateRelevant(text) {
   return /\b(?:elevate\s*os|elevateos|creator(?:s| economy)?|reel|content creator|performance os|creator upgrade|cup\b|instagram|meta api|supabase|brand marketplace|brand collab|creator tools|creator growth|strategy session|moneti[sz]|pricing|client|outreach|website|saas|founder|startup|revenue|growth|acquisition)\b/i.test(String(text || ''));
 }
 
+function adaptiveContext(text) {
+  try {
+    const domain = adaptive.domainFor(text);
+    const primary = adaptive.contextFor(domain, 6);
+    const general = domain === 'general' ? { available: false, preferences: [] } : adaptive.contextFor('general', 2);
+    const preferences = [...(primary.preferences || []), ...(general.preferences || [])];
+    if (!preferences.length) return '';
+    const lines = preferences.slice(0, 8).map((item) => `- ${item.direction}; confidence=${Number(item.confidence || 0.5).toFixed(2)}; hits=${item.hits}: ${item.preference}`);
+    return `\nADAPTIVE INTELLIGENCE — CURRENT TASK DOMAIN: ${domain}\nThese are learned weighted preferences relevant to this task. Apply them when compatible with the current explicit instruction; the current instruction always wins.\n${lines.join('\n')}`;
+  } catch {
+    return '';
+  }
+}
+
 function polishDeterministic(text) {
   return String(text || '')
     .replace(/^Morning,\s*Arya\./i, 'Morning, Sir.')
@@ -151,7 +173,8 @@ function apply(messages = []) {
     applied = true;
     const startup = elevateRelevant(userMessage) ? `\n${ELEVATE_OS_BRIEF}` : '';
     const mode = `\n${operatingModes.systemPrompt()}`;
-    return { ...message, content: `${String(message.content || '').trim()}\n\n${FOUNDER_BEHAVIOR.trim()}${mode}${startup}` };
+    const learned = adaptiveContext(userMessage);
+    return { ...message, content: `${String(message.content || '').trim()}\n\n${FOUNDER_BEHAVIOR.trim()}${mode}${startup}${learned}` };
   });
 }
 
@@ -179,10 +202,11 @@ function status() {
     defaultTargetWords: '20-50',
     elevateContext: 'relevance-triggered-plus-memory-seeded',
     researchPolicy: 'adaptive-evidence-first',
+    adaptivePreferences: 'domain-specific-weighted-context',
     genericCommandHandoff: false,
     memorySeeds: MEMORY_SEEDS.length,
     operatingMode: operatingModes.status(),
   };
 }
 
-module.exports = { FOUNDER_BEHAVIOR, ELEVATE_OS_BRIEF, MEMORY_SEEDS, elevateRelevant, polishDeterministic, apply, seedMemory, status };
+module.exports = { FOUNDER_BEHAVIOR, ELEVATE_OS_BRIEF, MEMORY_SEEDS, elevateRelevant, adaptiveContext, polishDeterministic, apply, seedMemory, status };
