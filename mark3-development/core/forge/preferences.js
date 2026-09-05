@@ -7,42 +7,23 @@ const CURRENT_FREE_MODELS = {
 };
 
 const PROFILES = {
-  repair: {
-    id: 'repair', label: 'Focused repair', maxJobs: 4,
-    principle: 'Reproduce first, patch the smallest surface, add a regression test, verify. Do not redesign working systems.',
-  },
-  integration: {
-    id: 'integration', label: 'API / connector integration', maxJobs: 7,
-    principle: 'Define the external contract and credential boundary, build a read-only verification path first, then dry-run writes, then approval-gated live action.',
-  },
-  automation: {
-    id: 'automation', label: 'Durable automation', maxJobs: 8,
-    principle: 'Prioritize idempotency, state/checkpoints, retries, dedupe, observability, approval gates and restart safety over UI polish.',
-  },
-  creator_ops: {
-    id: 'creator_ops', label: 'Creator / Elevate operator feature', maxJobs: 8,
-    principle: 'Optimize for creator growth operations: real inputs, measurable outputs, account-fit intelligence, approval-gated outreach/publishing and reusable data for CUP/Performance OS.',
-  },
-  media_pipeline: {
-    id: 'media_pipeline', label: 'Creator media pipeline', maxJobs: 8,
-    principle: 'Treat creative quality as a product requirement: account aesthetic, information density, narrator, edit grammar, final render verification and feedback/performance learning.',
-  },
-  product_feature: {
-    id: 'product_feature', label: 'Existing-product feature', maxJobs: 6,
-    principle: 'Modify the existing codebase in place, preserve working behavior, integrate with current state/memory/operator layers and add regression coverage.',
-  },
-  full_product: {
-    id: 'full_product', label: 'Large product build', maxJobs: 10,
-    principle: 'Build the smallest complete vertical slice first, then expand. Avoid documentation-only jobs and avoid over-fragmenting work into model-heavy microtasks.',
-  },
+  repair: { id: 'repair', label: 'Focused repair', maxJobs: 4, principle: 'Reproduce first, patch the smallest surface, add a regression test, verify. Do not redesign working systems.' },
+  integration: { id: 'integration', label: 'API / connector integration', maxJobs: 7, principle: 'Define the external contract and credential boundary, build a read-only verification path first, then dry-run writes, then approval-gated live action.' },
+  automation: { id: 'automation', label: 'Durable automation', maxJobs: 8, principle: 'Prioritize idempotency, state/checkpoints, retries, dedupe, observability, approval gates and restart safety over UI polish.' },
+  creator_ops: { id: 'creator_ops', label: 'Creator / Elevate operator feature', maxJobs: 8, principle: 'Optimize for creator growth operations: real inputs, measurable outputs, account-fit intelligence, approval-gated outreach/publishing and reusable data for CUP/Performance OS.' },
+  media_pipeline: { id: 'media_pipeline', label: 'Creator media pipeline', maxJobs: 8, principle: 'Treat creative quality as a product requirement: account aesthetic, information density, narrator, edit grammar, final render verification and feedback/performance learning.' },
+  product_feature: { id: 'product_feature', label: 'Existing-product feature', maxJobs: 6, principle: 'Modify the existing codebase in place, preserve working behavior, integrate with current state/memory/operator layers and add regression coverage.' },
+  full_product: { id: 'full_product', label: 'Large product build', maxJobs: 10, principle: 'Build the smallest complete vertical slice first, then expand. Avoid documentation-only jobs and avoid over-fragmenting work into model-heavy microtasks.' },
 };
 
 function classify(objective = '') {
   const text = String(objective || '').toLowerCase();
   if (/\b(?:fix|bug|repair|broken|regression|error|fails?|failing|not working|refactor)\b/.test(text) && !/\b(?:complete|entire|end[- ]to[- ]end|from scratch|rebuild|large migration)\b/.test(text)) return PROFILES.repair;
+  // Explicit provider/API/OAuth/webhook work is primarily an integration contract even
+  // when the business feature is Instagram, creator ops or Reel Factory.
+  if (/\b(?:api|oauth|webhook|connector|connect|integration|integrate|sync|provider|token|permission)\b/.test(text)) return PROFILES.integration;
   if (/\b(?:reel factory|reel intelligence|video pipeline|caption|narrator|b-roll|ffmpeg|short-form|short form|video editor)\b/.test(text)) return PROFILES.media_pipeline;
   if (/\b(?:instagram dm|instagram publish|creator research|lead extraction|creator upgrade|\bcup\b|linkedin publish|social media manager|creator operator|elevate os)\b/.test(text)) return PROFILES.creator_ops;
-  if (/\b(?:api|oauth|webhook|connector|connect|integration|integrate|sync|provider|token|permission)\b/.test(text)) return PROFILES.integration;
   if (/\b(?:automation|workflow|pipeline|scheduled|monitor|watch|ingest|queue|cron|follow[- ]?up|autonomous agent)\b/.test(text)) return PROFILES.automation;
   if (/\b(?:app|application|platform|saas|crm|operating system|complete system|full system|from scratch)\b/.test(text)) return PROFILES.full_product;
   return PROFILES.product_feature;
@@ -50,14 +31,11 @@ function classify(objective = '') {
 
 function shouldDelegate(message = '') {
   const text = String(message || '').trim();
-  const lower = text.toLowerCase();
   if (!text) return false;
   if (/\b(?:how do i|how can i|how should i|explain|teach me|guide me|what is|what are)\b/i.test(text)) return false;
   if (/\bforge\b|\bmulti[- ]agent\b|\bteam of agents\b/i.test(text)) return true;
   const profile = classify(text);
-  if (profile.id === 'repair') {
-    return /\b(?:entire|across the whole|large migration|many files|multi-module|end[- ]to[- ]end)\b/i.test(text);
-  }
+  if (profile.id === 'repair') return /\b(?:entire|across the whole|large migration|many files|multi-module|end[- ]to[- ]end)\b/i.test(text);
   const action = /\b(?:build|create|develop|implement|automate|integrate|connect|design|make)\b/i.test(text);
   if (!action) return false;
   if (['integration', 'automation', 'creator_ops', 'media_pipeline', 'full_product'].includes(profile.id)) return true;
