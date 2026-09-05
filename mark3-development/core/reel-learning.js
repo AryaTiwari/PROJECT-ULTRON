@@ -88,8 +88,9 @@ function feedbackScore(text = '') {
 
 function isReelFeedback(text = '') {
   const value = String(text || '');
-  const reel = /\b(?:reel|video|edit|caption|text|subtitle|graphics?|effects?|transition|narrator|voice|b-roll|broll|cta)\b/i.test(value);
-  const feedback = adaptive.isExplicitPreference(value) || /\b(?:good|great|better|worse|bad|ugly|unfinished|messy|clean|polished|professional|cluttered|overdone)\b/i.test(value);
+  const reel = /\b(?:reels?|videos?|edits?|captions?|texts?|subtitles?|graphics?|effects?|transitions?|narrators?|voices?|b-roll|broll|ctas?)\b/i.test(value);
+  const feedback = adaptive.isExplicitPreference(value)
+    || /\b(?:good|great|better|worse|bad|ugly|unfinished|messy|clean|polished|professional|cluttered|overdone|crowded|busy|too\s+much|too\s+many|hard\s+to\s+read|distracting)\b/i.test(value);
   return reel && feedback;
 }
 
