@@ -1,5 +1,6 @@
 const reels = require('../core/reel-operator-bootstrap');
 const pipeline = require('../core/reel-pipeline');
+const narrator = require('../core/reel-narrator');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -23,4 +24,11 @@ assert(typeof reels.registerReelArtifact === 'function', 'Rendered Reels must su
 assert(typeof reels.latestRenderedReel === 'function', 'Latest rendered Reel lookup must be available without re-rendering.');
 assert(/\.mp4$/i.test(reels.artifactName({ job: { id: 'test-reel-job' } })), 'Reel chat artifact must preserve MP4 delivery.');
 
-console.log('ULTRON Reel Operator self-test passed: natural generation, duration/style parsing, chat MP4 delivery, latest-Reel attachment and publish separation validated.');
+const strategyIntent = narrator.inferIntent({ style: 'dark cinematic premium', brief: 'why creators stop growing and how to fix retention' });
+assert(strategyIntent.includes('educational') && strategyIntent.includes('strategy') && strategyIntent.includes('premium'), 'Creator strategy Reels must infer calm educational/premium narrator intent.');
+const comedyIntent = narrator.inferIntent({ style: 'fast-paced', brief: 'funny sarcastic myth-busting hot take about creator advice' });
+assert(comedyIntent.includes('witty') && comedyIntent.includes('sarcastic'), 'Comedy/myth-busting Reels must infer witty narrator intent.');
+const trendIntent = narrator.inferIntent({ style: 'energetic fast-paced', brief: 'viral creator challenge trend' });
+assert(trendIntent.includes('energetic') && trendIntent.includes('high-energy'), 'Trend/challenge Reels must infer high-energy narrator intent.');
+
+console.log('ULTRON Reel Operator self-test passed: natural generation, MP4 delivery, publish separation and content-aware narrator intent routing validated.');
