@@ -72,31 +72,33 @@ function fallbackPlan(brief, options = {}) {
   const req = quality.requirements(durationSec);
   const creatorTopic = quality.creatorGrowthBrief(cleanBrief);
   const base = creatorTopic ? [
-    ['Pattern interrupt', 'Viral Reach ≠ Real Growth', 'A viral reel can spike reach without building a loyal audience.', 'creator looking at phone analytics surprised vertical'],
-    ['Context', 'One Topic Won', 'Many viewers liked one topic, not necessarily your whole page.', 'social media creator scrolling profile analytics vertical'],
-    ['Cause', 'Reach Must Convert', 'If they do not follow, save, visit your profile, or return, the spike dies.', 'creator analytics follower conversion phone vertical'],
-    ['Cause', 'Next Reel Resets', 'When the next post feels unrelated, repeat-viewer and retention signals weaken.', 'content creator disappointed analytics vertical'],
-    ['Action', 'Build Repeatable Pillars', 'Turn the winning promise into a series with sharper hooks and a clear reason to come back.', 'creator planning content calendar notebook vertical'],
-    ['Brand CTA', 'Free Strategy Session', 'Want a growth system built around your account? Book a free strategy session with Elevate OS at elevateos.in.', 'creator strategy consultation modern workspace vertical'],
+    ['Pattern interrupt', 'Viral Reach ≠ Real Growth', 'A viral reel can spike reach without building loyalty.', 'creator looking at phone analytics surprised vertical'],
+    ['Context', 'One Topic Won', 'Many viewers liked one topic, not your whole page.', 'social media creator scrolling profile analytics vertical'],
+    ['Cause', 'Reach Must Convert', 'If they do not follow or return, the spike dies.', 'creator analytics follower conversion phone vertical'],
+    ['Cause', 'Next Reel Resets', 'Then unrelated posts send weaker repeat-viewer and retention signals.', 'content creator disappointed analytics vertical'],
+    ['Action', 'Build Repeatable Pillars', 'Build repeatable pillars around the promise that already worked.', 'creator planning content calendar notebook vertical'],
+    ['Brand CTA', 'Free Strategy Session', 'Want a personal growth plan? Book a free strategy session with Elevate OS at elevateos.in.', 'creator strategy consultation modern workspace vertical'],
   ] : [
-    ['Pattern interrupt', 'Here Is What Most People Miss', `The important part of ${cleanBrief} is not the surface-level result; it is the system behind it.`, `${cleanBrief} cinematic vertical`],
-    ['Context', 'Start With The Real Problem', 'Separate the visible symptom from the cause before deciding what to change.', `${cleanBrief} problem analysis vertical`],
-    ['Insight', 'Look For The Pattern', 'One result can be random; repeated signals show what is actually working or failing.', `${cleanBrief} pattern data vertical`],
-    ['Insight', 'Remove The Bottleneck', 'Fix the constraint that blocks the next step instead of adding more noise.', `${cleanBrief} focused work vertical`],
-    ['Action', 'Build A Repeatable System', 'Turn the useful insight into a simple process you can measure and improve.', `${cleanBrief} system planning vertical`],
-    ['Close', 'Use The System, Not Luck', 'The goal is a repeatable result, not a one-time win.', `${cleanBrief} confident outcome vertical`],
+    ['Pattern interrupt', 'Look Beyond The Result', 'The visible result is not the whole story; the system behind it matters.', `${cleanBrief} cinematic vertical`],
+    ['Context', 'Find The Real Cause', 'Start by separating the symptom from the real cause.', `${cleanBrief} problem analysis vertical`],
+    ['Insight', 'Look For The Pattern', 'One result can be random; repeated signals reveal the pattern.', `${cleanBrief} pattern data vertical`],
+    ['Insight', 'Remove The Bottleneck', 'Fix the bottleneck blocking the next step, not every possible problem.', `${cleanBrief} focused work vertical`],
+    ['Action', 'Build A Repeatable System', 'Turn the useful insight into a process you can measure.', `${cleanBrief} system planning vertical`],
+    ['Close', 'Use The System, Not Luck', 'Aim for repeatable results, not a one-time win.', `${cleanBrief} confident outcome vertical`],
   ];
 
   if (durationSec > 24) {
-    base[2][2] += ' Track the conversion point, not just the headline number.';
-    base[3][2] += ' Consistency helps both the audience and the platform understand what to expect.';
+    base[2][2] += creatorTopic ? ' Track profile visits, follows, saves, and repeat viewers.' : ' Compare repeated outcomes before deciding what to change.';
+    base[3][2] += creatorTopic ? ' Consistent expectations help the right audience return.' : ' Prioritize the constraint that most affects the outcome.';
   }
   if (durationSec > 38) {
-    base.splice(base.length - 1, 0, ['Action', 'Measure The Follow-Through', 'Watch what happens after the first view: profile visits, saves, follows, repeat viewers, and the next post.', `${cleanBrief} analytics dashboard vertical`]);
+    base.splice(base.length - 1, 0, creatorTopic
+      ? ['Action', 'Measure The Follow-Through', 'Watch what happens after the first view: profile visits, saves, follows, repeat viewers, and the next post.', `${cleanBrief} analytics dashboard vertical`]
+      : ['Action', 'Measure The Follow-Through', 'Check the result after each change so the next decision comes from evidence, not guesswork.', `${cleanBrief} analytics dashboard vertical`]);
   }
 
   while (base.length < req.minScenes) {
-    base.splice(base.length - 1, 0, ['Proof', 'Make The Signal Clear', 'Each post should make the next action obvious for the right audience.', `${cleanBrief} creator workflow vertical`]);
+    base.splice(base.length - 1, 0, ['Proof', 'Make The Signal Clear', 'Make the next action obvious and measurable.', `${cleanBrief} creator workflow vertical`]);
   }
 
   const scenes = base.map((row, index) => ({
