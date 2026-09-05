@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const governor = require('./model-governor');
+const preferences = require('./preferences');
 
 function id(prefix = 'job') { return `${prefix}-${crypto.randomUUID()}`; }
 function cleanJson(text) {
@@ -17,7 +18,7 @@ function normalizeJob(job, index) {
     worker: ['reasoning', 'coding', 'review'].includes(String(job.worker || '').toLowerCase()) ? String(job.worker).toLowerCase() : undefined,
     modelRole: job.modelRole ? String(job.modelRole) : undefined,
     dependsOn: Array.isArray(job.dependsOn) ? job.dependsOn.map(String) : [],
-    acceptance: Array.isArray(job.acceptance) ? job.acceptance.map(String).slice(0, 8) : [],
+    acceptance: Array.isArray(job.acceptance) ? job.acceptance.map(String).slice(0, 10) : [],
     status: 'pending',
     attempts: 0,
     output: null,
@@ -36,31 +37,17 @@ function uniqueJobIds(jobs) {
     if (!aliases.has(original)) aliases.set(original, next);
     return { ...job, id: next };
   });
-  return rows.map((job) => ({
-    ...job,
-    dependsOn: (job.dependsOn || []).map((dep) => aliases.get(String(dep)) || String(dep)),
-  }));
+  return rows.map((job) => ({ ...job, dependsOn: (job.dependsOn || []).map((dep) => aliases.get(String(dep)) || String(dep)) }));
 }
 function repairDependencies(jobs) {
   const rows = uniqueJobIds(jobs);
   const ids = new Set(rows.map((job) => job.id));
-  return rows.map((job) => ({
-    ...job,
-    dependsOn: [...new Set((job.dependsOn || []).filter((dep) => dep !== job.id && ids.has(dep)))],
-  }));
+  return rows.map((job) => ({ ...job, dependsOn: [...new Set((job.dependsOn || []).filter((dep) => dep !== job.id && ids.has(dep)))] }));
 }
 function ensureRunnableDag(jobs) {
   const rows = repairDependencies(jobs);
   if (!rows.length) return rows;
-
-  // A Forge mission must always have at least one runnable root. If a model
-  // accidentally makes every job depend on another job, make the first job a root.
   if (!rows.some((job) => !(job.dependsOn || []).length)) rows[0] = { ...rows[0], dependsOn: [] };
-
-  // Kahn-style validation with deterministic cycle repair. Whenever no unresolved
-  // job can run, remove only dependencies that point to still-unresolved jobs from
-  // the earliest blocked job. This preserves already-valid ordering while breaking
-  // the minimum cycle needed to make forward progress.
   const resolved = new Set();
   const unresolved = new Set(rows.map((job) => job.id));
   while (unresolved.size) {
@@ -74,68 +61,76 @@ function ensureRunnableDag(jobs) {
       }
     }
     if (progressed) continue;
-
     const blocked = rows.find((job) => unresolved.has(job.id));
     if (!blocked) break;
     blocked.dependsOn = (blocked.dependsOn || []).filter((dep) => resolved.has(dep));
   }
   return rows;
 }
+
 function fallback(objective) {
-  const jobs = [
-    { id: 'requirements', title: 'Mission requirements', objective: `Turn this objective into testable requirements and acceptance criteria: ${objective}`, kind: 'product', worker: 'reasoning', dependsOn: [] },
-    { id: 'architecture', title: 'System architecture', objective: 'Design the implementation architecture, module boundaries, data flow and delivery sequence.', kind: 'architect', worker: 'reasoning', dependsOn: ['requirements'] },
-    { id: 'core-build', title: 'Core implementation', objective: 'Implement the core working system described by the requirements and architecture.', kind: /automat|workflow|agent/i.test(objective) ? 'automation' : 'backend', worker: 'coding', dependsOn: ['architecture'] },
-    { id: 'integration', title: 'Integration pass', objective: 'Integrate the implementation into one coherent runnable system and resolve contract mismatches.', kind: 'integration', worker: 'coding', dependsOn: ['core-build'] },
-    { id: 'qa', title: 'QA and validation', objective: 'Run executable validation, test the critical user flows and identify regressions or incomplete requirements.', kind: 'qa', worker: 'review', dependsOn: ['integration'] },
-    { id: 'repair', title: 'Repair failures', objective: 'Fix all actionable failures discovered by QA and rerun the relevant validation.', kind: 'integration', worker: 'coding', dependsOn: ['qa'] },
-    { id: 'final-review', title: 'Independent final review', objective: 'Independently verify that the mission acceptance criteria are satisfied and report remaining risk.', kind: 'critic', worker: 'review', dependsOn: ['repair'] },
-  ].map(normalizeJob);
+  const profile = preferences.classify(objective);
+  const jobs = preferences.fallbackJobs(objective, profile).map(normalizeJob);
   return {
-    summary: `Build and verify: ${objective}`,
-    requirements: [],
-    deliverables: ['Runnable implementation', 'Validation evidence', 'Final review'],
+    summary: `${profile.label}: ${objective}`,
+    requirements: [`Forge profile: ${profile.id}`, profile.principle],
+    deliverables: ['Working implementation or verified repair', 'Executable validation evidence', 'Honest remaining-blocker report'],
     risks: ['Free provider availability can pause inference', 'External side effects require explicit approval'],
     jobs: ensureRunnableDag(jobs),
-    compiler: 'deterministic-fallback',
+    compiler: `deterministic-${profile.id}`,
+    forgeProfile: profile.id,
   };
 }
+
 function validateGraph(compiled, objective) {
+  const profile = preferences.classify(objective);
   const source = Array.isArray(compiled?.jobs) && compiled.jobs.length ? compiled.jobs : fallback(objective).jobs;
-  let jobs = ensureRunnableDag(source.slice(0, 40).map(normalizeJob));
+  let jobs = ensureRunnableDag(source.slice(0, profile.maxJobs).map(normalizeJob));
   const hasCoding = jobs.some((job) => job.worker === 'coding');
   const hasReview = jobs.some((job) => job.worker === 'review');
-  if (!hasCoding) jobs.push(normalizeJob({ id: id('build'), title: 'Implementation', objective: 'Implement the mission deliverable.', kind: 'backend', worker: 'coding', dependsOn: jobs.length ? [jobs[jobs.length - 1].id] : [] }, jobs.length));
-  if (!hasReview) jobs.push(normalizeJob({ id: id('review'), title: 'Final QA', objective: 'Independently verify the completed mission and identify remaining failures.', kind: 'qa', worker: 'review', dependsOn: jobs.length ? [jobs[jobs.length - 1].id] : [] }, jobs.length));
-  jobs = ensureRunnableDag(jobs);
+  if (!hasCoding) jobs.push(normalizeJob({ id: id('build'), title: 'Implementation', objective: 'Implement the mission deliverable in the existing working system.', kind: 'integration', worker: 'coding', dependsOn: jobs.length ? [jobs[jobs.length - 1].id] : [], acceptance: ['Implement real files/code', 'Preserve existing working behavior', 'Run executable validation'] }, jobs.length));
+  if (!hasReview) jobs.push(normalizeJob({ id: id('review'), title: 'Independent QA', objective: 'Independently verify the completed mission against the user-visible behavior and regression boundaries.', kind: 'qa', worker: 'review', dependsOn: jobs.length ? [jobs[jobs.length - 1].id] : [], acceptance: ['Return explicit evidence-based verdict'] }, jobs.length));
+  jobs = ensureRunnableDag(jobs.slice(0, Math.max(profile.maxJobs, 3)));
   return {
-    summary: String(compiled?.summary || `Build and verify: ${objective}`),
+    summary: String(compiled?.summary || `${profile.label}: ${objective}`),
     requirements: Array.isArray(compiled?.requirements) ? compiled.requirements.map(String).slice(0, 20) : [],
     deliverables: Array.isArray(compiled?.deliverables) ? compiled.deliverables.map(String).slice(0, 20) : [],
     risks: Array.isArray(compiled?.risks) ? compiled.risks.map(String).slice(0, 12) : [],
     jobs,
     compiler: compiled?.compiler || 'nvidia-mission-compiler',
+    forgeProfile: profile.id,
   };
 }
 
 async function compile(mission) {
   const objective = String(mission?.objective || '').trim();
   if (!objective) throw new Error('Mission objective is required.');
-  const system = `You are ULTRON FORGE Mission Compiler. Convert a large project objective into a dependency-aware execution DAG for a multi-agent software/automation team. Return ONLY one JSON object. Keep jobs independently executable and avoid unnecessary model calls. Every mission that builds software must end with QA and an independent review. At least one job must have an empty dependsOn array so execution can start. Dependencies must form an acyclic graph and may only reference earlier prerequisite jobs. Never include production deployment, mass messaging, purchases, destructive database actions or other external side effects without an approval gate. Worker must be reasoning, coding, or review. kind should be one of product, architect, researcher, automation, backend, frontend, database, integration, qa, security, critic. Maximum 24 jobs. Schema: {summary:string,requirements:string[],deliverables:string[],risks:string[],jobs:[{id:string,title:string,objective:string,kind:string,worker:string,dependsOn:string[],acceptance:string[]}]}`;
+  const profile = preferences.classify(objective);
+  const system = [
+    'You are ULTRON FORGE Mission Compiler. Convert the objective into a lean dependency-aware execution DAG.',
+    'Return ONLY one JSON object. Prefer fewer strong jobs over many tiny model-heavy jobs.',
+    preferences.compilerGuidance(objective),
+    'Every software mission must include real implementation and evidence-based review. Documentation-only work does not count as implementation.',
+    'At least one job must have an empty dependsOn array. Dependencies must form an acyclic graph and may only reference real prerequisite jobs.',
+    'Never include production deployment, mass messaging, purchases, destructive database actions or other external side effects without an approval gate.',
+    'Worker must be reasoning, coding, or review. kind should be one of product, architect, researcher, automation, backend, frontend, database, integration, qa, security, critic.',
+    `Hard maximum ${profile.maxJobs} jobs for this mission profile.`,
+    'Schema: {summary:string,requirements:string[],deliverables:string[],risks:string[],jobs:[{id:string,title:string,objective:string,kind:string,worker:string,dependsOn:string[],acceptance:string[]}]}',
+  ].join(' ');
   try {
     const result = await governor.nvidiaChat({
       missionId: mission.id,
       role: 'mission_compile',
       json: true,
-      temperature: 0.15,
-      maxTokens: 7000,
+      temperature: 0.12,
+      maxTokens: 5000,
       messages: [
         { role: 'system', content: system },
-        { role: 'user', content: `MISSION: ${objective}\nCONSTRAINTS: zero monetary cost, no local LLM, cloud free inference only, checkpointed execution, evidence-based completion. Workspace: ${mission.workspace}` },
+        { role: 'user', content: `MISSION: ${objective}\nFORGE PROFILE: ${profile.id}\nCONSTRAINTS: zero monetary cost; no local LLM; cloud free inference only; preserve existing working systems; deterministic tools before AI where possible; checkpointed execution; evidence-based completion; approval-gated external actions. Workspace: ${mission.workspace}` },
       ],
     });
     const parsed = JSON.parse(cleanJson(result.text));
-    return { ...validateGraph(parsed, objective), model: result.model, provider: result.provider };
+    return { ...validateGraph(parsed, objective), model: result.model, provider: result.provider, forgeProfile: profile.id };
   } catch (error) {
     const value = fallback(objective);
     return { ...value, compilerError: error.message };
