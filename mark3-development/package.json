@@ -13,6 +13,7 @@
     "check:instagram": "node --env-file=../.env scripts/instagram-test.js",
     "check:adaptive": "node --env-file=../.env scripts/adaptive-intelligence-selftest.js",
     "check:turbo": "node --env-file=../.env scripts/turbo-selftest.js",
+    "turbo:keys": "node --env-file=../.env scripts/turbo-key-status.js",
     "check:reel-intelligence": "node --env-file=../.env scripts/reel-intelligence-selftest.js",
     "check:reel-learning": "node --env-file=../.env scripts/reel-learning-selftest.js",
     "check:reels": "node --env-file=../.env scripts/reel-intelligence-selftest.js && node --env-file=../.env scripts/reel-learning-selftest.js && node --env-file=../.env scripts/reel-selftest.js && node --env-file=../.env scripts/reel-operator-selftest.js && node --env-file=../.env scripts/reel-finisher-selftest.js",
