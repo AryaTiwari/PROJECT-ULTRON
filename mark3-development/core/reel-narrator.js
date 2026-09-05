@@ -35,7 +35,7 @@ function words(value) {
 function inferIntent(context = {}) {
   const source = typeof context === 'string'
     ? context
-    : [context.style, context.brief, context.title, context.angle, context.purpose].filter(Boolean).join(' ');
+    : [context.style, context.brief, context.title, context.angle, context.purpose, context.transcript].filter(Boolean).join(' ');
   const text = String(source || '').toLowerCase();
   const tags = new Set(words(text));
   const add = (...values) => values.forEach((value) => tags.add(value));
@@ -103,6 +103,7 @@ async function speak(text, options = {}) {
     title: options.title,
     angle: options.angle,
     purpose: options.purpose,
+    transcript: options.transcript || text,
   };
   const profile = chooseProfile(context);
   if (!profile) {
