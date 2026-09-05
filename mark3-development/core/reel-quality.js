@@ -17,8 +17,9 @@ function requirements(durationSec = 30) {
     minWords: Math.max(34, Math.round(duration * 2.15)),
     maxWords: Math.round(duration * 3.05),
     minScenes: duration <= 20 ? 6 : duration <= 35 ? 7 : 8,
-    maxOnScreenWords: 8,
-    maxOnScreenChars: 54,
+    maxOnScreenWords: 5,
+    maxOnScreenChars: 34,
+    maxSubtitleWords: 4,
   };
 }
 
@@ -96,9 +97,17 @@ function fitNarrationBudget(scenes, durationSec) {
   return list;
 }
 
+function shortenOnScreenText(value, limit = 5) {
+  return String(value || '').trim().split(/\s+/).filter(Boolean).slice(0, limit).join(' ');
+}
+
 function ensureBrandScene(plan, brief, options = {}) {
   const enabled = shouldBrand(brief, options);
   let scenes = Array.isArray(plan?.scenes) ? plan.scenes.map((scene) => ({ ...scene })) : [];
+  scenes = scenes.map((scene) => ({
+    ...scene,
+    onScreenText: scene.isBrandCta ? scene.onScreenText : shortenOnScreenText(scene.onScreenText, 5),
+  }));
   if (enabled) {
     const existing = scenes.findIndex((scene) => scene.isBrandCta || /free strategy session|elevate os/i.test(`${scene.onScreenText || ''} ${scene.subText || ''} ${scene.narration || ''}`));
     const cta = brandScene();
@@ -116,6 +125,7 @@ function ensureBrandScene(plan, brief, options = {}) {
     cta: enabled ? `${BRAND.offer} — ${BRAND.name} — ${BRAND.url}` : String(plan?.cta || '').trim(),
     brandPromotion: enabled,
     brand: enabled ? BRAND : null,
+    textDesign: 'minimal-clean-v3',
   };
 }
 
@@ -130,7 +140,7 @@ function auditPlan(plan, brief, options = {}) {
   if (scenes.length < req.minScenes) issues.push(`not enough scenes: ${scenes.length}; need at least ${req.minScenes}`);
   scenes.forEach((scene, index) => {
     const text = String(scene?.onScreenText || '').trim();
-    if (wordCount(text) > req.maxOnScreenWords || text.length > req.maxOnScreenChars) issues.push(`scene ${index + 1} on-screen text is too long`);
+    if (!scene?.isBrandCta && (wordCount(text) > req.maxOnScreenWords || text.length > req.maxOnScreenChars)) issues.push(`scene ${index + 1} on-screen text is too dense`);
     if (!String(scene?.narration || '').trim()) issues.push(`scene ${index + 1} has no narration`);
     if (index > 0 && Number(scene?.start || 0) < Number(scenes[index - 1]?.end || 0) - 0.01) issues.push(`scene ${index + 1} overlaps scene ${index}`);
   });
@@ -159,6 +169,7 @@ module.exports = {
   brandScene,
   trimToWords,
   fitNarrationBudget,
+  shortenOnScreenText,
   ensureBrandScene,
   auditPlan,
 };
