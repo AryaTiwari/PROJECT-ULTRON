@@ -38,7 +38,9 @@ assert(recipe.textBoxes === false, 'Creative recipe must distinguish boxless typ
 assert(recipe.averageHeadlineWords > 0 && recipe.maxHeadlineWords <= 4, 'Creative recipe must measure on-screen text density.');
 assert(learning.feedbackScore('the Reel text is too much and looks unfinished') < 0, 'Negative Reel feedback must score negatively.');
 assert(learning.feedbackScore('this video is clean and polished, keep it') > 0, 'Positive Reel feedback must score positively.');
-assert(learning.isReelFeedback('the captions are too cluttered and ugly'), 'Caption feedback must be recognized as Reel feedback.');
+assert(learning.isReelFeedback('the captions are too cluttered and ugly'), 'Plural caption feedback must be recognized as Reel feedback.');
+assert(learning.isReelFeedback('the subtitles are too crowded and hard to read'), 'Plural subtitle feedback must be recognized as Reel feedback.');
+assert(learning.isReelFeedback('the narrator voice sounds bad for this reel'), 'Narrator/voice feedback must be recognized as Reel feedback.');
 assert(!learning.isReelFeedback('remind me to call the client tomorrow'), 'Unrelated commands must not enter Reel creative learning.');
 assert(learning.scoreOutcome({ reach: 1000, likes: 80, comments: 10, saves: 20, shares: 15, follows: 12 }) > 0, 'Strong performance metrics must produce positive creative outcome score.');
 
@@ -53,4 +55,4 @@ assert(status.outcomeLearningImplemented === true && status.structuredAdaptiveLe
 assert(performanceStatus.closedLoopLearning === true, 'Published Reel links must support closed-loop Instagram performance learning.');
 assert(performanceStatus.insightsPermissionRequired === 'instagram_business_manage_insights', 'Insights permission requirement must remain explicit.');
 
-console.log('ULTRON Reel Learning self-test passed: creative recipes, user feedback, Hootsuite provenance, Instagram insights and performance-outcome learning validated.');
+console.log('ULTRON Reel Learning self-test passed: creative recipes, plural feedback language, Hootsuite provenance, Instagram insights and performance-outcome learning validated.');
