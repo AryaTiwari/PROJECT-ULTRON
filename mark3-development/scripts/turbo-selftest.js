@@ -22,6 +22,7 @@ assert(freeTools.byId('alpha-vantage')?.autoUse === 'research-paper-only', 'Mark
 
 const status = researchTurbo.status();
 assert(status.zeroCostOnly === true && status.primary === 'tinyfish/direct-http', 'Research Turbo must preserve current primary and zero-cost policy.');
+assert(Array.isArray(status.fetchFallbacks) && status.fetchFallbacks[0] === 'jina-reader', 'No-key Jina Reader must remain the first extraction fallback.');
 const report = turbo.audit();
 assert(report.zeroCostGuard.enabled === true && report.zeroCostGuard.paidInferenceAllowed === false, 'Turbo audit must expose hard paid-inference guard.');
 assert(report.topology.some((edge) => edge.from === 'adaptive-intelligence' && edge.to === 'founder-behavior'), 'Adaptive preferences must appear in runtime topology.');
@@ -31,4 +32,4 @@ const adaptiveSource = fs.readFileSync(path.resolve(__dirname, '../core/adaptive
 const observeBody = adaptiveSource.match(/function observeTurn[\s\S]*?\n}\n\nfunction topSignals/)?.[0] || '';
 assert(!/resolveLatestProposal\s*\(/.test(observeBody), 'Generic conversation turns must not silently approve pending adaptive proposals.');
 
-console.log('ULTRON Turbo self-test passed: adaptive safety, free-tool registry, research failover policy, runtime topology and zero-cost guard validated.');
+console.log('ULTRON Turbo self-test passed: adaptive safety, no-key Jina extraction, free-tool registry, research failover policy, runtime topology and zero-cost guard validated.');
