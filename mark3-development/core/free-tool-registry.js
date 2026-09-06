@@ -60,9 +60,9 @@ const TOOLS = [
     purpose: 'Transactional mail, founder notifications, lead follow-ups and CUP emails. Sending always remains approval-gated.', zeroCostSafe: true, autoUse: 'approval-required',
   },
   {
-    id: 'telegram-bot', name: 'Telegram Bot API', category: 'remote-interface', priority: 2, implemented: false,
-    env: ['TELEGRAM_BOT_TOKEN'], auth: 'bot-token', free: 'Bot API is free for developers',
-    purpose: 'Remote Ultron command/notification surface from phone without keeping the web UI open.', zeroCostSafe: true, autoUse: 'approval-required-for-actions',
+    id: 'telegram-bot', name: 'Telegram Bot API', category: 'remote-interface', priority: 1, implemented: true,
+    env: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_CHAT_ID'], auth: 'bot-token + private-chat allowlist', free: 'Standard Telegram Bot API requests are free; paid broadcast acceleration is not used by Ultron',
+    purpose: 'Secure remote Ultron command/notification surface from phone using a single-chat allowlist and long polling.', zeroCostSafe: true, autoUse: 'remote-surface',
   },
   {
     id: 'alpha-vantage', name: 'Alpha Vantage', category: 'market-research', priority: 3, implemented: false,
