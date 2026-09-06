@@ -60,7 +60,7 @@ http.createServer = (...args) => {
   return originalCreateServer(...args);
 };
 
-setImmediate(() => {
+setImmediate(async () => {
   try {
     const turbo = require('../turbo-bootstrap').install();
     const fallbacks = turbo.research?.searchFallbacks?.join(', ') || 'none configured';
@@ -112,5 +112,20 @@ setImmediate(() => {
     console.log(`[Mark 3] Adaptive Intelligence ready; ${adaptive.status.totalObservations || 0} learned observation(s), approval-gated proposals enabled.`);
   } catch (error) {
     console.error(`[Mark 3] Adaptive Intelligence bootstrap failed: ${error.message}`);
+  }
+
+  // Remote interfaces start only AFTER the final assistant wrapper is installed,
+  // so remote commands see the same Turbo/Operator/Reel/Forge/Adaptive behavior as local chat.
+  try {
+    const telegram = require('../telegram-remote');
+    const state = telegram.status();
+    if (state.tokenConfigured && state.allowedChatConfigured && state.enabled) {
+      const started = await telegram.start();
+      console.log(`[Mark 3] Telegram Remote ${started.running ? 'online' : 'configured with blocker'}; security=${started.security}.`);
+    } else if (state.tokenConfigured && !state.allowedChatConfigured) {
+      console.log('[Mark 3] Telegram bot token detected but private chat is not paired yet; run npm run telegram:pair after messaging the bot /start.');
+    }
+  } catch (error) {
+    console.error(`[Mark 3] Telegram Remote bootstrap failed: ${error.message}`);
   }
 });
