@@ -38,13 +38,14 @@ function saveProposals(data) { ensureRoot(); writeJsonAtomic(PROPOSALS_PATH, dat
 
 function domainFor(text = '') {
   const value = String(text || '').toLowerCase();
-  // Technical work wins over product nouns such as Instagram/reel so coding feedback
-  // cannot accidentally inherit creator-content preferences.
+  // Order matters. Technical work wins over product nouns; communication-specific
+  // wording wins over generic "style" language; creator-content comes after both.
   if (/\b(?:code|coding|github|repo|repository|bug|developer|software|api|architecture|endpoint|database|typescript|javascript|node|supabase schema)\b/.test(value)) return 'development';
-  if (/\b(?:ui|ux|design|font|typography|layout|aesthetic|color|visual|dashboard|website style)\b/.test(value)) return 'design';
-  if (/\b(?:reel|reels|instagram|creator|content|captions?|hooks?|b-roll|broll|short-form|short form|video edit|social media)\b/.test(value)) return 'creator-content';
+  if (/\b(?:response|reply|answer|wording|email|message|communication|speaking style|writing style|reply style|response style|tone of voice)\b/.test(value)) return 'communication';
+  if (/\b(?:ui|ux|design|font|typography|layout|aesthetic|color|visual|dashboard|website style|interface style)\b/.test(value)) return 'design';
+  if (/\b(?:reel|reels|instagram|creator|content|captions?|hooks?|b-roll|broll|short-form|short form|video edit|video style|reel style|social media)\b/.test(value)) return 'creator-content';
   if (/\b(?:elevate os|business|client|lead|sales|pricing|revenue|founder|strategy|marketplace|outreach)\b/.test(value)) return 'business';
-  if (/\b(?:voice|tone|reply|answer|message|email|write|wording|short|shorter|long|longer|detailed|concise|response)\b/.test(value)) return 'communication';
+  if (/\b(?:voice|tone|write|short|shorter|long|longer|detailed|concise)\b/.test(value)) return 'communication';
   if (/\b(?:research|source|trend|hootsuite|market|compare|evidence)\b/.test(value)) return 'research';
   return 'general';
 }
@@ -72,13 +73,25 @@ function directPreferenceStatement(value = '') {
 }
 
 function qualitativeWantStatement(value = '') {
-  if (!/\bi want\b/i.test(value)) return false;
-  // Requiring both a preference object and a qualitative modifier prevents normal
-  // commands such as “I want you to create a Reel” from becoming permanent taste.
-  const object = /\b(?:style|text|tone|format|design|way|voice|layout|behavio(?:u)?r|response|answer|video style|reel style|typography|graphics?|effects?|editing|pacing|aesthetic|presentation|structure)\b/i.test(value);
-  const qualifier = /\b(?:clean|cleaner|short|shorter|long|longer|simple|simpler|bold|bolder|soft|softer|fast|faster|slow|slower|minimal|cinematic|premium|professional|natural|human|polished|organized|organised|informative|entertaining|subtle|sparse|dense|more|less|fewer)\b/i.test(value)
-    || /\b(?:to\s+be|without|with\s+fewer|with\s+more|like\s+this|like\s+that|instead)\b/i.test(value);
-  return object && qualifier;
+  const text = normalizeSignalText(value).toLowerCase();
+  if (!text.includes('i want')) return false;
+
+  // Two-signal rule: a stable preference needs (1) a style/behavior target and
+  // (2) a qualitative direction. This rejects normal executable requests.
+  const targets = [
+    'style', 'text', 'tone', 'format', 'design', 'way', 'voice', 'layout', 'behavior', 'behaviour',
+    'response', 'answer', 'video style', 'reel style', 'typography', 'graphic', 'graphics', 'effect',
+    'effects', 'editing', 'pacing', 'aesthetic', 'presentation', 'structure', 'caption', 'captions',
+  ];
+  const qualifiers = [
+    'clean', 'cleaner', 'short', 'shorter', 'long', 'longer', 'simple', 'simpler', 'bold', 'bolder',
+    'soft', 'softer', 'fast', 'faster', 'slow', 'slower', 'minimal', 'cinematic', 'premium',
+    'professional', 'natural', 'human', 'polished', 'organized', 'organised', 'informative',
+    'entertaining', 'subtle', 'sparse', 'dense', 'more', 'less', 'fewer', 'without', 'instead',
+  ];
+  const hasTarget = targets.some((term) => text.includes(term));
+  const hasQualifier = qualifiers.some((term) => text.includes(term)) || /\bto be\b|\blike this\b|\blike that\b/.test(text);
+  return hasTarget && hasQualifier;
 }
 
 function isExplicitPreference(text = '') {
@@ -87,17 +100,26 @@ function isExplicitPreference(text = '') {
   return directPreferenceStatement(value) || qualitativeWantStatement(value);
 }
 
+function preferenceDomainFor(text = '') {
+  const value = normalizeSignalText(text).toLowerCase();
+  // Preference-domain override prevents broad nouns such as "style" from stealing
+  // a clearly scoped communication preference.
+  if (/\b(?:response|reply|answer|wording|communication|writing style|speaking style|tone)\b/.test(value)) return 'communication';
+  if (/\b(?:reel|reels|caption|captions|video style|reel style|creator|instagram|short-form|short form)\b/.test(value)) return 'creator-content';
+  if (/\b(?:dashboard|website|interface|ui|ux|typography|layout|aesthetic|visual design)\b/.test(value)) return 'design';
+  return domainFor(value);
+}
+
 function extractPreference(text = '') {
   const cleaned = normalizeSignalText(text);
   if (!cleaned || !isExplicitPreference(cleaned)) return null;
   const polarity = feedbackPolarity(cleaned);
-  const domain = domainFor(cleaned);
   return {
-    domain,
+    domain: preferenceDomainFor(cleaned),
     text: cleaned,
     polarity: polarity === null ? 0 : polarity,
     explicit: true,
-    confidence: 0.86,
+    confidence: 0.88,
   };
 }
 
