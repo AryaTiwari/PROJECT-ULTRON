@@ -5,6 +5,8 @@ const turboBootstrap = require('../core/turbo-bootstrap');
 const researchTurbo = require('../core/research-turbo-runtime');
 const freeTools = require('../core/free-tool-registry');
 const adaptive = require('../core/adaptive-intelligence');
+const operator = require('../core/operator');
+const forgePreferences = require('../core/forge/preferences');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -15,8 +17,9 @@ assert(turboBootstrap.isFreeToolRequest('What free APIs should I add to Ultron?'
 assert(turboBootstrap.isTopologyRequest('Show me the Ultron integration map'), 'Natural topology intent must route locally.');
 
 const registry = freeTools.status();
-assert(registry.zeroCostOnly === true && registry.total >= 10, 'Turbo free-tool registry must remain zero-cost focused and non-trivial.');
+assert(registry.zeroCostOnly === true && registry.total >= 15, 'Turbo free-tool registry must remain zero-cost focused and non-trivial.');
 assert(freeTools.byId('tavily')?.autoUse === 'fallback-only', 'Tavily must be fallback-only, not silently spend quota first.');
+assert(freeTools.byId('buffer')?.implemented === true && freeTools.byId('buffer')?.autoUse === 'explicit-feature', 'Buffer connector foundation must remain implemented and explicit-use only.');
 assert(freeTools.byId('resend')?.autoUse === 'approval-required', 'Email sending must remain approval-gated.');
 assert(freeTools.byId('alpha-vantage')?.autoUse === 'research-paper-only', 'Market-data integration must preserve paper/research boundary.');
 
@@ -27,9 +30,17 @@ const report = turbo.audit();
 assert(report.zeroCostGuard.enabled === true && report.zeroCostGuard.paidInferenceAllowed === false, 'Turbo audit must expose hard paid-inference guard.');
 assert(report.topology.some((edge) => edge.from === 'adaptive-intelligence' && edge.to === 'founder-behavior'), 'Adaptive preferences must appear in runtime topology.');
 assert(report.topology.some((edge) => edge.from === 'reel-factory' && edge.to === 'reel-learning'), 'Reel creative learning loop must appear in runtime topology.');
+assert(report.topology.some((edge) => edge.from === 'forge-founder-recipes' && edge.to === 'mission-compiler'), 'Founder recipes must appear in runtime topology.');
+assert(report.topology.some((edge) => edge.from === 'buffer' && edge.to === 'social-publishing'), 'Buffer publishing foundation must appear in runtime topology.');
+assert((report.forgeRecipes || []).includes('instagram-dm-sales') && (report.forgeRecipes || []).includes('cup-operator'), 'Turbo audit must surface founder-specific Forge recipes.');
+assert(forgePreferences.founderRecipes.RECIPES.length >= 8, 'Founder automation recipe library must remain substantial.');
+
+const op = operator.summary();
+assert(op.ready.some((row) => row.id === 'system_audit'), 'System audit must be a first-class ready operator.');
+assert(op.ready.some((row) => row.id === 'adaptive_operator'), 'Adaptive Intelligence must be a first-class ready operator.');
 
 const adaptiveSource = fs.readFileSync(path.resolve(__dirname, '../core/adaptive-intelligence.js'), 'utf8');
 const observeBody = adaptiveSource.match(/function observeTurn[\s\S]*?\n}\n\nfunction topSignals/)?.[0] || '';
 assert(!/resolveLatestProposal\s*\(/.test(observeBody), 'Generic conversation turns must not silently approve pending adaptive proposals.');
 
-console.log('ULTRON Turbo self-test passed: adaptive safety, no-key Jina extraction, free-tool registry, research failover policy, runtime topology and zero-cost guard validated.');
+console.log('ULTRON Turbo self-test passed: adaptive safety, Buffer foundation, founder Forge recipes, research failover, runtime topology and zero-cost guard validated.');
