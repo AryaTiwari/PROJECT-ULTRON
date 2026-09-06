@@ -18,7 +18,7 @@ function configured(...names) { return hasEnv(...names) || envFileHas(...names);
 const TOOLS = [
   {
     id: 'jina-reader', name: 'Jina Reader', category: 'web-extraction', priority: 1, implemented: true,
-    env: [], auth: 'none', free: 'Basic Reader usage without an API key; currently documented at 20 RPM without a key',
+    env: [], auth: 'none', free: 'Basic Reader usage without an API key; use as a no-key extraction fallback',
     purpose: 'No-key fallback that converts difficult public URLs into LLM-friendly Markdown.',
     zeroCostSafe: true, autoUse: 'fallback-only',
   },
@@ -28,6 +28,12 @@ const TOOLS = [
     purpose: 'Second independent search/research provider when TinyFish fails or deeper corroboration is useful.', zeroCostSafe: true, autoUse: 'fallback-only',
   },
   {
+    id: 'buffer', name: 'Buffer API', category: 'social-publishing', priority: 1, implemented: true,
+    env: ['BUFFER_API_KEY'], auth: 'api-key', free: 'Free plan API access; 1 API key and 3,000 requests per 30 days; plan limits also apply to scheduled posts/channels',
+    purpose: 'Unified social publishing/scheduling surface for Instagram Reels, LinkedIn and other connected channels. Current Ultron connector supports safe account/channel verification and video-post dry-runs; live writes remain approval-gated.',
+    zeroCostSafe: true, autoUse: 'explicit-feature',
+  },
+  {
     id: 'firecrawl', name: 'Firecrawl', category: 'web-extraction', priority: 2, implemented: true,
     env: ['FIRECRAWL_API_KEY'], auth: 'api-key', free: '1,000 credits/month; no card required',
     purpose: 'Reliable page extraction/crawling for sites direct HTTP and Jina cannot read.', zeroCostSafe: true, autoUse: 'fallback-only',
@@ -35,22 +41,22 @@ const TOOLS = [
   {
     id: 'cloudflare-r2', name: 'Cloudflare R2', category: 'storage', priority: 1, implemented: false,
     env: ['CLOUDFLARE_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'], auth: 's3-credentials',
-    free: '10 GB-month + 1M Class A + 10M Class B operations/month; egress free',
-    purpose: 'Public temporary media hosting for Instagram publishing and durable generated-artifact delivery.', zeroCostSafe: true, autoUse: 'explicit-feature',
+    free: 'Free tier is suitable for lightweight generated-media hosting; verify current Cloudflare account limits before production scale',
+    purpose: 'Public temporary media hosting for Instagram/Buffer publishing and durable generated-artifact delivery.', zeroCostSafe: true, autoUse: 'explicit-feature',
   },
   {
     id: 'cloudflare-workers-ai', name: 'Cloudflare Workers AI', category: 'inference', priority: 2, implemented: false,
-    env: ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'], auth: 'api-token', free: '10,000 Neurons/day on supported Free-plan models',
+    env: ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'], auth: 'api-token', free: 'Free-plan usage is quota-limited and model-dependent',
     purpose: 'Another cloud inference pool for lightweight reasoning/classification when primary free providers are constrained.', zeroCostSafe: true, autoUse: 'governed-fallback',
   },
   {
     id: 'youtube-data', name: 'YouTube Data API', category: 'creator-intelligence', priority: 1, implemented: true,
-    env: ['YOUTUBE_API_KEY'], auth: 'api-key', free: 'Default quota with current granular Search/Upload quota buckets plus 10,000 daily units for other endpoints',
+    env: ['YOUTUBE_API_KEY'], auth: 'api-key', free: 'Default projects currently receive 100 search.list calls/day plus 10,000 daily units for other endpoint usage; quota is subject to change',
     purpose: 'Study recent Shorts/video metadata and public momentum signals as a cross-platform input to Reel Intelligence.', zeroCostSafe: true, autoUse: 'research',
   },
   {
     id: 'resend', name: 'Resend', category: 'email', priority: 2, implemented: false,
-    env: ['RESEND_API_KEY'], auth: 'api-key', free: '3,000 emails/month; 100/day',
+    env: ['RESEND_API_KEY'], auth: 'api-key', free: '3,000 emails/month; 100/day on Free',
     purpose: 'Transactional mail, founder notifications, lead follow-ups and CUP emails. Sending always remains approval-gated.', zeroCostSafe: true, autoUse: 'approval-required',
   },
   {
@@ -60,32 +66,32 @@ const TOOLS = [
   },
   {
     id: 'alpha-vantage', name: 'Alpha Vantage', category: 'market-research', priority: 3, implemented: false,
-    env: ['ALPHA_VANTAGE_API_KEY'], auth: 'api-key', free: '25 API requests/day for most datasets',
+    env: ['ALPHA_VANTAGE_API_KEY'], auth: 'api-key', free: 'Free API tier is request-limited; current quotas should be checked before relying on it for frequent polling',
     purpose: 'Structured market data for research/backtesting and paper-trading analysis; never autonomous real-money execution.', zeroCostSafe: true, autoUse: 'research-paper-only',
   },
   {
     id: 'posthog', name: 'PostHog', category: 'product-analytics', priority: 2, implemented: false,
-    env: ['POSTHOG_PROJECT_KEY', 'POSTHOG_HOST'], auth: 'project-key', free: 'Product analytics free tier includes 1M events/month',
+    env: ['POSTHOG_PROJECT_KEY', 'POSTHOG_HOST'], auth: 'project-key', free: 'Generous free product-analytics quota; verify current event limits in the selected region before production use',
     purpose: 'Measure Elevate OS funnels, feature usage and creator-product behavior so Ultron can make product decisions from real usage.', zeroCostSafe: true, autoUse: 'analytics',
   },
   {
     id: 'brave-search', name: 'Brave Search API', category: 'research', priority: 4, implemented: true,
-    env: ['BRAVE_SEARCH_API_KEY'], auth: 'api-key', free: '$5 monthly credit (~1,000 Search requests), but card verification is required',
-    purpose: 'Independent web index fallback when TinyFish/Tavily are unavailable.', zeroCostSafe: true, autoUse: 'fallback-only', caveat: 'Requires card verification despite $0 intended spend.',
+    env: ['BRAVE_SEARCH_API_KEY'], auth: 'api-key', free: 'Free-credit availability can require billing verification; treat as optional fallback',
+    purpose: 'Independent web index fallback when TinyFish/Tavily are unavailable.', zeroCostSafe: true, autoUse: 'fallback-only', caveat: 'Do not enable paid overages.',
   },
   {
     id: 'apify', name: 'Apify', category: 'automation-research', priority: 4, implemented: false,
-    env: ['APIFY_API_TOKEN'], auth: 'api-token', free: '$5 platform credit/month; no card required',
+    env: ['APIFY_API_TOKEN'], auth: 'api-token', free: '$5 platform credit/month on Free; no card required',
     purpose: 'Specialized public-web Actors for research tasks that are difficult to implement directly. Do not use it to bypass platform access controls.', zeroCostSafe: true, autoUse: 'explicit-research',
   },
   {
     id: 'gmail-oauth', name: 'Gmail API', category: 'personal-operator', priority: 1, implemented: false,
-    env: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'], auth: 'oauth', free: 'Standard API usage is no-additional-cost below current daily thresholds',
+    env: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'], auth: 'oauth', free: 'Standard Gmail API usage does not have a per-request fee; normal API quotas apply',
     purpose: 'Read/draft/send founder email with explicit action controls and inbox automation.', zeroCostSafe: true, autoUse: 'oauth-user-consent',
   },
   {
     id: 'calendar-oauth', name: 'Google Calendar API', category: 'personal-operator', priority: 1, implemented: false,
-    env: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'], auth: 'oauth', free: 'Standard API usage is no-additional-cost below current daily thresholds',
+    env: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'], auth: 'oauth', free: 'Standard Google Calendar API usage does not have a per-request fee; normal API quotas apply',
     purpose: 'Real schedule awareness, meeting creation, reminders and proactive planning.', zeroCostSafe: true, autoUse: 'oauth-user-consent',
   },
   {
