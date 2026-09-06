@@ -23,6 +23,50 @@ function configured(...names) {
 
 const CAPABILITIES = [
   {
+    id: 'reel_generation',
+    title: 'Adaptive Reel Intelligence + Factory',
+    role: 'social-media-strategist-editor',
+    detects: /\b(?:make|create|generate|produce|render|edit)\b[\s\S]{0,90}\b(?:reel|short-form video|short form video|instagram video)\b/i,
+    implemented: true,
+    credentials: () => configured('PEXELS_API_KEY') && configured('FISH_API_KEY'),
+    missing: ['Pexels source API key', 'Fish narrator API key'],
+    mode: 'execute',
+    purpose: 'Research account-fit formats, apply learned creative preferences, direct/script/render a verified vertical Reel, and return the MP4 artifact without publishing it.',
+  },
+  {
+    id: 'reel_strategy',
+    title: 'Reel Strategy Analyst',
+    role: 'social-media-analyst',
+    detects: /\b(?:suggest|recommend|research|analy[sz]e|find)\b[\s\S]{0,100}\b(?:reel ideas?|content ideas?|reel trends?|instagram aesthetic|short-form formats?|short form formats?)\b/i,
+    implemented: true,
+    credentials: () => configured('INSTAGRAM_TOKEN', 'INSTAGRAM_ACCESS_TOKEN', 'META_ACCESS_TOKEN') || configured('TINYFISH_API_KEY') || configured('TAVILY_API_KEY'),
+    missing: ['Instagram or research provider credentials'],
+    mode: 'execute',
+    purpose: 'Combine trend evidence, Instagram account aesthetics, recent content patterns and Adaptive Intelligence into account-fit Reel ideas and creative direction.',
+  },
+  {
+    id: 'adaptive_operator',
+    title: 'Adaptive Founder Intelligence',
+    role: 'chief-of-staff',
+    detects: /\b(?:what have you learned|learned preferences|adaptive intelligence|adapt to me|my patterns|my style|suggest based on my preferences)\b/i,
+    implemented: true,
+    credentials: () => true,
+    missing: [],
+    mode: 'execute',
+    purpose: 'Learn from explicit corrections, repeated approvals/rejections and outcomes, then apply only domain-relevant preferences to future work.',
+  },
+  {
+    id: 'system_audit',
+    title: 'Turbo System Integrity Auditor',
+    role: 'systems-architect',
+    detects: /\b(?:audit ultron|audit yourself|system health|turbo status|what is broken|what'?s broken|integration map|runtime topology)\b/i,
+    implemented: true,
+    credentials: () => true,
+    missing: [],
+    mode: 'execute',
+    purpose: 'Cross-check Operator, Forge, Adaptive Intelligence, Reel Intelligence, research fallbacks, memory, file delivery and zero-cost guardrails for contradictory readiness or broken links.',
+  },
+  {
     id: 'instagram_publish',
     title: 'Instagram Reel Publisher',
     role: 'social-media-manager',
@@ -72,8 +116,8 @@ const CAPABILITIES = [
     role: 'founder-brand-manager',
     detects: /\b(?:post|publish|schedule|write and post)\b[\s\S]{0,90}\blinkedin\b|\blinkedin\b[\s\S]{0,90}\b(?:post|publish|schedule)\b/i,
     implemented: false,
-    credentials: () => configured('LINKEDIN_ACCESS_TOKEN'),
-    missing: ['LinkedIn publishing connector', 'LinkedIn publishing access/token'],
+    credentials: () => configured('LINKEDIN_ACCESS_TOKEN') || configured('BUFFER_API_KEY'),
+    missing: ['LinkedIn publishing connector', 'LinkedIn publishing access/token or Buffer API key'],
     mode: 'execute-with-approval',
     purpose: 'Draft and publish founder/company LinkedIn posts using business context and current priorities.',
   },
@@ -97,7 +141,7 @@ const CAPABILITIES = [
     credentials: () => true,
     missing: [],
     mode: 'execute',
-    purpose: 'Build and repair software through Forge/Coding Brain.',
+    purpose: 'Build and repair software through Forge/Coding Brain using founder-specific profiles, checkpoints and verification.',
   },
   {
     id: 'trading_research',
@@ -112,16 +156,24 @@ const CAPABILITIES = [
   },
 ];
 
+const SPECIFIC_MATCH_ORDER = [
+  'lead_extraction',
+  'instagram_publish',
+  'instagram_dm',
+  'reel_generation',
+  'reel_strategy',
+  'system_audit',
+  'adaptive_operator',
+];
+
 function match(message) {
   const text = String(message || '').trim();
   if (!text) return null;
-
-  // Explicit extraction/qualification requests are more specific than generic DM handling,
-  // so route them to the lead pipeline before the broader Instagram DM matcher.
-  const leadExtraction = CAPABILITIES.find((capability) => capability.id === 'lead_extraction');
-  if (leadExtraction?.detects.test(text)) return leadExtraction;
-
-  return CAPABILITIES.find((capability) => capability.detects.test(text)) || null;
+  for (const id of SPECIFIC_MATCH_ORDER) {
+    const capability = CAPABILITIES.find((row) => row.id === id);
+    if (capability?.detects.test(text)) return capability;
+  }
+  return CAPABILITIES.find((capability) => !SPECIFIC_MATCH_ORDER.includes(capability.id) && capability.detects.test(text)) || null;
 }
 
 function capabilityState(capability) {
@@ -170,4 +222,4 @@ function instruction(message) {
   return `OPERATOR MODE: ${capability.title}. ROLE: ${capability.role}. PURPOSE: ${capability.purpose} READINESS: ${state.ready ? 'ready' : `blocked; missing ${state.missing.join(', ') || 'implementation'}`}. ${constraint}`;
 }
 
-module.exports = { CAPABILITIES, match, status, summary, instruction, capabilityState };
+module.exports = { CAPABILITIES, SPECIFIC_MATCH_ORDER, match, status, summary, instruction, capabilityState };
