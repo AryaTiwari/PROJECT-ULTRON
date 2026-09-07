@@ -1,5 +1,6 @@
 const pipeline = require('./reel-pipeline');
 const finisher = require('./reel-finisher');
+const completion = require('./reel-completion');
 const finalQuality = require('./reel-final-quality');
 const reelLearning = require('./reel-learning');
 const { writeJsonAtomic } = require('./persistence');
@@ -26,12 +27,30 @@ function install() {
       return { ...base, ok: false, job, blocker: `Premium Reel finishing failed: ${error.message}` };
     }
 
+    try {
+      finished = completion.ensureComplete(finished, options);
+    } catch (error) {
+      const job = { ...(finished.job || base.job || {}) };
+      job.state = 'waiting_narration_completion';
+      job.updatedAt = new Date().toISOString();
+      job.narrationCompletionError = error.message;
+      if (finished?.paths?.job) writeJsonAtomic(finished.paths.job, job);
+      return {
+        ...finished,
+        ok: false,
+        job,
+        blocker: `Reel narration completion gate rejected the output: ${error.message}`,
+      };
+    }
+
     const audit = finalQuality.audit(finished, brief, options);
     const job = { ...(finished.job || {}) };
     job.finalQuality = audit;
     job.finisher = finished.finisher;
     job.output = finished.output;
     job.polish = finished.polish;
+    job.narration = finished.narration;
+    job.completion = finished.completion;
     job.updatedAt = new Date().toISOString();
 
     if (!audit.ok) {
@@ -70,6 +89,14 @@ function uninstall() {
   return { installed: false };
 }
 
-function status() { return { installed, premiumFinisherRequired: true, finalQualityGateRequired: true, creativeRecipeLearning: reelLearning.status() }; }
+function status() {
+  return {
+    installed,
+    premiumFinisherRequired: true,
+    narrationCompletionRequired: true,
+    finalQualityGateRequired: true,
+    creativeRecipeLearning: reelLearning.status(),
+  };
+}
 
 module.exports = { install, uninstall, status };
