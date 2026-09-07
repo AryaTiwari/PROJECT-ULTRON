@@ -16,10 +16,38 @@ function append(role, content, meta = {}) {
   });
 }
 
-function recent(limit = config.maxConversationItems) {
+function normalizeHistory(history) {
+  return (Array.isArray(history) ? history : [])
+    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim())
+    .map((item) => ({ role: item.role, content: String(item.content || ''), at: item.at || item.created_at || item.createdAt || null, model: item.model || null }));
+}
+
+function persistedRows() {
   return readJsonl(config.conversationPath)
-    .slice(-limit)
-    .map((m) => ({ role: m.role, content: m.content, at: m.at, model: m.model || null }));
+    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim())
+    .map((item) => ({ ...item, legacy: false }));
+}
+
+function recent(limit = config.maxConversationItems) {
+  return persistedRows()
+    .slice(-Math.max(1, limit))
+    .map((m) => ({ role: m.role, content: m.content, at: m.at, model: m.model || null, taskType: m.taskType || null }));
+}
+
+function history(limit = 120) {
+  return persistedRows()
+    .slice(-Math.max(1, Math.min(1000, Number(limit || 120))))
+    .map((m) => ({
+      id: m.id || null,
+      role: m.role,
+      content: m.content,
+      at: m.at || null,
+      model: m.model || null,
+      provider: m.provider || null,
+      taskType: m.taskType || null,
+      mode: m.mode || null,
+      inputMode: m.inputMode || null,
+    }));
 }
 
 function tokens(text) {
@@ -41,7 +69,7 @@ function overlap(a, b) {
 }
 
 function isGreeting(text) {
-  return /^(?:hey+|hi+|hello+|yo+|sup|what'?s up|good\s+(?:morning|afternoon|evening))(?:\s+(?:there|ultron|bro|buddy))?[!.?\s]*$/i.test(String(text || '').trim());
+  return /^(?:hey+|hi+|hello+|yo+|sup|what'?s up|good\s+(?:morning|afternoon|evening|night))(?:\s+(?:there|ultron|bro|buddy))?[!.?\s]*$/i.test(String(text || '').trim());
 }
 
 function isBareUrl(text) {
@@ -60,8 +88,8 @@ function isContinuation(text) {
 function isRecallQuery(text) {
   const value = String(text || '').trim();
   return /\b(?:remember|recall|recollect)\b.*\b(?:conversation|chat|discussion|talked|discussed|topic|thing)\b/i.test(value)
-    || /\b(?:last|previous|earlier|old)\s+(?:conversation|chat|discussion)\b/i.test(value)
-    || /\bwe\s+(?:talked|spoke|discussed|chatted)\s+about\b/i.test(value)
+    || /\b(?:last|previous|earlier|old|yesterday'?s?)\s+(?:conversation|chat|discussion|task|work)\b/i.test(value)
+    || /\bwe\s+(?:talked|spoke|discussed|chatted|worked)\s+about\b/i.test(value)
     || /\b(?:conversation|chat|discussion)\s+(?:about|regarding|where)\b/i.test(value);
 }
 
@@ -77,10 +105,62 @@ function currentSession(rows) {
   return rows.slice(start);
 }
 
-function normalizeHistory(history) {
-  return (Array.isArray(history) ? history : [])
-    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim())
-    .map((item) => ({ role: item.role, content: String(item.content || ''), at: item.at || item.created_at || item.createdAt || null, model: item.model || null }));
+function cleanSessionTitle(value) {
+  const text = String(value || '').replace(/^ultron[,:\s-]*/i, '').replace(/\s+/g, ' ').trim();
+  if (!text) return 'Untitled conversation';
+  return text.length > 72 ? `${text.slice(0, 69).trim()}…` : text;
+}
+
+function sessionize(rows = persistedRows()) {
+  const source = normalizeHistory(rows);
+  if (!source.length) return [];
+  const groups = [];
+  let current = [];
+  for (const row of source) {
+    if (current.length) {
+      const previousAt = Date.parse(current[current.length - 1].at || '');
+      const currentAt = Date.parse(row.at || '');
+      if (Number.isFinite(previousAt) && Number.isFinite(currentAt) && currentAt - previousAt > SESSION_GAP_MS) {
+        groups.push(current);
+        current = [];
+      }
+    }
+    current.push(row);
+  }
+  if (current.length) groups.push(current);
+  return groups.map((items, index) => {
+    const userRows = items.filter((item) => item.role === 'user');
+    const assistantRows = items.filter((item) => item.role === 'assistant');
+    const firstUser = userRows[0]?.content || items[0]?.content || '';
+    const lastUser = userRows[userRows.length - 1]?.content || null;
+    const lastAssistant = assistantRows[assistantRows.length - 1]?.content || null;
+    const startedAt = items[0]?.at || null;
+    const endedAt = items[items.length - 1]?.at || null;
+    return {
+      id: `session-${Date.parse(startedAt || '') || index}-${index}`,
+      title: cleanSessionTitle(firstUser),
+      startedAt,
+      endedAt,
+      messageCount: items.length,
+      userMessageCount: userRows.length,
+      lastUser: lastUser ? String(lastUser).slice(0, 360) : null,
+      lastAssistant: lastAssistant ? String(lastAssistant).slice(0, 360) : null,
+      items,
+    };
+  });
+}
+
+function sessions(limit = 12) {
+  return sessionize()
+    .slice(-Math.max(1, Math.min(50, Number(limit || 12))))
+    .reverse()
+    .map((session) => ({ ...session, items: undefined }));
+}
+
+function sessionHistory(sessionId, limit = 80) {
+  const group = sessionize().find((session) => session.id === sessionId);
+  if (!group) return [];
+  return group.items.slice(-Math.max(1, Math.min(300, Number(limit || 80))));
 }
 
 function legacyConversationRows() {
@@ -109,10 +189,7 @@ function uniqueContext(items) {
 }
 
 function searchHistory(query, options = {}) {
-  const mark3Rows = readJsonl(config.conversationPath)
-    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim())
-    .map((item) => ({ ...item, legacy: false }));
-  const rows = uniqueContext([...legacyConversationRows(), ...mark3Rows]);
+  const rows = uniqueContext([...legacyConversationRows(), ...persistedRows()]);
   if (!rows.length) return [];
 
   const focused = recallQueryText(query);
@@ -147,8 +224,7 @@ function contextFor(query, suppliedHistory = null) {
   if (!value || isGreeting(value)) return [];
 
   const supplied = normalizeHistory(suppliedHistory);
-  const persisted = readJsonl(config.conversationPath)
-    .filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+  const persisted = persistedRows();
   const session = currentSession(persisted).map((m) => ({ role: m.role, content: m.content, at: m.at, model: m.model || null }));
   const source = supplied.length ? supplied : session;
 
@@ -171,4 +247,20 @@ function contextFor(query, suppliedHistory = null) {
   return tail.slice(-6);
 }
 
-module.exports = { append, recent, contextFor, searchHistory, legacyConversationRows, isRecallQuery, isGreeting, isBareUrl, isContinuation, overlap };
+module.exports = {
+  SESSION_GAP_MS,
+  append,
+  recent,
+  history,
+  sessions,
+  sessionHistory,
+  sessionize,
+  contextFor,
+  searchHistory,
+  legacyConversationRows,
+  isRecallQuery,
+  isGreeting,
+  isBareUrl,
+  isContinuation,
+  overlap,
+};
