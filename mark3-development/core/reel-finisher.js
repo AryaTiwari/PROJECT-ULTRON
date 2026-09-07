@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pipeline = require('./reel-pipeline');
+const elevateReelEngine = require('./elevate-reel-engine');
 
 function transitionName(value) {
   const text = String(value || '').toLowerCase();
@@ -123,6 +124,21 @@ function mixSfx(videoPath, sfxPath, outputPath, durationSec) {
   return { applied: true, path: sfxPath };
 }
 
+function applyElevateGraphics(videoPath, result, plan, options = {}) {
+  if (options.graphics === false) return { path: videoPath, meta: { applied: false, reason: 'disabled' } };
+  try {
+    const graph = elevateReelEngine.applyGraphics({
+      ok: true,
+      plan,
+      paths: result.paths,
+      output: { path: videoPath },
+    }, options);
+    return { path: graph.result?.output?.path || videoPath, meta: graph.meta || { applied: false, reason: 'no-meta' } };
+  } catch (error) {
+    return { path: videoPath, meta: { applied: false, reason: error.message, degradedGracefully: true } };
+  }
+}
+
 async function finish(result, options = {}) {
   if (!result?.ok) return result;
   const plan = result.plan || {};
@@ -136,11 +152,15 @@ async function finish(result, options = {}) {
   const polish = pipeline.applyVisualPolish(joined.path, plan, tempDir);
   if (!polish.captionsApplied || !polish.safeZoneApplied) throw new Error(`Premium caption finishing failed: ${polish.reason || 'safe-zone captions unavailable'}`);
 
+  // Apply Elevate semantic 2D graphics only after transitions and captions are final.
+  // This preserves the graphics in the shipped MP4 and avoids a redundant pre-finisher encode.
+  const graphics = applyElevateGraphics(polish.path, result, plan, options);
+
   const narrationPath = result?.narration?.path;
   if (!narrationPath || !fs.existsSync(narrationPath)) throw new Error('Premium finisher cannot find the Reel narrator audio.');
   const musicPath = options.music === false ? null : pipeline.localMusicTrack();
   const baseAudio = path.join(tempDir, 'finished-base.mp4');
-  const audio = pipeline.muxAudio(polish.path, narrationPath, baseAudio, plan.durationSec, musicPath);
+  const audio = pipeline.muxAudio(graphics.path, narrationPath, baseAudio, plan.durationSec, musicPath);
   const sfxPath = options.sfx === false ? null : generateSfxBed(plan, tempDir);
   const finalTemp = path.join(tempDir, 'finished-final.mp4');
   const sfx = mixSfx(baseAudio, sfxPath, finalTemp, plan.durationSec);
@@ -158,12 +178,15 @@ async function finish(result, options = {}) {
       safeZoneApplied: true,
       musicApplied: audio.musicApplied,
       musicPath: audio.musicPath || null,
+      graphicsEngine: graphics.meta,
     },
     finisher: {
       applied: true,
       transitionsApplied: joined.transitionsApplied,
       transitionCount: joined.transitionCount,
       transitionPadSec: joined.padSec,
+      semanticGraphicsApplied: Boolean(graphics.meta?.applied),
+      semanticGraphicsEngine: graphics.meta?.engine || null,
       sfxApplied: sfx.applied,
       sfxPath: sfx.path || null,
       zeroCost: true,
@@ -179,5 +202,6 @@ module.exports = {
   sfxEvents,
   generateSfxBed,
   mixSfx,
+  applyElevateGraphics,
   finish,
 };
