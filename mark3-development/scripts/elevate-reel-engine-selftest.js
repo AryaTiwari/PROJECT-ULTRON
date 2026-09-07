@@ -5,6 +5,7 @@ const sources = require('../core/reel-sources');
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
 (() => {
+  engine.install();
   const state = engine.status();
   assert(state.implemented === true && state.installed === true, 'Elevate Reel Engine must install.');
   assert(state.scope === 'elevate-os-only', 'Reel Engine must stay scoped to Elevate OS.');
