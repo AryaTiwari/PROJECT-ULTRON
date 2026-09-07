@@ -57,9 +57,13 @@ assert(/ACTIVITY FABRIC/.test(contextUi), 'Interface must expose the shared cros
 assert(/\/api\/conversation\/history/.test(contextUi), 'Interface must restore transcript history from the persistent backend.');
 assert(/\/api\/context\/greeting/.test(contextUi), 'Interface must show a contextual startup greeting.');
 
+const historyBridge = fs.readFileSync(path.resolve(__dirname, '../interface/history-bridge.js'), 'utf8');
+assert(/continuedSessionId/.test(historyBridge) && /selectedHistory/.test(historyBridge), 'Opening an earlier thread must carry that thread into the next chat request, not only redraw the UI.');
+assert(/\/api\/conversation\/session/.test(historyBridge) && /\/api\/chat/.test(historyBridge), 'History bridge must connect restored sessions to subsequent chat requests.');
+
 const ids = registry.TOOLS.map((row) => row.id);
 assert(!ids.includes('youtube-data'), 'YouTube must remain removed until explicitly re-enrolled.');
 assert(ids.includes('buffer') && ids.includes('tavily') && ids.includes('firecrawl'), 'Current enrolled integrations must remain in the clean registry.');
 assert(registry.byId('telegram-bot')?.dormant === true, 'Telegram code must remain installed but dormant.');
 
-console.log('ULTRON Continuity self-test passed: persistent sessions, time-aware varied greetings, cross-feature activity, shared capability awareness, diagnostics, clean tool enrollment and history UI validated.');
+console.log('ULTRON Continuity self-test passed: persistent sessions, continuable restored threads, time-aware varied greetings, cross-feature activity, shared capability awareness, diagnostics, clean tool enrollment and history UI validated.');
