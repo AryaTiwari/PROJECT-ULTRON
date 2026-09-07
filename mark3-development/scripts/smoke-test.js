@@ -20,6 +20,7 @@ const memory = require('../core/memory');
 const planner = require('../core/planner');
 const voice = require('../core/voice-orchestrator');
 const router = require('../core/model-router');
+const direct = require('../core/direct-provider-router');
 const league = require('../core/model-league');
 const arena = require('../core/model-arena');
 const registry = require('../core/provider-registry');
@@ -40,7 +41,8 @@ if (!assistant.wantsDetailedResponse('Explain this step-by-step in detail')) thr
 if (assistant.wantsDetailedResponse('What is this?')) throw new Error('Ordinary questions must stay concise-first.');
 const voiceStyle = assistant.responseStyleInstruction('What is this?', 'voice');
 if (!/spoken sentences/i.test(voiceStyle) || !/no headings/i.test(voiceStyle) || !/20[–-]50 words/i.test(voiceStyle)) throw new Error('Voice responses must remain speech-native, concise, and screen-independent.');
-if (!router.isBlockedModel('nvidia/some-model')) throw new Error('NVIDIA inference must be blocked in Mark 3.');
+if (router.isBlockedModel('nvidia/nemotron-3-super-120b-a12b')) throw new Error('NVIDIA cloud inference must remain eligible in Mark 3 when configured.');
+if (direct.providerForModel('nvidia/nemotron-3-super-120b-a12b') !== 'nvidia') throw new Error('NVIDIA models must resolve through the direct cloud-provider router.');
 if (!router.isBlockedModel('opencode/big-pickle')) throw new Error('OpenCode/Big Pickle inference must be blocked in Mark 3.');
 if (!router.isBlockedModel('dva/swe-1-7-lightning')) throw new Error('Devin bridge models must not enter normal assistant chat.');
 if (router.normalizeRequestedModel('auto/best-fast') !== 'auto') throw new Error('Routing aliases must resolve through Mark 3 live routing.');
