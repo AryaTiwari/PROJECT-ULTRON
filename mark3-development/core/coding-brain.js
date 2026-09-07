@@ -3,6 +3,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const config = require('./config');
 const gitPublisher = require('./git-publisher');
+const contextFabric = require('./context-fabric');
 
 let managedChild = null;
 let startupPromise = null;
@@ -45,6 +46,30 @@ function explicitWorkspace(message) {
 function resolveWorkspace(message, override) {
   const raw = String(override || explicitWorkspace(message) || config.codingBrainWorkspace || config.projectRoot).trim();
   return path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(config.projectRoot, raw);
+}
+
+function continuityContext(task) {
+  try {
+    const ctx = contextFabric.snapshot({ diagnostics: false });
+    const previous = ctx.sessions?.previous || ctx.sessions?.recent?.[0] || null;
+    const development = ctx.learned?.development || '';
+    const yesterday = ctx.work?.yesterday?.slice(0, 4) || [];
+    const lines = [
+      'PRIVATE ULTRON CONTINUITY CONTEXT. This is supporting context, NOT additional scope.',
+      previous?.lastUser ? `Recent founder thread: ${String(previous.lastUser).replace(/\s+/g, ' ').slice(0, 320)}` : '',
+      yesterday.length ? `Recently completed work: ${yesterday.map((row) => row.objective).join(' | ')}` : '',
+      development ? `Learned development preferences: ${String(development).slice(0, 700)}` : '',
+      'RULES: The explicit CURRENT TASK above is authoritative. Use this context only to avoid redoing completed work, preserve working systems, and honor development preferences. Never add unrelated changes because they appear in previous context.',
+    ].filter(Boolean);
+    return lines.length > 2 ? lines.join('\n') : '';
+  } catch {
+    return '';
+  }
+}
+
+function contextualTask(task) {
+  const context = continuityContext(task);
+  return context ? `CURRENT TASK:\n${task}\n\n${context}` : task;
 }
 
 async function request(url, options = {}, timeoutMs = 2500) {
@@ -263,7 +288,7 @@ async function run(message, options = {}) {
   const result = await request(`${config.codingBrainUrl}/run`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ task, workspace, mode, mark3Url: `http://${host}:${config.port}` }),
+    body: JSON.stringify({ task: contextualTask(task), workspace, mode, mark3Url: `http://${host}:${config.port}` }),
   }, config.codingBrainTimeoutMs);
 
   if (mode === 'apply' && result?.ok && gitPublisher.shouldPublish(task)) {
@@ -304,4 +329,4 @@ function summarize(result) {
   return `${base} I changed ${changed} file${changed === 1 ? '' : 's'}. ${validationLabel(result)} ${reviewLine}${publishLabel(result)}`.replace(/\s+/g, ' ').trim();
 }
 
-module.exports = { enabled, shouldUse, modeFor, resolveWorkspace, health, ensureRunning, run, summarize, gitPublisher };
+module.exports = { enabled, shouldUse, modeFor, resolveWorkspace, continuityContext, contextualTask, health, ensureRunning, run, summarize, gitPublisher };
