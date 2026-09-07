@@ -11,6 +11,7 @@
     "check:reliability": "node --env-file=../.env scripts/reliability-selftest.js",
     "check:operator": "node --env-file=../.env scripts/operator-selftest.js",
     "check:creator-ops": "node --env-file=../.env scripts/operator-selftest.js && node --env-file=../.env scripts/creator-outreach-selftest.js",
+    "check:creator-ops:live": "node --env-file=../.env scripts/creator-outreach-live-test.js",
     "check:instagram": "node --env-file=../.env scripts/instagram-test.js",
     "check:adaptive": "node --env-file=../.env scripts/adaptive-intelligence-selftest.js",
     "check:continuity": "node --env-file=../.env scripts/continuity-selftest.js",
