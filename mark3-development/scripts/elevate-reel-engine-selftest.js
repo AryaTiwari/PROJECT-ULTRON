@@ -1,4 +1,5 @@
 const engine = require('../core/elevate-reel-engine');
+const themeRadar = require('../core/elevate-theme-radar');
 const factory = require('../core/reel-factory');
 const sources = require('../core/reel-sources');
 
@@ -17,6 +18,17 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
   assert(engine.pillarFor('Why viewers skip my Reel after two seconds').id === 'growth-retention', 'Elevate pillar routing must recognize retention.');
   assert(engine.pillarFor('How to improve creator positioning and authority').id === 'positioning', 'Elevate pillar routing must recognize positioning.');
   assert(engine.hookScore(engine.hookCandidate('brand deals')) >= 60, 'Hook engine must produce a strong concise creator hook.');
+
+  const radar = themeRadar.snapshot('brand deals for creators', {
+    updatedAt: '2026-09-08T00:00:00.000Z',
+    mode: 'test-current-intelligence',
+    completedSources: ['test-current-source'],
+    marketSignals: ['Creator brand trust and monetization are active creator-economy signals.'],
+    principles: ['Human authority matters.'],
+    formats: [{ name: 'human-authentic authority', whyNow: 'creator trust', bestFor: ['creator', 'brand'] }],
+  });
+  assert(radar.topTheme?.id === 'brand-readiness', 'Theme radar must rank Elevate monetization themes from current signals plus brief fit.');
+  assert(radar.directionalOnly === true && radar.guaranteesVirality === false, 'Theme radar must never claim guaranteed virality.');
 
   const fallback = factory.fallbackPlan('why creators get views but fail to turn them into followers', { durationSec: 30, brandPromotion: true });
   const plan = engine.enhancePlan(fallback, 'why creators get views but fail to turn them into followers', { durationSec: 30 });
@@ -74,5 +86,5 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
   const sourceState = sources.status();
   assert(sourceState.publicMediaScout?.implemented === true && sourceState.streamingDownloads === true, 'Stock layer must expose the public-media scout and streaming download policy.');
 
-  console.log('ULTRON Elevate Reel Engine self-test passed: Elevate-only direction, hooks, CTA, semantic 2D graphics, license-aware photo/video scouting, streaming downloads and 8GB-safe zero-cost policy validated.');
+  console.log('ULTRON Elevate Reel Engine self-test passed: Elevate-only direction, hook/CTA intelligence, current theme radar, semantic 2D graphics, license-aware photo/video scouting, streaming downloads and 8GB-safe zero-cost policy validated.');
 })();
