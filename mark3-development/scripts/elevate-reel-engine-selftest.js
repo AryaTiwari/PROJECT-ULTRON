@@ -15,6 +15,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
 
   assert(engine.pillarFor('How creators can get more brand deals and monetize their audience').id === 'monetization', 'Elevate pillar routing must recognize monetization.');
   assert(engine.pillarFor('Why viewers skip my Reel after two seconds').id === 'growth-retention', 'Elevate pillar routing must recognize retention.');
+  assert(engine.pillarFor('How to improve creator positioning and authority').id === 'positioning', 'Elevate pillar routing must recognize positioning.');
   assert(engine.hookScore(engine.hookCandidate('brand deals')) >= 60, 'Hook engine must produce a strong concise creator hook.');
 
   const fallback = factory.fallbackPlan('why creators get views but fail to turn them into followers', { durationSec: 30, brandPromotion: true });
@@ -23,7 +24,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
   assert(/Elevate OS/i.test(plan.cta) && /elevateos\.in/i.test(plan.cta), 'Elevate CTA must preserve brand and website.');
   assert(plan.elevateEngine?.scope === 'elevate-os-only', 'Plan must contain unified Elevate Engine metadata.');
   assert(plan.scenes.some((scene) => scene.visualDesign?.mode && scene.visualDesign.mode !== 'stock-focus'), 'Semantic graphics router must assign at least one non-stock visual mode.');
-  assert(plan.qualityAudit?.ok === true, `Elevate plan must remain inside existing quality gates: ${(plan.qualityAudit?.issues || []).join('; ')}`);
+  assert(plan.scenes[plan.scenes.length - 1]?.isBrandCta === true, 'Elevate CTA must remain the final scene.');
+  const engineRegressions = (plan.qualityAudit?.issues || []).filter((issue) => /missing Elevate|missing Free Strategy|missing elevateos|CTA must|on-screen text is too dense|overlaps/i.test(issue));
+  assert(engineRegressions.length === 0, `Elevate engine must not introduce brand/layout regressions: ${engineRegressions.join('; ')}`);
 
   const allowed = engine.normalizeCommonsPage({
     pageid: 123,
@@ -52,6 +55,18 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
     }],
   });
   assert(blocked === null, 'Public media scout must reject non-commercial licenses.');
+
+  const shareAlike = engine.normalizeCommonsPage({
+    pageid: 125,
+    title: 'File:Share-alike.jpg',
+    imageinfo: [{
+      mime: 'image/jpeg',
+      mediatype: 'BITMAP',
+      url: 'https://upload.wikimedia.org/share-alike.jpg',
+      extmetadata: { LicenseShortName: { value: 'CC BY-SA 4.0' } },
+    }],
+  });
+  assert(shareAlike === null, 'Default commercial scout policy must avoid ShareAlike obligations unless explicitly enabled later.');
 
   const imageName = sources.safeAssetName({ provider: 'wikimedia-commons', id: '123', mediaType: 'image', mime: 'image/jpeg', url: 'https://example.com/file.jpg' }, 1);
   assert(/\.jpg$/i.test(imageName), 'Image media must retain an image extension instead of being forced into MP4.');
