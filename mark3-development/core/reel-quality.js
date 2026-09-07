@@ -83,7 +83,7 @@ function brandScene() {
     visualQuery: 'content creator strategy consultation modern premium workspace vertical video',
     onScreenText: 'Book Your Free Strategy Session',
     subText: 'Elevate OS • elevateos.in',
-    narration: 'Want a growth plan built around your account? Book your free strategy session with Elevate OS now at elevateos.in.',
+    narration: 'Want a growth plan for your account? Book your free Elevate OS strategy session now at elevateos.in.',
     transition: 'clean-cut',
     energy: 'confident',
     isBrandCta: true,
