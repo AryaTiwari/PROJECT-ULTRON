@@ -4,18 +4,29 @@ const completion = require('./reel-completion');
 const finalQuality = require('./reel-final-quality');
 const reelLearning = require('./reel-learning');
 const elevateReelEngine = require('./elevate-reel-engine');
+const elevateThemeRadar = require('./elevate-theme-radar');
 const { writeJsonAtomic } = require('./persistence');
 
 let installed = false;
 let originalBuild = null;
 
 function install() {
-  if (installed) return { installed: true, alreadyInstalled: true, elevateReelEngine: elevateReelEngine.status() };
+  if (installed) return { installed: true, alreadyInstalled: true, elevateReelEngine: elevateReelEngine.status(), elevateThemeRadar: elevateThemeRadar.status() };
   const elevateStatus = elevateReelEngine.install();
   originalBuild = pipeline.build;
   pipeline.build = async (brief, options = {}) => {
     const base = await originalBuild(brief, options);
     if (!base?.ok) return base;
+
+    const themeRadar = elevateThemeRadar.snapshot(brief);
+    if (base.plan) {
+      base.plan.elevateEngine = { ...(base.plan.elevateEngine || {}), themeRadar };
+      if (base.paths?.plan) writeJsonAtomic(base.paths.plan, base.plan);
+    }
+    if (base.job) {
+      base.job.elevateThemeRadar = themeRadar;
+      if (base.paths?.job) writeJsonAtomic(base.paths.job, base.job);
+    }
 
     let finished;
     try {
@@ -54,6 +65,7 @@ function install() {
     job.narration = finished.narration;
     job.completion = finished.completion;
     job.elevateReelEngine = elevateReelEngine.status();
+    job.elevateThemeRadar = themeRadar;
     job.updatedAt = new Date().toISOString();
 
     if (!audit.ok) {
@@ -71,7 +83,7 @@ function install() {
     job.state = 'rendered';
     job.finishedProduction = true;
     if (finished?.paths?.job) writeJsonAtomic(finished.paths.job, job);
-    const result = { ...finished, ok: true, job, finalQuality: audit };
+    const result = { ...finished, ok: true, job, finalQuality: audit, elevateThemeRadar: themeRadar };
     try {
       const recipe = reelLearning.recordRender(result);
       if (recipe) result.creativeLearning = { tracked: true, jobId: recipe.jobId };
@@ -81,7 +93,7 @@ function install() {
     return result;
   };
   installed = true;
-  return { installed: true, elevateReelEngine: elevateStatus };
+  return { installed: true, elevateReelEngine: elevateStatus, elevateThemeRadar: elevateThemeRadar.status() };
 }
 
 function uninstall() {
@@ -99,6 +111,7 @@ function status() {
     narrationCompletionRequired: true,
     finalQualityGateRequired: true,
     elevateReelEngine: elevateReelEngine.status(),
+    elevateThemeRadar: elevateThemeRadar.status(),
     creativeRecipeLearning: reelLearning.status(),
   };
 }
