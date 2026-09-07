@@ -39,6 +39,7 @@
         <div><span class="panel-kicker">SHARED INTELLIGENCE</span><strong>CONTEXT FABRIC</strong></div>
         <div class="context-health"><span id="contextHealthDot"></span><b id="contextHealthScore">—</b></div>
       </div>
+      <div id="continuityGreeting" class="continuity-greeting"><span>SYNCING CONTINUITY…</span></div>
       <div class="context-clock"><span id="contextDaypart">SYNCING</span><b id="contextClock">—</b></div>
       <div class="context-grid">
         <button class="context-card context-card-action" id="previousThread" type="button">
@@ -48,15 +49,19 @@
       </div>
       <div class="context-card wide diagnostic-card"><span>SYSTEM COACH</span><b id="systemCoach">Running local diagnostics…</b></div>
       <div class="context-section">
-        <div class="context-section-head"><span>CAPABILITY MESH</span><small>READY + BUILDING</small></div>
+        <div class="context-section-head"><span>CAPABILITY MESH</span><small>CONNECTED + UPCOMING</small></div>
         <div id="featureMesh" class="feature-mesh"></div>
+      </div>
+      <div class="context-section activity-section">
+        <div class="context-section-head"><span>ACTIVITY FABRIC</span><small>SHARED ACROSS FEATURES</small></div>
+        <div id="activityList" class="activity-list"></div>
       </div>
       <div class="context-section history-section">
         <div class="context-section-head"><span>RECENT THREADS</span><button id="restoreCurrentHistory" type="button">LATEST</button></div>
         <div id="sessionList" class="session-list"></div>
       </div>
       <div class="context-section quick-section">
-        <div class="context-section-head"><span>QUICK MOVES</span><small>NO SIDE EFFECTS</small></div>
+        <div class="context-section-head"><span>QUICK MOVES</span><small>READ-ONLY / SAFE</small></div>
         <div class="quick-moves">
           <button data-command="Ultron, run a system audit and tell me the one thing we should check next.">DIAGNOSE</button>
           <button data-command="Ultron, resume the most relevant unfinished thread from our recent chats and give me the next concrete step.">RESUME</button>
@@ -116,7 +121,7 @@
   async function loadHistory(force = false) {
     if (state.loadedHistory && !force) return;
     try {
-      const response = await fetch('/api/conversation/history?limit=120');
+      const response = await fetch('/api/conversation/history?limit=100');
       const data = await response.json();
       if (!response.ok || !data.ok) return;
       renderMessageRows(data.messages || [], { replace: true, historical: true });
@@ -133,8 +138,27 @@
       renderMessageRows(data.messages || [], { replace: true, historical: true });
       if (!shell()?.classList.contains('chat-open')) document.querySelector('#chatToggle')?.click();
       const caption = document.querySelector('#voiceCaption');
-      if (caption) caption.textContent = 'Loaded an earlier conversation thread. New messages still continue in the live session.';
+      if (caption) caption.textContent = 'Earlier thread loaded. New messages still continue in the live session.';
     } catch {}
+  }
+
+  function renderFeatures(features = []) {
+    const mesh = document.querySelector('#featureMesh');
+    if (!mesh) return;
+    mesh.innerHTML = features.map((item) => {
+      const stateName = item.ready ? 'ready' : item.dormant || item.enrolled === false ? 'dormant' : item.implemented ? 'building' : 'planned';
+      const suffix = stateName === 'dormant' ? ' · dormant' : stateName === 'building' ? ' · building' : '';
+      return `<span class="feature-chip ${stateName}" title="${esc(item.mode || '')}"><i></i>${esc(item.title)}${esc(suffix)}</span>`;
+    }).join('') || '<span class="feature-chip building"><i></i>Context loading</span>';
+  }
+
+  function renderActivity(rows = []) {
+    const target = document.querySelector('#activityList');
+    if (!target) return;
+    target.innerHTML = rows.slice(0, 7).map((row) => `
+      <div class="activity-row ${esc(row.status || 'info')}">
+        <i></i><div><b>${esc(String(row.source || 'system').toUpperCase())}</b><span>${esc(clean(row.summary, 94))}</span></div><small>${esc(time(row.at))}</small>
+      </div>`).join('') || '<div class="empty-thread">Activity will appear as Ultron works across features.</div>';
   }
 
   function renderFabric(data) {
@@ -166,13 +190,8 @@
     const coach = document.querySelector('#systemCoach');
     if (coach) coach.textContent = data.diagnostic?.text || 'No urgent system issue detected.';
 
-    const mesh = document.querySelector('#featureMesh');
-    if (mesh) {
-      mesh.innerHTML = (data.features || []).map((item) => {
-        const stateName = item.ready ? 'ready' : item.implemented ? 'building' : 'planned';
-        return `<span class="feature-chip ${stateName}" title="${esc(item.mode || '')}"><i></i>${esc(item.title)}</span>`;
-      }).join('') || '<span class="feature-chip building"><i></i>Context loading</span>';
-    }
+    renderFeatures(data.features || []);
+    renderActivity(data.recentActivity || []);
 
     state.sessions = data.recentSessions || [];
     const sessionList = document.querySelector('#sessionList');
@@ -184,12 +203,18 @@
         </button>`).join('') || '<div class="empty-thread">No saved thread yet.</div>';
       sessionList.querySelectorAll('[data-session]').forEach((node) => node.addEventListener('click', () => loadSession(node.dataset.session)));
     }
+  }
 
-    const caption = document.querySelector('#voiceCaption');
-    if (caption && !/speaking|thinking|processing/i.test(document.querySelector('#statusText')?.textContent || '')) {
-      const continuity = previous?.title ? `Context loaded. Previous thread: ${clean(previous.title, 70)}.` : 'Context Fabric online. Persistent history is ready.';
-      caption.textContent = continuity;
-    }
+  async function loadGreeting() {
+    try {
+      const response = await fetch('/api/context/greeting');
+      const data = await response.json();
+      if (!response.ok || !data.ok) return;
+      const node = document.querySelector('#continuityGreeting');
+      if (node) node.innerHTML = `<span>${esc(data.response || 'Ultron is synchronized.')}</span>`;
+      const caption = document.querySelector('#voiceCaption');
+      if (caption && !/speaking|thinking|processing/i.test(document.querySelector('#statusText')?.textContent || '')) caption.textContent = data.response || caption.textContent;
+    } catch {}
   }
 
   async function refreshFabric() {
@@ -213,8 +238,8 @@
 
   async function boot() {
     installDock();
-    await Promise.all([loadHistory(false), refreshFabric()]);
-    setInterval(refreshFabric, 60000);
+    await Promise.all([loadHistory(false), refreshFabric(), loadGreeting()]);
+    setInterval(refreshFabric, 45000);
     setInterval(updateClockLocally, 15000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshFabric(); });
   }
