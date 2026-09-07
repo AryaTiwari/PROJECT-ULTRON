@@ -52,10 +52,22 @@ assert(fakeFilter.includes('shadowcolor='), 'Premium typography should use shado
 assert(typeof completion.probeDuration === 'function' && typeof completion.ensureComplete === 'function', 'Measured narration completion guard must be installed.');
 
 const sourceStatus = sources.status();
-assert(sourceStatus.provider === 'pexels', 'Reel Factory must use the enrolled Pexels source only.');
-assert(typeof sourceStatus.pexelsConfigured === 'boolean', 'Pexels readiness must be deterministic.');
-assert(!Object.prototype.hasOwnProperty.call(sourceStatus, 'pixabayConfigured'), 'Removed Pixabay runtime must not survive in source status.');
+assert(Array.isArray(sourceStatus.providers) && sourceStatus.providers.some((item) => item.provider === 'pexels'), 'Reel stock router must retain Pexels.');
+assert(sourceStatus.providers.some((item) => item.provider === 'pixabay'), 'Reel stock router must include Pixabay.');
+assert(typeof sourceStatus.pexelsConfigured === 'boolean' && typeof sourceStatus.pixabayConfigured === 'boolean', 'Pexels/Pixabay readiness must be deterministic.');
+assert(sourceStatus.selectionPolicy === 'parallel-search-interleaved-v1', 'Reel stock router must expose its diversity selection policy.');
 assert(!JSON.stringify(sourceStatus).includes(process.env.PEXELS_API_KEY || '__never__'), 'Reel source status must never expose the Pexels API key.');
+assert(!JSON.stringify(sourceStatus).includes(process.env.PIXABAY_API_KEY || '__never__'), 'Reel source status must never expose the Pixabay API key.');
+const mockPixabay = sources.normalizePixabay({
+  id: 123,
+  pageURL: 'https://pixabay.com/videos/id-123/',
+  duration: 8,
+  user: 'demo',
+  user_id: 9,
+  videos: { large: { url: 'https://cdn.example.com/demo.mp4', width: 1080, height: 1920, size: 1000 } },
+});
+assert(mockPixabay && mockPixabay.provider === 'pixabay' && mockPixabay.commercialUse === true, 'Pixabay normalization must preserve commercial-use provenance.');
+assert(/Pixabay Content License/i.test(mockPixabay.license), 'Pixabay assets must carry license metadata.');
 
 const status = factory.status();
 const narratorStatus = narrator.status();
@@ -68,5 +80,5 @@ assert(typeof narratorStatus.configured === 'boolean' && narratorStatus.ultronVo
 assert(typeof pipeline.build === 'function', 'Finished Reel renderer must be installed.');
 assert(typeof pipeline.applyVisualPolish === 'function', 'Premium caption/polish layer must be installed.');
 
-console.log('ULTRON Reel Factory v2 self-test passed: complete informative sentences, measured no-cut narration, eye-level boxless typography, restrained support text, mandatory Elevate booking CTA and separate narrator boundary validated.');
+console.log('ULTRON Reel Factory v2 self-test passed: complete informative sentences, measured no-cut narration, eye-level boxless typography, Pexels+Pixabay stock diversity, mandatory Elevate booking CTA and separate narrator boundary validated.');
 console.log(`Reel Factory readiness: stock=${status.stockSourceReady ? 'ready' : 'needs API key'}, ffmpeg=${status.ffmpeg.available ? 'ready' : 'not found'}, renderer=ready, captions=eye-level-minimal-v4, narration=measured-no-cut-v1, narrator=${status.narrator.configured ? 'ready' : 'needs profile'}.`);
