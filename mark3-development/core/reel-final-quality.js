@@ -13,6 +13,8 @@ function audit(result, brief, options = {}) {
   const content = quality.auditPlan(plan, brief, options);
   const branded = quality.shouldBrandPlan(plan, brief, options);
   const req = quality.requirements(plan?.durationSec || options.durationSec);
+  const semanticGraphicsExpected = plan?.elevateEngine?.scope === 'elevate-os-only'
+    && (plan.scenes || []).some((scene) => !scene?.isBrandCta && !['stock-focus', 'brand-cta'].includes(scene?.visualDesign?.mode));
 
   if (!content.ok) issues.push(...content.issues.map((issue) => `content: ${issue}`));
   if (Number(output.width || 0) !== 1080 || Number(output.height || 0) !== 1920) issues.push('output is not 1080x1920');
@@ -33,6 +35,8 @@ function audit(result, brief, options = {}) {
   if (Number(polish.subtitleY || 0) < 700 || Number(polish.subtitleY || 0) > 980) issues.push('supporting text anchor is outside the eye-level zone');
   if (Number(polish.maxHeadlineWords || 99) > 5) issues.push('headline text density exceeds five words');
   if (Number(polish.maxSubtitleWords || 99) > 5) issues.push('supporting text density exceeds five words');
+  if (semanticGraphicsExpected && !polish.graphicsEngine?.applied) issues.push('planned Elevate semantic graphics were not applied to the final visual pass');
+  if (semanticGraphicsExpected && !finisher.semanticGraphicsApplied) issues.push('premium finisher did not confirm the Elevate graphics pass survived into final output');
   if (branded && !plan.brandPromotion) issues.push('creator-growth Reel is missing Elevate OS promotion');
   if (branded && !/free strategy session/i.test(`${plan.cta || ''} ${plan.voiceover || ''}`)) issues.push('Free Strategy Session CTA is missing');
   if (branded && !/elevateos\.in/i.test(`${plan.cta || ''} ${plan.voiceover || ''}`)) issues.push('elevateos.in is missing from the CTA');
@@ -54,6 +58,8 @@ function audit(result, brief, options = {}) {
     narrationTailRoomSec: Number(narration.tailRoomSec || 0) || null,
     narrationTimeFitRate: Number(narration.timeFitRate || 1),
     transitionsApplied: Boolean(finisher.transitionsApplied),
+    semanticGraphicsExpected: Boolean(semanticGraphicsExpected),
+    semanticGraphicsApplied: Boolean(polish.graphicsEngine?.applied && finisher.semanticGraphicsApplied),
     sfxApplied: Boolean(finisher.sfxApplied),
     safeZoneApplied: Boolean(polish.safeZoneApplied),
     eyeLevelAligned: Boolean(polish.eyeLevelAligned),
