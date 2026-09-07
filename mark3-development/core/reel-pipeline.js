@@ -3,6 +3,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const factory = require('./reel-factory');
 const sources = require('./reel-sources');
+const aiVisuals = require('./reel-ai-visuals');
 const narrator = require('./reel-narrator');
 const quality = require('./reel-quality');
 const { writeJsonAtomic } = require('./persistence');
@@ -128,22 +129,57 @@ function localMusicTrack() {
   } catch { return null; }
 }
 
+function generatedImageName(scene, index) {
+  const raw = String(scene?.asset?.id || index).replace(/[^a-z0-9_-]/gi, '').slice(0, 48) || String(index);
+  return `${String(index).padStart(2, '0')}-cloudflare-ai-${raw}.jpg`;
+}
+
 async function materializeAssets(plan, paths, options = {}) {
   fs.mkdirSync(paths.assets, { recursive: true });
   const scenes = [];
   const downloads = [];
   for (let i = 0; i < plan.scenes.length; i += 1) {
     const scene = plan.scenes[i];
+    const generatedImage = scene.asset?.mediaType === 'generated-image' || scene.asset?.generated === true;
+    if (generatedImage) {
+      const destination = path.join(paths.assets, generatedImageName(scene, i + 1));
+      try {
+        const saved = fs.existsSync(destination) && fs.statSync(destination).size > 4096
+          ? {
+              ok: true,
+              path: destination,
+              bytes: fs.statSync(destination).size,
+              provider: scene.asset.provider,
+              id: scene.asset.id,
+              attribution: scene.asset.attribution,
+              sourcePage: scene.asset.sourcePage,
+              license: scene.asset.license,
+              commercialUse: scene.asset.commercialUse !== false,
+              generated: true,
+              mediaType: 'generated-image',
+              model: scene.asset.model,
+              prompt: scene.asset.prompt,
+              reused: true,
+            }
+          : await aiVisuals.generateImage(scene.asset.prompt, destination, options);
+        downloads.push(saved);
+        scenes.push({ ...scene, localAsset: saved.path, localAssetMediaType: 'image' });
+      } catch (error) {
+        scenes.push({ ...scene, localAsset: null, localAssetMediaType: 'image', assetDownloadError: error.message });
+      }
+      continue;
+    }
+
     if (!scene.asset?.url) { scenes.push({ ...scene, localAsset: null }); continue; }
     const destination = path.join(paths.assets, sources.safeAssetName(scene.asset, i + 1));
     try {
       const saved = fs.existsSync(destination) && fs.statSync(destination).size > 1024
-        ? { ok: true, path: destination, bytes: fs.statSync(destination).size, provider: scene.asset.provider, id: scene.asset.id, attribution: scene.asset.attribution, sourcePage: scene.asset.sourcePage, reused: true }
+        ? { ok: true, path: destination, bytes: fs.statSync(destination).size, provider: scene.asset.provider, id: scene.asset.id, attribution: scene.asset.attribution, sourcePage: scene.asset.sourcePage, license: scene.asset.license, commercialUse: scene.asset.commercialUse !== false, reused: true }
         : await sources.downloadAsset(scene.asset, destination, options);
       downloads.push(saved);
-      scenes.push({ ...scene, localAsset: saved.path });
+      scenes.push({ ...scene, localAsset: saved.path, localAssetMediaType: 'video' });
     } catch (error) {
-      scenes.push({ ...scene, localAsset: null, assetDownloadError: error.message });
+      scenes.push({ ...scene, localAsset: null, localAssetMediaType: 'video', assetDownloadError: error.message });
     }
   }
   return { plan: { ...plan, scenes }, downloads };
@@ -178,9 +214,22 @@ async function synthesizeNarration(plan, paths) {
 }
 
 function renderScene(scene, index, tempDir) {
-  if (!scene.localAsset) throw new Error(`Scene ${index + 1} has no downloaded stock asset.`);
+  if (!scene.localAsset) throw new Error(`Scene ${index + 1} has no materialized visual asset.`);
   const duration = Math.max(0.5, Number(scene.end || 0) - Number(scene.start || 0));
   const output = path.join(tempDir, `scene-${String(index + 1).padStart(2, '0')}.mp4`);
+  const isImage = scene.localAssetMediaType === 'image' || /\.(?:jpe?g|png|webp)$/i.test(scene.localAsset);
+  if (isImage) {
+    const filter = [
+      'scale=1440:2560:force_original_aspect_ratio=increase',
+      'crop=1440:2560',
+      "zoompan=z='min(zoom+0.00055,1.075)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30",
+      'eq=contrast=1.06:saturation=1.04:brightness=-0.025',
+      'vignette=PI/8',
+      'fps=30',
+    ].join(',');
+    run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-loop', '1', '-framerate', '30', '-i', scene.localAsset, '-t', duration.toFixed(3), '-vf', filter, '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', output], { timeoutMs: 240000 });
+    return output;
+  }
   run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-stream_loop', '-1', '-i', scene.localAsset, '-t', duration.toFixed(3), '-vf', 'scale=1180:2100:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.06:saturation=1.04:brightness=-0.025,vignette=PI/8,fps=30', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', output], { timeoutMs: 240000 });
   return output;
 }
@@ -354,14 +403,26 @@ async function build(brief, options = {}) {
   const missing = plan.scenes.filter((scene) => !scene.localAsset);
   if (missing.length) {
     job.state = 'waiting_assets'; job.updatedAt = new Date().toISOString();
-    job.assetErrors = missing.map((scene) => ({ scene: scene.index, error: scene.assetDownloadError || 'No stock result.' }));
+    job.assetErrors = missing.map((scene) => ({ scene: scene.index, error: scene.assetDownloadError || 'No usable visual asset.' }));
     writeJsonAtomic(paths.job, job);
-    return { ok: false, job, plan, paths, blocker: `${missing.length} scene(s) have no downloadable stock asset.` };
+    return { ok: false, job, plan, paths, blocker: `${missing.length} scene(s) have no usable visual asset.` };
   }
 
   job.state = 'assets_downloaded';
   job.updatedAt = new Date().toISOString();
-  job.downloadedAssets = materialized.downloads.map((item) => ({ provider: item.provider, id: item.id, path: item.path, bytes: item.bytes, attribution: item.attribution, sourcePage: item.sourcePage }));
+  job.downloadedAssets = materialized.downloads.map((item) => ({
+    provider: item.provider,
+    id: item.id,
+    path: item.path,
+    bytes: item.bytes,
+    attribution: item.attribution,
+    sourcePage: item.sourcePage,
+    license: item.license || null,
+    commercialUse: item.commercialUse !== false,
+    generated: Boolean(item.generated),
+    mediaType: item.mediaType || 'video',
+    model: item.model || null,
+  }));
   writeJsonAtomic(paths.job, job);
 
   let narration;
@@ -411,7 +472,12 @@ async function build(brief, options = {}) {
     maxSubtitleWords: polish.maxSubtitleWords || null,
   };
   job.qualityAudit = quality.auditPlan(plan, brief, options);
-  job.attributions = materialized.downloads.map((item) => ({ attribution: item.attribution, sourcePage: item.sourcePage }));
+  job.attributions = materialized.downloads.map((item) => ({
+    attribution: item.attribution,
+    sourcePage: item.sourcePage,
+    license: item.license || null,
+    generated: Boolean(item.generated),
+  }));
   writeJsonAtomic(paths.job, job);
   return { ok: true, job, plan, paths, output: verified, narration, polish: job.polish };
 }
@@ -427,6 +493,7 @@ module.exports = {
   narrationCues,
   writeOverlayText,
   localMusicTrack,
+  generatedImageName,
   materializeAssets,
   synthesizeNarration,
   renderScene,
