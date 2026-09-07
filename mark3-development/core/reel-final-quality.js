@@ -9,14 +9,20 @@ function audit(result, brief, options = {}) {
   const narration = result?.narration || {};
   const polish = result?.polish || {};
   const finisher = result?.finisher || {};
+  const completion = result?.completion || {};
   const content = quality.auditPlan(plan, brief, options);
   const branded = quality.shouldBrandPlan(plan, brief, options);
+  const req = quality.requirements(plan?.durationSec || options.durationSec);
 
   if (!content.ok) issues.push(...content.issues.map((issue) => `content: ${issue}`));
   if (Number(output.width || 0) !== 1080 || Number(output.height || 0) !== 1920) issues.push('output is not 1080x1920');
   if (!output.audioPresent) issues.push('final MP4 has no audio track');
   if (!text(narration.narratorProfile)) issues.push('dedicated Reel narrator profile was not recorded');
   if (narration.metallicApplied) issues.push('Ultron metallic voice processing leaked into Reel narration');
+  if (!narration.completionVerified || !completion.verified) issues.push('narration was not verified to finish before the final frame');
+  if (Number(narration.durationSec || 0) > Number(narration.spokenBudgetSec || 0) + 0.08) issues.push('narration runs beyond the safe spoken-time budget');
+  if (Number(narration.timeFitRate || 1) > Number(req.maxNarrationTimeFitRate || 1.14) + 0.001) issues.push('narration had to be rushed beyond the allowed natural time-fit rate');
+  if (Number(narration.tailRoomSec || 0) < Number(req.narrationTailRoomSec || 0.8) - 0.05) issues.push('final Reel does not preserve enough silent/visual tail room after narration');
   if (!polish.captionsApplied) issues.push('captions were not applied');
   if (!polish.safeZoneApplied) issues.push('Instagram-safe text layout was not confirmed');
   if (polish.visualStyle !== 'minimal-clean-v3') issues.push('minimal clean Reel typography was not confirmed');
@@ -42,6 +48,11 @@ function audit(result, brief, options = {}) {
     issues,
     contentScore: content.score,
     narratorProfile: narration.narratorProfile || null,
+    narrationCompletionVerified: Boolean(narration.completionVerified && completion.verified),
+    narrationDurationSec: Number(narration.durationSec || 0) || null,
+    spokenBudgetSec: Number(narration.spokenBudgetSec || 0) || null,
+    narrationTailRoomSec: Number(narration.tailRoomSec || 0) || null,
+    narrationTimeFitRate: Number(narration.timeFitRate || 1),
     transitionsApplied: Boolean(finisher.transitionsApplied),
     sfxApplied: Boolean(finisher.sfxApplied),
     safeZoneApplied: Boolean(polish.safeZoneApplied),
