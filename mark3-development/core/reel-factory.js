@@ -72,33 +72,42 @@ function fallbackPlan(brief, options = {}) {
   const req = quality.requirements(durationSec);
   const creatorTopic = quality.creatorGrowthBrief(cleanBrief);
   const base = creatorTopic ? [
-    ['Pattern interrupt', 'Viral Reach ≠ Real Growth', 'A viral reel can spike reach without building loyalty.', 'creator looking at phone analytics surprised vertical'],
-    ['Context', 'One Topic Won', 'Many viewers liked one topic, not your whole page.', 'social media creator scrolling profile analytics vertical'],
-    ['Cause', 'Reach Must Convert', 'If they do not follow or return, the spike dies.', 'creator analytics follower conversion phone vertical'],
-    ['Cause', 'Next Reel Resets', 'Then unrelated posts send weaker repeat-viewer and retention signals.', 'content creator disappointed analytics vertical'],
-    ['Action', 'Build Repeatable Pillars', 'Build repeatable pillars around the promise that already worked.', 'creator planning content calendar notebook vertical'],
-    ['Brand CTA', 'Free Strategy Session', 'Want a personal growth plan? Book a free strategy session with Elevate OS at elevateos.in.', 'creator strategy consultation modern workspace vertical'],
+    ['Pattern interrupt', 'Virality ≠ Loyalty', 'Virality does not equal loyalty.', 'content creator reviewing viral post and profile performance on smartphone vertical video'],
+    ['Context', 'One Topic Won', 'Viewers may follow one topic, not you.', 'content creator checking recent post and profile on smartphone vertical video'],
+    ['Mechanism', 'Return Signals Matter', 'Without returns, Instagram sees weaker repeat-viewer signals.', 'content creator checking social media analytics on smartphone in modern workspace vertical video'],
+    ['Consequence', 'Expectations Reset', 'Unrelated follow-ups reset what viewers expect next.', 'content creator reviewing several different posts on smartphone vertical video'],
+    ['Action', 'Build Repeatable Pillars', 'Build three pillars around the winning promise.', 'content creator planning content calendar with notebook and laptop in modern workspace vertical video'],
+    ['Brand CTA', 'Book Your Free Strategy Session', 'Want a growth plan built around your account? Book your free strategy session with Elevate OS now at elevateos.in.', 'content creator strategy consultation modern premium workspace vertical video'],
   ] : [
-    ['Pattern interrupt', 'Look Beyond The Result', 'The visible result is not the whole story; the system behind it matters.', `${cleanBrief} cinematic vertical`],
-    ['Context', 'Find The Real Cause', 'Start by separating the symptom from the real cause.', `${cleanBrief} problem analysis vertical`],
-    ['Insight', 'Look For The Pattern', 'One result can be random; repeated signals reveal the pattern.', `${cleanBrief} pattern data vertical`],
-    ['Insight', 'Remove The Bottleneck', 'Fix the bottleneck blocking the next step, not every possible problem.', `${cleanBrief} focused work vertical`],
-    ['Action', 'Build A Repeatable System', 'Turn the useful insight into a process you can measure.', `${cleanBrief} system planning vertical`],
-    ['Close', 'Use The System, Not Luck', 'Aim for repeatable results, not a one-time win.', `${cleanBrief} confident outcome vertical`],
+    ['Pattern interrupt', 'Look Beyond The Result', 'Results hide the system behind them.', `${cleanBrief} practical real-world vertical video`],
+    ['Context', 'Find The Real Cause', 'Separate the visible symptom from its real cause.', `${cleanBrief} person analyzing problem vertical video`],
+    ['Mechanism', 'Look For The Pattern', 'Repeated outcomes reveal patterns one result cannot.', `${cleanBrief} person reviewing notes or data vertical video`],
+    ['Consequence', 'Fix The Bottleneck', 'Fix the bottleneck that changes the outcome most.', `${cleanBrief} focused work vertical video`],
+    ['Action', 'Build A Repeatable System', 'Turn that insight into a measurable process.', `${cleanBrief} planning workflow vertical video`],
+    ['Payoff', 'Use Systems, Not Luck', 'Use repeatable systems instead of isolated wins.', `${cleanBrief} confident practical outcome vertical video`],
   ];
 
   if (durationSec > 24) {
-    base[2][2] += creatorTopic ? ' Track profile visits, follows, saves, and repeat viewers.' : ' Compare repeated outcomes before deciding what to change.';
-    base[3][2] += creatorTopic ? ' Consistent expectations help the right audience return.' : ' Prioritize the constraint that most affects the outcome.';
+    if (creatorTopic) {
+      base[2][2] += ' Track follows, saves, and profile visits.';
+      base[3][2] += ' Consistency teaches the right audience to return.';
+    } else {
+      base[1][2] += ' Compare evidence before choosing what to change.';
+      base[2][2] += ' Repetition separates useful signals from random noise.';
+      base[3][2] += ' Prioritize the constraint with the biggest effect.';
+    }
   }
   if (durationSec > 38) {
     base.splice(base.length - 1, 0, creatorTopic
-      ? ['Action', 'Measure The Follow-Through', 'Watch what happens after the first view: profile visits, saves, follows, repeat viewers, and the next post.', `${cleanBrief} analytics dashboard vertical`]
-      : ['Action', 'Measure The Follow-Through', 'Check the result after each change so the next decision comes from evidence, not guesswork.', `${cleanBrief} analytics dashboard vertical`]);
+      ? ['Measurement', 'Measure The Follow-Through', 'Measure what happens after each view: profile visits, saves, follows, and repeat viewers.', 'content creator checking analytics dashboard and follower metrics vertical video']
+      : ['Measurement', 'Measure The Change', 'Measure the result after each change so the next decision comes from evidence.', `${cleanBrief} analytics dashboard practical vertical video`]);
+    if (!creatorTopic) {
+      base.splice(base.length - 1, 0, ['Payoff', 'Close The Loop', 'Keep the change only when repeated evidence shows the outcome actually improved.', `${cleanBrief} reviewing successful outcome vertical video`]);
+    }
   }
 
   while (base.length < req.minScenes) {
-    base.splice(base.length - 1, 0, ['Proof', 'Make The Signal Clear', 'Make the next action obvious and measurable.', `${cleanBrief} creator workflow vertical`]);
+    base.splice(base.length - 1, 0, ['Proof', 'Make The Signal Clear', 'Make the next action obvious and measurable.', `${cleanBrief} practical workflow vertical video`]);
   }
 
   const scenes = base.map((row, index) => ({
@@ -118,11 +127,11 @@ function fallbackPlan(brief, options = {}) {
   let plan = {
     version: 2,
     title: cleanBrief.slice(0, 90),
-    angle: 'A complete creator-first explanation: hook, cause, consequence, fix and a clear next action.',
+    angle: 'A complete creator-first explanation: hook, cause, consequence, fix, payoff and a clear next action.',
     hook: scenes[0].narration,
     voiceover: scenes.map((scene) => scene.narration).join(' '),
     caption: `${cleanBrief}\n\n${creatorTopic ? 'Want a personalized growth system? Book a free strategy session at elevateos.in.' : ''}`.trim(),
-    cta: creatorTopic ? 'Free Strategy Session — Elevate OS — elevateos.in' : 'Use the system, not luck.',
+    cta: creatorTopic ? 'Book your Free Strategy Session now — Elevate OS — elevateos.in' : 'Use the system, not luck.',
     style: String(options.style || 'cinematic, fast-paced, premium creator reel'),
     durationSec,
     aspectRatio: '9:16',
@@ -183,19 +192,22 @@ function directorPrompt(brief, durationSec, style, options = {}) {
   const req = quality.requirements(durationSec);
   const branded = quality.shouldBrand(brief, options);
   return [
-    'You are ULTRON Reel Director v2. Create a FINISHED, information-dense Instagram Reel production plan, not vague motivational fragments.',
+    'You are ULTRON Reel Director v2. Create a FINISHED, information-dense Instagram Reel production plan, never a chain of vague fragments.',
     'Return ONLY one valid JSON object. No markdown.',
     `Topic: ${String(brief || '').trim()}`,
     `Duration: ${durationSec} seconds. Style: ${style}.`,
-    `Narration target: ${req.targetWords} words; acceptable range ${req.minWords}-${req.maxWords} words. Every sentence must add new information.`,
-    `Use at least ${req.minScenes} scenes. Structure: 0-2s pattern-interrupt hook → explain the real cause → show consequence/mechanism → actionable fix → payoff → final CTA.`,
-    'Each scene must contain narration plus onScreenText of 2-8 short words. Do not use long sentences as on-screen text.',
-    'Make stock-search visualQuery concrete and visually varied. Avoid celebrity likenesses, copyrighted characters, logos and unverifiable claims.',
-    'Do not repeat the same idea in different words. The viewer should learn WHY the problem happens and WHAT to do next.',
+    `Narration target: ${req.targetWords} words; acceptable range ${req.minWords}-${req.maxWords} words. This is a hard SPOKEN budget, not a writing suggestion.`,
+    `The narrator must finish at least ${req.narrationTailRoomSec.toFixed(2)} seconds before the final frame. Do not spend the whole duration talking.`,
+    `Use at least ${req.minScenes} scenes. Structure: pattern-interrupt hook → context/diagnosis → real cause/mechanism → consequence → specific actionable fix → measurable payoff/outcome → final CTA.`,
+    'Every scene narration must be a complete grammatical sentence with a finished thought. Never output fragments such as "The platform algorithm", "Add diversity", or a sentence cut mid-clause.',
+    'Each non-CTA scene should usually communicate ONE useful idea in roughly 7–12 spoken words. Every sentence must add new information.',
+    'On-screen text is a headline, not the explanation: use 2–5 short words. Supporting text is optional and must never carry information the narration forgot to finish.',
+    'Use concrete human/action B-roll: creators checking analytics, reviewing posts, planning content, filming, editing, or measuring performance. Avoid abstract/glitch visuals unless they are a brief accent.',
+    'Do not repeat the same idea in different words. The viewer must understand WHY the problem happens, WHAT it causes, WHAT to do, and WHAT success looks like.',
     branded
-      ? 'MANDATORY final scene: promote Elevate OS. On-screen text: "Free Strategy Session". Subtext must include "Elevate OS • elevateos.in". Narration must naturally invite the viewer to book the free strategy session. Do not make the entire Reel an ad; value first, CTA last.'
+      ? 'MANDATORY final scene: Elevate OS brand close. On-screen text must communicate "BOOK YOUR FREE STRATEGY SESSION NOW" and show "elevateos.in". The final narration must explicitly invite the viewer to book the free strategy session with Elevate OS now. Value first, CTA last.'
       : 'Do not add a brand promotion unless the topic explicitly asks for one.',
-    'The voiceover field must contain the full narration in scene order. Scene timings will be normalized by the renderer; do not overlap scenes.',
+    'The voiceover field must exactly equal the complete scene narrations in order. Scene timings will be normalized by the renderer; do not overlap scenes.',
     'JSON schema:',
     '{"title":"","angle":"","hook":"","voiceover":"","caption":"","cta":"","style":"","durationSec":20,"musicMood":"","scenes":[{"purpose":"","visualQuery":"","onScreenText":"","subText":"","narration":"","transition":"fast-cut","energy":"high","isBrandCta":false}]}',
   ].join('\n');
@@ -203,7 +215,7 @@ function directorPrompt(brief, durationSec, style, options = {}) {
 
 async function askDirector(prompt) {
   const result = await integrations.chat([
-    { role: 'system', content: 'You are a senior short-form video strategist and editor. Produce complete, useful, retention-focused plans and obey JSON-only output.' },
+    { role: 'system', content: 'You are a senior short-form video strategist and editor. Produce complete, useful, retention-focused plans, respect real spoken duration, and obey JSON-only output.' },
     { role: 'user', content: prompt },
   ], 'auto', null, { taskType: 'planning' });
   return extractJson(extractText(result));
@@ -222,7 +234,7 @@ async function directPlan(brief, options = {}) {
       directorPrompt(brief, durationSec, style, options),
       'The previous plan failed these quality checks:',
       ...audit.issues.map((issue) => `- ${issue}`),
-      'Rewrite the WHOLE JSON plan. Make the script more complete and informative while staying inside the narration word range.',
+      'Rewrite the WHOLE JSON plan. Preserve complete sentences and useful explanation, but shorten ideas instead of cutting sentences or rushing the narrator.',
       `Previous plan: ${JSON.stringify(first)}`,
     ].join('\n');
     const repaired = normalizePlan(await askDirector(repairPrompt), brief, { ...options, durationSec, style });
@@ -333,7 +345,7 @@ function status() {
     zeroCostOnly: true,
     paidGenerationAllowed: false,
     nextBlocker: !sourceStatus.anyConfigured
-      ? 'Add PEXELS_API_KEY or PIXABAY_API_KEY.'
+      ? 'Add PEXELS_API_KEY.'
       : !ffmpeg.available
         ? 'FFmpeg is not available on PATH.'
         : !narratorStatus.configured
