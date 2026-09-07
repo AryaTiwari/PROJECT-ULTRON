@@ -3,13 +3,15 @@ const finisher = require('./reel-finisher');
 const completion = require('./reel-completion');
 const finalQuality = require('./reel-final-quality');
 const reelLearning = require('./reel-learning');
+const elevateReelEngine = require('./elevate-reel-engine');
 const { writeJsonAtomic } = require('./persistence');
 
 let installed = false;
 let originalBuild = null;
 
 function install() {
-  if (installed) return { installed: true, alreadyInstalled: true };
+  if (installed) return { installed: true, alreadyInstalled: true, elevateReelEngine: elevateReelEngine.status() };
+  const elevateStatus = elevateReelEngine.install();
   originalBuild = pipeline.build;
   pipeline.build = async (brief, options = {}) => {
     const base = await originalBuild(brief, options);
@@ -51,6 +53,7 @@ function install() {
     job.polish = finished.polish;
     job.narration = finished.narration;
     job.completion = finished.completion;
+    job.elevateReelEngine = elevateReelEngine.status();
     job.updatedAt = new Date().toISOString();
 
     if (!audit.ok) {
@@ -78,7 +81,7 @@ function install() {
     return result;
   };
   installed = true;
-  return { installed: true };
+  return { installed: true, elevateReelEngine: elevateStatus };
 }
 
 function uninstall() {
@@ -95,6 +98,7 @@ function status() {
     premiumFinisherRequired: true,
     narrationCompletionRequired: true,
     finalQualityGateRequired: true,
+    elevateReelEngine: elevateReelEngine.status(),
     creativeRecipeLearning: reelLearning.status(),
   };
 }
