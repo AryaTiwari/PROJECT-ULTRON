@@ -57,19 +57,25 @@ function choose(daypart, salt = 0) {
 function create() {
   const ctx = fabric.compactSnapshot();
   const base = choose(ctx.clock.daypart, ctx.recentSessions?.length || 0);
-  // greetingHandle runs before the new greeting is persisted, so the newest saved
-  // session is the most useful "where we left off" thread even if it is <45m old.
   const previous = ctx.recentSessions?.[0] || ctx.previousSession;
   const yesterday = Array.isArray(ctx.yesterdayCompleted) ? ctx.yesterdayCompleted : [];
+  const recentActivity = Array.isArray(ctx.recentActivity) ? ctx.recentActivity : [];
   const focus = ctx.topAction;
   const diagnostic = ctx.diagnostic;
 
   const details = [];
   if (previous?.lastUser) details.push(`We left off on ${clean(previous.lastUser, 92)}.`);
   else if (yesterday.length) details.push(`Yesterday we closed ${clean(yesterday[0].objective, 92)}.`);
+  else {
+    const recentDone = recentActivity.find((row) => row.status === 'done');
+    if (recentDone?.summary) details.push(`Last useful system activity: ${clean(recentDone.summary, 92)}.`);
+  }
 
-  if (focus?.title) details.push(`The clean next move is ${clean(focus.title, 90)}.`);
-  else if (diagnostic && !['stable', 'focus'].includes(diagnostic.level)) details.push(`One thing worth checking: ${clean(diagnostic.text, 105)}`);
+  if (diagnostic && ['critical', 'attention', 'suggestion'].includes(diagnostic.level)) {
+    details.push(`One thing worth checking: ${clean(diagnostic.text, 105)}`);
+  } else if (focus?.title) {
+    details.push(`The clean next move is ${clean(focus.title, 90)}.`);
+  }
 
   return {
     response: [base, ...details.slice(0, 2)].join(' '),
