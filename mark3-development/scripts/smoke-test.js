@@ -38,7 +38,8 @@ if (typeof voice.setEnabled !== 'function' || typeof voice.isEnabled !== 'functi
 if (windowsVoice.cleanSpeechText('Hello `code` https://example.com').includes('https://')) throw new Error('Windows voice cleanup invariant failed.');
 if (!assistant.wantsDetailedResponse('Explain this step-by-step in detail')) throw new Error('Explicit depth requests must enable detailed response mode.');
 if (assistant.wantsDetailedResponse('What is this?')) throw new Error('Ordinary questions must stay concise-first.');
-if (!/speech-friendly|Spoken conversation/i.test(assistant.responseStyleInstruction('What is this?', 'voice'))) throw new Error('Voice responses must remain speech-native.');
+const voiceStyle = assistant.responseStyleInstruction('What is this?', 'voice');
+if (!/spoken sentences/i.test(voiceStyle) || !/no headings/i.test(voiceStyle) || !/20[–-]50 words/i.test(voiceStyle)) throw new Error('Voice responses must remain speech-native, concise, and screen-independent.');
 if (!router.isBlockedModel('nvidia/some-model')) throw new Error('NVIDIA inference must be blocked in Mark 3.');
 if (!router.isBlockedModel('opencode/big-pickle')) throw new Error('OpenCode/Big Pickle inference must be blocked in Mark 3.');
 if (!router.isBlockedModel('dva/swe-1-7-lightning')) throw new Error('Devin bridge models must not enter normal assistant chat.');
