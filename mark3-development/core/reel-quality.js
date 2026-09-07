@@ -10,17 +10,19 @@ function wordCount(value) {
 
 function requirements(durationSec = 30) {
   const duration = Math.max(15, Math.min(60, Number(durationSec) || 30));
-  const targetWords = Math.round(duration * 2.7);
+  const targetWords = Math.round(duration * 2.35);
   return {
     duration,
     targetWords,
-    minWords: Math.max(34, Math.round(duration * 2.15)),
-    maxWords: Math.round(duration * 3.35),
+    minWords: Math.max(32, Math.round(duration * 1.95)),
+    maxWords: Math.round(duration * 2.55),
     minScenes: duration <= 20 ? 6 : duration <= 35 ? 7 : 8,
     maxOnScreenWords: 5,
     maxOnScreenChars: 34,
     maxSubtitleWords: 5,
     minBodyNarrationWords: duration <= 20 ? 7 : 8,
+    narrationTailRoomSec: duration <= 20 ? 0.65 : 0.85,
+    maxNarrationTimeFitRate: 1.14,
   };
 }
 
@@ -60,7 +62,7 @@ function retimeScenes(scenes, durationSec, brandPromotion) {
   const duration = Math.max(15, Math.min(60, Number(durationSec) || 30));
   const count = source.length;
   const hookDuration = Math.min(2.4, duration * 0.13);
-  const ctaDuration = brandPromotion ? Math.min(4.2, Math.max(3.4, duration * 0.16)) : Math.min(2.5, duration * 0.12);
+  const ctaDuration = brandPromotion ? Math.min(4.4, Math.max(3.6, duration * 0.16)) : Math.min(2.5, duration * 0.12);
   const bodyCount = Math.max(1, count - 2);
   const bodyDuration = Math.max(1.8, (duration - hookDuration - ctaDuration) / bodyCount);
   let cursor = 0;
@@ -163,13 +165,19 @@ function ensureBrandScene(plan, brief, options = {}) {
     brandPromotion: enabled,
     brand: enabled ? BRAND : null,
     textDesign: 'minimal-clean-v3',
-    contentDesign: 'informative-creator-v4',
+    contentDesign: 'complete-informative-v5',
     visualGrounding: creator ? 'creator-human-actions-v1' : null,
+    narrationTimingPolicy: 'measured-no-cut-v1',
   };
 }
 
 function hasPurpose(scenes, regex) {
   return scenes.some((scene) => regex.test(`${scene?.purpose || ''} ${scene?.onScreenText || ''} ${scene?.narration || ''}`));
+}
+
+function completeSentence(value) {
+  const text = String(value || '').trim();
+  return Boolean(text) && /[.!?][\"')\]]?$/.test(text);
 }
 
 function auditPlan(plan, brief, options = {}) {
@@ -179,7 +187,7 @@ function auditPlan(plan, brief, options = {}) {
   const voiceover = String(plan?.voiceover || '').trim();
   const words = wordCount(voiceover);
   if (words < req.minWords) issues.push(`voiceover too short: ${words} words; need at least ${req.minWords}`);
-  if (words > req.maxWords) issues.push(`voiceover too long: ${words} words; keep under ${req.maxWords}`);
+  if (words > req.maxWords) issues.push(`voiceover too long for natural spoken timing: ${words} words; keep under ${req.maxWords}`);
   if (scenes.length < req.minScenes) issues.push(`not enough scenes: ${scenes.length}; need at least ${req.minScenes}`);
 
   scenes.forEach((scene, index) => {
@@ -187,13 +195,16 @@ function auditPlan(plan, brief, options = {}) {
     const narrationWords = wordCount(scene?.narration);
     if (!scene?.isBrandCta && (wordCount(text) > req.maxOnScreenWords || text.length > req.maxOnScreenChars)) issues.push(`scene ${index + 1} on-screen text is too dense`);
     if (!String(scene?.narration || '').trim()) issues.push(`scene ${index + 1} has no narration`);
+    if (String(scene?.narration || '').trim() && !completeSentence(scene.narration)) issues.push(`scene ${index + 1} narration is not a complete sentence`);
     if (!scene?.isBrandCta && index > 0 && narrationWords < req.minBodyNarrationWords) issues.push(`scene ${index + 1} narration is too vague/short: ${narrationWords} words`);
     if (index > 0 && Number(scene?.start || 0) < Number(scenes[index - 1]?.end || 0) - 0.01) issues.push(`scene ${index + 1} overlaps scene ${index}`);
   });
 
   if (creatorGrowthBrief(planEvidence(plan, brief))) {
     if (!hasPurpose(scenes, /cause|mechanism|why|signal|convert|retention|return|context/i)) issues.push('creator Reel does not clearly explain the cause/mechanism');
-    if (!hasPurpose(scenes, /action|fix|build|repeat|measure|track|pillar|system/i)) issues.push('creator Reel does not give a concrete action/fix');
+    if (!hasPurpose(scenes, /consequence|result|dies|weak|plateau|stops|drop|reset|expect/i)) issues.push('creator Reel does not clearly explain what the problem causes');
+    if (!hasPurpose(scenes, /action|fix|build|repeat|measure|track|pillar|system|strategy/i)) issues.push('creator Reel does not give a concrete action/fix');
+    if (!hasPurpose(scenes, /payoff|outcome|growth|sustain|return|convert|repeat|momentum/i)) issues.push('creator Reel does not close the value loop with a concrete payoff/outcome');
     const abstractScenes = scenes.filter((scene) => !scene?.isBrandCta && /\b(?:abstract|glitch|particles?|digital art|collage|surreal|3d render)\b/i.test(String(scene?.visualQuery || '')));
     if (abstractScenes.length > 1) issues.push('too many creator scenes rely on abstract B-roll instead of useful human/action footage');
   }
@@ -231,5 +242,6 @@ module.exports = {
   shortenOnScreenText,
   creatorVisualQuery,
   ensureBrandScene,
+  completeSentence,
   auditPlan,
 };
