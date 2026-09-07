@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+
 const PEXELS_BASE = 'https://api.pexels.com/v1/videos/search';
+const PIXABAY_BASE = 'https://pixabay.com/api/videos/';
 const DEFAULT_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_REEL_SOURCE_TIMEOUT_MS || 20000));
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = Math.max(15000, Number(process.env.ULTRON_M3_REEL_DOWNLOAD_TIMEOUT_MS || 120000));
 const MAX_DOWNLOAD_BYTES = Math.max(5 * 1024 * 1024, Number(process.env.ULTRON_M3_REEL_MAX_ASSET_BYTES || 120 * 1024 * 1024));
@@ -14,7 +16,10 @@ function firstEnv(...names) {
 }
 
 function credentials() {
-  return { pexels: firstEnv('PEXELS_API_KEY') };
+  return {
+    pexels: firstEnv('PEXELS_API_KEY'),
+    pixabay: firstEnv('PIXABAY_API_KEY'),
+  };
 }
 
 async function requestJson(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -53,6 +58,7 @@ function normalizePexels(video) {
   if (!file) return null;
   return {
     provider: 'pexels',
+    mediaType: 'video',
     id: String(video?.id || ''),
     duration: Number(video?.duration || 0) || null,
     width: Number(file?.width || 0) || null,
@@ -62,6 +68,47 @@ function normalizePexels(video) {
     creator: String(video?.user?.name || ''),
     creatorUrl: String(video?.user?.url || ''),
     attribution: video?.user?.name ? `Video by ${video.user.name} on Pexels` : 'Video provided by Pexels',
+    license: 'Pexels License',
+    commercialUse: true,
+  };
+}
+
+function pixabayFile(video) {
+  const variants = Object.values(video?.videos || {}).filter((item) => item?.url);
+  const portrait = variants.filter((item) => Number(item?.height) > Number(item?.width));
+  const candidates = portrait.length ? portrait : variants;
+  return candidates.sort((a, b) => {
+    const aArea = Number(a?.height || 0) * Number(a?.width || 0);
+    const bArea = Number(b?.height || 0) * Number(b?.width || 0);
+    return bArea - aArea;
+  })[0] || null;
+}
+
+function normalizePixabay(video) {
+  const file = pixabayFile(video);
+  if (!file) return null;
+  const user = String(video?.user || '').trim();
+  const userId = String(video?.user_id || '').trim();
+  return {
+    provider: 'pixabay',
+    mediaType: 'video',
+    id: String(video?.id || ''),
+    duration: Number(video?.duration || 0) || null,
+    width: Number(file?.width || 0) || null,
+    height: Number(file?.height || 0) || null,
+    url: String(file?.url || ''),
+    sourcePage: String(video?.pageURL || ''),
+    creator: user,
+    creatorUrl: user && userId ? `https://pixabay.com/users/${encodeURIComponent(user)}-${encodeURIComponent(userId)}/` : '',
+    attribution: user ? `Video by ${user} via Pixabay` : 'Video provided by Pixabay',
+    license: 'Pixabay Content License',
+    commercialUse: true,
+    tags: String(video?.tags || ''),
+    popularity: {
+      views: Number(video?.views || 0),
+      downloads: Number(video?.downloads || 0),
+      likes: Number(video?.likes || 0),
+    },
   };
 }
 
@@ -78,15 +125,62 @@ async function searchPexels(query, options = {}) {
   return (Array.isArray(data?.videos) ? data.videos : []).map(normalizePexels).filter(Boolean);
 }
 
+async function searchPixabay(query, options = {}) {
+  const key = credentials().pixabay;
+  if (!key.value) throw new Error('PIXABAY_API_KEY is not configured.');
+  const params = new URLSearchParams({
+    key: key.value,
+    q: String(query || '').trim().slice(0, 100),
+    video_type: 'all',
+    safesearch: 'true',
+    order: String(options.order || 'popular'),
+    per_page: String(Math.min(40, Math.max(3, Number(options.perPage || 8)))),
+  });
+  const data = await requestJson(`${PIXABAY_BASE}?${params.toString()}`, { headers: { Accept: 'application/json' } });
+  let items = (Array.isArray(data?.hits) ? data.hits : []).map(normalizePixabay).filter(Boolean);
+  if (String(options.orientation || 'portrait') === 'portrait') {
+    const portrait = items.filter((item) => Number(item?.height) > Number(item?.width));
+    if (portrait.length) items = portrait;
+  }
+  return items;
+}
+
+function interleave(lists, offset = 0) {
+  const active = lists.filter((list) => Array.isArray(list) && list.length);
+  if (!active.length) return [];
+  const rotated = active.map((_, index) => active[(index + Math.max(0, Number(offset || 0))) % active.length]);
+  const output = [];
+  const seen = new Set();
+  const max = Math.max(...rotated.map((list) => list.length));
+  for (let i = 0; i < max; i += 1) {
+    for (const list of rotated) {
+      const item = list[i];
+      if (!item) continue;
+      const key = `${item.provider}:${item.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      output.push(item);
+    }
+  }
+  return output;
+}
+
 async function searchVideos(query, options = {}) {
   const errors = [];
-  try {
-    const items = await searchPexels(query, options);
-    if (items.length) return { ok: true, provider: 'pexels', query, items, errors };
-  } catch (error) {
-    errors.push({ provider: 'pexels', error: error.message });
-  }
-  return { ok: false, provider: null, query, items: [], errors };
+  const creds = credentials();
+  const jobs = [];
+  if (creds.pexels.value) jobs.push(searchPexels(query, options).then((items) => ({ provider: 'pexels', items })).catch((error) => ({ provider: 'pexels', items: [], error })));
+  if (creds.pixabay.value) jobs.push(searchPixabay(query, options).then((items) => ({ provider: 'pixabay', items })).catch((error) => ({ provider: 'pixabay', items: [], error })));
+  if (!jobs.length) return { ok: false, provider: null, providers: [], query, items: [], errors: [{ provider: 'router', error: 'No Reel stock source API key is configured.' }] };
+
+  const results = await Promise.all(jobs);
+  results.forEach((result) => {
+    if (result.error) errors.push({ provider: result.provider, error: result.error.message });
+  });
+  const lists = results.filter((result) => result.items.length).map((result) => result.items);
+  const items = interleave(lists, Number(options.providerOffset || 0));
+  const providers = [...new Set(items.map((item) => item.provider))];
+  return { ok: items.length > 0, provider: providers.length > 1 ? 'multi-stock' : (providers[0] || null), providers, query, items, errors };
 }
 
 function safeAssetName(asset, index = 1) {
@@ -120,6 +214,8 @@ async function downloadAsset(asset, destination, options = {}) {
       id: asset.id || null,
       attribution: asset.attribution || null,
       sourcePage: asset.sourcePage || null,
+      license: asset.license || null,
+      commercialUse: asset.commercialUse !== false,
     };
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error(`Stock asset download timed out after ${timeoutMs}ms.`);
@@ -131,20 +227,33 @@ async function downloadAsset(asset, destination, options = {}) {
 
 function status() {
   const creds = credentials();
+  const providers = [
+    { provider: 'pexels', configured: Boolean(creds.pexels.value), variable: creds.pexels.name, commercialUse: true },
+    { provider: 'pixabay', configured: Boolean(creds.pixabay.value), variable: creds.pixabay.name, commercialUse: true },
+  ];
   return {
-    provider: 'pexels',
+    provider: providers.filter((item) => item.configured).length > 1 ? 'multi-stock' : (providers.find((item) => item.configured)?.provider || null),
+    providers,
     pexelsConfigured: Boolean(creds.pexels.value),
-    anyConfigured: Boolean(creds.pexels.value),
+    pixabayConfigured: Boolean(creds.pixabay.value),
+    anyConfigured: providers.some((item) => item.configured),
+    configuredCount: providers.filter((item) => item.configured).length,
     pexelsVariable: creds.pexels.name,
+    pixabayVariable: creds.pixabay.name,
+    selectionPolicy: 'parallel-search-interleaved-v1',
   };
 }
 
 module.exports = {
   PEXELS_BASE,
+  PIXABAY_BASE,
   credentials,
   requestJson,
   normalizePexels,
+  normalizePixabay,
   searchPexels,
+  searchPixabay,
+  interleave,
   searchVideos,
   safeAssetName,
   downloadAsset,
