@@ -29,19 +29,25 @@ function component(name, result, critical = false) {
 
 function topology() {
   return [
+    ['conversation-history', 'context-fabric', 'persistent recent sessions + previous-thread continuity'],
+    ['workspace-executions', 'context-fabric', 'verified recent work + next-focus state'],
+    ['adaptive-intelligence', 'context-fabric', 'domain-scoped learned preferences'],
+    ['turbo-diagnostics', 'context-fabric', 'system health + one useful next check'],
+    ['context-fabric', 'assistant', 'time + prior thread + task awareness + fluid continuity'],
+    ['context-fabric', 'reel-intelligence', 'shared founder context reaches model-backed creative reasoning'],
     ['conversation', 'adaptive-intelligence', 'explicit corrections + approval/rejection evidence'],
-    ['adaptive-intelligence', 'founder-behavior', 'domain-scoped learned preferences'],
-    ['reel-intelligence', 'reel-factory', 'trend + aesthetic + learned creative context'],
+    ['reel-intelligence', 'reel-factory', 'Hootsuite/web trend + Instagram aesthetic + learned creative context'],
     ['reel-factory', 'reel-learning', 'creative recipe + user feedback'],
     ['instagram-insights', 'reel-learning', 'published performance outcome weights'],
-    ['research-agent', 'research-turbo', 'TinyFish primary; Tavily/Brave fallback'],
+    ['research-agent', 'research-turbo', 'primary research + Tavily fallback'],
     ['web-fetch', 'research-turbo', 'direct/TinyFish primary; Jina then Firecrawl fallback'],
     ['operator-mode', 'forge', 'large software/automation delegation'],
-    ['forge-founder-recipes', 'mission-compiler', 'user-specific automation success contracts'],
+    ['forge-founder-recipes', 'mission-compiler', 'founder-specific automation success contracts'],
     ['forge', 'coding-brain', 'real workspace edits + validation'],
     ['forge', 'adaptive-intelligence', 'founder preferences constrain planning'],
-    ['buffer', 'social-publishing', 'unified channel verification + approval-gated publishing path'],
+    ['buffer', 'social-publishing', 'channel verification + approval-gated publishing path'],
     ['file-vault', 'interface', 'generated artifact delivery'],
+    ['context-fabric', 'interface', 'recent chats + focus + health + connected capability mesh'],
   ].map(([from, to, contract]) => ({ from, to, contract }));
 }
 
@@ -84,24 +90,17 @@ function audit() {
   const ig = instagram.status();
   if (ig.configured) {
     const publish = operator.status().find((row) => row.id === 'instagram_publish');
-    if (publish && !publish.implemented) opportunities.push({ id: 'instagram-publisher', priority: 1, reason: 'Instagram identity is connected but the publishing connector is still scaffolded.' });
-    if (!freeTools.byId('cloudflare-r2')?.credentialsReady) opportunities.push({ id: 'cloudflare-r2', priority: 1, reason: 'R2 credentials would unlock public-media hosting needed by direct Instagram/Buffer video publishing.' });
-    else if (!freeTools.byId('cloudflare-r2')?.implemented) opportunities.push({ id: 'cloudflare-r2-connector', priority: 1, reason: 'R2 credentials are present but the Ultron storage connector is not implemented yet.' });
+    if (publish && !publish.implemented) opportunities.push({ id: 'instagram-publisher', priority: 1, reason: 'Instagram identity is connected, but direct Reel publishing is still scaffolded.' });
   }
 
   const bufferState = buffer.status();
-  if (!bufferState.configured) opportunities.push({ id: 'buffer', priority: 1, reason: 'Buffer Free API would add one unified social channel/scheduling surface with 3,000 requests per 30 days; connector foundation is already implemented.' });
-  else if (!bufferState.liveWriteEnabled) opportunities.push({ id: 'buffer-publisher', priority: 2, reason: 'Buffer is configured for read verification/dry-run; live publishing still needs the explicit approval-gated execution wrapper.' });
+  if (!bufferState.configured) warnings.push({ component: 'buffer', reason: 'Buffer connector exists but BUFFER_API_KEY is not configured.' });
+  else if (!bufferState.liveWriteEnabled) opportunities.push({ id: 'buffer-publisher', priority: 2, reason: 'Buffer is connected for verification/dry-run; live publishing still needs the explicit approval-gated execution wrapper.' });
 
   const research = researchTurbo.status();
-  if (!research.searchFallbacks.length) opportunities.push({ id: 'tavily', priority: 1, reason: 'TinyFish currently has no independent configured zero-cost search fallback.' });
+  if (!research.searchFallbacks.includes('tavily')) warnings.push({ component: 'research-turbo', reason: 'Tavily fallback is not active.' });
   if (!research.fetchFallbacks.includes('jina-reader')) issues.push({ component: 'research-turbo', reason: 'No-key Jina extraction fallback disappeared from the research chain.' });
-  if (!research.fetchFallbacks.includes('firecrawl')) opportunities.push({ id: 'firecrawl', priority: 2, reason: 'Jina is available, but Firecrawl would add a second extraction/crawl fallback for dynamic or difficult sites.' });
-
-  if (!freeTools.byId('youtube-data')?.credentialsReady) opportunities.push({ id: 'youtube-data', priority: 1, reason: 'A YouTube API key would let Reel Intelligence compare Shorts metadata instead of staying Instagram/web-heavy.' });
-  if (!freeTools.byId('telegram-bot')?.credentialsReady) opportunities.push({ id: 'telegram-bot', priority: 2, reason: 'A Telegram bot token would unlock a lightweight phone command/notification surface.' });
-  if (!freeTools.byId('posthog')?.credentialsReady) opportunities.push({ id: 'posthog', priority: 2, reason: 'PostHog would add real Elevate OS product-usage/funnel evidence to Adaptive Intelligence.' });
-  if (!freeTools.byId('resend')?.credentialsReady) opportunities.push({ id: 'resend', priority: 2, reason: 'Resend Free would support transactional/CUP/follow-up email workflows with approval-gated sending.' });
+  if (!research.fetchFallbacks.includes('firecrawl')) warnings.push({ component: 'research-turbo', reason: 'Firecrawl extraction fallback is not active.' });
 
   const gov = forgeGovernor.status();
   if (!gov.zeroCostOnly || gov.paidFallbackAllowed || gov.localLlmAllowed) issues.push({ component: 'forge-governor', reason: 'Zero-cost/no-local-LLM policy regressed.' });
@@ -126,7 +125,7 @@ function audit() {
     topology: topology(),
     issues,
     warnings,
-    opportunities: opportunities.sort((a, b) => a.priority - b.priority).slice(0, 14),
+    opportunities: opportunities.sort((a, b) => a.priority - b.priority).slice(0, 10),
     freeTools: freeTools.status(),
     forgeProfiles: Object.keys(forgePreferences.PROFILES),
     forgeRecipes: recipes.map((row) => row.id),
@@ -146,6 +145,7 @@ function compact(report = audit()) {
     researchFallbacks: researchTurbo.status().searchFallbacks,
     freeToolsReady: report.freeTools.ready.map((row) => row.id),
     freeToolsCredentialed: report.freeTools.credentialed.map((row) => row.id),
+    dormantTools: report.freeTools.dormant.map((row) => row.id),
     forgeRecipes: report.forgeRecipes,
   };
 }
