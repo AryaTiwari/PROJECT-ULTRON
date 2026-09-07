@@ -4,6 +4,7 @@ const { spawnSync } = require('child_process');
 const config = require('./config');
 const integrations = require('./integrations');
 const sources = require('./reel-sources');
+const aiVisuals = require('./reel-ai-visuals');
 const quality = require('./reel-quality');
 const narrator = require('./reel-narrator');
 const { writeJsonAtomic } = require('./persistence');
@@ -252,16 +253,35 @@ async function directPlan(brief, options = {}) {
 async function sourceScenes(plan, options = {}) {
   const used = new Set();
   const scenes = [];
+  const aiStatus = aiVisuals.status();
   for (const scene of plan.scenes) {
     const found = await sources.searchVideos(scene.visualQuery, { perPage: 10, orientation: 'portrait' });
-    const candidate = found.items.find((item) => !used.has(`${item.provider}:${item.id}`)) || found.items[0] || null;
+    let candidate = found.items.find((item) => !used.has(`${item.provider}:${item.id}`)) || found.items[0] || null;
+    let aiFallback = false;
+    if (!candidate && aiStatus.ready) {
+      candidate = {
+        provider: 'cloudflare-workers-ai',
+        mediaType: 'generated-image',
+        generated: true,
+        id: `cf-ai-${scene.index}`,
+        prompt: aiVisuals.promptForScene(scene, plan),
+        model: aiStatus.model,
+        license: aiStatus.modelLicense,
+        commercialUse: aiStatus.commercialUse,
+        attribution: `AI-generated with ${aiStatus.model} on Cloudflare Workers AI`,
+        sourcePage: 'https://developers.cloudflare.com/workers-ai/models/flux-1-schnell/',
+      };
+      aiFallback = true;
+    }
     if (candidate) used.add(`${candidate.provider}:${candidate.id}`);
     scenes.push({
       ...scene,
       asset: candidate,
       assetSearch: {
         ok: Boolean(candidate),
-        provider: found.provider,
+        provider: candidate?.provider || found.provider,
+        stockProvider: found.provider,
+        aiFallback,
         query: scene.visualQuery,
         errors: found.errors,
       },
@@ -316,6 +336,7 @@ async function createJob(brief, options = {}) {
     rendererImplemented: true,
     qualityAudit: audit,
     sourceStatus: sources.status(),
+    aiVisualStatus: aiVisuals.status(),
     narrator: narrator.status(plan.style),
     ffmpeg: ffmpegStatus(),
   };
@@ -325,6 +346,7 @@ async function createJob(brief, options = {}) {
 
 function status() {
   const sourceStatus = sources.status();
+  const aiVisualStatus = aiVisuals.status();
   const ffmpeg = ffmpegStatus();
   const narratorStatus = narrator.status();
   return {
@@ -335,6 +357,8 @@ function status() {
     stockSourceRouterImplemented: true,
     stockSourceReady: sourceStatus.anyConfigured,
     sourceStatus,
+    aiVisualFallbackImplemented: true,
+    aiVisualStatus,
     ffmpeg,
     rendererImplemented: true,
     safeCaptionLayoutImplemented: true,
@@ -345,7 +369,7 @@ function status() {
     zeroCostOnly: true,
     paidGenerationAllowed: false,
     nextBlocker: !sourceStatus.anyConfigured
-      ? 'Add PEXELS_API_KEY.'
+      ? 'Add PEXELS_API_KEY or another enrolled stock source.'
       : !ffmpeg.available
         ? 'FFmpeg is not available on PATH.'
         : !narratorStatus.configured
