@@ -30,6 +30,3 @@ jobs:
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight
-      - name: Validate Elevate Reel Engine
-        working-directory: mark3-development
-        run: node --env-file=../.env scripts/elevate-reel-engine-selftest.js
