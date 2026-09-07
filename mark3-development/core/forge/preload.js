@@ -117,6 +117,13 @@ setImmediate(async () => {
     console.log(`[Mark 3] Adaptive Intelligence ready; ${adaptive.status.totalObservations || 0} learned observation(s), approval-gated proposals enabled.`);
   } catch (error) { console.error(`[Mark 3] Adaptive Intelligence bootstrap failed: ${error.message}`); }
 
+  // Install local artifact retrieval last so attachment/delivery requests win over
+  // every model-backed generation route, including accidentally normalized requests.
+  try {
+    const guard = require('../reel-attachment-guard').install();
+    console.log(`[Mark 3] Reel Attachment Guard ready; local-only=${guard.localOnly ? 'yes' : 'no'}, generation API bypass enabled.`);
+  } catch (error) { console.error(`[Mark 3] Reel Attachment Guard bootstrap failed: ${error.message}`); }
+
   try {
     const coach = require('../system-coach').start();
     console.log(`[Mark 3] System Coach online; diagnostics interval=${Math.round(coach.intervalMs / 60000)}m, low-noise suggestions enabled.`);
