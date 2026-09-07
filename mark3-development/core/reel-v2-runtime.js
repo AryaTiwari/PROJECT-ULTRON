@@ -15,7 +15,10 @@ function install() {
   const elevateStatus = elevateReelEngine.install();
   originalBuild = pipeline.build;
   pipeline.build = async (brief, options = {}) => {
-    const base = await originalBuild(brief, options);
+    // The premium finisher rebuilds video transitions from scene files, so semantic
+    // graphics are intentionally deferred there. This prevents a wasted encode and
+    // guarantees the final transition/caption pass cannot erase Elevate graphics.
+    const base = await originalBuild(brief, { ...options, graphics: false });
     if (!base?.ok) return base;
 
     const themeRadar = elevateThemeRadar.snapshot(brief);
