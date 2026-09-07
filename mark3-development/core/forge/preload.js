@@ -4,6 +4,17 @@
 // wrap the normal assistant in a deliberate order.
 const http = require('http');
 
+function json(res, data, status = 200) {
+  const payload = JSON.stringify(data);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(payload),
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(payload);
+}
+
 const originalCreateServer = http.createServer.bind(http);
 http.createServer = (...args) => {
   const listenerIndex = args.findLastIndex((value) => typeof value === 'function');
@@ -11,30 +22,29 @@ http.createServer = (...args) => {
   const normalListener = args[listenerIndex];
   args[listenerIndex] = async (req, res) => {
     try {
-      const pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+      const parsed = new URL(req.url || '/', 'http://127.0.0.1');
+      const pathname = parsed.pathname;
+      if (req.method === 'GET' && pathname === '/api/context/fabric') {
+        return json(res, { ok: true, ...require('../context-fabric').compactSnapshot() });
+      }
+      if (req.method === 'GET' && pathname === '/api/conversation/history') {
+        const limit = Math.max(1, Math.min(500, Number(parsed.searchParams.get('limit') || 120)));
+        return json(res, { ok: true, messages: require('../conversation').history(limit) });
+      }
+      if (req.method === 'GET' && pathname === '/api/conversation/sessions') {
+        const limit = Math.max(1, Math.min(50, Number(parsed.searchParams.get('limit') || 12)));
+        return json(res, { ok: true, sessions: require('../conversation').sessions(limit) });
+      }
+      if (req.method === 'GET' && pathname === '/api/conversation/session') {
+        const id = String(parsed.searchParams.get('id') || '').trim();
+        if (!id) return json(res, { ok: false, error: 'session id is required' }, 400);
+        return json(res, { ok: true, id, messages: require('../conversation').sessionHistory(id, 160) });
+      }
       if (req.method === 'GET' && pathname === '/api/forge/status') {
-        const data = require('./dashboard').payload();
-        const payload = JSON.stringify(data);
-        res.writeHead(200, {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Content-Length': Buffer.byteLength(payload),
-          'Cache-Control': 'no-store',
-          'Access-Control-Allow-Origin': '*',
-        });
-        res.end(payload);
-        return;
+        return json(res, require('./dashboard').payload());
       }
       if (req.method === 'GET' && pathname === '/api/turbo/status') {
-        const data = require('../turbo-engine').audit();
-        const payload = JSON.stringify(data);
-        res.writeHead(200, {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Content-Length': Buffer.byteLength(payload),
-          'Cache-Control': 'no-store',
-          'Access-Control-Allow-Origin': '*',
-        });
-        res.end(payload);
-        return;
+        return json(res, require('../turbo-engine').audit());
       }
       if (req.method === 'GET' && ['/forge', '/forge/', '/forge-dashboard'].includes(pathname)) {
         const payload = require('./dashboard').page();
@@ -48,12 +58,7 @@ http.createServer = (...args) => {
         return;
       }
     } catch (error) {
-      if (!res.headersSent) {
-        const payload = JSON.stringify({ ok: false, error: error.message });
-        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(payload), 'Cache-Control': 'no-store' });
-        res.end(payload);
-        return;
-      }
+      if (!res.headersSent) return json(res, { ok: false, error: error.message }, 500);
     }
     return normalListener(req, res);
   };
