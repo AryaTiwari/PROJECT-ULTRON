@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const governor = require('./model-governor');
 const preferences = require('./preferences');
+const contextFabric = require('../context-fabric');
 
 function id(prefix = 'job') { return `${prefix}-${crypto.randomUUID()}`; }
 function cleanJson(text) {
@@ -68,6 +69,24 @@ function ensureRunnableDag(jobs) {
   return rows;
 }
 
+function liveFounderContext() {
+  try {
+    const ctx = contextFabric.snapshot({ diagnostics: false });
+    const previous = ctx.sessions?.previous;
+    const top = ctx.workspace?.topAction;
+    const yesterday = ctx.work?.yesterday?.slice(0, 3) || [];
+    return [
+      `Local context: ${ctx.clock?.weekday || ''} ${ctx.clock?.timeLabel || ''} ${ctx.clock?.timezone || ''}.`,
+      previous?.lastUser ? `Previous chat was working on: ${String(previous.lastUser).replace(/\s+/g, ' ').slice(0, 180)}.` : '',
+      top?.title ? `Current recorded next focus: ${top.title}${top.project ? ` (${top.project})` : ''}.` : '',
+      yesterday.length ? `Recent completed work: ${yesterday.map((row) => row.objective).join(' | ')}.` : '',
+      'Use this only to preserve continuity and avoid duplicating finished work. The explicit Forge mission objective remains the source of scope; never silently add unrelated work from context.',
+    ].filter(Boolean).join(' ');
+  } catch {
+    return 'No live founder context available. Follow the explicit mission objective only.';
+  }
+}
+
 function fallback(objective) {
   const profile = preferences.classify(objective);
   const jobs = preferences.fallbackJobs(objective, profile).map(normalizeJob);
@@ -106,10 +125,12 @@ async function compile(mission) {
   const objective = String(mission?.objective || '').trim();
   if (!objective) throw new Error('Mission objective is required.');
   const profile = preferences.classify(objective);
+  const founderContext = liveFounderContext();
   const system = [
     'You are ULTRON FORGE Mission Compiler. Convert the objective into a lean dependency-aware execution DAG.',
     'Return ONLY one JSON object. Prefer fewer strong jobs over many tiny model-heavy jobs.',
     preferences.compilerGuidance(objective),
+    founderContext,
     'Every software mission must include real implementation and evidence-based review. Documentation-only work does not count as implementation.',
     'At least one job must have an empty dependsOn array. Dependencies must form an acyclic graph and may only reference real prerequisite jobs.',
     'Never include production deployment, mass messaging, purchases, destructive database actions or other external side effects without an approval gate.',
@@ -137,4 +158,4 @@ async function compile(mission) {
   }
 }
 
-module.exports = { compile, fallback, validateGraph, cleanJson, normalizeJob, repairDependencies, ensureRunnableDag };
+module.exports = { compile, fallback, validateGraph, cleanJson, normalizeJob, repairDependencies, ensureRunnableDag, liveFounderContext };
