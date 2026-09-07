@@ -47,7 +47,6 @@ async function textRequest(url, options = {}, timeoutMs = TIMEOUT_MS) {
 }
 
 function tavilyKey() { return String(process.env.TAVILY_API_KEY || '').trim(); }
-function braveKey() { return String(process.env.BRAVE_SEARCH_API_KEY || '').trim(); }
 function firecrawlKey() { return String(process.env.FIRECRAWL_API_KEY || '').trim(); }
 
 async function tavilySearch(query, options = {}) {
@@ -73,26 +72,6 @@ async function tavilySearch(query, options = {}) {
   })).filter((item) => item.url);
   if (!results.length) throw new Error('Tavily returned no results.');
   return { query, provider: 'tavily-fallback', results, pages: [], research: { adaptive: true, requestedSources: ['tavily'], completedSources: ['tavily'], errors: [], fallback: true } };
-}
-
-async function braveSearch(query, options = {}) {
-  const key = braveKey();
-  if (!key) throw new Error('BRAVE_SEARCH_API_KEY is not configured.');
-  const url = new URL('https://api.search.brave.com/res/v1/web/search');
-  url.searchParams.set('q', String(query || '').trim());
-  url.searchParams.set('count', String(Math.max(1, Math.min(10, Number(options.limit || 6)))));
-  const data = await jsonRequest(url.toString(), { headers: { 'X-Subscription-Token': key, Accept: 'application/json' } });
-  const rows = Array.isArray(data?.web?.results) ? data.web.results : [];
-  const results = rows.map((item, index) => ({
-    position: index + 1,
-    title: String(item?.title || '').replace(/<[^>]+>/g, '').trim(),
-    snippet: String(item?.description || '').replace(/<[^>]+>/g, '').trim(),
-    url: String(item?.url || '').trim(),
-    siteName: String(item?.profile?.long_name || item?.meta_url?.hostname || 'Brave').trim(),
-    source: 'brave-fallback', coverage: 'independent web index fallback',
-  })).filter((item) => item.url);
-  if (!results.length) throw new Error('Brave Search returned no results.');
-  return { query, provider: 'brave-fallback', results, pages: [], research: { adaptive: true, requestedSources: ['brave'], completedSources: ['brave'], errors: [], fallback: true } };
 }
 
 async function jinaReaderFetch(input, options = {}) {
@@ -135,28 +114,26 @@ async function firecrawlFetch(input, options = {}) {
   const text = String(payload?.markdown || payload?.content || '').trim();
   if (!text) throw new Error('Firecrawl returned no readable Markdown.');
   return {
-    requestedUrl: url, url: String(payload?.metadata?.sourceURL || payload?.metadata?.url || url), status: Number(payload?.metadata?.statusCode || 200),
-    contentType: 'text/markdown', title: String(payload?.metadata?.title || '').trim(), text: text.slice(0, Number(options.maxTextChars || 24000)),
-    truncated: text.length > Number(options.maxTextChars || 24000), provider: 'firecrawl-fallback', format: 'markdown',
+    requestedUrl: url,
+    url: String(payload?.metadata?.sourceURL || payload?.metadata?.url || url),
+    status: Number(payload?.metadata?.statusCode || 200),
+    contentType: 'text/markdown',
+    title: String(payload?.metadata?.title || '').trim(),
+    text: text.slice(0, Number(options.maxTextChars || 24000)),
+    truncated: text.length > Number(options.maxTextChars || 24000),
+    provider: 'firecrawl-fallback',
+    format: 'markdown',
   };
 }
 
 function providerSequence() {
-  const sequence = [];
-  if (tavilyKey()) sequence.push('tavily');
-  if (braveKey()) sequence.push('brave');
-  return sequence;
+  return tavilyKey() ? ['tavily'] : [];
 }
 
 async function fallbackSearch(query, options = {}) {
-  const failures = [];
-  for (const provider of providerSequence()) {
-    try {
-      if (provider === 'tavily') return await tavilySearch(query, options);
-      if (provider === 'brave') return await braveSearch(query, options);
-    } catch (error) { failures.push(`${provider}: ${error.message}`); }
-  }
-  throw new Error(`No configured zero-cost research fallback succeeded.${failures.length ? ` ${failures.join(' | ')}` : ''}`);
+  if (!tavilyKey()) throw new Error('No configured zero-cost search fallback is available.');
+  try { return await tavilySearch(query, options); }
+  catch (error) { throw new Error(`Tavily fallback failed: ${error.message}`); }
 }
 
 async function fallbackFetch(input, options = {}) {
@@ -184,7 +161,7 @@ function install() {
         fallback.primaryError = primaryError.message;
         return fallback;
       } catch (fallbackError) {
-        const error = new Error(`Primary research failed: ${primaryError.message} | Turbo fallbacks failed: ${fallbackError.message}`);
+        const error = new Error(`Primary research failed: ${primaryError.message} | Turbo fallback failed: ${fallbackError.message}`);
         error.primaryError = primaryError;
         error.fallbackError = fallbackError;
         throw error;
@@ -241,10 +218,9 @@ function status() {
     toolRegistry: {
       tavily: tools.byId('tavily')?.credentialsReady || false,
       firecrawl: tools.byId('firecrawl')?.credentialsReady || false,
-      brave: tools.byId('brave-search')?.credentialsReady || false,
       jinaReaderNoKey: true,
     },
   };
 }
 
-module.exports = { tavilySearch, braveSearch, jinaReaderFetch, firecrawlFetch, fallbackSearch, fallbackFetch, providerSequence, install, uninstall, status };
+module.exports = { tavilySearch, jinaReaderFetch, firecrawlFetch, fallbackSearch, fallbackFetch, providerSequence, install, uninstall, status };
