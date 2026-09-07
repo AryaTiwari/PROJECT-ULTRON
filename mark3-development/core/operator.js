@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
+const creatorResearch = require('./creator-research');
+const instagramDm = require('./instagram-dm');
 
 function hasEnv(...names) {
   return names.some((name) => Boolean(String(process.env[name] || '').trim()));
@@ -81,23 +83,26 @@ const CAPABILITIES = [
     id: 'instagram_dm',
     title: 'Instagram DM Operator',
     role: 'sales-operator',
-    detects: /\b(?:instagram|ig|dm|dms|inbox)\b[\s\S]{0,90}\b(?:reply|respond|message|lead|extract|qualify|follow up|follow-up)\b|\b(?:reply|respond|extract|qualify)\b[\s\S]{0,90}\b(?:dm|dms|inbox)\b/i,
-    implemented: false,
-    credentials: () => configured('INSTAGRAM_TOKEN', 'INSTAGRAM_ACCESS_TOKEN', 'META_ACCESS_TOKEN') && configured('META_APP_SECRET', 'INSTAGRAM_APP_SECRET'),
-    missing: ['Instagram messaging/webhook connector', 'Meta messaging permissions/token', 'Meta app secret/webhook setup'],
+    detects: /\b(?:instagram|ig|dm|dms|inbox)\b[\s\S]{0,90}\b(?:reply|respond|message|lead|extract|qualify|follow up|follow-up|conversation|conversations|check)\b|\b(?:reply|respond|extract|qualify|check)\b[\s\S]{0,90}\b(?:dm|dms|inbox)\b/i,
+    implemented: true,
+    credentials: () => instagramDm.status().configured,
+    missing: ['Meta/Instagram access token', 'Instagram professional account ID', 'instagram_business_manage_messages permission'],
     mode: 'execute-with-approval',
-    purpose: 'Read permitted Instagram conversations, extract leads, classify replies and send context-aware follow-ups.',
+    purpose: 'Read permitted Instagram conversations, prepare context-aware replies and send approved replies/follow-ups only where the creator has already opened a conversation. Cold first-contact outreach remains a manual draft queue because Meta does not allow the Send API to initiate cold DMs.',
   },
   {
     id: 'creator_research',
-    title: 'Creator Research Operator',
-    role: 'researcher',
+    title: 'India Creator Research Operator',
+    role: 'creator-growth-researcher',
     detects: /\b(?:find|research|discover|source|list|identify)\b[\s\S]{0,90}\b(?:creators?|influencers?|instagram accounts?|prospects?|leads?)\b/i,
     implemented: true,
-    credentials: () => true,
-    missing: [],
+    credentials: () => {
+      const providers = creatorResearch.status().providers;
+      return Boolean(providers.tinyfishPrimary || providers.tavilyFallback);
+    },
+    missing: ['TinyFish or Tavily research credential'],
     mode: 'execute',
-    purpose: 'Research public creator prospects, compare fit and return structured lead candidates.',
+    purpose: 'Research public creator prospects with India-first discovery by default, normalize Instagram handles, rank fit, preserve public evidence, prevent duplicate leads and persist outreach state without inventing follower or engagement metrics.',
   },
   {
     id: 'lead_extraction',
@@ -160,6 +165,7 @@ const SPECIFIC_MATCH_ORDER = [
   'lead_extraction',
   'instagram_publish',
   'instagram_dm',
+  'creator_research',
   'reel_generation',
   'reel_strategy',
   'system_audit',
