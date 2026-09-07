@@ -37,12 +37,21 @@ function isStatusRequest(text) {
 }
 
 function isInstagramCheckRequest(text) {
-  return /\b(?:check|verify|test|confirm)\b[\s\S]{0,50}\binstagram\b[\s\S]{0,30}\b(?:connection|api|account|token)?\b/i.test(String(text || ''))
-    || /\binstagram\b[\s\S]{0,40}\b(?:connection|api)\s+(?:status|check|test)\b/i.test(String(text || ''));
+  const value = String(text || '').trim();
+  if (/\b(?:dm|dms|inbox|conversation|conversations|message|messages)\b/i.test(value)) return false;
+  return /\b(?:check|verify|test|confirm)\b[\s\S]{0,50}\binstagram\b[\s\S]{0,40}\b(?:connection|api|account|token)\b/i.test(value)
+    || /\binstagram\b[\s\S]{0,40}\b(?:connection|api|account|token)\s+(?:status|check|test|verification)\b/i.test(value);
 }
 
 function isDmInboxRequest(text) {
   return /\b(?:check|read|show|list|open|review)\b[\s\S]{0,50}\b(?:instagram|ig)?\s*(?:dm|dms|inbox|conversations?)\b/i.test(String(text || ''));
+}
+
+function parseDmMessagesRequest(text) {
+  const value = String(text || '').trim();
+  if (!/\b(?:show|read|open|check|review)\b[\s\S]{0,40}\b(?:messages?|conversation|dms?)\b/i.test(value)) return null;
+  const handle = value.match(/@([a-z0-9._]{2,30})\b/i)?.[1];
+  return handle ? { handle: creatorResearch.normalizeHandle(handle) } : null;
 }
 
 function parseDmDraftRequest(text) {
@@ -62,6 +71,12 @@ function parseExplicitDmSend(text) {
   body = String(body || '').replace(/^["“]|["”]$/g, '').trim();
   if (!body) return null;
   return { handle: creatorResearch.normalizeHandle(handle), text: body };
+}
+
+function isCreatorLeadListRequest(text) {
+  const value = String(text || '').trim();
+  return /\b(?:show|list|view|open|review|display)\b[\s\S]{0,50}\b(?:saved\s+)?(?:creator|creators|influencer|influencers)?\s*(?:leads|prospects|pipeline)\b/i.test(value)
+    || /\bcreator\s+(?:lead|leads|prospect|prospects)\s+(?:list|pipeline)\b/i.test(value);
 }
 
 async function instagramCheckResponse() {
@@ -117,8 +132,30 @@ async function dmInboxResponse() {
   }
 }
 
+async function dmMessagesResponse(handle) {
+  try {
+    const found = await instagramDm.findConversationByUsername(handle, { limit: 50 });
+    if (!found?.conversation?.id) return { ok: false, text: `Sir, I found no existing inbound Instagram conversation for @${handle}.`, error: 'INSTAGRAM_CONVERSATION_NOT_FOUND' };
+    syncConversationLead(found.conversation);
+    const result = await instagramDm.getConversationMessages(found.conversation.id, { limit: 12 });
+    const messages = result.messages.filter((item) => item.message).slice(-8);
+    const lines = messages.map((item) => {
+      const from = String(item?.from?.username || item?.from?.id || '').trim();
+      const speaker = creatorResearch.normalizeHandle(from) === creatorResearch.normalizeHandle(handle) ? `@${handle}` : 'Elevate';
+      return `${speaker}: ${item.message}`;
+    });
+    return {
+      ok: true,
+      text: lines.length ? `Sir, recent messages with @${handle}:\n${lines.join('\n')}` : `Sir, the conversation with @${handle} exists, but Meta returned no readable text messages in the recent window.`,
+      result,
+    };
+  } catch (error) {
+    return { ok: false, text: `Sir, I could not read messages with @${handle}: ${error.message}`, error: error.message };
+  }
+}
+
 function dmDraftResponse(handle) {
-  const lead = findSavedLead(handle) || { handle, displayName: handle, niche: 'creator' };
+  const lead = findSavedLead(handle) || { handle, displayName: '', niche: 'creator' };
   const draft = instagramDm.draftColdOutreach(lead);
   return {
     ok: true,
@@ -129,20 +166,46 @@ function dmDraftResponse(handle) {
 
 async function dmSendResponse(parsed) {
   const lead = findSavedLead(parsed.handle);
-  if (!lead?.dmRecipientId) {
-    return {
-      ok: false,
-      text: `Sir, @${parsed.handle} is not linked to an existing inbound Instagram conversation, so Meta will not let the official API send this as a cold first DM. Keep this exact message in the manual outreach queue; after they reply, Ultron can take over follow-ups.`,
-      error: 'INSTAGRAM_COLD_DM_NOT_SUPPORTED',
-    };
-  }
   try {
-    const sent = await instagramDm.sendText(lead.dmRecipientId, parsed.text, { approved: true, explicitUserAction: true });
-    creatorResearch.updateLead(parsed.handle, { outreachState: 'replied', lastContactAt: sent.sentAt, dmConversationId: sent.conversationId, dmRecipientId: sent.recipientId });
+    let sent;
+    if (lead?.dmRecipientId) sent = await instagramDm.sendText(lead.dmRecipientId, parsed.text, { approved: true, explicitUserAction: true });
+    else sent = await instagramDm.sendTextToUsername(parsed.handle, parsed.text, { approved: true, explicitUserAction: true });
+
+    if (lead) {
+      creatorResearch.updateLead(parsed.handle, {
+        outreachState: 'replied',
+        lastContactAt: sent.sentAt,
+        dmConversationId: sent.conversationId,
+        dmRecipientId: sent.recipientId,
+      });
+    }
     return { ok: true, text: `Sent, Sir. The Instagram reply to @${parsed.handle} was verified with message ID ${sent.messageId}.`, result: sent };
   } catch (error) {
+    if (error.code === 'INSTAGRAM_COLD_DM_NOT_SUPPORTED') {
+      return {
+        ok: false,
+        text: `Sir, @${parsed.handle} has not opened an Instagram conversation with Elevate, so Meta will not let the official API send this cold first DM. The message remains suitable for the manual first-contact queue; after they reply, Ultron can take over follow-ups.`,
+        error: error.code,
+      };
+    }
     return { ok: false, text: `Sir, the Instagram DM send failed: ${error.message}`, error: error.message };
   }
+}
+
+function creatorLeadListResponse() {
+  const leads = creatorResearch.list({ limit: 30 });
+  if (!leads.length) return { ok: true, text: 'Sir, the creator lead store is empty. Run an India creator search first.', leads: [] };
+  const shown = leads.slice(0, 15);
+  const lines = shown.map((lead, index) => {
+    const location = lead.city || lead.market || 'location unverified';
+    const followers = lead.followerCount == null ? '' : ` · ${Number(lead.followerCount).toLocaleString('en-IN')} followers`;
+    return `${index + 1}. @${lead.handle} · ${location} · fit ${lead.fitScore}/100 · ${lead.outreachState || 'not_contacted'}${followers}`;
+  });
+  return {
+    ok: true,
+    text: `Sir, ${leads.length} creator lead${leads.length === 1 ? '' : 's'} are currently in the pipeline.\n${lines.join('\n')}${leads.length > shown.length ? `\n${leads.length - shown.length} more are saved.` : ''}`,
+    leads,
+  };
 }
 
 async function creatorResearchResponse(text) {
@@ -201,6 +264,14 @@ function install() {
       return { ok: true, response, text: response, model: 'operator-router', provider: 'local', taskType: 'operator-status', mode: 'operator', inputMode, toolRounds: 0 };
     }
 
+    if (isCreatorLeadListRequest(text)) {
+      const listed = creatorLeadListResponse();
+      conversation.append('user', text, { taskType: 'creator-leads', inputMode });
+      conversation.append('assistant', listed.text, { model: 'creator-research', provider: 'local', taskType: 'creator-leads', inputMode });
+      void voice.enqueue(listed.text);
+      return { ok: true, response: listed.text, text: listed.text, model: 'creator-research', provider: 'local', taskType: 'creator-leads', mode: 'operator', capability: 'creator_research', inputMode, creatorLeads: listed.leads, toolRounds: 0 };
+    }
+
     const draft = parseDmDraftRequest(text);
     if (draft) {
       const prepared = dmDraftResponse(draft.handle);
@@ -245,7 +316,9 @@ function install() {
     if (state.id === 'instagram_dm') {
       let handled;
       const explicitSend = parseExplicitDmSend(text);
+      const messages = parseDmMessagesRequest(text);
       if (explicitSend) handled = await dmSendResponse(explicitSend);
+      else if (messages) handled = await dmMessagesResponse(messages.handle);
       else if (isDmInboxRequest(text)) handled = await dmInboxResponse();
       if (handled) {
         conversation.append('user', text, { taskType: 'instagram-dm', inputMode });
@@ -284,11 +357,15 @@ module.exports = {
   isStatusRequest,
   isInstagramCheckRequest,
   isDmInboxRequest,
+  parseDmMessagesRequest,
   parseDmDraftRequest,
   parseExplicitDmSend,
+  isCreatorLeadListRequest,
   instagramCheckResponse,
   dmInboxResponse,
+  dmMessagesResponse,
   dmDraftResponse,
   dmSendResponse,
+  creatorLeadListResponse,
   creatorResearchResponse,
 };
