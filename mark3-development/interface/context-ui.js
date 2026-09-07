@@ -69,7 +69,7 @@
     dock.querySelectorAll('[data-command]').forEach((node) => node.addEventListener('click', () => runCommand(node.dataset.command)));
     dock.querySelector('#restoreCurrentHistory')?.addEventListener('click', () => loadHistory(true));
     dock.querySelector('#previousThread')?.addEventListener('click', () => {
-      const id = state.fabric?.previousSession?.id;
+      const id = state.fabric?.previousSession?.id || state.fabric?.recentSessions?.[0]?.id;
       if (id) loadSession(id);
     });
     setDockOpen(state.dockOpen);
@@ -131,7 +131,7 @@
       const data = await response.json();
       if (!response.ok || !data.ok) return;
       renderMessageRows(data.messages || [], { replace: true, historical: true });
-      document.querySelector('#chatToggle')?.click();
+      if (!shell()?.classList.contains('chat-open')) document.querySelector('#chatToggle')?.click();
       const caption = document.querySelector('#voiceCaption');
       if (caption) caption.textContent = 'Loaded an earlier conversation thread. New messages still continue in the live session.';
     } catch {}
@@ -151,7 +151,7 @@
     if (daypart) daypart.textContent = `${String(data.clock?.daypart || 'online').replace('-', ' ').toUpperCase()} · ${data.clock?.weekday || ''}`;
     if (clock) clock.textContent = `${data.clock?.timeLabel || '—'} · ${data.clock?.dateLabel || ''}`;
 
-    const previous = data.previousSession;
+    const previous = data.previousSession || data.recentSessions?.[0] || null;
     const previousTitle = document.querySelector('#previousThreadTitle');
     const previousMeta = document.querySelector('#previousThreadMeta');
     if (previousTitle) previousTitle.textContent = previous?.title || 'No previous thread yet';
