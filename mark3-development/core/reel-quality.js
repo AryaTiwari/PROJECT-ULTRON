@@ -113,9 +113,6 @@ function trimToWords(value, limit) {
   return text;
 }
 
-// Kept for explicit callers, but normal plan normalization no longer uses destructive
-// per-scene trimming. Over-budget AI plans should fail the quality gate and be repaired
-// or replaced, rather than producing fragments such as "Extract the hook that.".
 function fitNarrationBudget(scenes, durationSec) {
   const list = Array.isArray(scenes) ? scenes.map((scene) => ({ ...scene })) : [];
   const req = requirements(durationSec);
@@ -128,12 +125,26 @@ function shortenOnScreenText(value, limit = 5) {
   return String(value || '').trim().split(/\s+/).filter(Boolean).slice(0, limit).join(' ');
 }
 
+function creatorVisualQuery(scene = {}) {
+  const purpose = `${scene.purpose || ''} ${scene.onScreenText || ''} ${scene.narration || ''}`.toLowerCase();
+  const original = String(scene.visualQuery || '').trim();
+  const abstractHeavy = /\b(?:abstract|glitch|particles?|network|digital art|collage|animation|algorithm visualization|surreal|3d render|neon shapes?)\b/i.test(original);
+  const concrete = /\b(?:creator|person|phone|smartphone|laptop|camera|editing|analytics|dashboard|notebook|workspace|filming|profile|social media)\b/i.test(original);
+  if (original && concrete && !abstractHeavy) return original;
+  if (/measure|track|analytics|signal|convert|reach|follow|retention|performance/.test(purpose)) return 'content creator checking social media analytics on smartphone in modern workspace vertical video';
+  if (/action|fix|build|pillar|plan|system|repeat|strategy/.test(purpose)) return 'content creator planning content calendar with notebook and laptop in modern workspace vertical video';
+  if (/hook|viral|context|cause|why|problem|audience/.test(purpose)) return 'content creator reviewing viral post and profile performance on smartphone vertical video';
+  return original || 'content creator working on social media content with phone and laptop vertical video';
+}
+
 function ensureBrandScene(plan, brief, options = {}) {
+  const creator = creatorGrowthBrief(planEvidence(plan, brief));
   const enabled = shouldBrandPlan(plan, brief, options);
   let scenes = Array.isArray(plan?.scenes) ? plan.scenes.map((scene) => ({ ...scene })) : [];
   scenes = scenes.map((scene) => ({
     ...scene,
     onScreenText: scene.isBrandCta ? scene.onScreenText : shortenOnScreenText(scene.onScreenText, 5),
+    visualQuery: creator && !scene.isBrandCta ? creatorVisualQuery(scene) : scene.visualQuery,
   }));
   if (enabled) {
     const existing = scenes.findIndex((scene) => scene.isBrandCta || /free strategy session|elevate os/i.test(`${scene.onScreenText || ''} ${scene.subText || ''} ${scene.narration || ''}`));
@@ -153,6 +164,7 @@ function ensureBrandScene(plan, brief, options = {}) {
     brand: enabled ? BRAND : null,
     textDesign: 'minimal-clean-v3',
     contentDesign: 'informative-creator-v4',
+    visualGrounding: creator ? 'creator-human-actions-v1' : null,
   };
 }
 
@@ -182,6 +194,8 @@ function auditPlan(plan, brief, options = {}) {
   if (creatorGrowthBrief(planEvidence(plan, brief))) {
     if (!hasPurpose(scenes, /cause|mechanism|why|signal|convert|retention|return|context/i)) issues.push('creator Reel does not clearly explain the cause/mechanism');
     if (!hasPurpose(scenes, /action|fix|build|repeat|measure|track|pillar|system/i)) issues.push('creator Reel does not give a concrete action/fix');
+    const abstractScenes = scenes.filter((scene) => !scene?.isBrandCta && /\b(?:abstract|glitch|particles?|digital art|collage|surreal|3d render)\b/i.test(String(scene?.visualQuery || '')));
+    if (abstractScenes.length > 1) issues.push('too many creator scenes rely on abstract B-roll instead of useful human/action footage');
   }
 
   if (shouldBrandPlan(plan, brief, options)) {
@@ -215,6 +229,7 @@ module.exports = {
   trimToWords,
   fitNarrationBudget,
   shortenOnScreenText,
+  creatorVisualQuery,
   ensureBrandScene,
   auditPlan,
 };
