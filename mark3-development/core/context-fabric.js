@@ -3,6 +3,7 @@ const conversation = require('./conversation');
 const workspace = require('./workspace');
 const adaptive = require('./adaptive-intelligence');
 const operator = require('./operator');
+const activity = require('./activity-fabric');
 
 const TIMEZONE = String(process.env.ULTRON_M3_TIMEZONE || 'Asia/Kolkata').trim() || 'Asia/Kolkata';
 const TURBO_CACHE_MS = Math.max(15000, Number(process.env.ULTRON_M3_CONTEXT_DIAGNOSTIC_CACHE_MS || 60000));
@@ -71,7 +72,7 @@ function recentWork() {
 }
 
 function sessionContext() {
-  const rows = conversation.sessions(10);
+  const rows = conversation.sessions(12);
   const newest = rows[0] || null;
   const newestAge = newest?.endedAt ? Date.now() - Date.parse(newest.endedAt) : Infinity;
   const current = newest && newestAge <= conversation.SESSION_GAP_MS ? newest : null;
@@ -120,19 +121,26 @@ function featureMesh() {
     title: row.title,
     ready: Boolean(row.ready),
     implemented: Boolean(row.implemented),
+    enrolled: true,
     mode: row.mode,
   }));
   try {
     const instagram = require('./instagram').status();
-    features.push({ id: 'instagram_connection', title: 'Instagram Connection', ready: Boolean(instagram.configured), implemented: true, mode: 'connected-data' });
+    features.push({ id: 'instagram_connection', title: 'Instagram Connection', ready: Boolean(instagram.configured), implemented: true, enrolled: true, mode: 'connected-data' });
   } catch {}
   try {
     const buffer = require('./buffer').status();
-    features.push({ id: 'buffer', title: 'Buffer', ready: Boolean(buffer.configured || buffer.ready), implemented: true, mode: 'approval-gated-publishing' });
+    features.push({ id: 'buffer', title: 'Buffer', ready: Boolean(buffer.configured || buffer.ready), implemented: true, enrolled: true, mode: 'approval-gated-publishing' });
   } catch {}
   try {
     const research = require('./research-turbo-runtime').status();
-    features.push({ id: 'research', title: 'Research Fabric', ready: true, implemented: true, mode: `primary+${(research.searchFallbacks || []).join('+') || 'fallbacks'}` });
+    features.push({ id: 'research', title: 'Research Fabric', ready: true, implemented: true, enrolled: true, mode: `primary+${(research.searchFallbacks || []).join('+') || 'fallbacks'}` });
+  } catch {}
+  try {
+    const registry = require('./free-tool-registry').status();
+    for (const row of registry.dormant || []) {
+      features.push({ id: row.id, title: row.name, ready: false, implemented: Boolean(row.implemented), enrolled: false, dormant: true, mode: row.autoUse || 'dormant' });
+    }
   } catch {}
   return features;
 }
@@ -156,11 +164,17 @@ function snapshot(options = {}) {
   const state = workspace.stateSnapshot();
   const turboData = options.diagnostics === false ? { report: null, compact: null } : safeTurbo({ force: options.forceDiagnostics });
   const diagnostic = options.diagnostics === false ? null : diagnosticSuggestion(turboData, state);
+  const recentActivity = activity.recent(12);
   return {
     generatedAt: new Date().toISOString(),
     clock: localClock,
     sessions,
     work,
+    activity: {
+      recent: recentActivity,
+      latest: recentActivity[0] || null,
+      bySource: Object.fromEntries([...new Set(recentActivity.map((row) => row.source))].map((source) => [source, recentActivity.filter((row) => row.source === source).slice(0, 3)])),
+    },
     workspace: {
       topAction: state.topAction,
       blocked: state.blocked.slice(0, 5),
@@ -180,13 +194,16 @@ function promptContext(message = '') {
   const previous = fabric.sessions.previous;
   const yesterday = fabric.work.yesterday.slice(0, 4);
   const activeFeatureNames = fabric.features.filter((row) => row.ready).map((row) => row.title).slice(0, 8);
+  const recentActivity = fabric.activity.recent.slice(0, 6);
   const lines = [
     `CURRENT LOCAL CONTEXT: ${fabric.clock.weekday}, ${fabric.clock.dateLabel}, ${fabric.clock.timeLabel} (${fabric.clock.timezone}); daypart=${fabric.clock.daypart}.`,
     previous ? `PREVIOUS CHAT THREAD: ${previous.title}. Last user request: ${clean(previous.lastUser, 220)}.` : 'PREVIOUS CHAT THREAD: none recorded yet.',
     yesterday.length ? `VERIFIED/COMPLETED YESTERDAY: ${yesterday.map((row) => row.objective).join(' | ')}.` : 'VERIFIED/COMPLETED YESTERDAY: none recorded.',
+    recentActivity.length ? `RECENT CROSS-FEATURE ACTIVITY: ${recentActivity.map((row) => `${row.source}:${row.status}=${clean(row.summary, 120)}`).join(' | ')}.` : 'RECENT CROSS-FEATURE ACTIVITY: none recorded yet.',
     fabric.workspace.topAction ? `CURRENT NEXT FOCUS: ${clean(fabric.workspace.topAction.title, 140)}${fabric.workspace.topAction.project ? ` (${fabric.workspace.topAction.project})` : ''}.` : 'CURRENT NEXT FOCUS: none explicitly recorded.',
     fabric.diagnostic ? `SYSTEM COACH: ${fabric.diagnostic.text}` : '',
     activeFeatureNames.length ? `CONNECTED CAPABILITY MESH: ${activeFeatureNames.join(', ')}.` : '',
+    'CONNECTION RULE: Features share this activity/context fabric. Treat Reel, Research, Forge, Adaptive, Operator, Instagram, Buffer, memory, workspace and diagnostics as one system. Reuse useful outputs from one feature as context for another instead of asking the founder to repeat information already present.',
     'CONTINUITY RULE: Treat this as an ongoing working relationship. Use prior-thread/time/task context only when it naturally helps the current message. Do not force references to unrelated old work. If a useful diagnostic or unfinished thread directly affects the current task, mention it briefly and proactively.',
   ].filter(Boolean);
   return { fabric, text: lines.join('\n') };
@@ -203,6 +220,7 @@ function compactSnapshot(options = {}) {
       lastUser: value.sessions.previous.lastUser,
     } : null,
     yesterdayCompleted: value.work.yesterday.slice(0, 5),
+    recentActivity: value.activity.recent.slice(0, 10),
     topAction: value.workspace.topAction || null,
     blocked: value.workspace.blocked,
     diagnostic: value.diagnostic,
