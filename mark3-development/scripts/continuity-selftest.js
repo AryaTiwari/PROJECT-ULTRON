@@ -59,7 +59,13 @@ assert(/\/api\/context\/greeting/.test(contextUi), 'Interface must show a contex
 
 const historyBridge = fs.readFileSync(path.resolve(__dirname, '../interface/history-bridge.js'), 'utf8');
 assert(/continuedSessionId/.test(historyBridge) && /selectedHistory/.test(historyBridge), 'Opening an earlier thread must carry that thread into the next chat request, not only redraw the UI.');
-assert(/\/api\/conversation\/session/.test(historyBridge) && /\/api\/chat/.test(historyBridge), 'History bridge must connect restored sessions to subsequent chat requests.');
+const bridgeHasSessionRoute = historyBridge.includes('\\/api\\/conversation\\/session') || historyBridge.includes('/api/conversation/session');
+const bridgeHasChatRoute = historyBridge.includes('\\/api\\/chat') || historyBridge.includes('/api/chat');
+assert(bridgeHasSessionRoute && bridgeHasChatRoute, 'History bridge must connect restored sessions to subsequent chat requests.');
+assert(/history:\s*selectedHistory/.test(historyBridge) && /continuedSessionId:\s*selectedSessionId/.test(historyBridge), 'History bridge must inject the restored transcript and session identity into the next request.');
+
+const interfaceIndex = fs.readFileSync(path.resolve(__dirname, '../interface/index.html'), 'utf8');
+assert(/history-bridge\.js/.test(interfaceIndex), 'The browser interface must actually load the restored-thread history bridge.');
 
 const ids = registry.TOOLS.map((row) => row.id);
 assert(!ids.includes('youtube-data'), 'YouTube must remain removed until explicitly re-enrolled.');
