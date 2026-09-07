@@ -5,6 +5,9 @@ const adaptive = require('./adaptive-intelligence');
 const operator = require('./operator');
 
 const TIMEZONE = String(process.env.ULTRON_M3_TIMEZONE || 'Asia/Kolkata').trim() || 'Asia/Kolkata';
+const TURBO_CACHE_MS = Math.max(15000, Number(process.env.ULTRON_M3_CONTEXT_DIAGNOSTIC_CACHE_MS || 60000));
+let turboCache = null;
+let turboCacheAt = 0;
 
 function clean(value, max = 220) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
@@ -76,14 +79,25 @@ function sessionContext() {
   return { current, previous, recent: rows };
 }
 
-function safeTurbo() {
+function safeTurbo(options = {}) {
+  const force = Boolean(options.force);
+  if (!force && turboCache && Date.now() - turboCacheAt < TURBO_CACHE_MS) return turboCache;
   try {
     const turbo = require('./turbo-engine');
     const report = turbo.audit();
-    return { report, compact: turbo.compact(report) };
+    turboCache = { report, compact: turbo.compact(report), cachedAt: new Date().toISOString() };
+    turboCacheAt = Date.now();
+    return turboCache;
   } catch (error) {
-    return { report: null, compact: { score: null, state: 'unavailable', criticalIssue: error.message, topOpportunity: null } };
+    turboCache = { report: null, compact: { score: null, state: 'unavailable', criticalIssue: error.message, topOpportunity: null }, cachedAt: new Date().toISOString() };
+    turboCacheAt = Date.now();
+    return turboCache;
   }
+}
+
+function invalidateDiagnostics() {
+  turboCache = null;
+  turboCacheAt = 0;
 }
 
 function learnedSummary() {
@@ -140,7 +154,7 @@ function snapshot(options = {}) {
   const sessions = sessionContext();
   const work = recentWork();
   const state = workspace.stateSnapshot();
-  const turboData = options.diagnostics === false ? { report: null, compact: null } : safeTurbo();
+  const turboData = options.diagnostics === false ? { report: null, compact: null } : safeTurbo({ force: options.forceDiagnostics });
   const diagnostic = options.diagnostics === false ? null : diagnosticSuggestion(turboData, state);
   return {
     generatedAt: new Date().toISOString(),
@@ -178,8 +192,8 @@ function promptContext(message = '') {
   return { fabric, text: lines.join('\n') };
 }
 
-function compactSnapshot() {
-  const value = snapshot({ diagnostics: true });
+function compactSnapshot(options = {}) {
+  const value = snapshot({ diagnostics: true, forceDiagnostics: options.forceDiagnostics });
   return {
     clock: value.clock,
     previousSession: value.sessions.previous ? {
@@ -198,4 +212,4 @@ function compactSnapshot() {
   };
 }
 
-module.exports = { TIMEZONE, clock, dayKey, recentWork, sessionContext, featureMesh, snapshot, promptContext, compactSnapshot, diagnosticSuggestion };
+module.exports = { TIMEZONE, TURBO_CACHE_MS, clock, dayKey, recentWork, sessionContext, featureMesh, snapshot, promptContext, compactSnapshot, diagnosticSuggestion, safeTurbo, invalidateDiagnostics };
