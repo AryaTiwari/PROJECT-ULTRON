@@ -19,15 +19,15 @@ assert(intents.includes('premium') && intents.includes('credible'), 'Elevate bus
 const mockPlan = {
   durationSec: 20,
   brandPromotion: true,
-  cta: 'Free Strategy Session — Elevate OS — elevateos.in',
-  voiceover: 'A viral reel can spike reach without building loyalty. Many viewers liked one topic, not your whole page. If they do not follow or return, the spike dies. Unrelated posts weaken repeat-viewer signals. Build repeatable pillars around the promise that worked. Book a free strategy session with Elevate OS at elevateos.in.',
+  cta: 'Book your Free Strategy Session now — Elevate OS — elevateos.in',
+  voiceover: 'A viral reel can spike reach without building loyalty. Many viewers liked one topic, not your whole page. If they do not follow or return, the spike dies. Unrelated posts weaken repeat-viewer and retention signals after the spike. Build repeatable pillars around the promise that already worked. Want a growth plan built around your account? Book your free strategy session with Elevate OS now at elevateos.in.',
   scenes: [
-    { start: 0, end: 2.4, onScreenText: 'Viral Reach ≠ Growth', narration: 'A viral reel can spike reach without building loyalty.' },
-    { start: 2.4, end: 5.4, onScreenText: 'One Topic Won', narration: 'Many viewers liked one topic, not your whole page.' },
-    { start: 5.4, end: 8.4, onScreenText: 'Reach Must Convert', narration: 'If they do not follow or return, the spike dies.' },
-    { start: 8.4, end: 11.4, onScreenText: 'Next Reel Resets', narration: 'Unrelated posts weaken repeat-viewer signals.' },
-    { start: 11.4, end: 16.8, onScreenText: 'Build Repeatable Pillars', narration: 'Build repeatable pillars around the promise that worked.' },
-    { start: 16.8, end: 20, onScreenText: 'Free Strategy Session', subText: 'Elevate OS • elevateos.in', narration: 'Book a free strategy session with Elevate OS at elevateos.in.', isBrandCta: true },
+    { start: 0, end: 2.4, purpose: 'Pattern interrupt', onScreenText: 'Viral Reach ≠ Growth', narration: 'A viral reel can spike reach without building loyalty.' },
+    { start: 2.4, end: 5.4, purpose: 'Context', onScreenText: 'One Topic Won', narration: 'Many viewers liked one topic, not your whole page.' },
+    { start: 5.4, end: 8.4, purpose: 'Cause', onScreenText: 'Reach Must Convert', narration: 'If they do not follow or return, the spike dies.' },
+    { start: 8.4, end: 11.4, purpose: 'Mechanism', onScreenText: 'Next Reel Resets', narration: 'Unrelated posts weaken repeat-viewer and retention signals after the spike.' },
+    { start: 11.4, end: 16.6, purpose: 'Action', onScreenText: 'Build Repeatable Pillars', narration: 'Build repeatable pillars around the promise that already worked.' },
+    { start: 16.6, end: 20, purpose: 'Brand CTA', onScreenText: 'Book Your Free Strategy Session', subText: 'Elevate OS • elevateos.in', narration: 'Want a growth plan built around your account? Book your free strategy session with Elevate OS now at elevateos.in.', isBrandCta: true },
   ],
 };
 
@@ -41,8 +41,12 @@ const good = finalQuality.audit({
     visualStyle: 'minimal-clean-v3',
     textBoxes: false,
     headlineSubtitleOverlapAvoided: true,
+    eyeLevelAligned: true,
+    headlineY: 610,
+    subtitleY: 840,
+    brandCtaVersion: 'elevate-book-now-v1',
     maxHeadlineWords: 5,
-    maxSubtitleWords: 4,
+    maxSubtitleWords: 5,
   },
   finisher: { applied: true, transitionsApplied: true, sfxApplied: true },
 }, 'why creators stop growing after a viral reel');
@@ -52,9 +56,9 @@ const bad = finalQuality.audit({
   plan: mockPlan,
   output: { width: 1080, height: 1920, audioPresent: true },
   narration: { narratorProfile: null, metallicApplied: false },
-  polish: { captionsApplied: true, safeZoneApplied: false, visualStyle: 'boxed', textBoxes: true },
+  polish: { captionsApplied: true, safeZoneApplied: false, visualStyle: 'boxed', textBoxes: true, eyeLevelAligned: false, headlineY: 610, subtitleY: 1160 },
   finisher: { applied: false, transitionsApplied: false, sfxApplied: false },
 }, 'why creators stop growing after a viral reel');
 assert(!bad.ok && bad.issues.length >= 6, 'Dense unfinished Reel must be rejected by final quality gate.');
 
-console.log('ULTRON Reel Finisher self-test passed: intent-aware narrator routing, minimal boxless typography, cinematic transitions, procedural SFX and final production gate validated.');
+console.log('ULTRON Reel Finisher self-test passed: intent-aware narrator routing, eye-level boxless typography, cinematic transitions, mandatory Elevate booking close and final production gate validated.');
