@@ -1,4 +1,5 @@
 const reels = require('../core/reel-operator-bootstrap');
+const attachmentGuard = require('../core/reel-attachment-guard');
 const pipeline = require('../core/reel-pipeline');
 const narrator = require('../core/reel-narrator');
 
@@ -11,6 +12,15 @@ assert(!reels.isReelFactoryRequest('Schedule this reel for tomorrow'), 'Scheduli
 assert(reels.isReelAttachmentRequest('Ultron, attach the last reel'), 'Latest Reel attachment command must be recognized.');
 assert(reels.isReelAttachmentRequest('Send me the latest reel file'), 'Natural latest Reel file request must be recognized.');
 assert(!reels.isReelAttachmentRequest('Post the latest reel on Instagram'), 'Instagram publishing must not be mistaken for Reel attachment delivery.');
+
+assert(attachmentGuard.isReelRetrievalIntent('i want u to attach the video of the new revised one'), 'Revised Reel/video attachment phrasing must resolve to local retrieval.');
+assert(attachmentGuard.isReelRetrievalIntent('create attach the video of the new revised one'), 'Accidentally generation-prefixed attachment phrasing must still resolve locally.');
+assert(attachmentGuard.isReelRetrievalIntent('send me the newest MP4'), 'Newest MP4 retrieval must resolve locally.');
+assert(attachmentGuard.isReelRetrievalIntent('show me the final rendered video'), 'Rendered video delivery must resolve locally.');
+assert(!attachmentGuard.isReelRetrievalIntent('create a revised video about creator growth'), 'A real generation request must not be hijacked by the local retrieval guard.');
+assert(!attachmentGuard.isReelRetrievalIntent('publish the revised video on Instagram'), 'Publishing must never be hijacked by the attachment guard.');
+assert(attachmentGuard.status().generationApiUsed === false, 'Reel Attachment Guard must remain a local-only path with no generation API dependency.');
+
 assert(reels.isReelStatusRequest('Reel Factory status'), 'Reel Factory status request must be recognized.');
 assert(reels.parseDuration('make a 45 second reel about growth') === 45, 'Explicit Reel duration must be parsed.');
 assert(reels.parseDuration('make a reel about growth') === 30, 'Default Reel duration must remain 30 seconds.');
@@ -31,4 +41,4 @@ assert(comedyIntent.includes('witty') && comedyIntent.includes('sarcastic'), 'Co
 const trendIntent = narrator.inferIntent({ style: 'energetic fast-paced', brief: 'viral creator challenge trend' });
 assert(trendIntent.includes('energetic') && trendIntent.includes('high-energy'), 'Trend/challenge Reels must infer high-energy narrator intent.');
 
-console.log('ULTRON Reel Operator self-test passed: natural generation, MP4 delivery, publish separation and content-aware narrator intent routing validated.');
+console.log('ULTRON Reel Operator self-test passed: natural generation, local revised-Reel retrieval, MP4 delivery, publish separation and content-aware narrator intent routing validated.');
