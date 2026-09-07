@@ -2,6 +2,7 @@ const factory = require('../core/reel-factory');
 const sources = require('../core/reel-sources');
 const pipeline = require('../core/reel-pipeline');
 const quality = require('../core/reel-quality');
+const completion = require('../core/reel-completion');
 const narrator = require('../core/reel-narrator');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
@@ -17,16 +18,20 @@ assert(plan.scenes[plan.scenes.length - 1].end === 20, 'Final scene must end at 
 assert(plan.scenes.every((scene) => scene.visualQuery), 'Every scene needs a stock-search query.');
 assert(plan.scenes.every((scene, index) => index === 0 || scene.start >= plan.scenes[index - 1].end), 'Scene timings must never overlap.');
 assert(plan.scenes.filter((scene) => !scene.isBrandCta).every((scene) => quality.wordCount(scene.onScreenText) <= 5), 'Main on-screen phrases must stay at five words or fewer.');
+assert(plan.scenes.every((scene) => quality.completeSentence(scene.narration)), 'Every Reel scene must contain a complete spoken sentence.');
 assert(/Free Strategy Session/i.test(plan.cta), 'Creator-growth Reel must contain Free Strategy Session CTA.');
 assert(/book[\s\S]*now/i.test(plan.cta), 'Creator-growth Reel CTA must explicitly ask viewers to book now.');
 assert(/Elevate OS/i.test(plan.voiceover), 'Creator-growth Reel narration must include Elevate OS brand close.');
 assert(/elevateos\.in/i.test(plan.voiceover), 'Creator-growth Reel narration must include elevateos.in.');
 assert(plan.scenes[plan.scenes.length - 1].isBrandCta === true, 'Elevate OS CTA must be the final scene.');
+assert(plan.narrationTimingPolicy === 'measured-no-cut-v1', 'Reel plans must declare the measured no-cut narration policy.');
 
 const audit = quality.auditPlan(plan, brief, { durationSec: 20 });
 assert(audit.ok, `Fallback Reel plan must pass v2 quality gate: ${audit.issues.join('; ')}`);
-assert(audit.wordCount >= audit.requirements.minWords, 'Reel narration must carry sufficient information density.');
+assert(audit.wordCount >= audit.requirements.minWords && audit.wordCount <= audit.requirements.maxWords, 'Reel narration must be informative while remaining inside the natural spoken word budget.');
 assert(audit.requirements.maxOnScreenWords === 5 && audit.requirements.maxSubtitleWords === 5, 'Sparse but useful text-density policy must remain active.');
+assert(audit.requirements.narrationTailRoomSec >= 0.6, 'Narration timing policy must reserve visible tail room before the final frame.');
+assert(audit.requirements.maxNarrationTimeFitRate <= 1.14, 'Narration may not be aggressively rushed to hide an overlong script.');
 assert(plan.scenes.slice(1, -1).every((scene) => quality.wordCount(scene.narration) >= audit.requirements.minBodyNarrationWords), 'Body scenes must contain enough narration to explain an idea rather than vague fragments.');
 
 const wrapped = pipeline.wrapText('This headline must stay safely inside a vertical video frame', 18, 2);
@@ -44,6 +49,7 @@ for (const scene of plan.scenes.filter((item) => !item.isBrandCta)) {
 const fakeFilter = pipeline.drawTextFileFilter('C:/Windows/Fonts/arialbd.ttf', 'C:/tmp/caption.txt', { start: 0, end: 1 });
 assert(fakeFilter.includes('box=0'), 'Premium typography must not render translucent caption boxes.');
 assert(fakeFilter.includes('shadowcolor='), 'Premium typography should use shadow/outline contrast instead of caption boxes.');
+assert(typeof completion.probeDuration === 'function' && typeof completion.ensureComplete === 'function', 'Measured narration completion guard must be installed.');
 
 const sourceStatus = sources.status();
 assert(sourceStatus.provider === 'pexels', 'Reel Factory must use the enrolled Pexels source only.');
@@ -62,5 +68,5 @@ assert(typeof narratorStatus.configured === 'boolean' && narratorStatus.ultronVo
 assert(typeof pipeline.build === 'function', 'Finished Reel renderer must be installed.');
 assert(typeof pipeline.applyVisualPolish === 'function', 'Premium caption/polish layer must be installed.');
 
-console.log('ULTRON Reel Factory v2 self-test passed: informative scripts, eye-level boxless typography, restrained support text, mandatory Elevate booking CTA and separate narrator boundary validated.');
-console.log(`Reel Factory readiness: stock=${status.stockSourceReady ? 'ready' : 'needs API key'}, ffmpeg=${status.ffmpeg.available ? 'ready' : 'not found'}, renderer=ready, captions=eye-level-minimal-v4, narrator=${status.narrator.configured ? 'ready' : 'needs profile'}.`);
+console.log('ULTRON Reel Factory v2 self-test passed: complete informative sentences, measured no-cut narration, eye-level boxless typography, restrained support text, mandatory Elevate booking CTA and separate narrator boundary validated.');
+console.log(`Reel Factory readiness: stock=${status.stockSourceReady ? 'ready' : 'needs API key'}, ffmpeg=${status.ffmpeg.available ? 'ready' : 'not found'}, renderer=ready, captions=eye-level-minimal-v4, narration=measured-no-cut-v1, narrator=${status.narrator.configured ? 'ready' : 'needs profile'}.`);
