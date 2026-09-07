@@ -1,11 +1,15 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const config = require('./config');
 
 const PEXELS_BASE = 'https://api.pexels.com/v1/videos/search';
 const PIXABAY_BASE = 'https://pixabay.com/api/videos/';
 const DEFAULT_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_REEL_SOURCE_TIMEOUT_MS || 20000));
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = Math.max(15000, Number(process.env.ULTRON_M3_REEL_DOWNLOAD_TIMEOUT_MS || 120000));
 const MAX_DOWNLOAD_BYTES = Math.max(5 * 1024 * 1024, Number(process.env.ULTRON_M3_REEL_MAX_ASSET_BYTES || 120 * 1024 * 1024));
+const PIXABAY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const CACHE_DIR = path.resolve(config.projectRoot, '.ultron', 'reel-source-cache');
 
 function firstEnv(...names) {
   for (const name of names) {
@@ -43,6 +47,31 @@ async function requestJson(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function cachePath(provider, query, options = {}) {
+  const fingerprint = JSON.stringify({ provider, query: String(query || '').trim().toLowerCase(), options });
+  const id = crypto.createHash('sha256').update(fingerprint).digest('hex').slice(0, 32);
+  return path.join(CACHE_DIR, `${provider}-${id}.json`);
+}
+
+function readCache(file, ttlMs) {
+  try {
+    const stat = fs.statSync(file);
+    if (Date.now() - stat.mtimeMs > ttlMs) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(file, data) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(data), 'utf8');
+    fs.renameSync(temp, file);
+  } catch {}
 }
 
 function pexelsFile(video) {
@@ -128,17 +157,27 @@ async function searchPexels(query, options = {}) {
 async function searchPixabay(query, options = {}) {
   const key = credentials().pixabay;
   if (!key.value) throw new Error('PIXABAY_API_KEY is not configured.');
-  const params = new URLSearchParams({
-    key: key.value,
-    q: String(query || '').trim().slice(0, 100),
-    video_type: 'all',
-    safesearch: 'true',
+  const requestOptions = {
     order: String(options.order || 'popular'),
-    per_page: String(Math.min(40, Math.max(3, Number(options.perPage || 8)))),
-  });
-  const data = await requestJson(`${PIXABAY_BASE}?${params.toString()}`, { headers: { Accept: 'application/json' } });
+    perPage: Math.min(40, Math.max(3, Number(options.perPage || 8))),
+    orientation: String(options.orientation || 'portrait'),
+  };
+  const cache = cachePath('pixabay', query, requestOptions);
+  let data = readCache(cache, PIXABAY_CACHE_TTL_MS);
+  if (!data) {
+    const params = new URLSearchParams({
+      key: key.value,
+      q: String(query || '').trim().slice(0, 100),
+      video_type: 'all',
+      safesearch: 'true',
+      order: requestOptions.order,
+      per_page: String(requestOptions.perPage),
+    });
+    data = await requestJson(`${PIXABAY_BASE}?${params.toString()}`, { headers: { Accept: 'application/json' } });
+    writeCache(cache, data);
+  }
   let items = (Array.isArray(data?.hits) ? data.hits : []).map(normalizePixabay).filter(Boolean);
-  if (String(options.orientation || 'portrait') === 'portrait') {
+  if (requestOptions.orientation === 'portrait') {
     const portrait = items.filter((item) => Number(item?.height) > Number(item?.width));
     if (portrait.length) items = portrait;
   }
@@ -148,7 +187,8 @@ async function searchPixabay(query, options = {}) {
 function interleave(lists, offset = 0) {
   const active = lists.filter((list) => Array.isArray(list) && list.length);
   if (!active.length) return [];
-  const rotated = active.map((_, index) => active[(index + Math.max(0, Number(offset || 0))) % active.length]);
+  const normalizedOffset = ((Math.floor(Number(offset || 0)) % active.length) + active.length) % active.length;
+  const rotated = active.map((_, index) => active[(index + normalizedOffset) % active.length]);
   const output = [];
   const seen = new Set();
   const max = Math.max(...rotated.map((list) => list.length));
@@ -165,6 +205,12 @@ function interleave(lists, offset = 0) {
   return output;
 }
 
+function providerOffsetForQuery(query, providerCount) {
+  const count = Math.max(1, Number(providerCount || 1));
+  const digest = crypto.createHash('sha1').update(String(query || '')).digest();
+  return digest[0] % count;
+}
+
 async function searchVideos(query, options = {}) {
   const errors = [];
   const creds = credentials();
@@ -178,9 +224,11 @@ async function searchVideos(query, options = {}) {
     if (result.error) errors.push({ provider: result.provider, error: result.error.message });
   });
   const lists = results.filter((result) => result.items.length).map((result) => result.items);
-  const items = interleave(lists, Number(options.providerOffset || 0));
+  const explicitOffset = Number(options.providerOffset);
+  const offset = Number.isFinite(explicitOffset) ? explicitOffset : providerOffsetForQuery(query, lists.length);
+  const items = interleave(lists, offset);
   const providers = [...new Set(items.map((item) => item.provider))];
-  return { ok: items.length > 0, provider: providers.length > 1 ? 'multi-stock' : (providers[0] || null), providers, query, items, errors };
+  return { ok: items.length > 0, provider: providers.length > 1 ? 'multi-stock' : (providers[0] || null), providers, query, items, errors, providerOffset: offset };
 }
 
 function safeAssetName(asset, index = 1) {
@@ -241,19 +289,26 @@ function status() {
     pexelsVariable: creds.pexels.name,
     pixabayVariable: creds.pixabay.name,
     selectionPolicy: 'parallel-search-interleaved-v1',
+    pixabayCache: { persistent: true, ttlHours: 24, dir: CACHE_DIR },
   };
 }
 
 module.exports = {
   PEXELS_BASE,
   PIXABAY_BASE,
+  PIXABAY_CACHE_TTL_MS,
+  CACHE_DIR,
   credentials,
   requestJson,
+  cachePath,
+  readCache,
+  writeCache,
   normalizePexels,
   normalizePixabay,
   searchPexels,
   searchPixabay,
   interleave,
+  providerOffsetForQuery,
   searchVideos,
   safeAssetName,
   downloadAsset,
