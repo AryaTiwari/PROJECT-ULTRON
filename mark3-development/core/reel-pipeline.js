@@ -12,8 +12,10 @@ const SAFE = {
   right: 120,
   top: 270,
   bottom: 410,
-  headlineY: 635,
-  subtitleY: 1160,
+  eyeTop: 520,
+  eyeBottom: 980,
+  headlineY: 610,
+  subtitleY: 840,
 };
 
 function run(binary, args, options = {}) {
@@ -99,19 +101,13 @@ function narrationCues(plan) {
   const cues = [];
   for (const scene of plan.scenes || []) {
     if (scene.isBrandCta) continue;
-    const chunks = splitCaptionChunks(scene.narration, 4, 24).slice(0, 2);
-    if (!chunks.length) continue;
+    const support = cleanText(scene.subText) || cleanText(quality.trimToWords(scene.narration, 5));
+    if (!support) continue;
     const sceneStart = Number(scene.start || 0);
     const sceneEnd = Number(scene.end || sceneStart + 1);
     const duration = Math.max(0.5, sceneEnd - sceneStart);
-    const captionStart = Math.min(sceneEnd - 0.35, sceneStart + Math.min(1.05, Math.max(0.62, duration * 0.38)));
-    const available = Math.max(0.4, sceneEnd - captionStart);
-    const step = available / chunks.length;
-    chunks.forEach((text, index) => {
-      const start = captionStart + index * step;
-      const end = index === chunks.length - 1 ? sceneEnd : Math.min(sceneEnd, start + step);
-      cues.push({ text, start, end });
-    });
+    const start = Math.min(sceneEnd - 0.35, sceneStart + Math.min(1.55, Math.max(1.05, duration * 0.42)));
+    cues.push({ text: quality.shortenOnScreenText(support, 5), start, end: sceneEnd });
   }
   return cues;
 }
@@ -230,14 +226,14 @@ function applyVisualPolish(videoPath, plan, tempDir) {
     const start = Math.max(0, Number(scene.start || 0));
     const end = Math.max(start + 0.1, Number(scene.end || plan.durationSec || 30));
     if (scene.isBrandCta) {
-      filters.push(`drawbox=x=0:y=0:w=iw:h=ih:color=black@0.48:t=fill:enable='between(t,${start.toFixed(2)},${end.toFixed(2)})'`);
+      filters.push(`drawbox=x=0:y=0:w=iw:h=ih:color=black@0.58:t=fill:enable='between(t,${start.toFixed(2)},${end.toFixed(2)})'`);
       const brandFile = writeOverlayText(tempDir, `brand-${index}`, 'ELEVATE OS');
-      const offerFile = writeOverlayText(tempDir, `offer-${index}`, 'FREE STRATEGY\nSESSION');
+      const offerFile = writeOverlayText(tempDir, `offer-${index}`, 'BOOK YOUR FREE\nSTRATEGY SESSION\nNOW');
       const urlFile = writeOverlayText(tempDir, `url-${index}`, 'elevateos.in');
       overlayFiles.push(brandFile, offerFile, urlFile);
-      filters.push(drawTextFileFilter(font, brandFile, { start, end, y: 570, fontSize: 38, borderWidth: 0, shadowX: 2, shadowY: 2, fontColor: 'white@0.78' }));
-      filters.push(drawTextFileFilter(font, offerFile, { start, end, y: 715, fontSize: 76, borderWidth: 2, lineSpacing: 5 }));
-      filters.push(drawTextFileFilter(font, urlFile, { start, end, y: 990, fontSize: 46, borderWidth: 1, fontColor: 'white@0.90' }));
+      filters.push(drawTextFileFilter(font, brandFile, { start, end, y: 520, fontSize: 40, borderWidth: 0, shadowX: 2, shadowY: 2, fontColor: 'white@0.82' }));
+      filters.push(drawTextFileFilter(font, offerFile, { start, end, y: 680, fontSize: 66, borderWidth: 2, lineSpacing: 8 }));
+      filters.push(drawTextFileFilter(font, urlFile, { start, end, y: 1050, fontSize: 46, borderWidth: 1, fontColor: 'white@0.94' }));
       return;
     }
 
@@ -246,28 +242,28 @@ function applyVisualPolish(videoPath, plan, tempDir) {
     const file = writeOverlayText(tempDir, `headline-${index}`, headline);
     overlayFiles.push(file);
     const duration = end - start;
-    const headlineEnd = Math.min(end, start + Math.min(1.1, Math.max(0.72, duration * 0.36)));
+    const headlineEnd = Math.min(end, start + Math.min(1.55, Math.max(1.18, duration * 0.44)));
     filters.push(drawTextFileFilter(font, file, {
       start,
       end: headlineEnd,
-      y: index === 0 ? 600 : SAFE.headlineY,
-      fontSize: index === 0 ? 76 : 62,
+      y: index === 0 ? 585 : SAFE.headlineY,
+      fontSize: index === 0 ? 76 : 64,
       borderWidth: 2,
       shadowX: 4,
       shadowY: 4,
       lineSpacing: 6,
     }));
-    filters.push(`drawbox=x=(iw-110)/2:y=${index === 0 ? 790 : 805}:w=110:h=4:color=white@0.82:t=fill:enable='between(t,${start.toFixed(2)},${headlineEnd.toFixed(2)})'`);
+    filters.push(`drawbox=x=(iw-110)/2:y=${index === 0 ? 770 : 790}:w=110:h=4:color=white@0.82:t=fill:enable='between(t,${start.toFixed(2)},${headlineEnd.toFixed(2)})'`);
   });
 
   narrationCues(plan).forEach((cue, index) => {
-    const file = writeOverlayText(tempDir, `subtitle-${index}`, wrapText(cue.text, 24, 1));
+    const file = writeOverlayText(tempDir, `subtitle-${index}`, wrapText(cue.text, 30, 1));
     overlayFiles.push(file);
     filters.push(drawTextFileFilter(font, file, {
       start: cue.start,
       end: cue.end,
       y: SAFE.subtitleY,
-      fontSize: 42,
+      fontSize: 44,
       borderWidth: 2,
       shadowX: 3,
       shadowY: 3,
@@ -288,8 +284,12 @@ function applyVisualPolish(videoPath, plan, tempDir) {
       visualStyle: 'minimal-clean-v3',
       textBoxes: false,
       headlineSubtitleOverlapAvoided: true,
+      eyeLevelAligned: true,
+      headlineY: SAFE.headlineY,
+      subtitleY: SAFE.subtitleY,
+      brandCtaVersion: 'elevate-book-now-v1',
       maxHeadlineWords: 5,
-      maxSubtitleWords: 4,
+      maxSubtitleWords: 5,
     };
   } catch (error) {
     return { path: videoPath, captionsApplied: false, safeZoneApplied: false, reason: error.message };
@@ -358,6 +358,7 @@ async function build(brief, options = {}) {
     writeJsonAtomic(paths.job, job);
     return { ok: false, job, plan, paths, blocker: `${missing.length} scene(s) have no downloadable stock asset.` };
   }
+
   job.state = 'assets_downloaded';
   job.updatedAt = new Date().toISOString();
   job.downloadedAssets = materialized.downloads.map((item) => ({ provider: item.provider, id: item.id, path: item.path, bytes: item.bytes, attribution: item.attribution, sourcePage: item.sourcePage }));
@@ -402,6 +403,10 @@ async function build(brief, options = {}) {
     visualStyle: polish.visualStyle || null,
     textBoxes: polish.textBoxes,
     headlineSubtitleOverlapAvoided: polish.headlineSubtitleOverlapAvoided,
+    eyeLevelAligned: polish.eyeLevelAligned,
+    headlineY: polish.headlineY || null,
+    subtitleY: polish.subtitleY || null,
+    brandCtaVersion: polish.brandCtaVersion || null,
     maxHeadlineWords: polish.maxHeadlineWords || null,
     maxSubtitleWords: polish.maxSubtitleWords || null,
   };
