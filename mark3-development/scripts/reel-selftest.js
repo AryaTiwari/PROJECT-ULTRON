@@ -42,8 +42,9 @@ assert(fakeFilter.includes('box=0'), 'Premium typography must not render translu
 assert(fakeFilter.includes('shadowcolor='), 'Premium typography should use shadow/outline contrast instead of caption boxes.');
 
 const sourceStatus = sources.status();
+assert(sourceStatus.provider === 'pexels', 'Reel Factory must use the enrolled Pexels source only.');
 assert(typeof sourceStatus.pexelsConfigured === 'boolean', 'Pexels readiness must be deterministic.');
-assert(typeof sourceStatus.pixabayConfigured === 'boolean', 'Pixabay readiness must be deterministic.');
+assert(!Object.prototype.hasOwnProperty.call(sourceStatus, 'pixabayConfigured'), 'Removed Pixabay runtime must not survive in source status.');
 assert(!JSON.stringify(sourceStatus).includes(process.env.PEXELS_API_KEY || '__never__'), 'Reel source status must never expose the Pexels API key.');
 
 const status = factory.status();
@@ -57,5 +58,5 @@ assert(typeof narratorStatus.configured === 'boolean' && narratorStatus.ultronVo
 assert(typeof pipeline.build === 'function', 'Finished Reel renderer must be installed.');
 assert(typeof pipeline.applyVisualPolish === 'function', 'Premium caption/polish layer must be installed.');
 
-console.log('ULTRON Reel Factory v2 self-test passed: complete scripts, sparse boxless typography, non-overlapping text timing, Elevate CTA and separate narrator boundary validated.');
+console.log('ULTRON Reel Factory v2 self-test passed: complete scripts, Pexels-only sourcing, sparse boxless typography, non-overlapping text timing, Elevate CTA and separate narrator boundary validated.');
 console.log(`Reel Factory readiness: stock=${status.stockSourceReady ? 'ready' : 'needs API key'}, ffmpeg=${status.ffmpeg.available ? 'ready' : 'not found'}, renderer=ready, captions=minimal-clean-v3, narrator=${status.narrator.configured ? 'ready' : 'needs profile'}.`);
