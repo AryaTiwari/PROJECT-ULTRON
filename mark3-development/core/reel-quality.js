@@ -10,12 +10,12 @@ function wordCount(value) {
 
 function requirements(durationSec = 30) {
   const duration = Math.max(15, Math.min(60, Number(durationSec) || 30));
-  const targetWords = Math.round(duration * 2.55);
+  const targetWords = Math.round(duration * 2.7);
   return {
     duration,
     targetWords,
     minWords: Math.max(34, Math.round(duration * 2.15)),
-    maxWords: Math.round(duration * 3.05),
+    maxWords: Math.round(duration * 3.35),
     minScenes: duration <= 20 ? 6 : duration <= 35 ? 7 : 8,
     maxOnScreenWords: 5,
     maxOnScreenChars: 34,
