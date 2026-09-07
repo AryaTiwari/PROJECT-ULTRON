@@ -8,6 +8,7 @@ const adaptive = require('../core/adaptive-intelligence');
 const operator = require('../core/operator');
 const forgePreferences = require('../core/forge/preferences');
 const contextFabric = require('../core/context-fabric');
+const activity = require('../core/activity-fabric');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
@@ -31,9 +32,13 @@ assert(status.zeroCostOnly === true && status.primary === 'tinyfish/direct-http'
 assert(Array.isArray(status.fetchFallbacks) && status.fetchFallbacks[0] === 'jina-reader', 'No-key Jina Reader must remain the first extraction fallback.');
 assert(!status.searchFallbacks.includes('brave'), 'Removed Brave fallback must not survive in runtime routing.');
 
+const normalizedActivity = activity.normalize({ type: 'reel_factory_completed', brief: 'Test Reel' });
+assert(normalizedActivity.source === 'reel' && normalizedActivity.status === 'done', 'Activity Fabric must classify feature events for cross-system awareness.');
+
 const report = turbo.audit();
 assert(report.zeroCostGuard.enabled === true && report.zeroCostGuard.paidInferenceAllowed === false, 'Turbo audit must expose hard paid-inference guard.');
 assert(report.topology.some((edge) => edge.from === 'conversation-history' && edge.to === 'context-fabric'), 'Persistent conversation history must feed Context Fabric.');
+assert(report.topology.some((edge) => edge.from === 'activity-fabric' && edge.to === 'context-fabric'), 'Cross-feature Activity Fabric must feed Context Fabric.');
 assert(report.topology.some((edge) => edge.from === 'context-fabric' && edge.to === 'assistant'), 'Context Fabric must feed normal assistant reasoning.');
 assert(report.topology.some((edge) => edge.from === 'reel-factory' && edge.to === 'reel-learning'), 'Reel creative learning loop must appear in runtime topology.');
 assert(report.topology.some((edge) => edge.from === 'forge-founder-recipes' && edge.to === 'mission-compiler'), 'Founder recipes must appear in runtime topology.');
@@ -45,6 +50,7 @@ const compact = contextFabric.compactSnapshot();
 assert(compact.clock?.timezone === 'Asia/Kolkata' || Boolean(compact.clock?.timezone), 'Context Fabric must expose an explicit local timezone.');
 assert(Array.isArray(compact.recentSessions), 'Context Fabric must expose recent chat sessions.');
 assert(Array.isArray(compact.features), 'Context Fabric must expose connected feature mesh.');
+assert(Array.isArray(compact.recentActivity), 'Context Fabric must expose shared feature activity.');
 
 const op = operator.summary();
 assert(op.ready.some((row) => row.id === 'system_audit'), 'System audit must be a first-class ready operator.');
@@ -54,4 +60,4 @@ const adaptiveSource = fs.readFileSync(path.resolve(__dirname, '../core/adaptive
 const observeBody = adaptiveSource.match(/function observeTurn[\s\S]*?\n}\n\nfunction topSignals/)?.[0] || '';
 assert(!/resolveLatestProposal\s*\(/.test(observeBody), 'Generic conversation turns must not silently approve pending adaptive proposals.');
 
-console.log('ULTRON Turbo self-test passed: lean integrations, Context Fabric continuity, founder Forge recipes, research failover and zero-cost guard validated.');
+console.log('ULTRON Turbo self-test passed: lean integrations, Context/Activity Fabric continuity, founder Forge recipes, research failover and zero-cost guard validated.');
