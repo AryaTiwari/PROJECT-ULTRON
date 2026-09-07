@@ -5,6 +5,7 @@ const TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_INSTAGRAM_DM_TIME
 const REQUIRED_PERMISSION = 'instagram_business_manage_messages';
 
 function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+function normalizeUsername(value) { return clean(value).replace(/^@+/, '').toLowerCase(); }
 function endpoint(pathname) {
   const base = String(instagram.GRAPH_BASE || 'https://graph.instagram.com').replace(/\/$/, '');
   const path = String(pathname || '').replace(/^\/+/, '');
@@ -89,6 +90,18 @@ async function findConversationByRecipient(recipientId, options = {}) {
   return row ? normalizeConversation(row) : null;
 }
 
+async function findConversationByUsername(username, options = {}) {
+  const target = normalizeUsername(username);
+  if (!target) throw new Error('Instagram username is required.');
+  const result = await listConversations({ limit: options.limit || 50, timeoutMs: options.timeoutMs });
+  const selfId = String(instagram.credentials().accountId.value || '');
+  for (const conversation of result.conversations) {
+    const participant = (conversation.participants || []).find((item) => normalizeUsername(item?.username) === target && String(item?.id || '') !== selfId);
+    if (participant?.id) return { conversation, participant };
+  }
+  return null;
+}
+
 async function getConversationMessages(conversationId, options = {}) {
   const id = clean(conversationId);
   if (!id) throw new Error('Instagram conversation ID is required.');
@@ -133,8 +146,6 @@ async function sendText(recipientId, text, options = {}) {
   if (message.length > 1000) throw new Error('Instagram DM text is too long; keep it within 1000 characters.');
   assertSendApproval(options);
 
-  // Meta's official Send API cannot initiate a cold conversation. Verify that an
-  // existing conversation already exists with this Instagram-scoped user ID.
   const existing = await findConversationByRecipient(recipient, options);
   if (!existing?.id) {
     const error = new Error('Official Instagram Messaging cannot initiate this cold DM. The recipient must message the Elevate professional account first. Keep this creator in the manual-first-contact outreach queue.');
@@ -171,12 +182,25 @@ async function sendText(recipientId, text, options = {}) {
   };
 }
 
+async function sendTextToUsername(username, text, options = {}) {
+  assertSendApproval(options);
+  const found = await findConversationByUsername(username, options);
+  if (!found?.participant?.id) {
+    const error = new Error(`No existing inbound Instagram conversation was found for @${normalizeUsername(username)}. Official Instagram Messaging cannot initiate a cold DM.`);
+    error.code = 'INSTAGRAM_COLD_DM_NOT_SUPPORTED';
+    throw error;
+  }
+  return sendText(found.participant.id, text, options);
+}
+
 function draftColdOutreach(lead = {}, options = {}) {
   const handle = clean(lead.handle).replace(/^@+/, '');
-  const name = clean(lead.displayName || handle || 'there').replace(/\s*\(@.*$/, '');
+  const rawName = clean(lead.displayName || '');
+  const name = rawName && !/instagram|photos|videos|followers/i.test(rawName) ? rawName.replace(/\s*\(@.*$/, '').slice(0, 40) : '';
   const niche = clean(lead.niche || options.niche || 'content');
   const website = clean(options.website || 'elevateos.in');
-  const text = clean(`Hey ${name || 'there'} 👋 Came across your ${niche} content and liked what you're building. I'm reaching out from Elevate OS — we help creators improve content performance, positioning and brand opportunities. Would love to share a few ideas tailored to your page. You can also check us out at ${website}.`);
+  const greeting = name ? `Hey ${name} 👋` : `Hey @${handle || 'there'} 👋`;
+  const text = clean(`${greeting} Came across your ${niche} content and liked what you're building. I'm reaching out from Elevate OS — we help creators improve content performance, positioning and brand opportunities. Would love to share a few ideas tailored to your page. You can also check us out at ${website}.`);
   return {
     ok: true,
     handle: handle || null,
@@ -198,6 +222,7 @@ function status() {
     requiredPermission: REQUIRED_PERMISSION,
     conversationsImplemented: true,
     repliesImplemented: true,
+    usernameConversationLookupImplemented: true,
     dryRunImplemented: true,
     approvalRequired: true,
     coldOutreachViaOfficialApi: false,
@@ -214,8 +239,10 @@ module.exports = {
   normalizeConversation,
   listConversations,
   findConversationByRecipient,
+  findConversationByUsername,
   getConversationMessages,
   sendText,
+  sendTextToUsername,
   draftColdOutreach,
   status,
 };
