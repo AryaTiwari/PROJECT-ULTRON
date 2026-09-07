@@ -1,5 +1,6 @@
 const factory = require('../core/reel-factory');
 const sources = require('../core/reel-sources');
+const aiVisuals = require('../core/reel-ai-visuals');
 const pipeline = require('../core/reel-pipeline');
 const quality = require('../core/reel-quality');
 const completion = require('../core/reel-completion');
@@ -50,6 +51,7 @@ const fakeFilter = pipeline.drawTextFileFilter('C:/Windows/Fonts/arialbd.ttf', '
 assert(fakeFilter.includes('box=0'), 'Premium typography must not render translucent caption boxes.');
 assert(fakeFilter.includes('shadowcolor='), 'Premium typography should use shadow/outline contrast instead of caption boxes.');
 assert(typeof completion.probeDuration === 'function' && typeof completion.ensureComplete === 'function', 'Measured narration completion guard must be installed.');
+assert(typeof pipeline.generatedImageName === 'function', 'Reel renderer must support locally materialized generated-image assets.');
 
 const sourceStatus = sources.status();
 assert(Array.isArray(sourceStatus.providers) && sourceStatus.providers.some((item) => item.provider === 'pexels'), 'Reel stock router must retain Pexels.');
@@ -69,16 +71,26 @@ const mockPixabay = sources.normalizePixabay({
 assert(mockPixabay && mockPixabay.provider === 'pixabay' && mockPixabay.commercialUse === true, 'Pixabay normalization must preserve commercial-use provenance.');
 assert(/Pixabay Content License/i.test(mockPixabay.license), 'Pixabay assets must carry license metadata.');
 
+const aiStatus = aiVisuals.status();
+assert(aiStatus.implemented === true && aiStatus.provider === 'cloudflare-workers-ai', 'Cloudflare Workers AI visual fallback must be implemented.');
+assert(aiStatus.model === '@cf/black-forest-labs/flux-1-schnell' || Boolean(process.env.ULTRON_M3_CF_AI_IMAGE_MODEL), 'Default Reel AI image model must remain FLUX.1 schnell unless explicitly overridden.');
+assert(aiStatus.dailyMax >= 1 && aiStatus.dailyMax <= 24, 'Cloudflare AI visual fallback must keep a bounded local daily generation cap.');
+assert(aiStatus.model !== '@cf/black-forest-labs/flux-1-schnell' || aiStatus.modelLicense === 'Apache-2.0', 'FLUX.1 schnell provenance must retain its Apache-2.0 license marker.');
+const generatedPrompt = aiVisuals.promptForScene(plan.scenes[1], plan);
+assert(/vertical 9:16/i.test(generatedPrompt) && /No visible words/i.test(generatedPrompt), 'Generated Reel visuals must be composed for vertical cropping without baked-in text/logos.');
+assert(!JSON.stringify(aiStatus).includes(process.env.CLOUDFLARE_API_TOKEN || '__never__'), 'Cloudflare AI status must never expose its API token.');
+
 const status = factory.status();
 const narratorStatus = narrator.status();
 assert(status.version === 2, 'Reel Factory v2 must be active.');
 assert(status.directorImplemented === true && status.contentQualityGateImplemented === true, 'Reel Director v2 quality gate must be implemented.');
 assert(status.safeCaptionLayoutImplemented === true && status.brandCtaImplemented === true, 'Safe caption layout and branded CTA must be installed.');
 assert(status.stockSourceRouterImplemented === true, 'Stock source router must be implemented.');
+assert(status.aiVisualFallbackImplemented === true && status.aiVisualStatus?.implemented === true, 'Cloudflare AI still-image fallback must be connected to Reel Factory status.');
 assert(status.zeroCostOnly === true && status.paidGenerationAllowed === false, 'Reel Factory must preserve the zero-cost guardrail.');
 assert(typeof narratorStatus.configured === 'boolean' && narratorStatus.ultronVoiceFallbackAllowed === false, 'Reel narrator must be separate and must never silently fall back to Ultron voice.');
 assert(typeof pipeline.build === 'function', 'Finished Reel renderer must be installed.');
 assert(typeof pipeline.applyVisualPolish === 'function', 'Premium caption/polish layer must be installed.');
 
-console.log('ULTRON Reel Factory v2 self-test passed: complete informative sentences, measured no-cut narration, eye-level boxless typography, Pexels+Pixabay stock diversity, mandatory Elevate booking CTA and separate narrator boundary validated.');
-console.log(`Reel Factory readiness: stock=${status.stockSourceReady ? 'ready' : 'needs API key'}, ffmpeg=${status.ffmpeg.available ? 'ready' : 'not found'}, renderer=ready, captions=eye-level-minimal-v4, narration=measured-no-cut-v1, narrator=${status.narrator.configured ? 'ready' : 'needs profile'}.`);
+console.log('ULTRON Reel Factory v2 self-test passed: complete informative sentences, measured no-cut narration, eye-level boxless typography, Pexels+Pixabay stock diversity, Cloudflare AI still fallback, mandatory Elevate booking CTA and separate narrator boundary validated.');
+console.log(`Reel Factory readiness: stock=${status.stockSourceReady ? 'ready' : 'needs API key'}, cf-ai=${status.aiVisualStatus.ready ? 'ready' : 'optional/off'}, ffmpeg=${status.ffmpeg.available ? 'ready' : 'not found'}, renderer=ready, captions=eye-level-minimal-v4, narration=measured-no-cut-v1, narrator=${status.narrator.configured ? 'ready' : 'needs profile'}.`);
