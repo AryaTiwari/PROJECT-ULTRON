@@ -126,6 +126,13 @@ setImmediate(async () => {
     console.error(`[Mark 3] Adaptive Intelligence bootstrap failed: ${error.message}`);
   }
 
+  try {
+    const coach = require('../system-coach').start();
+    console.log(`[Mark 3] System Coach online; diagnostics interval=${Math.round(coach.intervalMs / 60000)}m, low-noise suggestions enabled.`);
+  } catch (error) {
+    console.error(`[Mark 3] System Coach bootstrap failed: ${error.message}`);
+  }
+
   // Telegram remains implemented but intentionally dormant until the founder chooses
   // to enroll/pair it. Do not start remote polling just because credentials exist.
   try {
