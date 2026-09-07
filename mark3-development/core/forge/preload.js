@@ -1,7 +1,7 @@
-// Loaded only by the Mark 3 server process. Forge installs lightweight local
-// read-only endpoints before server.js creates its HTTP server, then Context Fabric,
-// Turbo, Operator Mode, Reel Intelligence, Reel Factory, Forge and Adaptive Intelligence
-// wrap the normal assistant in a deliberate order.
+// Loaded only by the Mark 3 server process. The Activity Fabric records meaningful
+// cross-feature events first; Context Fabric then exposes shared continuity to every
+// model-backed feature. Turbo, Operator, Reel Intelligence, Reel Factory, Forge and
+// Adaptive Intelligence wrap the normal assistant in a deliberate order.
 const http = require('http');
 
 function json(res, data, status = 200) {
@@ -26,6 +26,10 @@ http.createServer = (...args) => {
       const pathname = parsed.pathname;
       if (req.method === 'GET' && pathname === '/api/context/fabric') {
         return json(res, { ok: true, ...require('../context-fabric').compactSnapshot() });
+      }
+      if (req.method === 'GET' && pathname === '/api/context/activity') {
+        const limit = Math.max(1, Math.min(100, Number(parsed.searchParams.get('limit') || 20)));
+        return json(res, { ok: true, activity: require('../activity-fabric').recent(limit) });
       }
       if (req.method === 'GET' && pathname === '/api/conversation/history') {
         const limit = Math.max(1, Math.min(500, Number(parsed.searchParams.get('limit') || 120)));
@@ -66,6 +70,13 @@ http.createServer = (...args) => {
 };
 
 setImmediate(async () => {
+  try {
+    const activity = require('../activity-fabric').install();
+    console.log(`[Mark 3] Activity Fabric ready; shared cross-feature trail=${activity.recentCount} recent event(s).`);
+  } catch (error) {
+    console.error(`[Mark 3] Activity Fabric bootstrap failed: ${error.message}`);
+  }
+
   try {
     const context = require('../context-fabric-runtime').install();
     console.log(`[Mark 3] Context Fabric ready; timezone=${context.timezone}, persistent history=${context.persistentHistory ? 'on' : 'off'}, contextual greetings=${context.contextualGreetings ? 'on' : 'off'}.`);
@@ -117,8 +128,8 @@ setImmediate(async () => {
     console.error(`[Mark 3] ULTRON Forge bootstrap failed: ${error.message}`);
   }
 
-  // Adaptive installs last so it can observe the final behavior of every upstream
-  // runtime wrapper without changing their execution/approval semantics.
+  // Adaptive installs after the operational wrappers so it can observe their final
+  // behavior without changing execution/approval semantics.
   try {
     const adaptive = require('../adaptive-bootstrap').install();
     console.log(`[Mark 3] Adaptive Intelligence ready; ${adaptive.status.totalObservations || 0} learned observation(s), approval-gated proposals enabled.`);
