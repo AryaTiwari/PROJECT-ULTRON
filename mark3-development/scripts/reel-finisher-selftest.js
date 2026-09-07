@@ -1,4 +1,5 @@
 const finisher = require('../core/reel-finisher');
+const completion = require('../core/reel-completion');
 const finalQuality = require('../core/reel-final-quality');
 const narrator = require('../core/reel-narrator');
 
@@ -7,6 +8,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
 assert(finisher.transitionName('clean-cut') === 'fade', 'Clean cuts should map to a subtle fade transition.');
 assert(finisher.transitionName('fast-cut') === 'smoothleft', 'Fast cuts should map to a faster directional transition.');
 assert(finisher.transitionDuration(3) >= 0.08 && finisher.transitionDuration(3) <= 0.16, 'Transition duration must stay inside the premium short-form range.');
+assert(typeof completion.ensureComplete === 'function' && typeof completion.probeDuration === 'function', 'Narration completion guard must be available to the premium runtime.');
 
 const intents = narrator.inferIntent({
   style: 'dark cinematic premium',
@@ -16,25 +18,51 @@ const intents = narrator.inferIntent({
 assert(intents.includes('educational') && intents.includes('strategy'), 'Creator strategy narration should infer educational/strategy intent.');
 assert(intents.includes('premium') && intents.includes('credible'), 'Elevate business narration should infer premium/credible intent.');
 
+const sceneNarrations = [
+  'Virality does not equal loyalty.',
+  'Viewers may follow one topic, not you.',
+  'Without returns, Instagram sees weaker repeat-viewer signals.',
+  'Unrelated follow-ups reset what viewers expect next.',
+  'Build three pillars around the winning promise.',
+  'Want a growth plan for your account? Book your free Elevate OS strategy session now at elevateos.in.',
+];
+
 const mockPlan = {
   durationSec: 20,
   brandPromotion: true,
   cta: 'Book your Free Strategy Session now — Elevate OS — elevateos.in',
-  voiceover: 'A viral reel can spike reach without building loyalty. Many viewers liked one topic, not your whole page. If they do not follow or return, the spike dies. Unrelated posts weaken repeat-viewer and retention signals after the spike. Build repeatable pillars around the promise that already worked. Want a growth plan built around your account? Book your free strategy session with Elevate OS now at elevateos.in.',
+  voiceover: sceneNarrations.join(' '),
+  narrationTimingPolicy: 'measured-no-cut-v1',
   scenes: [
-    { start: 0, end: 2.4, purpose: 'Pattern interrupt', onScreenText: 'Viral Reach ≠ Growth', narration: 'A viral reel can spike reach without building loyalty.' },
-    { start: 2.4, end: 5.4, purpose: 'Context', onScreenText: 'One Topic Won', narration: 'Many viewers liked one topic, not your whole page.' },
-    { start: 5.4, end: 8.4, purpose: 'Cause', onScreenText: 'Reach Must Convert', narration: 'If they do not follow or return, the spike dies.' },
-    { start: 8.4, end: 11.4, purpose: 'Mechanism', onScreenText: 'Next Reel Resets', narration: 'Unrelated posts weaken repeat-viewer and retention signals after the spike.' },
-    { start: 11.4, end: 16.6, purpose: 'Action', onScreenText: 'Build Repeatable Pillars', narration: 'Build repeatable pillars around the promise that already worked.' },
-    { start: 16.6, end: 20, purpose: 'Brand CTA', onScreenText: 'Book Your Free Strategy Session', subText: 'Elevate OS • elevateos.in', narration: 'Want a growth plan built around your account? Book your free strategy session with Elevate OS now at elevateos.in.', isBrandCta: true },
+    { start: 0, end: 2.4, purpose: 'Pattern interrupt', onScreenText: 'Virality ≠ Loyalty', narration: sceneNarrations[0] },
+    { start: 2.4, end: 5.7, purpose: 'Context', onScreenText: 'One Topic Won', narration: sceneNarrations[1] },
+    { start: 5.7, end: 9.0, purpose: 'Mechanism', onScreenText: 'Return Signals Matter', narration: sceneNarrations[2] },
+    { start: 9.0, end: 12.3, purpose: 'Consequence', onScreenText: 'Expectations Reset', narration: sceneNarrations[3] },
+    { start: 12.3, end: 16.4, purpose: 'Action', onScreenText: 'Build Repeatable Pillars', narration: sceneNarrations[4] },
+    { start: 16.4, end: 20, purpose: 'Brand CTA', onScreenText: 'Book Your Free Strategy Session', subText: 'Elevate OS • elevateos.in', narration: sceneNarrations[5], isBrandCta: true },
   ],
 };
 
 const good = finalQuality.audit({
   plan: mockPlan,
-  output: { width: 1080, height: 1920, audioPresent: true },
-  narration: { narratorProfile: 'Verity', metallicApplied: false },
+  output: { width: 1080, height: 1920, audioPresent: true, durationSec: 20 },
+  narration: {
+    narratorProfile: 'Verity',
+    metallicApplied: false,
+    completionVerified: true,
+    durationSec: 18.92,
+    spokenBudgetSec: 19.35,
+    tailRoomSec: 0.65,
+    timeFitRate: 1.03,
+    completionPolicy: 'finish-before-final-frame-v1',
+  },
+  completion: {
+    verified: true,
+    finalNarrationDurationSec: 18.92,
+    spokenBudgetSec: 19.35,
+    tailRoomSec: 0.65,
+    timeFitRate: 1.03,
+  },
   polish: {
     captionsApplied: true,
     safeZoneApplied: true,
@@ -51,14 +79,25 @@ const good = finalQuality.audit({
   finisher: { applied: true, transitionsApplied: true, sfxApplied: true },
 }, 'why creators stop growing after a viral reel');
 assert(good.ok, `Complete Reel should pass final quality gate: ${good.issues.join('; ')}`);
+assert(good.narrationCompletionVerified === true, 'Final quality must explicitly confirm narration completion.');
 
 const bad = finalQuality.audit({
   plan: mockPlan,
-  output: { width: 1080, height: 1920, audioPresent: true },
-  narration: { narratorProfile: null, metallicApplied: false },
+  output: { width: 1080, height: 1920, audioPresent: true, durationSec: 20 },
+  narration: {
+    narratorProfile: null,
+    metallicApplied: false,
+    completionVerified: false,
+    durationSec: 20.1,
+    spokenBudgetSec: 19.35,
+    tailRoomSec: 0,
+    timeFitRate: 1.2,
+  },
+  completion: { verified: false },
   polish: { captionsApplied: true, safeZoneApplied: false, visualStyle: 'boxed', textBoxes: true, eyeLevelAligned: false, headlineY: 610, subtitleY: 1160 },
   finisher: { applied: false, transitionsApplied: false, sfxApplied: false },
 }, 'why creators stop growing after a viral reel');
-assert(!bad.ok && bad.issues.length >= 6, 'Dense unfinished Reel must be rejected by final quality gate.');
+assert(!bad.ok && bad.issues.length >= 9, 'Incomplete or clipped Reel must be rejected by final quality gate.');
+assert(bad.issues.some((issue) => /narration.*final frame|spoken-time budget|tail room/i.test(issue)), 'Final quality must explain narration-completion failure.');
 
-console.log('ULTRON Reel Finisher self-test passed: intent-aware narrator routing, eye-level boxless typography, cinematic transitions, mandatory Elevate booking close and final production gate validated.');
+console.log('ULTRON Reel Finisher self-test passed: intent-aware narrator routing, measured no-cut narration, eye-level boxless typography, cinematic transitions, mandatory Elevate booking close and final production gate validated.');
