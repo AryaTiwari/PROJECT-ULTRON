@@ -123,7 +123,13 @@ function dedupe(candidates = []) {
 
 function requestFromText(text = '') {
   const value = clean(text);
-  const count = Math.max(5, Math.min(50, Number(value.match(/\b(\d{1,2})\s+(?:india(?:n)?\s+)?(?:content\s+)?(?:creators?|influencers?|prospects?|leads?)\b/i)?.[1] || DEFAULT_LIMIT)));
+  const countMatch =
+    value.match(/\b(?:find|research|discover|source|identify)\s+(?:me\s+)?(\d{1,2})\b/i) ||
+    value.match(/\b(\d{1,2})\b(?=[^.!?\n]{0,80}\b(?:creators?|influencers?|prospects?|leads?)\b)/i);
+  const requestedCount = Number(countMatch?.[1]);
+  const count = Number.isFinite(requestedCount)
+    ? Math.max(5, Math.min(50, requestedCount))
+    : DEFAULT_LIMIT;
   const nichePatterns = [
     'fitness', 'health', 'nutrition', 'business', 'finance', 'marketing', 'education', 'self improvement', 'self-improvement', 'tech', 'ai', 'software', 'design', 'video editing', 'photography', 'fashion', 'beauty', 'travel', 'food', 'gaming', 'lifestyle', 'motivation', 'career', 'startup', 'entrepreneurship',
   ];
