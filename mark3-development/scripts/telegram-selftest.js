@@ -15,5 +15,6 @@ assert(chunks.length >= 3 && chunks.every((row) => row.length <= 3900), 'Telegra
 const registry = tools.byId('telegram-bot');
 assert(registry?.implemented === true, 'Free-tool registry must reflect the actual Telegram implementation.');
 assert(registry?.env?.includes('TELEGRAM_ALLOWED_CHAT_ID'), 'Telegram readiness must require the private-chat allowlist, not only the bot token.');
+assert(registry?.dormant === true && registry?.ready === false, 'Telegram must remain installed but dormant until explicit founder enrollment.');
 
-console.log('ULTRON Telegram self-test passed: implemented remote surface, message chunking, local-voice suppression and single-chat allowlist validated.');
+console.log('ULTRON Telegram self-test passed: dormant remote surface, message chunking, local-voice suppression and single-chat allowlist validated.');
