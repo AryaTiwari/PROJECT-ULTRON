@@ -69,6 +69,17 @@ function normalizeConversation(item = {}) {
   };
 }
 
+function normalizeMessage(message = {}) {
+  return {
+    id: clean(message?.id) || null,
+    createdTime: clean(message?.created_time) || null,
+    from: message?.from || null,
+    to: message?.to || null,
+    message: clean(message?.message) || null,
+    unsupported: Boolean(message?.is_unsupported),
+  };
+}
+
 async function listConversations(options = {}) {
   const limit = Math.max(1, Math.min(50, Number(options.limit || 20)));
   const data = await request('GET', `${accountId()}/conversations`, {
@@ -102,32 +113,56 @@ async function findConversationByUsername(username, options = {}) {
   return null;
 }
 
+async function getMessage(messageId, options = {}) {
+  const id = clean(messageId);
+  if (!id) throw new Error('Instagram message ID is required.');
+  const data = await request('GET', id, {
+    query: { fields: 'id,created_time,from,to,message,is_unsupported' },
+    timeoutMs: options.timeoutMs,
+  });
+  return normalizeMessage(data);
+}
+
 async function getConversationMessages(conversationId, options = {}) {
   const id = clean(conversationId);
   if (!id) throw new Error('Instagram conversation ID is required.');
-  const limit = Math.max(1, Math.min(20, Number(options.limit || 20)));
+  const limit = Math.max(1, Math.min(20, Number(options.limit || 12)));
   let data;
+  let expanded = true;
   try {
     data = await request('GET', id, {
       query: { fields: `messages.limit(${limit}){id,created_time,from,to,message,is_unsupported}` },
       timeoutMs: options.timeoutMs,
     });
   } catch {
+    expanded = false;
     data = await request('GET', id, { query: { fields: 'messages' }, timeoutMs: options.timeoutMs });
   }
-  const messages = Array.isArray(data?.messages?.data) ? data.messages.data : [];
+
+  let rows = Array.isArray(data?.messages?.data) ? data.messages.data.slice(0, limit) : [];
+  const needsHydration = !expanded || rows.some((message) => message?.id && !Object.prototype.hasOwnProperty.call(message, 'message'));
+  const errors = [];
+  if (needsHydration && rows.length) {
+    const hydrated = [];
+    for (const row of rows) {
+      if (!row?.id) continue;
+      try { hydrated.push(await getMessage(row.id, options)); }
+      catch (error) {
+        errors.push({ messageId: clean(row.id), error: error.message });
+        hydrated.push(normalizeMessage(row));
+      }
+    }
+    rows = hydrated;
+  } else rows = rows.map(normalizeMessage);
+
   return {
     ok: true,
     conversationId: id,
-    messages: messages.map((message) => ({
-      id: clean(message?.id) || null,
-      createdTime: clean(message?.created_time) || null,
-      from: message?.from || null,
-      to: message?.to || null,
-      message: clean(message?.message) || null,
-      unsupported: Boolean(message?.is_unsupported),
-    })),
-    count: messages.length,
+    messages: rows,
+    count: rows.length,
+    hydratedMessageDetails: needsHydration,
+    partial: errors.length > 0,
+    errors,
   };
 }
 
@@ -223,6 +258,7 @@ function status() {
     conversationsImplemented: true,
     repliesImplemented: true,
     usernameConversationLookupImplemented: true,
+    messageDetailsImplemented: true,
     dryRunImplemented: true,
     approvalRequired: true,
     coldOutreachViaOfficialApi: false,
@@ -237,9 +273,11 @@ module.exports = {
   endpoint,
   request,
   normalizeConversation,
+  normalizeMessage,
   listConversations,
   findConversationByRecipient,
   findConversationByUsername,
+  getMessage,
   getConversationMessages,
   sendText,
   sendTextToUsername,
