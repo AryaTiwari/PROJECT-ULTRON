@@ -58,9 +58,11 @@ const weakUtility = league.utility({ attempts:4, successes:2, qualitySamples:2, 
 if (!(strongUtility > weakUtility)) throw new Error('Model League utility must reward answer quality and reliability.');
 if (arena.heuristicQuality('') !== 0) throw new Error('Model Arena must reject empty answers.');
 if (!(arena.heuristicQuality('1. Check the evidence. 2. Verify the metric. 3. Compare like-for-like because context matters.') > 0.5)) throw new Error('Model Arena heuristic must recognize a useful structured answer.');
-if (handoff.withCommandHandoff('Done.') !== "Done. What's your next command?") throw new Error('Ordinary assistant answers must end with a command handoff.');
+const plainDelivery = handoff.responseDelivery('Done.');
+if (plainDelivery.text !== 'Done.' || plainDelivery.invitesReply) throw new Error('Ordinary assistant answers must not receive a canned command handoff.');
+if (handoff.withCommandHandoff('Done.') !== `Done. ${handoff.DEFAULT_HANDOFF}`) throw new Error('Explicit command-handoff callers must still receive the configured invitation.');
 if (handoff.withCommandHandoff('What do you want me to do next?') !== 'What do you want me to do next?') throw new Error('Existing assistant follow-up questions must not be duplicated.');
-if (handoff.withCommandHandoff('```js\nconsole.log(1)\n```').includes('next command')) throw new Error('Code artifacts must not receive a spoken command suffix inside the artifact.');
+if (handoff.withCommandHandoff('```js\nconsole.log(1)\n```') !== '```js\nconsole.log(1)\n```') throw new Error('Structured/code artifacts must not receive a spoken command suffix.');
 
 if (!codingBrain.shouldUse('Fix the wake word bug in ULTRON', 'coding')) throw new Error('Coding modifications must route through Cortex when available.');
 if (codingBrain.shouldUse('Explain what a promise is', 'coding')) throw new Error('Simple coding questions must stay on normal Mark 3 inference.');
