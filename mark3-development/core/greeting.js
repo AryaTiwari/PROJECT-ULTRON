@@ -57,13 +57,15 @@ function choose(daypart, salt = 0) {
 function create() {
   const ctx = fabric.compactSnapshot();
   const base = choose(ctx.clock.daypart, ctx.recentSessions?.length || 0);
-  const previous = ctx.previousSession;
+  // greetingHandle runs before the new greeting is persisted, so the newest saved
+  // session is the most useful "where we left off" thread even if it is <45m old.
+  const previous = ctx.recentSessions?.[0] || ctx.previousSession;
   const yesterday = Array.isArray(ctx.yesterdayCompleted) ? ctx.yesterdayCompleted : [];
   const focus = ctx.topAction;
   const diagnostic = ctx.diagnostic;
 
   const details = [];
-  if (previous?.lastUser) details.push(`Last time, we were on ${clean(previous.lastUser, 92)}.`);
+  if (previous?.lastUser) details.push(`We left off on ${clean(previous.lastUser, 92)}.`);
   else if (yesterday.length) details.push(`Yesterday we closed ${clean(yesterday[0].objective, 92)}.`);
 
   if (focus?.title) details.push(`The clean next move is ${clean(focus.title, 90)}.`);
