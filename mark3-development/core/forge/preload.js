@@ -1,6 +1,6 @@
 // Loaded only by the Mark 3 server process. Forge installs lightweight local
-// read-only endpoints before server.js creates its HTTP server, then Turbo,
-// Operator Mode, Reel Intelligence, Reel Factory, Forge and Adaptive Intelligence
+// read-only endpoints before server.js creates its HTTP server, then Context Fabric,
+// Turbo, Operator Mode, Reel Intelligence, Reel Factory, Forge and Adaptive Intelligence
 // wrap the normal assistant in a deliberate order.
 const http = require('http');
 
@@ -62,6 +62,13 @@ http.createServer = (...args) => {
 
 setImmediate(async () => {
   try {
+    const context = require('../context-fabric-runtime').install();
+    console.log(`[Mark 3] Context Fabric ready; timezone=${context.timezone}, persistent history=${context.persistentHistory ? 'on' : 'off'}, contextual greetings=${context.contextualGreetings ? 'on' : 'off'}.`);
+  } catch (error) {
+    console.error(`[Mark 3] Context Fabric bootstrap failed: ${error.message}`);
+  }
+
+  try {
     const turbo = require('../turbo-bootstrap').install();
     const fallbacks = turbo.research?.searchFallbacks?.join(', ') || 'none configured';
     console.log(`[Mark 3] Turbo Engine ready; zero-cost research fallbacks=${fallbacks}. Health API: http://127.0.0.1:8790/api/turbo/status`);
@@ -114,18 +121,12 @@ setImmediate(async () => {
     console.error(`[Mark 3] Adaptive Intelligence bootstrap failed: ${error.message}`);
   }
 
-  // Remote interfaces start only AFTER the final assistant wrapper is installed,
-  // so remote commands see the same Turbo/Operator/Reel/Forge/Adaptive behavior as local chat.
+  // Telegram remains implemented but intentionally dormant until the founder chooses
+  // to enroll/pair it. Do not start remote polling just because credentials exist.
   try {
-    const telegram = require('../telegram-remote');
-    const state = telegram.status();
-    if (state.tokenConfigured && state.allowedChatConfigured && state.enabled) {
-      const started = await telegram.start();
-      console.log(`[Mark 3] Telegram Remote ${started.running ? 'online' : 'configured with blocker'}; security=${started.security}.`);
-    } else if (state.tokenConfigured && !state.allowedChatConfigured) {
-      console.log('[Mark 3] Telegram bot token detected but private chat is not paired yet; run npm run telegram:pair after messaging the bot /start.');
+    const telegram = require('../telegram-remote').status();
+    if (telegram.tokenConfigured || telegram.allowedChatConfigured) {
+      console.log('[Mark 3] Telegram Remote is installed but enrollment is paused; no polling process was started.');
     }
-  } catch (error) {
-    console.error(`[Mark 3] Telegram Remote bootstrap failed: ${error.message}`);
-  }
+  } catch {}
 });
