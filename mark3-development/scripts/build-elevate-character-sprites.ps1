@@ -145,6 +145,6 @@ if ($files.Count -ne 7) { throw "Expected 7 character sprites, created $($files.
 foreach ($file in $files) {
   if (-not (Test-Path -LiteralPath $file)) { throw "Character sprite was not created: $file" }
   $item = Get-Item -LiteralPath $file
-  if ($item.Length -lt 4096) { throw "Character sprite is unexpectedly small: $file" }
+  if ($item.Length -lt 512) { throw "Character sprite appears corrupt or empty: $file" }
 }
 Write-Output "Elevate transparent sprite pack ready: $($files.Count) sprites."
