@@ -32,7 +32,15 @@ assert(typeof pipeline.applyVisualPolish === 'function', 'Premium visual polish 
 assert(typeof pipeline.localMusicTrack === 'function', 'Zero-cost local music layer must be installed.');
 assert(typeof reels.registerReelArtifact === 'function', 'Rendered Reels must support File Vault artifact delivery.');
 assert(typeof reels.latestRenderedReel === 'function', 'Latest rendered Reel lookup must be available without re-rendering.');
+assert(typeof reels.readinessSnapshot === 'function', 'Reel Operator must expose truthful readiness diagnostics.');
 assert(/\.mp4$/i.test(reels.artifactName({ job: { id: 'test-reel-job' } })), 'Reel chat artifact must preserve MP4 delivery.');
+
+const readiness = reels.readinessSnapshot();
+assert(typeof readiness.ready === 'boolean' && typeof readiness.ffmpegReady === 'boolean' && typeof readiness.narratorReady === 'boolean', 'Reel readiness must expose boolean production checks.');
+const statusText = reels.statusText();
+if (!readiness.narratorReady) assert(/Reel narrator missing/i.test(statusText), 'Reel status must not falsely claim narration is ready when the narrator is missing.');
+if (!readiness.ffmpegReady) assert(/FFmpeg missing/i.test(statusText), 'Reel status must identify a missing FFmpeg runtime.');
+if (readiness.blocker) assert(statusText.includes(readiness.blocker), 'Reel status must surface the exact current blocker.');
 
 const strategyIntent = narrator.inferIntent({ style: 'dark cinematic premium', brief: 'why creators stop growing and how to fix retention' });
 assert(strategyIntent.includes('educational') && strategyIntent.includes('strategy') && strategyIntent.includes('premium'), 'Creator strategy Reels must infer calm educational/premium narrator intent.');
@@ -41,4 +49,4 @@ assert(comedyIntent.includes('witty') && comedyIntent.includes('sarcastic'), 'Co
 const trendIntent = narrator.inferIntent({ style: 'energetic fast-paced', brief: 'viral creator challenge trend' });
 assert(trendIntent.includes('energetic') && trendIntent.includes('high-energy'), 'Trend/challenge Reels must infer high-energy narrator intent.');
 
-console.log('ULTRON Reel Operator self-test passed: natural generation, local revised-Reel retrieval, MP4 delivery, publish separation and content-aware narrator intent routing validated.');
+console.log('ULTRON Reel Operator self-test passed: natural generation, truthful readiness/blocker reporting, local revised-Reel retrieval, MP4 delivery, publish separation and content-aware narrator intent routing validated.');
