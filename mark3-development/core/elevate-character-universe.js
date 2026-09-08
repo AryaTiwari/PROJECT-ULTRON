@@ -1,11 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawnSync } = require('child_process');
 const config = require('./config');
 const factory = require('./reel-factory');
 
 const ROOT = path.join(factory.REEL_ROOT, 'characters');
 const REFERENCE_PATH = path.join(ROOT, 'reference-sheet.jpg');
+const SPRITE_ROOT = path.join(ROOT, 'sprites');
+const SPRITE_BUILDER = path.join(config.projectRoot, 'mark3-development', 'scripts', 'build-elevate-character-sprites.ps1');
 const CANONICAL_REFERENCE_NAMES = [
   '1000248121.jpg',
   '1788800599891.png',
@@ -15,49 +18,39 @@ const CANONICAL_REFERENCE_NAMES = [
   'elevate-characters.png',
 ];
 
-// Coordinates are measured against the canonical 1536-wide sheet after the renderer
-// normalizes it to 1536x865. Each crop is intentionally narrow enough to avoid
-// dragging a neighboring actor or prop into the keyed sprite.
 const CHARACTERS = Object.freeze({
   gym_creator: {
     id: 'gym_creator', label: 'Gym Creator', role: 'fitness creator',
-    crop: { x: 24, y: 105, w: 286, h: 710 },
     equipment: ['barbell', 'fitness metrics', 'workout content'],
     expressions: ['confident', 'confused', 'frustrated', 'motivated', 'celebrating'],
   },
   fashion_creator: {
     id: 'fashion_creator', label: 'Fashion Creator', role: 'fashion / lifestyle / beauty creator',
-    crop: { x: 330, y: 145, w: 190, h: 665 },
     equipment: ['phone', 'camera', 'outfit cards', 'brand collab cards'],
     expressions: ['confident', 'surprised', 'frustrated', 'excited', 'celebrating'],
   },
   ugc_creator: {
     id: 'ugc_creator', label: 'UGC Creator', role: 'skincare / UGC / product-review creator',
-    crop: { x: 520, y: 160, w: 190, h: 650 },
     equipment: ['product bottle', 'makeup brush', 'review card', 'camera'],
     expressions: ['curious', 'concerned', 'confident', 'excited', 'celebrating'],
   },
   info_creator: {
     id: 'info_creator', label: 'Info Creator', role: 'finance / tech / education / information creator',
-    crop: { x: 710, y: 135, w: 190, h: 675 },
     equipment: ['phone', 'analytics', 'topic cards', 'content notes'],
     expressions: ['confident', 'confused', 'thinking', 'concerned', 'celebrating'],
   },
   retention_devil: {
     id: 'retention_devil', label: 'Retention Devil', role: 'personification of creator mistakes and audience drop-off, not the Instagram algorithm',
-    crop: { x: 900, y: 95, w: 230, h: 720 },
     equipment: ['SKIP button', 'scissors', 'retention graph', 'down arrow', 'stopwatch', 'broken engagement meter', 'view/swipe cards'],
     expressions: ['smug', 'scheming', 'laughing', 'shocked', 'defeated'],
   },
   content_doctor_female: {
     id: 'content_doctor_female', label: 'Elevate Doctor', role: 'friendly Elevate strategist who diagnoses creator underperformance',
-    crop: { x: 1130, y: 160, w: 175, h: 650 },
     equipment: ['stethoscope', 'tablet', 'scanner', 'retention graph', 'diagnostic report'],
     expressions: ['analytical', 'concerned', 'confident', 'approving', 'celebrating'],
   },
   content_doctor_male: {
     id: 'content_doctor_male', label: 'Elevate Analyst', role: 'strategic metrics-oriented Elevate expert who prescribes the fix',
-    crop: { x: 1305, y: 135, w: 215, h: 675 },
     equipment: ['stethoscope', 'clipboard', 'dashboard', 'growth graph', 'strategy report'],
     expressions: ['analytical', 'thinking', 'confident', 'approving', 'celebrating'],
   },
@@ -65,6 +58,9 @@ const CHARACTERS = Object.freeze({
 
 function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
 function exists(file) { try { return Boolean(file && fs.existsSync(file) && fs.statSync(file).isFile()); } catch { return false; } }
+function spritePath(id) { return path.join(SPRITE_ROOT, `${id}.png`); }
+function spritePaths() { return Object.fromEntries(Object.keys(CHARACTERS).map((id) => [id, spritePath(id)])); }
+function spritePackReady() { return Object.keys(CHARACTERS).every((id) => exists(spritePath(id)) && fs.statSync(spritePath(id)).size >= 4096); }
 
 function candidateReferencePaths() {
   const home = os.homedir();
@@ -80,6 +76,7 @@ function candidateReferencePaths() {
   ].filter(Boolean);
   const candidates = [];
   if (configured) candidates.push(path.resolve(configured));
+  if (exists(REFERENCE_PATH)) candidates.push(REFERENCE_PATH);
   for (const root of roots) for (const name of CANONICAL_REFERENCE_NAMES) candidates.push(path.join(root, name));
   return [...new Set(candidates)];
 }
@@ -89,19 +86,62 @@ function discoverReference() {
   return candidateReferencePaths().find(exists) || null;
 }
 
+function powershellBinary() {
+  if (process.platform !== 'win32') return null;
+  for (const binary of ['powershell.exe', 'pwsh.exe']) {
+    try {
+      const probe = spawnSync(binary, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
+      if (probe.status === 0) return binary;
+    } catch {}
+  }
+  return null;
+}
+
+function buildSpritePack(reference = REFERENCE_PATH) {
+  if (spritePackReady()) return { ok: true, alreadyBuilt: true, root: SPRITE_ROOT, files: spritePaths() };
+  if (!exists(reference)) return { ok: false, error: 'character reference sheet is missing' };
+  if (process.platform !== 'win32') return { ok: false, unsupported: true, error: 'transparent sprite builder is Windows-only in this lightweight runtime' };
+  const powershell = powershellBinary();
+  if (!powershell) return { ok: false, error: 'PowerShell is unavailable for the transparent character sprite build' };
+  if (!exists(SPRITE_BUILDER)) return { ok: false, error: `sprite builder script is missing: ${SPRITE_BUILDER}` };
+  fs.mkdirSync(SPRITE_ROOT, { recursive: true });
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SPRITE_BUILDER, '-ReferencePath', path.resolve(reference), '-OutputDir', path.resolve(SPRITE_ROOT)];
+  const run = spawnSync(powershell, args, { encoding: 'utf8', timeout: 180000, windowsHide: true });
+  if (run.status !== 0 || !spritePackReady()) {
+    const detail = clean(`${run.stderr || ''} ${run.stdout || ''}`) || `PowerShell exited with code ${run.status}`;
+    return { ok: false, error: detail };
+  }
+  return { ok: true, root: SPRITE_ROOT, files: spritePaths(), output: clean(run.stdout) };
+}
+
 function installReference(source) {
   const src = path.resolve(String(source || discoverReference() || ''));
   if (!exists(src)) throw new Error('Elevate character reference sheet was not found. Set ULTRON_M3_ELEVATE_CHARACTER_REFERENCE or run the character installer with the reference image path.');
   fs.mkdirSync(ROOT, { recursive: true });
   if (path.resolve(src) !== path.resolve(REFERENCE_PATH)) fs.copyFileSync(src, REFERENCE_PATH);
+  const spriteBuild = buildSpritePack(REFERENCE_PATH);
+  if (process.platform === 'win32' && !spriteBuild.ok) {
+    throw new Error(`Character reference installed, but transparent sprite pack generation failed: ${spriteBuild.error}`);
+  }
   return REFERENCE_PATH;
 }
 
 function ensureReference() {
   if (exists(REFERENCE_PATH)) return REFERENCE_PATH;
-  const found = discoverReference();
+  const found = candidateReferencePaths().find(exists);
   if (!found) return null;
-  try { return installReference(found); } catch { return null; }
+  try {
+    fs.mkdirSync(ROOT, { recursive: true });
+    if (path.resolve(found) !== path.resolve(REFERENCE_PATH)) fs.copyFileSync(found, REFERENCE_PATH);
+    return REFERENCE_PATH;
+  } catch { return null; }
+}
+
+function ensureSpritePack() {
+  if (spritePackReady()) return { ok: true, root: SPRITE_ROOT, files: spritePaths() };
+  const reference = ensureReference();
+  if (!reference) return { ok: false, error: 'character reference sheet is missing' };
+  return buildSpritePack(reference);
 }
 
 function creatorForBrief(brief = '') {
@@ -159,7 +199,7 @@ function beatForScene(scene, index, total, creator) {
     return {
       type: 'doctor-diagnosis', characters: [creator, 'content_doctor_female'], expressions: ['concerned', 'analytical'],
       prop: propForScene(scene), motion: 'scanner-diagnosis',
-      story: 'The female Elevate doctor scans the creator performance and diagnoses the bottleneck.',
+      story: 'The female Elevate doctor scans creator performance and diagnoses the bottleneck.',
     };
   }
   if (index === total - 2 || /\b(?:action|fix|solution|strategy|payoff|measure)\b/i.test(clean(scene.purpose))) {
@@ -172,7 +212,7 @@ function beatForScene(scene, index, total, creator) {
   return {
     type: 'story-explanation', characters: [creator, 'content_doctor_female'], expressions: ['thinking', 'confident'],
     prop: propForScene(scene), motion: 'panel-explain',
-    story: 'Keep the creator and Elevate strategist on screen while the explanatory graphic carries the lesson.',
+    story: 'Keep the creator and Elevate strategist visible while the explanatory graphic carries the lesson.',
   };
 }
 
@@ -189,14 +229,17 @@ function decoratePlan(plan, brief = '') {
       continuityRequired: true,
     },
   }));
+  const state = status();
   return {
     ...plan,
     scenes,
     characterUniverse: {
-      version: 2,
+      version: 3,
       required: true,
       primaryCreator: creator,
-      referencePath: ensureReference(),
+      referencePath: state.referencePath,
+      spriteRoot: state.spriteRoot,
+      spritePackReady: state.spritePackReady,
       cast: Object.keys(CHARACTERS),
       storytelling: 'creator -> retention devil -> metric consequence -> Elevate diagnosis -> prescription -> recovery -> Elevate CTA',
       stockPolicy: 'blurred-background-texture-only',
@@ -208,31 +251,50 @@ function decoratePlan(plan, brief = '') {
 
 function status() {
   const reference = ensureReference();
+  const sprites = spritePackReady();
+  const needsSprites = process.platform === 'win32';
+  const configured = Boolean(reference) && (!needsSprites || sprites);
+  let installHint = null;
+  if (!reference) installHint = 'Set ULTRON_M3_ELEVATE_CHARACTER_REFERENCE to the seven-character reference image, or run npm run reels:characters:add -- "C:\\path\\to\\elevate-character-reference.jpg".';
+  else if (needsSprites && !sprites) installHint = 'Run npm run reels:characters:add once more to build the transparent seven-character sprite pack from the installed reference sheet.';
   return {
     implemented: true,
     requiredForElevateReels: true,
-    configured: Boolean(reference),
+    configured,
     referencePath: reference,
+    spriteRoot: SPRITE_ROOT,
+    spritePackReady: sprites,
+    spritePackRequiredOnWindows: needsSprites,
+    spritePaths: sprites ? spritePaths() : {},
     castCount: Object.keys(CHARACTERS).length,
     cast: Object.values(CHARACTERS).map(({ id, label, role }) => ({ id, label, role })),
     defaultCreator: 'info_creator',
     genericHumanReplacementAllowed: false,
     genericSaaSPanelsAllowed: false,
     lightweight: true,
-    renderer: 'single-reference-sheet FFmpeg crop/overlay',
-    installHint: reference ? null : 'Set ULTRON_M3_ELEVATE_CHARACTER_REFERENCE to the seven-character reference image, or run npm run reels:characters:add -- "C:\\path\\to\\1000248121.jpg".',
+    renderer: sprites ? 'transparent PNG sprite compositor' : 'reference-sheet compatibility compositor',
+    installHint,
   };
 }
 
 module.exports = {
   ROOT,
   REFERENCE_PATH,
+  SPRITE_ROOT,
+  SPRITE_BUILDER,
   CANONICAL_REFERENCE_NAMES,
   CHARACTERS,
+  exists,
+  spritePath,
+  spritePaths,
+  spritePackReady,
   candidateReferencePaths,
   discoverReference,
+  powershellBinary,
+  buildSpritePack,
   installReference,
   ensureReference,
+  ensureSpritePack,
   creatorForBrief,
   propForScene,
   beatForScene,
