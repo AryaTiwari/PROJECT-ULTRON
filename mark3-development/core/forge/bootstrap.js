@@ -9,9 +9,19 @@ let originalHandle = null;
 function executionRequest(message) {
   return preferences.shouldDelegate(String(message || '').trim());
 }
+function explicitSubsystemStatusIntent(text) {
+  const value = String(text || '').trim().toLowerCase();
+  const subsystem = /\b(?:reel factory|reel generator|reel engine|reel intelligence|reel learning|reel narrator|creator ops|creator outreach|instagram(?: dms?| integration)?|turbo(?: engine)?|adaptive intelligence|telegram(?: remote)?|buffer(?: publishing)?|voice(?: system)?|omniroute|model router)\b/;
+  const status = /\b(?:status|progress|ready|readiness|working|health|configured|configuration|connected|connection)\b/;
+  return subsystem.test(value) && status.test(value);
+}
 function internalProjectStatusIntent(text) {
   const value = String(text || '').trim().toLowerCase();
   if (!/\b(?:status|progress|how(?:'s| is)|where (?:is|are)|what(?:'s| is) happening)\b/.test(value)) return false;
+  // Forge wraps the assistant after subsystem operators. Never steal an explicit
+  // component health/status command just because the active mission objective also
+  // happens to contain a word such as "reel", "creator", or "integration".
+  if (!/\b(?:forge|mission)\b/.test(value) && explicitSubsystemStatusIntent(value)) return false;
   const state = supervisor.status();
   if (!state.available) return false;
   const objective = String(state.mission?.objective || '').toLowerCase();
@@ -137,4 +147,4 @@ function uninstall() {
 }
 function status() { return { installed, governor: governor.status(), latestMission: supervisor.status(), missionProfiles: Object.keys(preferences.PROFILES) }; }
 
-module.exports = { install, uninstall, status, executionRequest, internalProjectStatusIntent, latestStatusResponse };
+module.exports = { install, uninstall, status, executionRequest, explicitSubsystemStatusIntent, internalProjectStatusIntent, latestStatusResponse };
