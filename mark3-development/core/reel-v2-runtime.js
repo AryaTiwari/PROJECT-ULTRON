@@ -5,29 +5,39 @@ const finalQuality = require('./reel-final-quality');
 const reelLearning = require('./reel-learning');
 const elevateReelEngine = require('./elevate-reel-engine');
 const elevateThemeRadar = require('./elevate-theme-radar');
+const assetRescue = require('./reel-asset-rescue');
 const { writeJsonAtomic } = require('./persistence');
 
 let installed = false;
 let originalBuild = null;
 
 function install() {
-  if (installed) return { installed: true, alreadyInstalled: true, elevateReelEngine: elevateReelEngine.status(), elevateThemeRadar: elevateThemeRadar.status() };
+  if (installed) return { installed: true, alreadyInstalled: true, elevateReelEngine: elevateReelEngine.status(), elevateThemeRadar: elevateThemeRadar.status(), assetCompletion: assetRescue.status() };
   const elevateStatus = elevateReelEngine.install();
   originalBuild = pipeline.build;
   pipeline.build = async (brief, options = {}) => {
     // The premium finisher rebuilds video transitions from scene files, so semantic
     // graphics are intentionally deferred there. This prevents a wasted encode and
     // guarantees the final transition/caption pass cannot erase Elevate graphics.
-    const base = await originalBuild(brief, { ...options, graphics: false });
+    let base = await originalBuild(brief, { ...options, graphics: false });
+
+    // External media is preferred, never mandatory. If normal stock/public/AI visual
+    // acquisition leaves any scene unresolved, complete it from the built-in Elevate
+    // asset pack. The emergency FFmpeg carrier is the last local fallback, so a Reel
+    // is never rejected merely because a stock provider did not return usable media.
+    if (!base?.ok && assetRescue.missingAssetFailure(base)) {
+      base = await assetRescue.rescue(base, brief, { ...options, graphics: false });
+    }
     if (!base?.ok) return base;
 
     const themeRadar = elevateThemeRadar.snapshot(brief);
     if (base.plan) {
-      base.plan.elevateEngine = { ...(base.plan.elevateEngine || {}), themeRadar };
+      base.plan.elevateEngine = { ...(base.plan.elevateEngine || {}), themeRadar, assetCompletion: assetRescue.status() };
       if (base.paths?.plan) writeJsonAtomic(base.paths.plan, base.plan);
     }
     if (base.job) {
       base.job.elevateThemeRadar = themeRadar;
+      base.job.reelAssetCompletion = assetRescue.status();
       if (base.paths?.job) writeJsonAtomic(base.paths.job, base.job);
     }
 
@@ -69,6 +79,7 @@ function install() {
     job.completion = finished.completion;
     job.elevateReelEngine = elevateReelEngine.status();
     job.elevateThemeRadar = themeRadar;
+    job.reelAssetCompletion = assetRescue.status();
     job.updatedAt = new Date().toISOString();
 
     if (!audit.ok) {
@@ -86,7 +97,7 @@ function install() {
     job.state = 'rendered';
     job.finishedProduction = true;
     if (finished?.paths?.job) writeJsonAtomic(finished.paths.job, job);
-    const result = { ...finished, ok: true, job, finalQuality: audit, elevateThemeRadar: themeRadar };
+    const result = { ...finished, ok: true, job, finalQuality: audit, elevateThemeRadar: themeRadar, reelAssetCompletion: assetRescue.status() };
     try {
       const recipe = reelLearning.recordRender(result);
       if (recipe) result.creativeLearning = { tracked: true, jobId: recipe.jobId };
@@ -96,7 +107,7 @@ function install() {
     return result;
   };
   installed = true;
-  return { installed: true, elevateReelEngine: elevateStatus, elevateThemeRadar: elevateThemeRadar.status() };
+  return { installed: true, elevateReelEngine: elevateStatus, elevateThemeRadar: elevateThemeRadar.status(), assetCompletion: assetRescue.status() };
 }
 
 function uninstall() {
@@ -115,6 +126,7 @@ function status() {
     finalQualityGateRequired: true,
     elevateReelEngine: elevateReelEngine.status(),
     elevateThemeRadar: elevateThemeRadar.status(),
+    assetCompletion: assetRescue.status(),
     creativeRecipeLearning: reelLearning.status(),
   };
 }
