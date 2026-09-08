@@ -60,7 +60,7 @@ function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim(); 
 function exists(file) { try { return Boolean(file && fs.existsSync(file) && fs.statSync(file).isFile()); } catch { return false; } }
 function spritePath(id) { return path.join(SPRITE_ROOT, `${id}.png`); }
 function spritePaths() { return Object.fromEntries(Object.keys(CHARACTERS).map((id) => [id, spritePath(id)])); }
-function spritePackReady() { return Object.keys(CHARACTERS).every((id) => exists(spritePath(id)) && fs.statSync(spritePath(id)).size >= 4096); }
+function spritePackReady() { return Object.keys(CHARACTERS).every((id) => exists(spritePath(id)) && fs.statSync(spritePath(id)).size >= 512); }
 
 function candidateReferencePaths() {
   const home = os.homedir();
