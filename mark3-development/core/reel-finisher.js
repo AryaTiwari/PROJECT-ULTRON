@@ -137,6 +137,23 @@ function applyElevateCharacters(videoPath, result, plan, options = {}) {
 
 function applyElevateGraphics(videoPath, result, plan, options = {}) {
   if (options.graphics === false) return { path: videoPath, meta: { applied: false, reason: 'disabled' } };
+
+  // Character-universe Reels already receive scene-specific graphs, funnels, scanners,
+  // SKIP attacks, prescription cards and CTA props inside the character compositor.
+  // Do not stack the old generic SaaS rectangles over the cast again.
+  if (plan?.characterUniverse?.required) {
+    return {
+      path: videoPath,
+      meta: {
+        applied: true,
+        engine: 'elevate-character-story-graphics-v1',
+        characterAware: true,
+        replacedGenericPanels: true,
+        genericMetricStackDisabled: true,
+      },
+    };
+  }
+
   try {
     const graph = elevateReelEngine.applyGraphics({
       ok: true,
@@ -161,9 +178,8 @@ async function finish(result, options = {}) {
   const scenes = renderedSceneFiles(result);
   const joined = cinematicJoin(scenes, plan, tempDir);
 
-  // CHARACTER-FIRST ORDER:
-  // 1) cinematic background, 2) recurring Elevate cast, 3) semantic metrics/graphs,
-  // 4) captions on top. This prevents random B-roll from becoming the visual identity.
+  // Character-first finishing: B-roll becomes texture, recurring cast becomes identity,
+  // character-aware props explain the metric, and captions sit above the finished scene.
   const characters = applyElevateCharacters(joined.path, result, plan, options);
   if (plan?.characterUniverse?.required && !characters.meta?.applied) {
     throw new Error(`Elevate character universe was required but not rendered: ${characters.meta?.reason || 'unknown character renderer failure'}`);
