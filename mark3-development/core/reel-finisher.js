@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const pipeline = require('./reel-pipeline');
 const elevateReelEngine = require('./elevate-reel-engine');
+const characterRenderer = require('./elevate-character-renderer');
 
 function transitionName(value) {
   const text = String(value || '').toLowerCase();
@@ -83,6 +84,8 @@ function sfxEvents(plan) {
   const events = [{ at: 0.04, type: 'hook', frequency: 82 }];
   scenes.slice(1).forEach((scene, index) => {
     if (scene?.isBrandCta) events.push({ at: Number(scene.start || 0) + 0.03, type: 'cta', frequency: 108 });
+    else if (scene?.characterStory?.type === 'devil-interruption') events.push({ at: Number(scene.start || 0) + 0.03, type: 'devil', frequency: 68 });
+    else if (scene?.characterStory?.type === 'doctor-diagnosis') events.push({ at: Number(scene.start || 0) + 0.03, type: 'diagnosis', frequency: 132 });
     else events.push({ at: Number(scene.start || 0) + 0.03, type: 'transition', frequency: index % 2 ? 92 : 116 });
   });
   return events.filter((event) => event.at >= 0 && event.at < Number(plan?.durationSec || 30));
@@ -97,7 +100,7 @@ function generateSfxBed(plan, tempDir) {
   });
   const filters = events.map((event, index) => {
     const delay = Math.max(0, Math.round(event.at * 1000));
-    const gain = event.type === 'hook' ? 0.14 : event.type === 'cta' ? 0.10 : 0.075;
+    const gain = event.type === 'hook' ? 0.14 : event.type === 'cta' ? 0.10 : event.type === 'devil' ? 0.11 : 0.075;
     return `[${index}:a]volume=${gain},afade=t=out:st=0.035:d=0.105,adelay=${delay}|${delay}[s${index}]`;
   });
   filters.push(`${events.map((_, index) => `[s${index}]`).join('')}amix=inputs=${events.length}:normalize=0,alimiter=limit=0.7[sfx]`);
@@ -122,6 +125,14 @@ function mixSfx(videoPath, sfxPath, outputPath, durationSec) {
     '-t', Number(durationSec || 30).toFixed(3), '-movflags', '+faststart', outputPath,
   ], { timeoutMs: 180000 });
   return { applied: true, path: sfxPath };
+}
+
+function applyElevateCharacters(videoPath, result, plan, options = {}) {
+  try {
+    return characterRenderer.apply(videoPath, result, plan, options);
+  } catch (error) {
+    return { path: videoPath, meta: { applied: false, reason: error.message, required: true } };
+  }
 }
 
 function applyElevateGraphics(videoPath, result, plan, options = {}) {
@@ -149,18 +160,24 @@ async function finish(result, options = {}) {
 
   const scenes = renderedSceneFiles(result);
   const joined = cinematicJoin(scenes, plan, tempDir);
-  const polish = pipeline.applyVisualPolish(joined.path, plan, tempDir);
-  if (!polish.captionsApplied || !polish.safeZoneApplied) throw new Error(`Premium caption finishing failed: ${polish.reason || 'safe-zone captions unavailable'}`);
 
-  // Apply Elevate semantic 2D graphics only after transitions and captions are final.
-  // This preserves the graphics in the shipped MP4 and avoids a redundant pre-finisher encode.
-  const graphics = applyElevateGraphics(polish.path, result, plan, options);
+  // CHARACTER-FIRST ORDER:
+  // 1) cinematic background, 2) recurring Elevate cast, 3) semantic metrics/graphs,
+  // 4) captions on top. This prevents random B-roll from becoming the visual identity.
+  const characters = applyElevateCharacters(joined.path, result, plan, options);
+  if (plan?.characterUniverse?.required && !characters.meta?.applied) {
+    throw new Error(`Elevate character universe was required but not rendered: ${characters.meta?.reason || 'unknown character renderer failure'}`);
+  }
+
+  const graphics = applyElevateGraphics(characters.path, result, plan, options);
+  const polish = pipeline.applyVisualPolish(graphics.path, plan, tempDir);
+  if (!polish.captionsApplied || !polish.safeZoneApplied) throw new Error(`Premium caption finishing failed: ${polish.reason || 'safe-zone captions unavailable'}`);
 
   const narrationPath = result?.narration?.path;
   if (!narrationPath || !fs.existsSync(narrationPath)) throw new Error('Premium finisher cannot find the Reel narrator audio.');
   const musicPath = options.music === false ? null : pipeline.localMusicTrack();
   const baseAudio = path.join(tempDir, 'finished-base.mp4');
-  const audio = pipeline.muxAudio(graphics.path, narrationPath, baseAudio, plan.durationSec, musicPath);
+  const audio = pipeline.muxAudio(polish.path, narrationPath, baseAudio, plan.durationSec, musicPath);
   const sfxPath = options.sfx === false ? null : generateSfxBed(plan, tempDir);
   const finalTemp = path.join(tempDir, 'finished-final.mp4');
   const sfx = mixSfx(baseAudio, sfxPath, finalTemp, plan.durationSec);
@@ -178,6 +195,7 @@ async function finish(result, options = {}) {
       safeZoneApplied: true,
       musicApplied: audio.musicApplied,
       musicPath: audio.musicPath || null,
+      characterUniverse: characters.meta,
       graphicsEngine: graphics.meta,
     },
     finisher: {
@@ -185,6 +203,9 @@ async function finish(result, options = {}) {
       transitionsApplied: joined.transitionsApplied,
       transitionCount: joined.transitionCount,
       transitionPadSec: joined.padSec,
+      characterUniverseApplied: Boolean(characters.meta?.applied),
+      characterCastUsed: characters.meta?.castUsed || [],
+      characterSceneCoverage: Number(characters.meta?.sceneCoverage || 0),
       semanticGraphicsApplied: Boolean(graphics.meta?.applied),
       semanticGraphicsEngine: graphics.meta?.engine || null,
       sfxApplied: sfx.applied,
@@ -202,6 +223,7 @@ module.exports = {
   sfxEvents,
   generateSfxBed,
   mixSfx,
+  applyElevateCharacters,
   applyElevateGraphics,
   finish,
 };
