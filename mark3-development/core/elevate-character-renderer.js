@@ -3,7 +3,6 @@ const path = require('path');
 const universe = require('./elevate-character-universe');
 const pipeline = require('./reel-pipeline');
 
-function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
 function esc(value) { return String(value || '').replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1\\:').replace(/'/g, "\\'"); }
 
 function appearances(plan = {}) {
@@ -88,7 +87,8 @@ function propFilters(plan = {}) {
     }
     if (story.type === 'doctor-diagnosis') {
       filters.push(`drawbox=x=160:y=1040:w=760:h=5:color=0x5B8CFF@0.95:t=fill:${enable}`);
-      filters.push(`drawbox=x=160:y=1035+mod(t*180\,250):w=760:h=4:color=white@0.65:t=fill:${enable}`);
+      filters.push(`drawbox=x=160:y=1085:w=760:h=3:color=white@0.42:t=fill:${enable}`);
+      filters.push(`drawbox=x=160:y=1130:w=760:h=3:color=0x5B8CFF@0.35:t=fill:${enable}`);
     }
     if (story.type === 'doctor-prescription') {
       filters.push(`drawbox=x=320:y=1080:w=440:h=230:color=black@0.56:t=fill:${enable}`);
@@ -116,8 +116,6 @@ function apply(videoPath, result, plan, options = {}) {
   const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath, '-loop', '1', '-framerate', '30', '-i', reference];
   const filters = [];
 
-  // Dim and unify whatever background source was selected. The cast and explanatory
-  // graphics should be the visual identity; stock footage is only texture behind it.
   filters.push(`[0:v]eq=brightness=-0.10:saturation=0.72:contrast=1.04,drawbox=x=0:y=0:w=iw:h=ih:color=0x050811@0.22:t=fill[base]`);
   filters.push(`[1:v]scale=1536:865,split=${cast.length}${cast.map((_, i) => `[sheet${i}]`).join('')}`);
 
@@ -125,7 +123,7 @@ function apply(videoPath, result, plan, options = {}) {
     const character = universe.CHARACTERS[item.characterId];
     const crop = character.crop;
     const target = targetPosition(item);
-    filters.push(`[sheet${i}]crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},colorkey=0xF4F4F4:0.035:0.02,format=rgba,scale=-2:${target.height}[char${i}]`);
+    filters.push(`[sheet${i}]crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},colorkey=0xF4F4F4:0.05:0.035,format=rgba,scale=-2:${target.height}[char${i}]`);
   });
 
   let previous = '[base]';
@@ -138,11 +136,7 @@ function apply(videoPath, result, plan, options = {}) {
   });
 
   const props = propFilters(plan);
-  if (props.length) {
-    filters.push(`${previous}${props.join(',')}[vout]`);
-  } else {
-    filters.push(`${previous}null[vout]`);
-  }
+  filters.push(props.length ? `${previous}${props.join(',')}[vout]` : `${previous}null[vout]`);
 
   args.push(
     '-filter_complex', filters.join(';'),
