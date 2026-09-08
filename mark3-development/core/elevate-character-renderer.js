@@ -30,13 +30,16 @@ function appearances(plan = {}) {
         sceneIndex: Number(scene.index || 0),
         characterId,
         storyType: story.type,
+        stage: story.stage || 'explanation-stage',
+        role: story.roles?.[slot] || 'support',
         slot,
         slotCount: chars.length,
         start: Number(scene.start || 0),
         end: Number(scene.end || plan.durationSec || 30),
-        motion: story.motion || 'panel-explain',
+        motion: story.motion || 'doctor-explain',
         expression: story.expressions?.[slot] || 'confident',
-        prop: story.prop || 'metric-card',
+        prop: story.prop || 'creator-system',
+        action: story.action || '',
       });
     });
   }
@@ -44,51 +47,90 @@ function appearances(plan = {}) {
 }
 
 function characterHeight(item) {
-  if (item.storyType === 'elevate-close') return 600;
-  if (item.slotCount >= 3) return item.characterId === 'retention_devil' ? 460 : 500;
-  if (item.slotCount === 2) return item.characterId === 'retention_devil' ? 620 : 590;
-  return item.characterId === 'retention_devil' ? 720 : 660;
+  switch (item.stage) {
+    case 'creator-hero': return item.characterId === 'retention_devil' ? 820 : 840;
+    case 'conflict-split': return item.characterId === 'retention_devil' ? 790 : 720;
+    case 'devil-dominant': return item.characterId === 'retention_devil' ? 850 : 640;
+    case 'diagnosis-split': return 720;
+    case 'explanation-stage': return item.characterId === 'content_doctor_female' ? 735 : 660;
+    case 'prescription-stage':
+      if (item.role === 'strategist') return 760;
+      if (item.role === 'defeated-antagonist') return 430;
+      return 650;
+    case 'cta-stage': return 720;
+    default: return item.characterId === 'retention_devil' ? 760 : 700;
+  }
 }
 
 function targetPosition(item) {
   const height = characterHeight(item);
-  if (item.storyType === 'elevate-close') return item.slot === 0
-    ? { x: 120, y: 1010, anchor: 'left', height }
-    : { x: 960, y: 1010, anchor: 'right', height };
-  if (item.storyType === 'doctor-prescription' && item.slotCount >= 3) {
-    if (item.slot === 0) return { x: 35, y: 1010, anchor: 'left', height };
-    if (item.slot === 1) return { x: 540, y: 1010, anchor: 'center', height };
-    return { x: 1050, y: 1080, anchor: 'right', height: 390 };
+  switch (item.stage) {
+    case 'creator-hero':
+      return { x: 540, y: 885, anchor: 'center', height };
+    case 'conflict-split':
+      return item.role === 'antagonist'
+        ? { x: 1040, y: 895, anchor: 'right', height }
+        : { x: 45, y: 1010, anchor: 'left', height };
+    case 'devil-dominant':
+      return item.role === 'dominant-antagonist'
+        ? { x: 1045, y: 830, anchor: 'right', height }
+        : { x: 45, y: 1060, anchor: 'left', height };
+    case 'diagnosis-split':
+      return item.role === 'diagnostician'
+        ? { x: 1035, y: 995, anchor: 'right', height }
+        : { x: 45, y: 1020, anchor: 'left', height };
+    case 'explanation-stage':
+      return item.role === 'guide'
+        ? { x: 1035, y: 985, anchor: 'right', height }
+        : { x: 45, y: 1040, anchor: 'left', height };
+    case 'prescription-stage':
+      if (item.role === 'strategist') return { x: 25, y: 980, anchor: 'left', height };
+      if (item.role === 'recovering-creator') return { x: 540, y: 1045, anchor: 'center', height };
+      return { x: 1050, y: 1175, anchor: 'right', height };
+    case 'cta-stage':
+      return item.role === 'host-left'
+        ? { x: 80, y: 1005, anchor: 'left', height }
+        : { x: 1000, y: 1005, anchor: 'right', height };
+    default:
+      if (item.slotCount === 1) return { x: 540, y: 980, anchor: 'center', height };
+      return item.slot === 0
+        ? { x: 55, y: 1010, anchor: 'left', height }
+        : { x: 1025, y: 1010, anchor: 'right', height };
   }
-  if (item.slotCount === 1) return { x: 540, y: 930, anchor: 'center', height };
-  if (item.slotCount === 2) return item.slot === 0
-    ? { x: 65, y: 1010, anchor: 'left', height }
-    : { x: 1015, y: 1010, anchor: 'right', height };
-  if (item.slot === 0) return { x: 30, y: 1030, anchor: 'left', height };
-  if (item.slot === 1) return { x: 540, y: 980, anchor: 'center', height };
-  return { x: 1050, y: 1030, anchor: 'right', height };
+}
+
+function anchoredX(target) {
+  if (target.anchor === 'center') return '(W-w)/2';
+  if (target.anchor === 'left') return String(target.x);
+  return `${target.x}-w`;
 }
 
 function overlayX(item, target) {
   const s = item.start.toFixed(3);
+  const e = item.end.toFixed(3);
+  const base = anchoredX(target);
+
+  if (item.role === 'defeated-antagonist') {
+    const retreat = Math.max(item.start, item.end - 1.05).toFixed(3);
+    return `if(lt(t,${s}+0.30),W-(t-${s})/0.30*(W-(${base})),if(gt(t,${retreat}),(${base})+(t-${retreat})*260,${base}))`;
+  }
   if (target.anchor === 'center') {
-    const base = '(W-w)/2';
-    if (/devil|attack|ambush/.test(item.motion)) return `${base}+8*sin(28*t)`;
-    return `${base}+4*sin(3*t)`;
+    if (item.motion === 'creator-pop') return `${base}+4*sin(3*(t-${s}))`;
+    return `${base}+3*sin(2.4*(t-${s}))`;
   }
   if (target.anchor === 'left') {
-    const tx = target.x;
-    return `if(lt(t,${s}+0.32),-w+(t-${s})/0.32*(${tx}+w),${tx}+3*sin(3*t))`;
+    return `if(lt(t,${s}+0.32),-w+(t-${s})/0.32*(${target.x}+w),${target.x}+3*sin(2.6*(t-${s})))`;
   }
-  const tx = target.x;
-  return `if(lt(t,${s}+0.32),W-(t-${s})/0.32*(W-${tx}),${tx}-w+3*sin(3*t))`;
+  return `if(lt(t,${s}+0.30),W-(t-${s})/0.30*(W-(${base})),(${base})+3*sin(2.8*(t-${s})))`;
 }
 
 function overlayY(item, target) {
   const s = item.start.toFixed(3);
   const base = target.y;
-  if (item.characterId === 'retention_devil') return `${base}+7*sin(8*(t-${s}))`;
-  if (/celebr|recovery|prescription/.test(`${item.expression} ${item.motion}`)) return `${base}+6*sin(5*(t-${s}))`;
+  if (item.motion === 'creator-pop') return `if(lt(t,${s}+0.28),H-(t-${s})/0.28*(H-${base}),${base}+3*sin(2.4*(t-${s})))`;
+  if (item.role === 'dominant-antagonist') return `${base}+7*sin(9*(t-${s}))`;
+  if (item.role === 'defeated-antagonist') return `${base}+6*sin(10*(t-${s}))`;
+  if (item.role === 'diagnostician' || item.role === 'strategist') return `${base}+3*sin(2.2*(t-${s}))`;
   return `${base}+3*sin(2.5*(t-${s}))`;
 }
 
@@ -101,104 +143,103 @@ function label(filters, fontExpr, value, x, y, size, color, enable) {
   filters.push(`drawtext=${fontExpr}text='${text}':expansion=none:fontsize=${size}:fontcolor=${color}:x=${x}:y=${y}:${enable}`);
 }
 
-function drawMetricCard(filters, fontExpr, enable) {
-  box(filters, 155, 270, 350, 190, 'black@0.58', enable);
-  box(filters, 575, 270, 350, 190, 'black@0.58', enable);
-  box(filters, 155, 270, 8, 190, '0x5B8CFF@0.95', enable);
-  box(filters, 575, 270, 8, 190, '0xEF4444@0.95', enable);
-  label(filters, fontExpr, 'VIEWS', 210, 306, 31, 'white@0.82', enable);
-  label(filters, fontExpr, '12.8K', 210, 355, 58, 'white', enable);
-  label(filters, fontExpr, 'FOLLOWS', 630, 306, 31, 'white@0.82', enable);
-  label(filters, fontExpr, '+19', 630, 355, 58, '0xFF7474', enable);
+function drawViewsVsFollows(filters, fontExpr, enable) {
+  box(filters, 135, 475, 370, 180, '0x08111F@0.76', enable);
+  box(filters, 575, 475, 370, 180, '0x08111F@0.76', enable);
+  box(filters, 135, 475, 7, 180, '0x5B8CFF@0.96', enable);
+  box(filters, 575, 475, 7, 180, '0xEF4444@0.96', enable);
+  label(filters, fontExpr, 'VIEWS', 190, 508, 29, 'white@0.72', enable);
+  label(filters, fontExpr, '12.8K', 190, 553, 62, 'white', enable);
+  label(filters, fontExpr, 'FOLLOWS', 630, 508, 29, 'white@0.72', enable);
+  label(filters, fontExpr, '+19', 630, 553, 62, '0xFF7A7A', enable);
 }
 
 function drawRetention(filters, fontExpr, enable) {
-  box(filters, 150, 260, 780, 225, 'black@0.55', enable);
-  label(filters, fontExpr, 'RETENTION', 190, 290, 30, 'white@0.82', enable);
-  const heights = [145, 130, 108, 86, 58, 35];
-  heights.forEach((height, index) => box(filters, 220 + index * 105, 445 - height, 64, height, index < 2 ? '0x5B8CFF@0.88' : '0xEF4444@0.78', enable));
-  box(filters, 210, 448, 680, 3, 'white@0.26', enable);
+  box(filters, 145, 470, 790, 235, '0x08111F@0.70', enable);
+  label(filters, fontExpr, 'RETENTION DROP', 190, 500, 30, 'white@0.78', enable);
+  const heights = [150, 132, 108, 84, 58, 34];
+  heights.forEach((height, index) => box(filters, 215 + index * 110, 670 - height, 66, height, index < 2 ? '0x5B8CFF@0.90' : '0xEF4444@0.82', enable));
+  box(filters, 205, 672, 690, 3, 'white@0.22', enable);
 }
 
 function drawFunnel(filters, fontExpr, enable) {
-  label(filters, fontExpr, 'VIEW  >  PROFILE  >  FOLLOW', 212, 265, 32, 'white@0.88', enable);
-  box(filters, 185, 330, 710, 56, 'white@0.14', enable);
-  box(filters, 285, 400, 510, 56, '0x5B8CFF@0.28', enable);
-  box(filters, 390, 470, 300, 56, '0x5B8CFF@0.78', enable);
+  label(filters, fontExpr, 'VIEW  >  PROFILE  >  FOLLOW', 215, 462, 31, 'white@0.84', enable);
+  box(filters, 175, 525, 730, 54, 'white@0.14', enable);
+  box(filters, 275, 592, 530, 54, '0x5B8CFF@0.24', enable);
+  box(filters, 385, 659, 310, 54, '0xEF4444@0.68', enable);
+  label(filters, fontExpr, 'DROP-OFF', 452, 671, 27, 'white', enable);
 }
 
 function drawHookMeter(filters, fontExpr, enable) {
-  label(filters, fontExpr, 'HOOK STRENGTH', 190, 285, 30, 'white@0.82', enable);
-  box(filters, 190, 350, 700, 44, 'white@0.12', enable);
-  box(filters, 190, 350, 505, 44, '0x5B8CFF@0.9', enable);
-  box(filters, 695, 342, 6, 60, 'white@0.9', enable);
-  label(filters, fontExpr, '72%', 760, 338, 42, 'white', enable);
+  label(filters, fontExpr, 'HOOK STRENGTH', 180, 485, 29, 'white@0.76', enable);
+  box(filters, 180, 545, 720, 42, 'white@0.12', enable);
+  box(filters, 180, 545, 520, 42, '0x5B8CFF@0.92', enable);
+  box(filters, 700, 536, 6, 60, 'white@0.92', enable);
+  label(filters, fontExpr, '72%', 770, 536, 42, 'white', enable);
 }
 
-function drawPillars(filters, fontExpr, enable) {
-  ['HOOK', 'VALUE', 'CTA'].forEach((text, index) => {
-    const x = 145 + index * 275;
-    box(filters, x, 310, 235, 150, index === 1 ? '0x17345F@0.92' : 'black@0.55', enable);
-    box(filters, x, 310, 235, 6, '0x5B8CFF@0.9', enable);
-    label(filters, fontExpr, text, x + 48, 365, 34, 'white', enable);
+function drawCreatorSystem(filters, fontExpr, enable) {
+  const labels = ['PROMISE', 'SERIES', 'CTA'];
+  labels.forEach((value, index) => {
+    const x = 135 + index * 275;
+    box(filters, x, 500, 235, 145, index === 1 ? '0x17345F@0.90' : '0x08111F@0.72', enable);
+    box(filters, x, 500, 235, 6, '0x5B8CFF@0.95', enable);
+    label(filters, fontExpr, value, x + (value === 'PROMISE' ? 34 : 57), 555, 31, 'white', enable);
   });
 }
 
 function drawBrandCard(filters, fontExpr, enable) {
-  box(filters, 170, 275, 740, 220, 'black@0.58', enable);
-  box(filters, 170, 275, 8, 220, '0x5B8CFF@0.95', enable);
-  label(filters, fontExpr, 'BRAND READY?', 225, 310, 32, 'white@0.78', enable);
-  label(filters, fontExpr, 'TRUST  +  FIT  +  PROOF', 225, 375, 38, 'white', enable);
+  box(filters, 160, 485, 760, 190, '0x08111F@0.72', enable);
+  box(filters, 160, 485, 7, 190, '0x5B8CFF@0.95', enable);
+  label(filters, fontExpr, 'BRAND READY', 215, 520, 30, 'white@0.72', enable);
+  label(filters, fontExpr, 'TRUST  +  FIT  +  PROOF', 215, 582, 39, 'white', enable);
 }
 
-function drawGenericSignal(filters, fontExpr, enable) {
-  box(filters, 175, 285, 730, 180, 'black@0.48', enable);
-  box(filters, 175, 285, 7, 180, '0x5B8CFF@0.92', enable);
-  label(filters, fontExpr, 'CREATOR SIGNAL', 225, 320, 30, 'white@0.75', enable);
-  box(filters, 225, 390, 530, 18, 'white@0.14', enable);
-  box(filters, 225, 390, 375, 18, '0x5B8CFF@0.88', enable);
+function drawPrimaryProp(filters, fontExpr, prop, enable) {
+  if (prop === 'views-vs-follows') return drawViewsVsFollows(filters, fontExpr, enable);
+  if (prop === 'retention-graph') return drawRetention(filters, fontExpr, enable);
+  if (prop === 'conversion-funnel') return drawFunnel(filters, fontExpr, enable);
+  if (prop === 'hook-meter') return drawHookMeter(filters, fontExpr, enable);
+  if (prop === 'brand-card') return drawBrandCard(filters, fontExpr, enable);
+  return drawCreatorSystem(filters, fontExpr, enable);
 }
 
 function propFilters(plan = {}) {
   const filters = [];
   const font = pipeline.findCaptionFont();
   const fontExpr = font ? `fontfile='${escPath(font)}':` : '';
+
   for (const scene of plan.scenes || []) {
     const story = scene.characterStory;
-    if (!story) continue;
+    if (!story || scene.isBrandCta) continue;
     const s = Number(scene.start || 0).toFixed(2);
     const e = Number(scene.end || plan.durationSec || 30).toFixed(2);
     const enable = `enable='between(t,${s},${e})'`;
 
-    if (story.prop === 'views-vs-follows') drawMetricCard(filters, fontExpr, enable);
-    else if (story.prop === 'retention-graph') drawRetention(filters, fontExpr, enable);
-    else if (story.prop === 'conversion-funnel') drawFunnel(filters, fontExpr, enable);
-    else if (story.prop === 'hook-meter') drawHookMeter(filters, fontExpr, enable);
-    else if (story.prop === 'content-pillars') drawPillars(filters, fontExpr, enable);
-    else if (story.prop === 'brand-card') drawBrandCard(filters, fontExpr, enable);
-    else drawGenericSignal(filters, fontExpr, enable);
+    drawPrimaryProp(filters, fontExpr, story.prop, enable);
 
-    if (story.type === 'devil-interruption' || story.type === 'metric-consequence') {
-      box(filters, 430, 535, 220, 88, '0xB91C1C@0.94', enable);
-      label(filters, fontExpr, 'SKIP', 485, 551, 46, 'white', enable);
-      box(filters, 466, 645, 148, 11, '0xEF4444@0.9', enable);
-      box(filters, 530, 645, 18, 90, '0xEF4444@0.9', enable);
+    if (story.type === 'devil-interruption') {
+      box(filters, 430, 735, 220, 86, '0xB91C1C@0.96', enable);
+      label(filters, fontExpr, 'SKIP', 486, 750, 46, 'white', enable);
+      label(filters, fontExpr, 'THE LEAK STARTS HERE', 340, 842, 26, '0xFF9A9A', enable);
+    }
+    if (story.type === 'metric-consequence') {
+      box(filters, 455, 732, 170, 6, '0xEF4444@0.94', enable);
+      box(filters, 535, 700, 10, 74, '0xEF4444@0.94', enable);
+      label(filters, fontExpr, 'LOST FOLLOW', 420, 790, 27, '0xFF8A8A', enable);
     }
     if (story.type === 'doctor-diagnosis') {
-      box(filters, 130, 245, 820, 5, '0x5B8CFF@0.95', enable);
-      box(filters, 130, 500, 820, 4, '0x5B8CFF@0.52', enable);
-      label(filters, fontExpr, 'ELEVATE DIAGNOSIS', 365, 525, 28, '0xAFC9FF', enable);
+      box(filters, 150, 432, 780, 5, '0x5B8CFF@0.95', enable);
+      label(filters, fontExpr, 'ELEVATE DIAGNOSIS', 367, 445, 27, '0xB8CEFF', enable);
+      label(filters, fontExpr, story.prop === 'retention-graph' ? 'RETENTION LEAK' : 'NO REASON TO RETURN', story.prop === 'retention-graph' ? 395 : 318, 740, 31, 'white@0.88', enable);
+    }
+    if (story.type === 'story-explanation') {
+      label(filters, fontExpr, 'BUILD A REASON TO RETURN', 320, 730, 29, '0xB8CEFF', enable);
     }
     if (story.type === 'doctor-prescription') {
-      box(filters, 230, 245, 620, 255, 'black@0.58', enable);
-      box(filters, 230, 245, 7, 255, '0x5B8CFF@0.95', enable);
-      label(filters, fontExpr, 'PRESCRIPTION', 285, 280, 28, '0xAFC9FF', enable);
-      label(filters, fontExpr, 'HOOK  >  VALUE  >  CTA', 285, 355, 36, 'white', enable);
-      label(filters, fontExpr, 'REPEAT WHAT WORKS', 285, 415, 31, 'white@0.80', enable);
-    }
-    if (scene.isBrandCta) {
-      box(filters, 150, 260, 780, 5, '0x5B8CFF@0.9', enable);
-      label(filters, fontExpr, 'ELEVATE OS', 392, 302, 46, 'white', enable);
+      box(filters, 150, 432, 780, 5, '0x5B8CFF@0.95', enable);
+      label(filters, fontExpr, 'ELEVATE PRESCRIPTION', 350, 445, 27, '0xB8CEFF', enable);
+      label(filters, fontExpr, 'PROMISE  >  SERIES  >  CTA', 303, 730, 31, 'white@0.90', enable);
     }
   }
   return filters;
@@ -214,27 +255,49 @@ function validSpriteMap(candidate, cast) {
 }
 
 function spriteMapFor(cast, options = {}) {
-  const override = validSpriteMap(options.characterSpritePaths, cast);
-  if (override) return override;
-  if (universe.spritePackReady()) return universe.spritePaths();
-  return null;
+  return validSpriteMap(options.characterSpritePaths, cast);
 }
 
 function backgroundFilter() {
-  return '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,boxblur=12:2,eq=brightness=-0.14:saturation=0.42:contrast=1.05,drawbox=x=0:y=0:w=iw:h=ih:color=0x050811@0.38:t=fill[base]';
+  return '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,boxblur=8:2,eq=brightness=-0.07:saturation=0.56:contrast=1.04,drawbox=x=0:y=0:w=iw:h=ih:color=0x050811@0.27:t=fill[base]';
 }
 
 function overlayChain(filters, cast, sourceLabels) {
   let previous = '[base]';
   cast.forEach((item, i) => {
     const target = targetPosition(item);
-    filters.push(`${sourceLabels[i]}scale=-2:${target.height}[char${i}]`);
+    filters.push(`${sourceLabels[i]}scale=-2:${target.height}:flags=lanczos,format=rgba[char${i}]`);
     const out = `[cv${i}]`;
     const enable = `enable='between(t,${item.start.toFixed(3)},${item.end.toFixed(3)})'`;
     filters.push(`${previous}[char${i}]overlay=x='${overlayX(item, target)}':y='${overlayY(item, target)}':${enable}:eval=frame${out}`);
     previous = out;
   });
   return previous;
+}
+
+function renderWithFinalLineup(videoPath, output, plan, cast, lineupPath) {
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath, '-loop', '1', '-framerate', '30', '-i', lineupPath];
+  const filters = [backgroundFilter()];
+  filters.push(`[1:v]scale=2048:682:flags=lanczos,format=rgba,setsar=1,split=${cast.length}${cast.map((_, i) => `[sheet${i}]`).join('')}`);
+  const sourceLabels = [];
+  cast.forEach((item, index) => {
+    const crop = universe.FINAL_LINEUP_CROPS[item.characterId];
+    if (!crop) throw new Error(`No approved final-lineup crop exists for ${item.characterId}.`);
+    filters.push(`[sheet${index}]crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},format=rgba,setpts=PTS-STARTPTS[actor${index}]`);
+    sourceLabels.push(`[actor${index}]`);
+  });
+  const previous = overlayChain(filters, cast, sourceLabels);
+  const props = propFilters(plan);
+  filters.push(props.length ? `${previous}${props.join(',')}[vout]` : `${previous}null[vout]`);
+  args.push(
+    '-filter_complex', filters.join(';'),
+    '-map', '[vout]', '-an',
+    '-t', Number(plan.durationSec || 30).toFixed(3),
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart', output
+  );
+  pipeline.run('ffmpeg', args, { timeoutMs: 360000 });
+  return { assetMode: 'approved-final-lineup', finalLineupReady: true };
 }
 
 function renderWithSprites(videoPath, output, plan, cast, spriteMap) {
@@ -258,40 +321,7 @@ function renderWithSprites(videoPath, output, plan, cast, spriteMap) {
     '-movflags', '+faststart', output
   );
   pipeline.run('ffmpeg', args, { timeoutMs: 360000 });
-  return { assetMode: 'transparent-sprites', spriteCount: cast.length };
-}
-
-function renderWithReference(videoPath, output, plan, cast, reference) {
-  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath, '-loop', '1', '-framerate', '30', '-i', reference];
-  const filters = [backgroundFilter()];
-  const fallbackCrops = {
-    gym_creator: { x: 0, y: 60, w: 315, h: 755 },
-    fashion_creator: { x: 315, y: 80, w: 200, h: 735 },
-    ugc_creator: { x: 515, y: 90, w: 195, h: 725 },
-    info_creator: { x: 710, y: 80, w: 195, h: 735 },
-    retention_devil: { x: 905, y: 50, w: 225, h: 765 },
-    content_doctor_female: { x: 1130, y: 85, w: 180, h: 730 },
-    content_doctor_male: { x: 1310, y: 80, w: 226, h: 740 },
-  };
-  filters.push(`[1:v]scale=1536:839,split=${cast.length}${cast.map((_, i) => `[sheet${i}]`).join('')}`);
-  const sourceLabels = [];
-  cast.forEach((item, i) => {
-    const crop = fallbackCrops[item.characterId];
-    filters.push(`[sheet${i}]crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},colorkey=0xF4F4F4:0.045:0.02,format=rgba[ref${i}]`);
-    sourceLabels.push(`[ref${i}]`);
-  });
-  const previous = overlayChain(filters, cast, sourceLabels);
-  const props = propFilters(plan);
-  filters.push(props.length ? `${previous}${props.join(',')}[vout]` : `${previous}null[vout]`);
-  args.push(
-    '-filter_complex', filters.join(';'),
-    '-map', '[vout]', '-an',
-    '-t', Number(plan.durationSec || 30).toFixed(3),
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart', output
-  );
-  pipeline.run('ffmpeg', args, { timeoutMs: 360000 });
-  return { assetMode: 'reference-compatibility', spriteCount: 0 };
+  return { assetMode: 'test-transparent-sprites', finalLineupReady: false };
 }
 
 function apply(videoPath, result, plan, options = {}) {
@@ -303,15 +333,20 @@ function apply(videoPath, result, plan, options = {}) {
   const tempDir = path.join(root, 'finish-temp');
   fs.mkdirSync(tempDir, { recursive: true });
   const output = path.join(tempDir, 'character-universe.mp4');
-  const spriteMap = spriteMapFor(cast, options);
+
+  const finalLineup = options.characterFinalLineupPath || universe.ensureFinalLineup();
   let renderMeta;
-  let reference = null;
-  if (spriteMap) {
-    renderMeta = renderWithSprites(videoPath, output, plan, cast, spriteMap);
+  let sourcePath = null;
+  if (finalLineup && fs.existsSync(finalLineup)) {
+    sourcePath = path.resolve(finalLineup);
+    renderMeta = renderWithFinalLineup(videoPath, output, plan, cast, sourcePath);
   } else {
-    reference = options.characterReferencePath || universe.ensureReference();
-    if (!reference || !fs.existsSync(reference)) return { path: videoPath, meta: { applied: false, reason: 'character-assets-missing', required: true } };
-    renderMeta = renderWithReference(videoPath, output, plan, cast, reference);
+    // Explicit synthetic sprites remain available only for render-level tests.
+    const testSpriteMap = spriteMapFor(cast, options);
+    if (!testSpriteMap) {
+      return { path: videoPath, meta: { applied: false, reason: 'approved-final-transparent-lineup-missing', required: true } };
+    }
+    renderMeta = renderWithSprites(videoPath, output, plan, cast, testSpriteMap);
   }
 
   const verified = pipeline.verifyOutput(output);
@@ -319,16 +354,19 @@ function apply(videoPath, result, plan, options = {}) {
     path: output,
     meta: {
       applied: true,
-      engine: 'elevate-character-universe-v3',
-      referencePath: reference,
-      spritePackReady: Boolean(spriteMap),
+      engine: 'elevate-character-universe-v4',
+      finalLineupPath: sourcePath,
+      finalLineupReady: renderMeta.finalLineupReady,
       assetMode: renderMeta.assetMode,
       appearances: cast.length,
       sceneCoverage: new Set(cast.map((item) => item.sceneIndex)).size,
       castUsed: [...new Set(cast.map((item) => item.characterId))],
       storyModes: [...new Set((plan.scenes || []).map((scene) => scene.characterStory?.type).filter(Boolean))],
+      storyStages: [...new Set((plan.scenes || []).map((scene) => scene.characterStory?.stage).filter(Boolean))],
       propModes: [...new Set((plan.scenes || []).map((scene) => scene.characterStory?.prop).filter(Boolean))],
-      stockRole: 'blurred-background-texture-only',
+      activeRoleEngine: true,
+      largeCharacterStaging: true,
+      stockRole: 'soft-background-texture-only',
       genericHumanReplacementAllowed: false,
       ffmpegTextExpansion: 'none',
       output: verified.path,
@@ -342,15 +380,16 @@ function status() {
     implemented: true,
     configured: universeStatus.configured,
     castCount: universeStatus.castCount,
-    referencePath: universeStatus.referencePath,
-    spritePackReady: universeStatus.spritePackReady,
-    spriteRoot: universeStatus.spriteRoot,
-    renderer: universeStatus.spritePackReady
-      ? 'FFmpeg transparent-sprite stage + recurring cast + story props + motion'
-      : 'FFmpeg reference compatibility compositor',
+    finalLineupReady: universeStatus.finalLineupReady,
+    finalLineupPath: universeStatus.finalLineupPath,
+    renderer: universeStatus.finalLineupReady
+      ? 'FFmpeg approved transparent-lineup stage + active character roles + story props + motion'
+      : 'blocked until approved transparent final lineup is installed',
     lightweight: true,
     characterPrimary: true,
-    stockRole: 'blurred-background-texture-only',
+    activeRoleEngine: true,
+    largeCharacterStaging: true,
+    stockRole: 'soft-background-texture-only',
     genericSaaSPanelsDisabled: true,
     safeLiteralDrawtext: true,
   };
@@ -366,6 +405,7 @@ module.exports = {
   propFilters,
   spriteMapFor,
   backgroundFilter,
+  renderWithFinalLineup,
   apply,
   status,
 };
