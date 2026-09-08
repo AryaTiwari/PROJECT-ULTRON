@@ -10,6 +10,7 @@ function audit(result, brief, options = {}) {
   const polish = result?.polish || {};
   const finisher = result?.finisher || {};
   const completion = result?.completion || {};
+  const characterMeta = polish.characterUniverse || {};
   const content = quality.auditPlan(plan, brief, options);
   const branded = quality.shouldBrandPlan(plan, brief, options);
   const req = quality.requirements(plan?.durationSec || options.durationSec);
@@ -18,6 +19,7 @@ function audit(result, brief, options = {}) {
   const characterUniverseExpected = plan?.characterUniverse?.required === true;
   const expectedCharacterScenes = characterUniverseExpected ? (plan.scenes || []).length : 0;
   const castUsed = Array.isArray(finisher.characterCastUsed) ? finisher.characterCastUsed : [];
+  const transparentSpritesRequired = characterUniverseExpected && process.platform === 'win32';
 
   if (!content.ok) issues.push(...content.issues.map((issue) => `content: ${issue}`));
   if (Number(output.width || 0) !== 1080 || Number(output.height || 0) !== 1920) issues.push('output is not 1080x1920');
@@ -39,12 +41,15 @@ function audit(result, brief, options = {}) {
   if (Number(polish.maxHeadlineWords || 99) > 5) issues.push('headline text density exceeds five words');
   if (Number(polish.maxSubtitleWords || 99) > 5) issues.push('supporting text density exceeds five words');
 
-  if (characterUniverseExpected && !polish.characterUniverse?.applied) issues.push('required Elevate character universe was not applied to the final Reel');
+  if (characterUniverseExpected && !characterMeta.applied) issues.push('required Elevate character universe was not applied to the final Reel');
   if (characterUniverseExpected && !finisher.characterUniverseApplied) issues.push('premium finisher did not confirm character-universe survival into final output');
   if (characterUniverseExpected && Number(finisher.characterSceneCoverage || 0) < expectedCharacterScenes) issues.push('not every Reel scene is covered by the recurring Elevate character storyline');
   if (characterUniverseExpected && !castUsed.includes('retention_devil')) issues.push('Retention Devil is missing from the character storyline');
   if (characterUniverseExpected && !castUsed.some((id) => /^content_doctor_/.test(id))) issues.push('Elevate content doctor is missing from the diagnosis/fix storyline');
   if (characterUniverseExpected && !castUsed.some((id) => /_creator$/.test(id))) issues.push('creator archetype is missing from the character storyline');
+  if (transparentSpritesRequired && characterMeta.assetMode !== 'transparent-sprites') issues.push('Windows Elevate Reel did not use the transparent character sprite compositor');
+  if (transparentSpritesRequired && characterMeta.spritePackReady !== true) issues.push('Windows Elevate Reel did not confirm the seven-character transparent sprite pack');
+  if (characterUniverseExpected && characterMeta.ffmpegTextExpansion !== 'none') issues.push('character-story text was not rendered in FFmpeg literal-safe mode');
 
   if (semanticGraphicsExpected && !polish.graphicsEngine?.applied) issues.push('planned Elevate semantic graphics were not applied to the final visual pass');
   if (semanticGraphicsExpected && !finisher.semanticGraphicsApplied) issues.push('premium finisher did not confirm the Elevate graphics pass survived into final output');
@@ -70,9 +75,13 @@ function audit(result, brief, options = {}) {
     narrationTimeFitRate: Number(narration.timeFitRate || 1),
     transitionsApplied: Boolean(finisher.transitionsApplied),
     characterUniverseExpected: Boolean(characterUniverseExpected),
-    characterUniverseApplied: Boolean(polish.characterUniverse?.applied && finisher.characterUniverseApplied),
+    characterUniverseApplied: Boolean(characterMeta.applied && finisher.characterUniverseApplied),
     characterSceneCoverage: Number(finisher.characterSceneCoverage || 0),
     characterCastUsed: castUsed,
+    characterAssetMode: characterMeta.assetMode || null,
+    transparentSpritesRequired,
+    transparentSpritePackConfirmed: characterMeta.spritePackReady === true,
+    ffmpegTextExpansion: characterMeta.ffmpegTextExpansion || null,
     semanticGraphicsExpected: Boolean(semanticGraphicsExpected),
     semanticGraphicsApplied: Boolean(polish.graphicsEngine?.applied && finisher.semanticGraphicsApplied),
     sfxApplied: Boolean(finisher.sfxApplied),
