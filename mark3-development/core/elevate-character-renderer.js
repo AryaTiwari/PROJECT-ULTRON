@@ -3,7 +3,20 @@ const path = require('path');
 const universe = require('./elevate-character-universe');
 const pipeline = require('./reel-pipeline');
 
-function esc(value) { return String(value || '').replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1\\:').replace(/'/g, "\\'"); }
+function escPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1\\:').replace(/'/g, "\\'");
+}
+
+function escapeDrawtextText(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/:/g, '\\:')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]');
+}
 
 function appearances(plan = {}) {
   const list = [];
@@ -82,8 +95,10 @@ function overlayY(item, target) {
 function box(filters, x, y, w, h, color, enable) {
   filters.push(`drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=${color}:t=fill:${enable}`);
 }
-function label(filters, fontExpr, text, x, y, size, color, enable) {
-  filters.push(`drawtext=${fontExpr}text='${text}':fontsize=${size}:fontcolor=${color}:x=${x}:y=${y}:${enable}`);
+
+function label(filters, fontExpr, value, x, y, size, color, enable) {
+  const text = escapeDrawtextText(value);
+  filters.push(`drawtext=${fontExpr}text='${text}':expansion=none:fontsize=${size}:fontcolor=${color}:x=${x}:y=${y}:${enable}`);
 }
 
 function drawMetricCard(filters, fontExpr, enable) {
@@ -100,13 +115,13 @@ function drawMetricCard(filters, fontExpr, enable) {
 function drawRetention(filters, fontExpr, enable) {
   box(filters, 150, 260, 780, 225, 'black@0.55', enable);
   label(filters, fontExpr, 'RETENTION', 190, 290, 30, 'white@0.82', enable);
-  const heights = [145,130,108,86,58,35];
+  const heights = [145, 130, 108, 86, 58, 35];
   heights.forEach((height, index) => box(filters, 220 + index * 105, 445 - height, 64, height, index < 2 ? '0x5B8CFF@0.88' : '0xEF4444@0.78', enable));
   box(filters, 210, 448, 680, 3, 'white@0.26', enable);
 }
 
 function drawFunnel(filters, fontExpr, enable) {
-  label(filters, fontExpr, 'VIEW  →  PROFILE  →  FOLLOW', 212, 265, 32, 'white@0.88', enable);
+  label(filters, fontExpr, 'VIEW  >  PROFILE  >  FOLLOW', 212, 265, 32, 'white@0.88', enable);
   box(filters, 185, 330, 710, 56, 'white@0.14', enable);
   box(filters, 285, 400, 510, 56, '0x5B8CFF@0.28', enable);
   box(filters, 390, 470, 300, 56, '0x5B8CFF@0.78', enable);
@@ -121,7 +136,7 @@ function drawHookMeter(filters, fontExpr, enable) {
 }
 
 function drawPillars(filters, fontExpr, enable) {
-  ['HOOK','VALUE','CTA'].forEach((text, index) => {
+  ['HOOK', 'VALUE', 'CTA'].forEach((text, index) => {
     const x = 145 + index * 275;
     box(filters, x, 310, 235, 150, index === 1 ? '0x17345F@0.92' : 'black@0.55', enable);
     box(filters, x, 310, 235, 6, '0x5B8CFF@0.9', enable);
@@ -147,7 +162,7 @@ function drawGenericSignal(filters, fontExpr, enable) {
 function propFilters(plan = {}) {
   const filters = [];
   const font = pipeline.findCaptionFont();
-  const fontExpr = font ? `fontfile='${esc(font)}':` : '';
+  const fontExpr = font ? `fontfile='${escPath(font)}':` : '';
   for (const scene of plan.scenes || []) {
     const story = scene.characterStory;
     if (!story) continue;
@@ -189,44 +204,52 @@ function propFilters(plan = {}) {
   return filters;
 }
 
-function apply(videoPath, result, plan, options = {}) {
-  if (options.characters === false) return { path: videoPath, meta: { applied: false, reason: 'disabled' } };
-  const reference = universe.ensureReference();
-  if (!reference) return { path: videoPath, meta: { applied: false, reason: 'character-reference-missing', required: true } };
-  const cast = appearances(plan);
-  if (!cast.length) return { path: videoPath, meta: { applied: false, reason: 'no-character-story-beats' } };
+function validSpriteMap(candidate, cast) {
+  if (!candidate || typeof candidate !== 'object') return null;
+  for (const item of cast) {
+    const file = candidate[item.characterId];
+    if (!file || !fs.existsSync(file)) return null;
+  }
+  return candidate;
+}
 
-  const root = result?.paths?.dir || path.dirname(videoPath);
-  const tempDir = path.join(root, 'finish-temp');
-  fs.mkdirSync(tempDir, { recursive: true });
-  const output = path.join(tempDir, 'character-universe.mp4');
-  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath, '-loop', '1', '-framerate', '30', '-i', reference];
-  const filters = [];
+function spriteMapFor(cast, options = {}) {
+  const override = validSpriteMap(options.characterSpritePaths, cast);
+  if (override) return override;
+  if (universe.spritePackReady()) return universe.spritePaths();
+  return null;
+}
 
-  // Keep the real media as motion texture only. Heavy blur + desaturation prevents
-  // unrelated stock people from becoming the visual identity of an Elevate Reel.
-  filters.push(`[0:v]boxblur=18:2,eq=brightness=-0.16:saturation=0.38:contrast=1.06,drawbox=x=0:y=0:w=iw:h=ih:color=0x050811@0.40:t=fill[base]`);
-  filters.push(`[1:v]scale=1536:865,split=${cast.length}${cast.map((_, i) => `[sheet${i}]`).join('')}`);
+function backgroundFilter() {
+  return '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,boxblur=12:2,eq=brightness=-0.14:saturation=0.42:contrast=1.05,drawbox=x=0:y=0:w=iw:h=ih:color=0x050811@0.38:t=fill[base]';
+}
 
-  cast.forEach((item, i) => {
-    const character = universe.CHARACTERS[item.characterId];
-    const crop = character.crop;
-    const target = targetPosition(item);
-    filters.push(`[sheet${i}]crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},colorkey=0xF4F4F4:0.05:0.035,format=rgba,scale=-2:${target.height}[char${i}]`);
-  });
-
+function overlayChain(filters, cast, sourceLabels) {
   let previous = '[base]';
   cast.forEach((item, i) => {
     const target = targetPosition(item);
-    const labelName = `[cv${i}]`;
+    filters.push(`${sourceLabels[i]}scale=-2:${target.height}[char${i}]`);
+    const out = `[cv${i}]`;
     const enable = `enable='between(t,${item.start.toFixed(3)},${item.end.toFixed(3)})'`;
-    filters.push(`${previous}[char${i}]overlay=x='${overlayX(item, target)}':y='${overlayY(item, target)}':${enable}:eval=frame${labelName}`);
-    previous = labelName;
+    filters.push(`${previous}[char${i}]overlay=x='${overlayX(item, target)}':y='${overlayY(item, target)}':${enable}:eval=frame${out}`);
+    previous = out;
   });
+  return previous;
+}
 
+function renderWithSprites(videoPath, output, plan, cast, spriteMap) {
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath];
+  const filters = [backgroundFilter()];
+  const sourceLabels = [];
+  cast.forEach((item, index) => {
+    const file = path.resolve(spriteMap[item.characterId]);
+    args.push('-loop', '1', '-framerate', '30', '-i', file);
+    filters.push(`[${index + 1}:v]format=rgba,setpts=PTS-STARTPTS[sprite${index}]`);
+    sourceLabels.push(`[sprite${index}]`);
+  });
+  const previous = overlayChain(filters, cast, sourceLabels);
   const props = propFilters(plan);
   filters.push(props.length ? `${previous}${props.join(',')}[vout]` : `${previous}null[vout]`);
-
   args.push(
     '-filter_complex', filters.join(';'),
     '-map', '[vout]', '-an',
@@ -235,13 +258,71 @@ function apply(videoPath, result, plan, options = {}) {
     '-movflags', '+faststart', output
   );
   pipeline.run('ffmpeg', args, { timeoutMs: 360000 });
+  return { assetMode: 'transparent-sprites', spriteCount: cast.length };
+}
+
+function renderWithReference(videoPath, output, plan, cast, reference) {
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath, '-loop', '1', '-framerate', '30', '-i', reference];
+  const filters = [backgroundFilter()];
+  const fallbackCrops = {
+    gym_creator: { x: 0, y: 60, w: 315, h: 755 },
+    fashion_creator: { x: 315, y: 80, w: 200, h: 735 },
+    ugc_creator: { x: 515, y: 90, w: 195, h: 725 },
+    info_creator: { x: 710, y: 80, w: 195, h: 735 },
+    retention_devil: { x: 905, y: 50, w: 225, h: 765 },
+    content_doctor_female: { x: 1130, y: 85, w: 180, h: 730 },
+    content_doctor_male: { x: 1310, y: 80, w: 226, h: 740 },
+  };
+  filters.push(`[1:v]scale=1536:839,split=${cast.length}${cast.map((_, i) => `[sheet${i}]`).join('')}`);
+  const sourceLabels = [];
+  cast.forEach((item, i) => {
+    const crop = fallbackCrops[item.characterId];
+    filters.push(`[sheet${i}]crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},colorkey=0xF4F4F4:0.045:0.02,format=rgba[ref${i}]`);
+    sourceLabels.push(`[ref${i}]`);
+  });
+  const previous = overlayChain(filters, cast, sourceLabels);
+  const props = propFilters(plan);
+  filters.push(props.length ? `${previous}${props.join(',')}[vout]` : `${previous}null[vout]`);
+  args.push(
+    '-filter_complex', filters.join(';'),
+    '-map', '[vout]', '-an',
+    '-t', Number(plan.durationSec || 30).toFixed(3),
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart', output
+  );
+  pipeline.run('ffmpeg', args, { timeoutMs: 360000 });
+  return { assetMode: 'reference-compatibility', spriteCount: 0 };
+}
+
+function apply(videoPath, result, plan, options = {}) {
+  if (options.characters === false) return { path: videoPath, meta: { applied: false, reason: 'disabled' } };
+  const cast = appearances(plan);
+  if (!cast.length) return { path: videoPath, meta: { applied: false, reason: 'no-character-story-beats' } };
+
+  const root = result?.paths?.dir || path.dirname(videoPath);
+  const tempDir = path.join(root, 'finish-temp');
+  fs.mkdirSync(tempDir, { recursive: true });
+  const output = path.join(tempDir, 'character-universe.mp4');
+  const spriteMap = spriteMapFor(cast, options);
+  let renderMeta;
+  let reference = null;
+  if (spriteMap) {
+    renderMeta = renderWithSprites(videoPath, output, plan, cast, spriteMap);
+  } else {
+    reference = options.characterReferencePath || universe.ensureReference();
+    if (!reference || !fs.existsSync(reference)) return { path: videoPath, meta: { applied: false, reason: 'character-assets-missing', required: true } };
+    renderMeta = renderWithReference(videoPath, output, plan, cast, reference);
+  }
+
   const verified = pipeline.verifyOutput(output);
   return {
     path: output,
     meta: {
       applied: true,
-      engine: 'elevate-character-universe-v2',
+      engine: 'elevate-character-universe-v3',
       referencePath: reference,
+      spritePackReady: Boolean(spriteMap),
+      assetMode: renderMeta.assetMode,
       appearances: cast.length,
       sceneCoverage: new Set(cast.map((item) => item.sceneIndex)).size,
       castUsed: [...new Set(cast.map((item) => item.characterId))],
@@ -249,6 +330,7 @@ function apply(videoPath, result, plan, options = {}) {
       propModes: [...new Set((plan.scenes || []).map((scene) => scene.characterStory?.prop).filter(Boolean))],
       stockRole: 'blurred-background-texture-only',
       genericHumanReplacementAllowed: false,
+      ffmpegTextExpansion: 'none',
       output: verified.path,
     },
   };
@@ -261,21 +343,29 @@ function status() {
     configured: universeStatus.configured,
     castCount: universeStatus.castCount,
     referencePath: universeStatus.referencePath,
-    renderer: 'FFmpeg character stage + keyed canonical cast + story props + motion',
+    spritePackReady: universeStatus.spritePackReady,
+    spriteRoot: universeStatus.spriteRoot,
+    renderer: universeStatus.spritePackReady
+      ? 'FFmpeg transparent-sprite stage + recurring cast + story props + motion'
+      : 'FFmpeg reference compatibility compositor',
     lightweight: true,
     characterPrimary: true,
     stockRole: 'blurred-background-texture-only',
     genericSaaSPanelsDisabled: true,
+    safeLiteralDrawtext: true,
   };
 }
 
 module.exports = {
+  escapeDrawtextText,
   appearances,
   characterHeight,
   targetPosition,
   overlayX,
   overlayY,
   propFilters,
+  spriteMapFor,
+  backgroundFilter,
   apply,
   status,
 };
