@@ -39,3 +39,12 @@ jobs:
       - name: Render full 30-second Elevate visual acceptance Reel
         working-directory: mark3-development
         run: node --env-file=../.env scripts/reel-visual-acceptance.js
+
+  windows-character-assets:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Windows transparent character sprite builder
+        shell: powershell
+        working-directory: mark3-development
+        run: .\scripts\reel-sprite-builder-windows-test.ps1
