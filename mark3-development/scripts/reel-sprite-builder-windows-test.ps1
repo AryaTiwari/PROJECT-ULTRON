@@ -52,27 +52,31 @@ try {
   foreach ($name in $expected) {
     $file = Join-Path $output $name
     if (-not (Test-Path -LiteralPath $file)) { throw "Missing transparent sprite: $name" }
-    if ((Get-Item -LiteralPath $file).Length -lt 4096) { throw "Sprite is unexpectedly small: $name" }
+    if ((Get-Item -LiteralPath $file).Length -lt 512) { throw "Sprite appears corrupt or empty: $name" }
   }
 
-  $doctorPath = Join-Path $output 'content_doctor_female.png'
-  $doctor = New-Object System.Drawing.Bitmap $doctorPath
-  try {
-    $transparent = 0
-    $opaque = 0
-    for ($y = 0; $y -lt $doctor.Height; $y += 20) {
-      for ($x = 0; $x -lt $doctor.Width; $x += 20) {
-        $alpha = $doctor.GetPixel($x,$y).A
-        if ($alpha -lt 16) { $transparent++ }
-        if ($alpha -gt 220) { $opaque++ }
+  # Inspect actual alpha content, which is a meaningful correctness check. PNG byte
+  # size is not, because flat images can compress to only a few kilobytes.
+  foreach ($name in $expected) {
+    $spritePath = Join-Path $output $name
+    $sprite = New-Object System.Drawing.Bitmap $spritePath
+    try {
+      $transparent = 0
+      $opaque = 0
+      for ($y = 0; $y -lt $sprite.Height; $y += 20) {
+        for ($x = 0; $x -lt $sprite.Width; $x += 20) {
+          $alpha = $sprite.GetPixel($x,$y).A
+          if ($alpha -lt 16) { $transparent++ }
+          if ($alpha -gt 220) { $opaque++ }
+        }
       }
+      if ($transparent -lt 5) { throw "Sprite builder did not create meaningful transparent background: $name" }
+      if ($opaque -lt 5) { throw "Sprite builder removed too much foreground detail: $name" }
     }
-    if ($transparent -lt 5) { throw 'Sprite builder did not create meaningful transparent background.' }
-    if ($opaque -lt 5) { throw 'Sprite builder removed too much foreground detail.' }
+    finally { $sprite.Dispose() }
   }
-  finally { $doctor.Dispose() }
 
-  Write-Output 'ULTRON Windows character sprite acceptance passed: seven transparent PNG sprites generated from one reference sheet with foreground detail preserved.'
+  Write-Output 'ULTRON Windows character sprite acceptance passed: seven transparent PNG sprites generated from one reference sheet with transparent background and foreground detail preserved.'
 }
 finally {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
