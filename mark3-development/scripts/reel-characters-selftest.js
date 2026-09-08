@@ -42,8 +42,10 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
   const appearances = renderer.appearances(decorated);
   assert(appearances.length >= decorated.scenes.length, 'Character renderer must cover every storyline scene.');
   assert(new Set(appearances.map((item) => item.sceneIndex)).size === decorated.scenes.length, 'Character renderer must cover every scene index.');
-  assert(renderer.status().characterPrimary === true, 'Characters must be the primary visual identity.');
-  assert(renderer.status().stockRole === 'background-support-only', 'Stock footage must remain supporting background only.');
+  const state = renderer.status();
+  assert(state.characterPrimary === true, 'Characters must be the primary visual identity.');
+  assert(state.stockRole === 'blurred-background-texture-only', 'Stock footage must be reduced to blurred background texture only.');
+  assert(state.genericSaaSPanelsDisabled === true, 'Generic SaaS metric panels must be disabled on character-universe Reels.');
 
-  console.log('ULTRON Elevate Character Universe self-test passed: seven canonical actors, creator routing, Retention Devil conflict, doctor diagnosis/prescription, every-scene continuity and stock-as-background-only policy validated.');
+  console.log('ULTRON Elevate Character Universe self-test passed: seven canonical actors, creator routing, Retention Devil conflict, doctor diagnosis/prescription, every-scene continuity, character-aware props and blurred-background-only stock policy validated.');
 })();
