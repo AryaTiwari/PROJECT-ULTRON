@@ -1,7 +1,75 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const universe = require('../core/elevate-character-universe');
 const renderer = require('../core/elevate-character-renderer');
+const pipeline = require('../core/reel-pipeline');
+const factory = require('../core/reel-factory');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
+
+function syntheticSprite(file, color) {
+  pipeline.run('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', `color=c=black@0.0:s=220x620:r=1:d=0.1,format=rgba,drawbox=x=38:y=28:w=144:h=552:color=${color}@1:t=fill`,
+    '-frames:v', '1', file,
+  ], { timeoutMs: 30000 });
+  assert(fs.existsSync(file) && fs.statSync(file).size > 1000, `Synthetic character sprite failed: ${file}`);
+}
+
+function realFfmpegCharacterRenderTest() {
+  if (!factory.ffmpegStatus().available) {
+    console.log('ULTRON Elevate Character render smoke skipped: FFmpeg unavailable in this environment.');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ultron-character-render-'));
+  const background = path.join(root, 'background.mp4');
+  pipeline.run('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc2=size=1080x1920:rate=30:duration=2.8',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p', background,
+  ], { timeoutMs: 120000 });
+
+  const colors = {
+    gym_creator: '0x2563EB',
+    fashion_creator: '0xEC4899',
+    ugc_creator: '0xF59E0B',
+    info_creator: '0x6B7280',
+    retention_devil: '0xDC2626',
+    content_doctor_female: '0xDB2777',
+    content_doctor_male: '0x0284C7',
+  };
+  const spriteMap = {};
+  for (const id of Object.keys(universe.CHARACTERS)) {
+    const file = path.join(root, `${id}.png`);
+    syntheticSprite(file, colors[id]);
+    spriteMap[id] = file;
+  }
+
+  const plan = {
+    durationSec: 2.8,
+    scenes: [
+      { index:1,start:0,end:0.4,characterStory:{type:'creator-hook',characters:['info_creator'],expressions:['confident'],prop:'hook-meter',motion:'creator-pop'} },
+      { index:2,start:0.4,end:0.8,characterStory:{type:'devil-interruption',characters:['info_creator','retention_devil'],expressions:['confused','smug'],prop:'views-vs-follows',motion:'devil-ambush'} },
+      { index:3,start:0.8,end:1.2,characterStory:{type:'metric-consequence',characters:['retention_devil','info_creator'],expressions:['scheming','frustrated'],prop:'retention-graph',motion:'metric-attack'} },
+      { index:4,start:1.2,end:1.6,characterStory:{type:'doctor-diagnosis',characters:['info_creator','content_doctor_female'],expressions:['concerned','analytical'],prop:'conversion-funnel',motion:'scanner-diagnosis'} },
+      { index:5,start:1.6,end:2.0,characterStory:{type:'story-explanation',characters:['info_creator','content_doctor_female'],expressions:['thinking','confident'],prop:'content-pillars',motion:'panel-explain'} },
+      { index:6,start:2.0,end:2.4,characterStory:{type:'doctor-prescription',characters:['content_doctor_male','info_creator','retention_devil'],expressions:['confident','motivated','shocked'],prop:'brand-card',motion:'prescription-reveal'} },
+      { index:7,start:2.4,end:2.8,isBrandCta:true,characterStory:{type:'elevate-close',characters:['content_doctor_female','content_doctor_male'],expressions:['confident','approving'],prop:'cta-button',motion:'doctor-close'} },
+    ],
+  };
+  const rendered = renderer.apply(background, { paths: { dir: root } }, plan, { characterSpritePaths: spriteMap, characters: true });
+  assert(rendered.meta?.applied === true, `Real character render must succeed: ${rendered.meta?.reason || 'unknown failure'}`);
+  assert(rendered.meta?.assetMode === 'transparent-sprites', 'Real render smoke must exercise transparent sprite mode.');
+  assert(rendered.meta?.ffmpegTextExpansion === 'none', 'Literal drawtext expansion must remain disabled.');
+  assert(rendered.meta?.sceneCoverage === 7, 'Real render smoke must cover all seven story scenes.');
+  const verified = pipeline.verifyOutput(rendered.path);
+  assert(verified.width === 1080 && verified.height === 1920, 'Character render smoke output must remain 1080x1920.');
+  const filters = renderer.propFilters(plan).join(',');
+  assert(filters.includes("text='72%'"), 'Regression smoke must include the literal 72% graphic that previously crashed FFmpeg.');
+  assert(filters.includes('expansion=none'), 'Every character-story label must disable FFmpeg text expansion.');
+  fs.rmSync(root, { recursive: true, force: true });
+}
 
 (() => {
   const ids = Object.keys(universe.CHARACTERS);
@@ -46,6 +114,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
   assert(state.characterPrimary === true, 'Characters must be the primary visual identity.');
   assert(state.stockRole === 'blurred-background-texture-only', 'Stock footage must be reduced to blurred background texture only.');
   assert(state.genericSaaSPanelsDisabled === true, 'Generic SaaS metric panels must be disabled on character-universe Reels.');
+  assert(state.safeLiteralDrawtext === true, 'Character renderer must explicitly protect literal FFmpeg drawtext content.');
+  assert(renderer.escapeDrawtextText("72%: creator's signal") === "72%\\: creator\\'s signal", 'FFmpeg text escaping must preserve literal percent while escaping filter syntax.');
 
-  console.log('ULTRON Elevate Character Universe self-test passed: seven canonical actors, creator routing, Retention Devil conflict, doctor diagnosis/prescription, every-scene continuity, character-aware props and blurred-background-only stock policy validated.');
+  realFfmpegCharacterRenderTest();
+  console.log('ULTRON Elevate Character Universe self-test passed: seven canonical actors, transparent sprite compositor, literal-percent FFmpeg regression render, Retention Devil conflict, doctor diagnosis/prescription, every-scene continuity and blurred-background-only stock policy validated.');
 })();
