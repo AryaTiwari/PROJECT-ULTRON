@@ -6,6 +6,7 @@ const reelLearning = require('./reel-learning');
 const elevateReelEngine = require('./elevate-reel-engine');
 const elevateThemeRadar = require('./elevate-theme-radar');
 const assetRescue = require('./reel-asset-rescue');
+const scriptRescue = require('./reel-script-rescue');
 const characterUniverse = require('./elevate-character-universe');
 const characterRenderer = require('./elevate-character-renderer');
 const { writeJsonAtomic } = require('./persistence');
@@ -20,9 +21,11 @@ function install() {
     elevateReelEngine: elevateReelEngine.status(),
     elevateThemeRadar: elevateThemeRadar.status(),
     assetCompletion: assetRescue.status(),
+    scriptRescue: scriptRescue.status(),
     characterUniverse: characterUniverse.status(),
   };
   const elevateStatus = elevateReelEngine.install();
+  const scriptRescueStatus = scriptRescue.install();
   originalBuild = pipeline.build;
   pipeline.build = async (brief, options = {}) => {
     const characterState = characterUniverse.status();
@@ -50,6 +53,7 @@ function install() {
         ...(base.plan.elevateEngine || {}),
         themeRadar,
         assetCompletion: assetRescue.status(),
+        scriptRescue: scriptRescue.status(),
         characterUniverse: characterRenderer.status(),
       };
       if (base.paths?.plan) writeJsonAtomic(base.paths.plan, base.plan);
@@ -57,6 +61,7 @@ function install() {
     if (base.job) {
       base.job.elevateThemeRadar = themeRadar;
       base.job.reelAssetCompletion = assetRescue.status();
+      base.job.reelScriptRescue = scriptRescue.status();
       base.job.characterUniverse = characterRenderer.status();
       if (base.paths?.job) writeJsonAtomic(base.paths.job, base.job);
     }
@@ -100,6 +105,7 @@ function install() {
     job.elevateReelEngine = elevateReelEngine.status();
     job.elevateThemeRadar = themeRadar;
     job.reelAssetCompletion = assetRescue.status();
+    job.reelScriptRescue = scriptRescue.status();
     job.characterUniverse = characterRenderer.status();
     job.updatedAt = new Date().toISOString();
 
@@ -125,6 +131,7 @@ function install() {
       finalQuality: audit,
       elevateThemeRadar: themeRadar,
       reelAssetCompletion: assetRescue.status(),
+      reelScriptRescue: scriptRescue.status(),
       characterUniverse: characterRenderer.status(),
     };
     try {
@@ -141,6 +148,7 @@ function install() {
     elevateReelEngine: elevateStatus,
     elevateThemeRadar: elevateThemeRadar.status(),
     assetCompletion: assetRescue.status(),
+    scriptRescue: scriptRescueStatus,
     characterUniverse: characterUniverse.status(),
   };
 }
@@ -148,6 +156,7 @@ function install() {
 function uninstall() {
   if (!installed || !originalBuild) return { installed: false };
   pipeline.build = originalBuild;
+  scriptRescue.uninstall();
   originalBuild = null;
   installed = false;
   return { installed: false };
@@ -162,6 +171,7 @@ function status() {
     elevateReelEngine: elevateReelEngine.status(),
     elevateThemeRadar: elevateThemeRadar.status(),
     assetCompletion: assetRescue.status(),
+    scriptRescue: scriptRescue.status(),
     characterUniverse: characterUniverse.status(),
     characterRenderer: characterRenderer.status(),
     creativeRecipeLearning: reelLearning.status(),
