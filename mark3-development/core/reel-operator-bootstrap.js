@@ -3,6 +3,7 @@ const path = require('path');
 const factory = require('./reel-factory');
 const pipeline = require('./reel-pipeline');
 const fileVault = require('./file-vault');
+const characterUniverse = require('./elevate-character-universe');
 
 let installed = false;
 let originalHandle = null;
@@ -53,12 +54,16 @@ function extractBrief(text) {
 
 function readinessSnapshot() {
   const state = factory.status();
+  const characters = characterUniverse.status();
+  const blocker = !characters.configured ? characters.installHint : (state.nextBlocker || null);
   return {
-    ready: !state.nextBlocker,
-    blocker: state.nextBlocker || null,
+    ready: !blocker,
+    blocker,
     stockReady: Boolean(state.stockSourceReady),
     ffmpegReady: Boolean(state.ffmpeg?.available),
     narratorReady: Boolean(state.narrator?.configured),
+    characterReady: Boolean(characters.configured),
+    characterUniverse: characters,
     state,
   };
 }
@@ -68,8 +73,9 @@ function statusText() {
   const stock = readiness.stockReady ? 'stock/public media ready' : 'stock source unavailable';
   const ffmpeg = readiness.ffmpegReady ? 'FFmpeg ready' : 'FFmpeg missing';
   const narrator = readiness.narratorReady ? 'Reel narrator ready' : 'Reel narrator missing';
+  const characters = readiness.characterReady ? 'seven-character Elevate universe ready' : 'Elevate character reference missing';
   const blocker = readiness.blocker ? ` Current blocker: ${readiness.blocker}` : ' Production readiness is green.';
-  return `Sir, Reel Factory is active: ${stock}, ${ffmpeg}, ${narrator}, AI direction ready, semantic graphics ready, and the finished MP4 renderer is installed.${blocker} Generation stays zero-cost-only; publishing remains a separate Instagram action.`;
+  return `Sir, Reel Factory is active: ${stock}, ${ffmpeg}, ${narrator}, ${characters}, AI direction ready, character-first storyline direction ready, semantic graphics ready, and the finished MP4 renderer is installed.${blocker} Generation stays zero-cost-only; publishing remains a separate Instagram action.`;
 }
 
 function artifactName(result) {
@@ -98,6 +104,8 @@ function registerReelArtifact(result, brief) {
       durationSec: Number(result?.output?.durationSec || result?.plan?.durationSec || 0) || null,
       captionsApplied: Boolean(result?.polish?.captionsApplied),
       musicApplied: Boolean(result?.polish?.musicApplied),
+      characterUniverseApplied: Boolean(result?.polish?.characterUniverse?.applied),
+      characterCastUsed: result?.polish?.characterUniverse?.castUsed || [],
       originalPath: outputPath,
     },
   });
@@ -177,7 +185,7 @@ async function buildReelResponse(requestText) {
       ok: false,
       error: blocker,
       text: `Sir, Reel Factory is installed but cannot start production yet. Blocker: ${blocker}`,
-      result: { ok: false, blocker, readiness: readiness.state },
+      result: { ok: false, blocker, readiness },
       artifact: null,
     };
   }
@@ -185,7 +193,7 @@ async function buildReelResponse(requestText) {
   const brief = extractBrief(requestText);
   const durationSec = parseDuration(requestText);
   const style = parseStyle(requestText);
-  const result = await pipeline.build(brief, { durationSec, style, polish: true, music: true });
+  const result = await pipeline.build(brief, { durationSec, style, polish: true, music: true, characters: true });
   if (!result.ok) {
     const blocker = result.blocker || result.job?.finishingError || result.job?.narrationError || result.job?.polishError || 'unknown production blocker';
     return {
@@ -209,10 +217,13 @@ async function buildReelResponse(requestText) {
   const captions = result.polish?.captionsApplied ? 'captions applied' : 'caption overlay skipped';
   const music = result.polish?.musicApplied ? 'background music mixed' : 'no local music track configured';
   const graphics = result.polish?.graphicsEngine?.applied ? 'semantic graphics applied' : 'semantic graphics not required';
+  const characters = result.polish?.characterUniverse?.applied
+    ? `Elevate character universe applied (${(result.polish.characterUniverse.castUsed || []).join(', ')})`
+    : 'character universe missing';
   const duration = Math.round(result.output?.durationSec || durationSec);
   const responseText = artifact
-    ? `Done, Sir. I created the Reel and attached it here for preview or download. ${mb} MB, ${duration} seconds, ${captions}, ${graphics}, ${music}. It is rendered and verified. I have not published it to Instagram.`
-    : `Done, Sir. I created and verified the Reel, but I could not attach it in chat: ${artifactError || 'file delivery failed'}. The local file is at ${result.output.path}. I have not published it to Instagram.`;
+    ? `Done, Sir. I created the character-first Elevate Reel and attached it here for preview or download. ${mb} MB, ${duration} seconds, ${characters}, ${captions}, ${graphics}, ${music}. It is rendered and verified. I have not published it to Instagram.`
+    : `Done, Sir. I created and verified the character-first Reel, but I could not attach it in chat: ${artifactError || 'file delivery failed'}. The local file is at ${result.output.path}. I have not published it to Instagram.`;
 
   return { ok: true, error: null, text: responseText, result, artifact, artifactError };
 }
@@ -234,7 +245,7 @@ function install() {
       const response = statusText();
       conversation.append('user', text, { taskType: 'reel-factory-status', inputMode });
       conversation.append('assistant', response, { model: 'reel-factory', provider: 'local', taskType: 'reel-factory-status', inputMode });
-      emit('reel_factory_status_requested', { inputMode, status: factory.status() });
+      emit('reel_factory_status_requested', { inputMode, status: readinessSnapshot() });
       void voice.enqueue(response);
       return { ok: true, response, text: response, model: 'reel-factory', provider: 'local', taskType: 'reel-factory-status', mode: 'operator', inputMode, toolRounds: 0 };
     }
@@ -278,13 +289,13 @@ function install() {
       const built = await buildReelResponse(text);
       const artifacts = built.artifact ? [built.artifact] : [];
       conversation.append('assistant', built.text, {
-        model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', inputMode,
+        model: 'reel-factory', provider: 'local+free-stock+character-universe', taskType: 'reel-factory', inputMode,
         ok: built.ok, artifactId: built.artifact?.id || null,
       });
       emit(
         built.ok ? 'reel_factory_completed' : 'reel_factory_blocked',
         built.ok
-          ? { inputMode, output: built.result.output?.path, jobId: built.result.job?.id, artifactId: built.artifact?.id || null, artifactError: built.artifactError || null }
+          ? { inputMode, output: built.result.output?.path, jobId: built.result.job?.id, artifactId: built.artifact?.id || null, artifactError: built.artifactError || null, characters: built.result.polish?.characterUniverse?.castUsed || [] }
           : { inputMode, blocker: built.error || built.result?.blocker || 'unknown production blocker' }
       );
       void voice.enqueue(built.text);
@@ -293,7 +304,7 @@ function install() {
         response: built.text,
         text: built.text,
         model: 'reel-factory',
-        provider: 'local+free-stock',
+        provider: 'local+free-stock+character-universe',
         taskType: 'reel-factory',
         mode: 'operator',
         inputMode,
@@ -305,16 +316,16 @@ function install() {
       };
     } catch (error) {
       const response = `Sir, Reel Factory failed safely: ${error.message}`;
-      conversation.append('assistant', response, { model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', inputMode, ok: false });
+      conversation.append('assistant', response, { model: 'reel-factory', provider: 'local+free-stock+character-universe', taskType: 'reel-factory', inputMode, ok: false });
       emit('reel_factory_failed', { inputMode, error: error.message });
       void voice.enqueue(response);
-      return { ok: false, response, text: response, model: 'reel-factory', provider: 'local+free-stock', taskType: 'reel-factory', mode: 'operator', inputMode, error: error.message, artifacts: [], toolRounds: 0 };
+      return { ok: false, response, text: response, model: 'reel-factory', provider: 'local+free-stock+character-universe', taskType: 'reel-factory', mode: 'operator', inputMode, error: error.message, artifacts: [], toolRounds: 0 };
     }
   };
 
   installed = true;
-  emit('reel_factory_operator_ready', { status: factory.status() });
-  return { installed: true, status: factory.status() };
+  emit('reel_factory_operator_ready', { status: readinessSnapshot() });
+  return { installed: true, status: readinessSnapshot() };
 }
 
 function uninstall() {
@@ -325,7 +336,7 @@ function uninstall() {
   installed = false;
 }
 
-function status() { return { installed, factory: factory.status() }; }
+function status() { return { installed, factory: factory.status(), characters: characterUniverse.status() }; }
 
 module.exports = {
   install,
