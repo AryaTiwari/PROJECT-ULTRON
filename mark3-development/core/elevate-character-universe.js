@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawnSync } = require('child_process');
 const config = require('./config');
 const factory = require('./reel-factory');
 
@@ -16,46 +15,49 @@ const CANONICAL_REFERENCE_NAMES = [
   'elevate-characters.png',
 ];
 
+// Coordinates are measured against the canonical 1536-wide sheet after the renderer
+// normalizes it to 1536x865. Each crop is intentionally narrow enough to avoid
+// dragging a neighboring actor or prop into the keyed sprite.
 const CHARACTERS = Object.freeze({
   gym_creator: {
     id: 'gym_creator', label: 'Gym Creator', role: 'fitness creator',
-    crop: { x: 45, y: 75, w: 250, h: 715 },
+    crop: { x: 24, y: 105, w: 286, h: 710 },
     equipment: ['barbell', 'fitness metrics', 'workout content'],
     expressions: ['confident', 'confused', 'frustrated', 'motivated', 'celebrating'],
   },
   fashion_creator: {
     id: 'fashion_creator', label: 'Fashion Creator', role: 'fashion / lifestyle / beauty creator',
-    crop: { x: 300, y: 78, w: 215, h: 705 },
+    crop: { x: 330, y: 145, w: 190, h: 665 },
     equipment: ['phone', 'camera', 'outfit cards', 'brand collab cards'],
     expressions: ['confident', 'surprised', 'frustrated', 'excited', 'celebrating'],
   },
   ugc_creator: {
     id: 'ugc_creator', label: 'UGC Creator', role: 'skincare / UGC / product-review creator',
-    crop: { x: 505, y: 88, w: 205, h: 700 },
+    crop: { x: 520, y: 160, w: 190, h: 650 },
     equipment: ['product bottle', 'makeup brush', 'review card', 'camera'],
     expressions: ['curious', 'concerned', 'confident', 'excited', 'celebrating'],
   },
   info_creator: {
     id: 'info_creator', label: 'Info Creator', role: 'finance / tech / education / information creator',
-    crop: { x: 690, y: 72, w: 215, h: 710 },
+    crop: { x: 710, y: 135, w: 190, h: 675 },
     equipment: ['phone', 'analytics', 'topic cards', 'content notes'],
     expressions: ['confident', 'confused', 'thinking', 'concerned', 'celebrating'],
   },
   retention_devil: {
     id: 'retention_devil', label: 'Retention Devil', role: 'personification of creator mistakes and audience drop-off, not the Instagram algorithm',
-    crop: { x: 850, y: 20, w: 285, h: 770 },
+    crop: { x: 900, y: 95, w: 230, h: 720 },
     equipment: ['SKIP button', 'scissors', 'retention graph', 'down arrow', 'stopwatch', 'broken engagement meter', 'view/swipe cards'],
     expressions: ['smug', 'scheming', 'laughing', 'shocked', 'defeated'],
   },
   content_doctor_female: {
     id: 'content_doctor_female', label: 'Elevate Doctor', role: 'friendly Elevate strategist who diagnoses creator underperformance',
-    crop: { x: 1120, y: 82, w: 190, h: 705 },
+    crop: { x: 1130, y: 160, w: 175, h: 650 },
     equipment: ['stethoscope', 'tablet', 'scanner', 'retention graph', 'diagnostic report'],
     expressions: ['analytical', 'concerned', 'confident', 'approving', 'celebrating'],
   },
   content_doctor_male: {
     id: 'content_doctor_male', label: 'Elevate Analyst', role: 'strategic metrics-oriented Elevate expert who prescribes the fix',
-    crop: { x: 1315, y: 80, w: 195, h: 705 },
+    crop: { x: 1305, y: 135, w: 215, h: 675 },
     equipment: ['stethoscope', 'clipboard', 'dashboard', 'growth graph', 'strategy report'],
     expressions: ['analytical', 'thinking', 'confident', 'approving', 'celebrating'],
   },
@@ -183,7 +185,7 @@ function decoratePlan(plan, brief = '') {
     visualDesign: {
       ...(scene.visualDesign || {}),
       characterPrimary: true,
-      stockRole: 'background-support-only',
+      stockRole: 'blurred-background-texture-only',
       continuityRequired: true,
     },
   }));
@@ -191,14 +193,15 @@ function decoratePlan(plan, brief = '') {
     ...plan,
     scenes,
     characterUniverse: {
-      version: 1,
+      version: 2,
       required: true,
       primaryCreator: creator,
       referencePath: ensureReference(),
       cast: Object.keys(CHARACTERS),
       storytelling: 'creator -> retention devil -> metric consequence -> Elevate diagnosis -> prescription -> recovery -> Elevate CTA',
-      stockPolicy: 'supporting-background-only',
+      stockPolicy: 'blurred-background-texture-only',
       genericHumanReplacementAllowed: false,
+      genericSaaSPanelsAllowed: false,
     },
   };
 }
@@ -214,6 +217,7 @@ function status() {
     cast: Object.values(CHARACTERS).map(({ id, label, role }) => ({ id, label, role })),
     defaultCreator: 'info_creator',
     genericHumanReplacementAllowed: false,
+    genericSaaSPanelsAllowed: false,
     lightweight: true,
     renderer: 'single-reference-sheet FFmpeg crop/overlay',
     installHint: reference ? null : 'Set ULTRON_M3_ELEVATE_CHARACTER_REFERENCE to the seven-character reference image, or run npm run reels:characters:add -- "C:\\path\\to\\1000248121.jpg".',
