@@ -3,17 +3,18 @@ const universe = require('../core/elevate-character-universe');
 
 (() => {
   const supplied = process.argv.slice(2).join(' ').trim();
-  const source = supplied || universe.discoverReference();
+  const source = supplied || universe.discoverFinalLineup() || universe.discoverReference();
   if (!source) {
-    console.error('Elevate character reference was not found automatically.');
-    console.error('Run: npm run reels:characters:add -- "C:\\path\\to\\elevate-character-reference.jpg"');
-    console.error('Or set ULTRON_M3_ELEVATE_CHARACTER_REFERENCE to the seven-character reference sheet.');
+    console.error('Approved Elevate character lineup was not found automatically.');
+    console.error('Save the final transparent lineup PNG in Downloads, then run npm run reels:characters:add again.');
+    console.error('Recognized filename: ChatGPT Image Sep 8, 2026, 02_09_14 PM.png');
+    console.error('You can also run: npm run reels:characters:add -- "C:\\path\\to\\final-lineup.png"');
     process.exit(1);
   }
 
   let installed;
   try {
-    installed = universe.installReference(source);
+    installed = universe.installCharacterAsset(source);
   } catch (error) {
     console.error(`Elevate character installation failed: ${error.message}`);
     process.exit(1);
@@ -21,17 +22,15 @@ const universe = require('../core/elevate-character-universe');
 
   const status = universe.status();
   if (!status.configured) {
-    console.error(`Elevate character universe is not production-ready. ${status.installHint || 'Transparent sprite pack is incomplete.'}`);
+    console.error(`Elevate character universe is not production-ready. ${status.installHint || 'Approved final transparent lineup is missing.'}`);
     process.exit(1);
   }
 
   console.log(`ULTRON Elevate character universe ready: ${status.castCount} canonical actors installed.`);
-  console.log(`Reference: ${path.resolve(installed)}`);
-  if (status.spritePackReady) {
-    console.log(`Transparent sprite pack: READY (7/7) at ${path.resolve(status.spriteRoot)}`);
-  } else {
-    console.log('Transparent sprite pack: compatibility mode only on this platform.');
-  }
+  console.log(`Final transparent lineup: READY at ${path.resolve(status.finalLineupPath)}`);
   console.log(`Renderer: ${status.renderer}`);
+  if (installed?.mode === 'legacy-reference') {
+    console.log('Legacy reference preserved, but production still uses the approved transparent final lineup.');
+  }
   console.log('Cast: gym creator, fashion creator, UGC/skincare creator, info creator, Retention Devil, female Elevate doctor, male Elevate doctor.');
 })();
