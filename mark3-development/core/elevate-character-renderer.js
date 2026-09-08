@@ -107,7 +107,6 @@ function anchoredX(target) {
 
 function overlayX(item, target) {
   const s = item.start.toFixed(3);
-  const e = item.end.toFixed(3);
   const base = anchoredX(target);
 
   if (item.role === 'defeated-antagonist') {
@@ -143,56 +142,58 @@ function label(filters, fontExpr, value, x, y, size, color, enable) {
   filters.push(`drawtext=${fontExpr}text='${text}':expansion=none:fontsize=${size}:fontcolor=${color}:x=${x}:y=${y}:${enable}`);
 }
 
+// Story graphics deliberately live below the top editorial text band and above
+// the acting band. Nothing in this section may drift into headline territory.
 function drawViewsVsFollows(filters, fontExpr, enable) {
-  box(filters, 135, 475, 370, 180, '0x08111F@0.76', enable);
-  box(filters, 575, 475, 370, 180, '0x08111F@0.76', enable);
-  box(filters, 135, 475, 7, 180, '0x5B8CFF@0.96', enable);
-  box(filters, 575, 475, 7, 180, '0xEF4444@0.96', enable);
-  label(filters, fontExpr, 'VIEWS', 190, 508, 29, 'white@0.72', enable);
-  label(filters, fontExpr, '12.8K', 190, 553, 62, 'white', enable);
-  label(filters, fontExpr, 'FOLLOWS', 630, 508, 29, 'white@0.72', enable);
-  label(filters, fontExpr, '+19', 630, 553, 62, '0xFF7A7A', enable);
+  box(filters, 135, 525, 370, 180, '0x08111F@0.76', enable);
+  box(filters, 575, 525, 370, 180, '0x08111F@0.76', enable);
+  box(filters, 135, 525, 7, 180, '0x5B8CFF@0.96', enable);
+  box(filters, 575, 525, 7, 180, '0xEF4444@0.96', enable);
+  label(filters, fontExpr, 'VIEWS', 190, 558, 29, 'white@0.72', enable);
+  label(filters, fontExpr, '12.8K', 190, 603, 62, 'white', enable);
+  label(filters, fontExpr, 'FOLLOWS', 630, 558, 29, 'white@0.72', enable);
+  label(filters, fontExpr, '+19', 630, 603, 62, '0xFF7A7A', enable);
 }
 
 function drawRetention(filters, fontExpr, enable) {
-  box(filters, 145, 470, 790, 235, '0x08111F@0.70', enable);
-  label(filters, fontExpr, 'RETENTION DROP', 190, 500, 30, 'white@0.78', enable);
+  box(filters, 145, 520, 790, 235, '0x08111F@0.70', enable);
+  label(filters, fontExpr, 'RETENTION DROP', 190, 550, 30, 'white@0.78', enable);
   const heights = [150, 132, 108, 84, 58, 34];
-  heights.forEach((height, index) => box(filters, 215 + index * 110, 670 - height, 66, height, index < 2 ? '0x5B8CFF@0.90' : '0xEF4444@0.82', enable));
-  box(filters, 205, 672, 690, 3, 'white@0.22', enable);
+  heights.forEach((height, index) => box(filters, 215 + index * 110, 720 - height, 66, height, index < 2 ? '0x5B8CFF@0.90' : '0xEF4444@0.82', enable));
+  box(filters, 205, 722, 690, 3, 'white@0.22', enable);
 }
 
 function drawFunnel(filters, fontExpr, enable) {
-  label(filters, fontExpr, 'VIEW  >  PROFILE  >  FOLLOW', 215, 462, 31, 'white@0.84', enable);
-  box(filters, 175, 525, 730, 54, 'white@0.14', enable);
-  box(filters, 275, 592, 530, 54, '0x5B8CFF@0.24', enable);
-  box(filters, 385, 659, 310, 54, '0xEF4444@0.68', enable);
-  label(filters, fontExpr, 'DROP-OFF', 452, 671, 27, 'white', enable);
+  label(filters, fontExpr, 'VIEW  >  PROFILE  >  FOLLOW', 215, 515, 31, 'white@0.84', enable);
+  box(filters, 175, 575, 730, 54, 'white@0.14', enable);
+  box(filters, 275, 642, 530, 54, '0x5B8CFF@0.24', enable);
+  box(filters, 385, 709, 310, 54, '0xEF4444@0.68', enable);
+  label(filters, fontExpr, 'DROP-OFF', 452, 721, 27, 'white', enable);
 }
 
 function drawHookMeter(filters, fontExpr, enable) {
-  label(filters, fontExpr, 'HOOK STRENGTH', 180, 485, 29, 'white@0.76', enable);
-  box(filters, 180, 545, 720, 42, 'white@0.12', enable);
-  box(filters, 180, 545, 520, 42, '0x5B8CFF@0.92', enable);
-  box(filters, 700, 536, 6, 60, 'white@0.92', enable);
-  label(filters, fontExpr, '72%', 770, 536, 42, 'white', enable);
+  label(filters, fontExpr, 'HOOK STRENGTH', 180, 535, 29, 'white@0.76', enable);
+  box(filters, 180, 595, 720, 42, 'white@0.12', enable);
+  box(filters, 180, 595, 520, 42, '0x5B8CFF@0.92', enable);
+  box(filters, 700, 586, 6, 60, 'white@0.92', enable);
+  label(filters, fontExpr, '72%', 770, 586, 42, 'white', enable);
 }
 
 function drawCreatorSystem(filters, fontExpr, enable) {
   const labels = ['PROMISE', 'SERIES', 'CTA'];
   labels.forEach((value, index) => {
     const x = 135 + index * 275;
-    box(filters, x, 500, 235, 145, index === 1 ? '0x17345F@0.90' : '0x08111F@0.72', enable);
-    box(filters, x, 500, 235, 6, '0x5B8CFF@0.95', enable);
-    label(filters, fontExpr, value, x + (value === 'PROMISE' ? 34 : 57), 555, 31, 'white', enable);
+    box(filters, x, 555, 235, 145, index === 1 ? '0x17345F@0.90' : '0x08111F@0.72', enable);
+    box(filters, x, 555, 235, 6, '0x5B8CFF@0.95', enable);
+    label(filters, fontExpr, value, x + (value === 'PROMISE' ? 34 : 57), 610, 31, 'white', enable);
   });
 }
 
 function drawBrandCard(filters, fontExpr, enable) {
-  box(filters, 160, 485, 760, 190, '0x08111F@0.72', enable);
-  box(filters, 160, 485, 7, 190, '0x5B8CFF@0.95', enable);
-  label(filters, fontExpr, 'BRAND READY', 215, 520, 30, 'white@0.72', enable);
-  label(filters, fontExpr, 'TRUST  +  FIT  +  PROOF', 215, 582, 39, 'white', enable);
+  box(filters, 160, 530, 760, 190, '0x08111F@0.72', enable);
+  box(filters, 160, 530, 7, 190, '0x5B8CFF@0.95', enable);
+  label(filters, fontExpr, 'BRAND READY', 215, 565, 30, 'white@0.72', enable);
+  label(filters, fontExpr, 'TRUST  +  FIT  +  PROOF', 215, 627, 39, 'white', enable);
 }
 
 function drawPrimaryProp(filters, fontExpr, prop, enable) {
@@ -219,27 +220,27 @@ function propFilters(plan = {}) {
     drawPrimaryProp(filters, fontExpr, story.prop, enable);
 
     if (story.type === 'devil-interruption') {
-      box(filters, 430, 735, 220, 86, '0xB91C1C@0.96', enable);
-      label(filters, fontExpr, 'SKIP', 486, 750, 46, 'white', enable);
-      label(filters, fontExpr, 'THE LEAK STARTS HERE', 340, 842, 26, '0xFF9A9A', enable);
+      box(filters, 430, 765, 220, 86, '0xB91C1C@0.96', enable);
+      label(filters, fontExpr, 'SKIP', 486, 780, 46, 'white', enable);
+      label(filters, fontExpr, 'THE LEAK STARTS HERE', 340, 854, 26, '0xFF9A9A', enable);
     }
     if (story.type === 'metric-consequence') {
-      box(filters, 455, 732, 170, 6, '0xEF4444@0.94', enable);
-      box(filters, 535, 700, 10, 74, '0xEF4444@0.94', enable);
-      label(filters, fontExpr, 'LOST FOLLOW', 420, 790, 27, '0xFF8A8A', enable);
+      box(filters, 455, 770, 170, 6, '0xEF4444@0.94', enable);
+      box(filters, 535, 744, 10, 74, '0xEF4444@0.94', enable);
+      label(filters, fontExpr, 'LOST FOLLOW', 420, 818, 27, '0xFF8A8A', enable);
     }
     if (story.type === 'doctor-diagnosis') {
-      box(filters, 150, 432, 780, 5, '0x5B8CFF@0.95', enable);
-      label(filters, fontExpr, 'ELEVATE DIAGNOSIS', 367, 445, 27, '0xB8CEFF', enable);
-      label(filters, fontExpr, story.prop === 'retention-graph' ? 'RETENTION LEAK' : 'NO REASON TO RETURN', story.prop === 'retention-graph' ? 395 : 318, 740, 31, 'white@0.88', enable);
+      box(filters, 150, 450, 780, 5, '0x5B8CFF@0.95', enable);
+      label(filters, fontExpr, 'ELEVATE DIAGNOSIS', 367, 463, 27, '0xB8CEFF', enable);
+      label(filters, fontExpr, story.prop === 'retention-graph' ? 'RETENTION LEAK' : 'NO REASON TO RETURN', story.prop === 'retention-graph' ? 395 : 318, 798, 31, 'white@0.88', enable);
     }
     if (story.type === 'story-explanation') {
-      label(filters, fontExpr, 'BUILD A REASON TO RETURN', 320, 730, 29, '0xB8CEFF', enable);
+      label(filters, fontExpr, 'BUILD A REASON TO RETURN', 320, 798, 29, '0xB8CEFF', enable);
     }
     if (story.type === 'doctor-prescription') {
-      box(filters, 150, 432, 780, 5, '0x5B8CFF@0.95', enable);
-      label(filters, fontExpr, 'ELEVATE PRESCRIPTION', 350, 445, 27, '0xB8CEFF', enable);
-      label(filters, fontExpr, 'PROMISE  >  SERIES  >  CTA', 303, 730, 31, 'white@0.90', enable);
+      box(filters, 150, 450, 780, 5, '0x5B8CFF@0.95', enable);
+      label(filters, fontExpr, 'ELEVATE PRESCRIPTION', 350, 463, 27, '0xB8CEFF', enable);
+      label(filters, fontExpr, 'PROMISE  >  SERIES  >  CTA', 303, 798, 31, 'white@0.90', enable);
     }
   }
   return filters;
@@ -341,7 +342,6 @@ function apply(videoPath, result, plan, options = {}) {
     sourcePath = path.resolve(finalLineup);
     renderMeta = renderWithFinalLineup(videoPath, output, plan, cast, sourcePath);
   } else {
-    // Explicit synthetic sprites remain available only for render-level tests.
     const testSpriteMap = spriteMapFor(cast, options);
     if (!testSpriteMap) {
       return { path: videoPath, meta: { applied: false, reason: 'approved-final-transparent-lineup-missing', required: true } };
@@ -366,6 +366,13 @@ function apply(videoPath, result, plan, options = {}) {
       propModes: [...new Set((plan.scenes || []).map((scene) => scene.characterStory?.prop).filter(Boolean))],
       activeRoleEngine: true,
       largeCharacterStaging: true,
+      layoutBands: {
+        editorialText: [270, 430],
+        sceneRole: [450, 500],
+        storyGraphic: [515, 755],
+        actionCue: [765, 860],
+        characterActing: [885, 1750],
+      },
       stockRole: 'soft-background-texture-only',
       genericHumanReplacementAllowed: false,
       ffmpegTextExpansion: 'none',
@@ -389,6 +396,7 @@ function status() {
     characterPrimary: true,
     activeRoleEngine: true,
     largeCharacterStaging: true,
+    collisionFreeLayoutBands: true,
     stockRole: 'soft-background-texture-only',
     genericSaaSPanelsDisabled: true,
     safeLiteralDrawtext: true,
