@@ -3,6 +3,7 @@ const path = require('path');
 const pipeline = require('./reel-pipeline');
 const elevateReelEngine = require('./elevate-reel-engine');
 const characterRenderer = require('./elevate-character-renderer');
+const elevateTextLayout = require('./elevate-text-layout');
 
 function transitionName(value) {
   const text = String(value || '').toLowerCase();
@@ -137,17 +138,14 @@ function applyElevateCharacters(videoPath, result, plan, options = {}) {
 
 function applyElevateGraphics(videoPath, result, plan, options = {}) {
   if (options.graphics === false) return { path: videoPath, meta: { applied: false, reason: 'disabled' } };
-
-  // Character-universe Reels already receive scene-specific graphs, funnels, scanners,
-  // SKIP attacks, prescription cards and CTA props inside the character compositor.
-  // Do not stack the old generic SaaS rectangles over the cast again.
   if (plan?.characterUniverse?.required) {
     return {
       path: videoPath,
       meta: {
         applied: true,
-        engine: 'elevate-character-story-graphics-v1',
+        engine: 'elevate-character-story-graphics-v2',
         characterAware: true,
+        activeRoles: true,
         replacedGenericPanels: true,
         genericMetricStackDisabled: true,
       },
@@ -167,6 +165,11 @@ function applyElevateGraphics(videoPath, result, plan, options = {}) {
   }
 }
 
+function applyTextPolish(videoPath, plan, tempDir) {
+  if (plan?.characterUniverse?.required) return elevateTextLayout.apply(videoPath, plan, tempDir);
+  return pipeline.applyVisualPolish(videoPath, plan, tempDir);
+}
+
 async function finish(result, options = {}) {
   if (!result?.ok) return result;
   const plan = result.plan || {};
@@ -178,15 +181,13 @@ async function finish(result, options = {}) {
   const scenes = renderedSceneFiles(result);
   const joined = cinematicJoin(scenes, plan, tempDir);
 
-  // Character-first finishing: B-roll becomes texture, recurring cast becomes identity,
-  // character-aware props explain the metric, and captions sit above the finished scene.
   const characters = applyElevateCharacters(joined.path, result, plan, options);
   if (plan?.characterUniverse?.required && !characters.meta?.applied) {
     throw new Error(`Elevate character universe was required but not rendered: ${characters.meta?.reason || 'unknown character renderer failure'}`);
   }
 
   const graphics = applyElevateGraphics(characters.path, result, plan, options);
-  const polish = pipeline.applyVisualPolish(graphics.path, plan, tempDir);
+  const polish = applyTextPolish(graphics.path, plan, tempDir);
   if (!polish.captionsApplied || !polish.safeZoneApplied) throw new Error(`Premium caption finishing failed: ${polish.reason || 'safe-zone captions unavailable'}`);
 
   const narrationPath = result?.narration?.path;
@@ -207,6 +208,7 @@ async function finish(result, options = {}) {
     output: finalOutput,
     polish: {
       ...(result.polish || {}),
+      ...polish,
       captionsApplied: true,
       safeZoneApplied: true,
       musicApplied: audio.musicApplied,
@@ -222,8 +224,11 @@ async function finish(result, options = {}) {
       characterUniverseApplied: Boolean(characters.meta?.applied),
       characterCastUsed: characters.meta?.castUsed || [],
       characterSceneCoverage: Number(characters.meta?.sceneCoverage || 0),
+      activeCharacterRoles: Boolean(characters.meta?.activeRoleEngine),
+      largeCharacterStaging: Boolean(characters.meta?.largeCharacterStaging),
       semanticGraphicsApplied: Boolean(graphics.meta?.applied),
       semanticGraphicsEngine: graphics.meta?.engine || null,
+      textLayout: polish.visualStyle || null,
       sfxApplied: sfx.applied,
       sfxPath: sfx.path || null,
       zeroCost: true,
@@ -241,5 +246,6 @@ module.exports = {
   mixSfx,
   applyElevateCharacters,
   applyElevateGraphics,
+  applyTextPolish,
   finish,
 };
