@@ -19,7 +19,8 @@ function syntheticSprite(file, color) {
 
 function realFfmpegCharacterRenderTest() {
   if (!factory.ffmpegStatus().available) {
-    console.log('ULTRON Elevate Character render smoke skipped: FFmpeg unavailable in this environment.');
+    if (process.env.CI) throw new Error('CI Reel acceptance requires FFmpeg, but FFmpeg is unavailable.');
+    console.log('ULTRON Elevate Character render smoke skipped locally: FFmpeg unavailable in this environment.');
     return;
   }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ultron-character-render-'));
@@ -118,5 +119,5 @@ function realFfmpegCharacterRenderTest() {
   assert(renderer.escapeDrawtextText("72%: creator's signal") === "72%\\: creator\\'s signal", 'FFmpeg text escaping must preserve literal percent while escaping filter syntax.');
 
   realFfmpegCharacterRenderTest();
-  console.log('ULTRON Elevate Character Universe self-test passed: seven canonical actors, transparent sprite compositor, literal-percent FFmpeg regression render, Retention Devil conflict, doctor diagnosis/prescription, every-scene continuity and blurred-background-only stock policy validated.');
+  console.log('ULTRON Elevate Character Universe self-test passed: seven canonical actors, transparent sprite compositor, mandatory real FFmpeg literal-percent regression render, Retention Devil conflict, doctor diagnosis/prescription, every-scene continuity and blurred-background-only stock policy validated.');
 })();
