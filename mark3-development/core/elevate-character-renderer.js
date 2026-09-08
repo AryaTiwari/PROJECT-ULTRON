@@ -16,6 +16,7 @@ function appearances(plan = {}) {
       list.push({
         sceneIndex: Number(scene.index || 0),
         characterId,
+        storyType: story.type,
         slot,
         slotCount: chars.length,
         start: Number(scene.start || 0),
@@ -30,20 +31,29 @@ function appearances(plan = {}) {
 }
 
 function characterHeight(item) {
-  if (item.slotCount >= 3) return 500;
+  if (item.storyType === 'elevate-close') return 600;
+  if (item.slotCount >= 3) return item.characterId === 'retention_devil' ? 460 : 500;
   if (item.slotCount === 2) return item.characterId === 'retention_devil' ? 620 : 590;
   return item.characterId === 'retention_devil' ? 720 : 660;
 }
 
 function targetPosition(item) {
   const height = characterHeight(item);
-  if (item.slotCount === 1) return { x: 540, y: 820, anchor: 'center', height };
+  if (item.storyType === 'elevate-close') return item.slot === 0
+    ? { x: 120, y: 1010, anchor: 'left', height }
+    : { x: 960, y: 1010, anchor: 'right', height };
+  if (item.storyType === 'doctor-prescription' && item.slotCount >= 3) {
+    if (item.slot === 0) return { x: 35, y: 1010, anchor: 'left', height };
+    if (item.slot === 1) return { x: 540, y: 1010, anchor: 'center', height };
+    return { x: 1050, y: 1080, anchor: 'right', height: 390 };
+  }
+  if (item.slotCount === 1) return { x: 540, y: 930, anchor: 'center', height };
   if (item.slotCount === 2) return item.slot === 0
-    ? { x: 65, y: 900, anchor: 'left', height }
-    : { x: 1015, y: 900, anchor: 'right', height };
-  if (item.slot === 0) return { x: 30, y: 990, anchor: 'left', height };
-  if (item.slot === 1) return { x: 540, y: 900, anchor: 'center', height };
-  return { x: 1050, y: 990, anchor: 'right', height };
+    ? { x: 65, y: 1010, anchor: 'left', height }
+    : { x: 1015, y: 1010, anchor: 'right', height };
+  if (item.slot === 0) return { x: 30, y: 1030, anchor: 'left', height };
+  if (item.slot === 1) return { x: 540, y: 980, anchor: 'center', height };
+  return { x: 1050, y: 1030, anchor: 'right', height };
 }
 
 function overlayX(item, target) {
@@ -69,6 +79,71 @@ function overlayY(item, target) {
   return `${base}+3*sin(2.5*(t-${s}))`;
 }
 
+function box(filters, x, y, w, h, color, enable) {
+  filters.push(`drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=${color}:t=fill:${enable}`);
+}
+function label(filters, fontExpr, text, x, y, size, color, enable) {
+  filters.push(`drawtext=${fontExpr}text='${text}':fontsize=${size}:fontcolor=${color}:x=${x}:y=${y}:${enable}`);
+}
+
+function drawMetricCard(filters, fontExpr, enable) {
+  box(filters, 155, 270, 350, 190, 'black@0.58', enable);
+  box(filters, 575, 270, 350, 190, 'black@0.58', enable);
+  box(filters, 155, 270, 8, 190, '0x5B8CFF@0.95', enable);
+  box(filters, 575, 270, 8, 190, '0xEF4444@0.95', enable);
+  label(filters, fontExpr, 'VIEWS', 210, 306, 31, 'white@0.82', enable);
+  label(filters, fontExpr, '12.8K', 210, 355, 58, 'white', enable);
+  label(filters, fontExpr, 'FOLLOWS', 630, 306, 31, 'white@0.82', enable);
+  label(filters, fontExpr, '+19', 630, 355, 58, '0xFF7474', enable);
+}
+
+function drawRetention(filters, fontExpr, enable) {
+  box(filters, 150, 260, 780, 225, 'black@0.55', enable);
+  label(filters, fontExpr, 'RETENTION', 190, 290, 30, 'white@0.82', enable);
+  const heights = [145,130,108,86,58,35];
+  heights.forEach((height, index) => box(filters, 220 + index * 105, 445 - height, 64, height, index < 2 ? '0x5B8CFF@0.88' : '0xEF4444@0.78', enable));
+  box(filters, 210, 448, 680, 3, 'white@0.26', enable);
+}
+
+function drawFunnel(filters, fontExpr, enable) {
+  label(filters, fontExpr, 'VIEW  →  PROFILE  →  FOLLOW', 212, 265, 32, 'white@0.88', enable);
+  box(filters, 185, 330, 710, 56, 'white@0.14', enable);
+  box(filters, 285, 400, 510, 56, '0x5B8CFF@0.28', enable);
+  box(filters, 390, 470, 300, 56, '0x5B8CFF@0.78', enable);
+}
+
+function drawHookMeter(filters, fontExpr, enable) {
+  label(filters, fontExpr, 'HOOK STRENGTH', 190, 285, 30, 'white@0.82', enable);
+  box(filters, 190, 350, 700, 44, 'white@0.12', enable);
+  box(filters, 190, 350, 505, 44, '0x5B8CFF@0.9', enable);
+  box(filters, 695, 342, 6, 60, 'white@0.9', enable);
+  label(filters, fontExpr, '72%', 760, 338, 42, 'white', enable);
+}
+
+function drawPillars(filters, fontExpr, enable) {
+  ['HOOK','VALUE','CTA'].forEach((text, index) => {
+    const x = 145 + index * 275;
+    box(filters, x, 310, 235, 150, index === 1 ? '0x17345F@0.92' : 'black@0.55', enable);
+    box(filters, x, 310, 235, 6, '0x5B8CFF@0.9', enable);
+    label(filters, fontExpr, text, x + 48, 365, 34, 'white', enable);
+  });
+}
+
+function drawBrandCard(filters, fontExpr, enable) {
+  box(filters, 170, 275, 740, 220, 'black@0.58', enable);
+  box(filters, 170, 275, 8, 220, '0x5B8CFF@0.95', enable);
+  label(filters, fontExpr, 'BRAND READY?', 225, 310, 32, 'white@0.78', enable);
+  label(filters, fontExpr, 'TRUST  +  FIT  +  PROOF', 225, 375, 38, 'white', enable);
+}
+
+function drawGenericSignal(filters, fontExpr, enable) {
+  box(filters, 175, 285, 730, 180, 'black@0.48', enable);
+  box(filters, 175, 285, 7, 180, '0x5B8CFF@0.92', enable);
+  label(filters, fontExpr, 'CREATOR SIGNAL', 225, 320, 30, 'white@0.75', enable);
+  box(filters, 225, 390, 530, 18, 'white@0.14', enable);
+  box(filters, 225, 390, 375, 18, '0x5B8CFF@0.88', enable);
+}
+
 function propFilters(plan = {}) {
   const filters = [];
   const font = pipeline.findCaptionFont();
@@ -79,24 +154,36 @@ function propFilters(plan = {}) {
     const s = Number(scene.start || 0).toFixed(2);
     const e = Number(scene.end || plan.durationSec || 30).toFixed(2);
     const enable = `enable='between(t,${s},${e})'`;
+
+    if (story.prop === 'views-vs-follows') drawMetricCard(filters, fontExpr, enable);
+    else if (story.prop === 'retention-graph') drawRetention(filters, fontExpr, enable);
+    else if (story.prop === 'conversion-funnel') drawFunnel(filters, fontExpr, enable);
+    else if (story.prop === 'hook-meter') drawHookMeter(filters, fontExpr, enable);
+    else if (story.prop === 'content-pillars') drawPillars(filters, fontExpr, enable);
+    else if (story.prop === 'brand-card') drawBrandCard(filters, fontExpr, enable);
+    else drawGenericSignal(filters, fontExpr, enable);
+
     if (story.type === 'devil-interruption' || story.type === 'metric-consequence') {
-      filters.push(`drawbox=x=430:y=1110:w=220:h=94:color=0xB91C1C@0.92:t=fill:${enable}`);
-      filters.push(`drawtext=${fontExpr}text='SKIP':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=1128:${enable}`);
-      filters.push(`drawbox=x=466:y=1240:w=148:h=12:color=0xEF4444@0.9:t=fill:${enable}`);
-      filters.push(`drawbox=x=530:y=1240:w=18:h=132:color=0xEF4444@0.9:t=fill:${enable}`);
+      box(filters, 430, 535, 220, 88, '0xB91C1C@0.94', enable);
+      label(filters, fontExpr, 'SKIP', 485, 551, 46, 'white', enable);
+      box(filters, 466, 645, 148, 11, '0xEF4444@0.9', enable);
+      box(filters, 530, 645, 18, 90, '0xEF4444@0.9', enable);
     }
     if (story.type === 'doctor-diagnosis') {
-      filters.push(`drawbox=x=160:y=1040:w=760:h=5:color=0x5B8CFF@0.95:t=fill:${enable}`);
-      filters.push(`drawbox=x=160:y=1085:w=760:h=3:color=white@0.42:t=fill:${enable}`);
-      filters.push(`drawbox=x=160:y=1130:w=760:h=3:color=0x5B8CFF@0.35:t=fill:${enable}`);
+      box(filters, 130, 245, 820, 5, '0x5B8CFF@0.95', enable);
+      box(filters, 130, 500, 820, 4, '0x5B8CFF@0.52', enable);
+      label(filters, fontExpr, 'ELEVATE DIAGNOSIS', 365, 525, 28, '0xAFC9FF', enable);
     }
     if (story.type === 'doctor-prescription') {
-      filters.push(`drawbox=x=320:y=1080:w=440:h=230:color=black@0.56:t=fill:${enable}`);
-      filters.push(`drawbox=x=320:y=1080:w=7:h=230:color=0x5B8CFF@0.95:t=fill:${enable}`);
-      filters.push(`drawtext=${fontExpr}text='HOOK  >  VALUE  >  CTA':fontsize=31:fontcolor=white:x=365:y=1165:${enable}`);
+      box(filters, 230, 245, 620, 255, 'black@0.58', enable);
+      box(filters, 230, 245, 7, 255, '0x5B8CFF@0.95', enable);
+      label(filters, fontExpr, 'PRESCRIPTION', 285, 280, 28, '0xAFC9FF', enable);
+      label(filters, fontExpr, 'HOOK  >  VALUE  >  CTA', 285, 355, 36, 'white', enable);
+      label(filters, fontExpr, 'REPEAT WHAT WORKS', 285, 415, 31, 'white@0.80', enable);
     }
     if (scene.isBrandCta) {
-      filters.push(`drawbox=x=110:y=1030:w=860:h=5:color=0x5B8CFF@0.9:t=fill:${enable}`);
+      box(filters, 150, 260, 780, 5, '0x5B8CFF@0.9', enable);
+      label(filters, fontExpr, 'ELEVATE OS', 392, 302, 46, 'white', enable);
     }
   }
   return filters;
@@ -116,7 +203,9 @@ function apply(videoPath, result, plan, options = {}) {
   const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath, '-loop', '1', '-framerate', '30', '-i', reference];
   const filters = [];
 
-  filters.push(`[0:v]eq=brightness=-0.10:saturation=0.72:contrast=1.04,drawbox=x=0:y=0:w=iw:h=ih:color=0x050811@0.22:t=fill[base]`);
+  // Keep the real media as motion texture only. Heavy blur + desaturation prevents
+  // unrelated stock people from becoming the visual identity of an Elevate Reel.
+  filters.push(`[0:v]boxblur=18:2,eq=brightness=-0.16:saturation=0.38:contrast=1.06,drawbox=x=0:y=0:w=iw:h=ih:color=0x050811@0.40:t=fill[base]`);
   filters.push(`[1:v]scale=1536:865,split=${cast.length}${cast.map((_, i) => `[sheet${i}]`).join('')}`);
 
   cast.forEach((item, i) => {
@@ -129,10 +218,10 @@ function apply(videoPath, result, plan, options = {}) {
   let previous = '[base]';
   cast.forEach((item, i) => {
     const target = targetPosition(item);
-    const label = `[cv${i}]`;
+    const labelName = `[cv${i}]`;
     const enable = `enable='between(t,${item.start.toFixed(3)},${item.end.toFixed(3)})'`;
-    filters.push(`${previous}[char${i}]overlay=x='${overlayX(item, target)}':y='${overlayY(item, target)}':${enable}:eval=frame${label}`);
-    previous = label;
+    filters.push(`${previous}[char${i}]overlay=x='${overlayX(item, target)}':y='${overlayY(item, target)}':${enable}:eval=frame${labelName}`);
+    previous = labelName;
   });
 
   const props = propFilters(plan);
@@ -151,13 +240,14 @@ function apply(videoPath, result, plan, options = {}) {
     path: output,
     meta: {
       applied: true,
-      engine: 'elevate-character-universe-v1',
+      engine: 'elevate-character-universe-v2',
       referencePath: reference,
       appearances: cast.length,
       sceneCoverage: new Set(cast.map((item) => item.sceneIndex)).size,
       castUsed: [...new Set(cast.map((item) => item.characterId))],
       storyModes: [...new Set((plan.scenes || []).map((scene) => scene.characterStory?.type).filter(Boolean))],
-      stockRole: 'background-support-only',
+      propModes: [...new Set((plan.scenes || []).map((scene) => scene.characterStory?.prop).filter(Boolean))],
+      stockRole: 'blurred-background-texture-only',
       genericHumanReplacementAllowed: false,
       output: verified.path,
     },
@@ -171,10 +261,11 @@ function status() {
     configured: universeStatus.configured,
     castCount: universeStatus.castCount,
     referencePath: universeStatus.referencePath,
-    renderer: 'FFmpeg crop + keyed character overlays + motion + storyline props',
+    renderer: 'FFmpeg character stage + keyed canonical cast + story props + motion',
     lightweight: true,
     characterPrimary: true,
-    stockRole: 'background-support-only',
+    stockRole: 'blurred-background-texture-only',
+    genericSaaSPanelsDisabled: true,
   };
 }
 
