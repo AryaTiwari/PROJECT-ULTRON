@@ -51,11 +51,25 @@ function extractBrief(text) {
   return value || 'a high-retention creator growth insight';
 }
 
-function statusText() {
+function readinessSnapshot() {
   const state = factory.status();
-  const stock = state.stockSourceReady ? 'stock source ready' : 'stock source credentials missing';
-  const ffmpeg = state.ffmpeg.available ? 'FFmpeg ready' : 'FFmpeg missing';
-  return `Sir, Reel Factory is active: ${stock}, ${ffmpeg}, AI direction ready, narration ready, and the finished MP4 renderer is installed. Generation stays zero-cost-only; publishing remains a separate Instagram action.`;
+  return {
+    ready: !state.nextBlocker,
+    blocker: state.nextBlocker || null,
+    stockReady: Boolean(state.stockSourceReady),
+    ffmpegReady: Boolean(state.ffmpeg?.available),
+    narratorReady: Boolean(state.narrator?.configured),
+    state,
+  };
+}
+
+function statusText() {
+  const readiness = readinessSnapshot();
+  const stock = readiness.stockReady ? 'stock/public media ready' : 'stock source unavailable';
+  const ffmpeg = readiness.ffmpegReady ? 'FFmpeg ready' : 'FFmpeg missing';
+  const narrator = readiness.narratorReady ? 'Reel narrator ready' : 'Reel narrator missing';
+  const blocker = readiness.blocker ? ` Current blocker: ${readiness.blocker}` : ' Production readiness is green.';
+  return `Sir, Reel Factory is active: ${stock}, ${ffmpeg}, ${narrator}, AI direction ready, semantic graphics ready, and the finished MP4 renderer is installed.${blocker} Generation stays zero-cost-only; publishing remains a separate Instagram action.`;
 }
 
 function artifactName(result) {
@@ -132,7 +146,7 @@ function latestRenderedReel() {
 
 function attachLatestReelResponse() {
   const result = latestRenderedReel();
-  if (!result) return { ok: false, text: 'Sir, I could not find a previously rendered Reel to attach.', result: null, artifact: null };
+  if (!result) return { ok: false, text: 'Sir, I could not find a previously rendered Reel to attach.', result: null, artifact: null, error: 'No previously rendered Reel was found.' };
   try {
     const artifact = registerReelArtifact(result, result?.job?.brief || result?.plan?.title || 'latest rendered reel');
     const mb = (Number(result.output?.bytes || 0) / 1024 / 1024).toFixed(2);
@@ -141,6 +155,7 @@ function attachLatestReelResponse() {
       text: `Attached, Sir. This is the latest rendered Reel (${mb} MB). You can preview it here or open/save the MP4. I have not published it to Instagram.`,
       result,
       artifact,
+      error: null,
     };
   } catch (error) {
     return {
@@ -149,19 +164,34 @@ function attachLatestReelResponse() {
       result,
       artifact: null,
       artifactError: error.message,
+      error: error.message,
     };
   }
 }
 
 async function buildReelResponse(requestText) {
+  const readiness = readinessSnapshot();
+  if (!readiness.ready) {
+    const blocker = readiness.blocker || 'Reel Factory is not production-ready.';
+    return {
+      ok: false,
+      error: blocker,
+      text: `Sir, Reel Factory is installed but cannot start production yet. Blocker: ${blocker}`,
+      result: { ok: false, blocker, readiness: readiness.state },
+      artifact: null,
+    };
+  }
+
   const brief = extractBrief(requestText);
   const durationSec = parseDuration(requestText);
   const style = parseStyle(requestText);
   const result = await pipeline.build(brief, { durationSec, style, polish: true, music: true });
   if (!result.ok) {
+    const blocker = result.blocker || result.job?.finishingError || result.job?.narrationError || result.job?.polishError || 'unknown production blocker';
     return {
       ok: false,
-      text: `Sir, Reel Factory stopped safely before completion. Blocker: ${result.blocker || 'unknown production blocker'}`,
+      error: blocker,
+      text: `Sir, Reel Factory stopped safely before completion. Blocker: ${blocker}`,
       result,
       artifact: null,
     };
@@ -178,12 +208,13 @@ async function buildReelResponse(requestText) {
   const mb = (Number(result.output?.bytes || 0) / 1024 / 1024).toFixed(2);
   const captions = result.polish?.captionsApplied ? 'captions applied' : 'caption overlay skipped';
   const music = result.polish?.musicApplied ? 'background music mixed' : 'no local music track configured';
+  const graphics = result.polish?.graphicsEngine?.applied ? 'semantic graphics applied' : 'semantic graphics not required';
   const duration = Math.round(result.output?.durationSec || durationSec);
   const responseText = artifact
-    ? `Done, Sir. I created the Reel and attached it here for preview or download. ${mb} MB, ${duration} seconds, ${captions}, ${music}. It is rendered and verified. I have not published it to Instagram.`
+    ? `Done, Sir. I created the Reel and attached it here for preview or download. ${mb} MB, ${duration} seconds, ${captions}, ${graphics}, ${music}. It is rendered and verified. I have not published it to Instagram.`
     : `Done, Sir. I created and verified the Reel, but I could not attach it in chat: ${artifactError || 'file delivery failed'}. The local file is at ${result.output.path}. I have not published it to Instagram.`;
 
-  return { ok: true, text: responseText, result, artifact, artifactError };
+  return { ok: true, error: null, text: responseText, result, artifact, artifactError };
 }
 
 function install() {
@@ -220,7 +251,7 @@ function install() {
         inputMode,
         artifactId: attached.artifact?.id || null,
         output: attached.result?.output?.path || null,
-        error: attached.artifactError || null,
+        error: attached.error || attached.artifactError || null,
       });
       void voice.enqueue(attached.text);
       return {
@@ -234,7 +265,7 @@ function install() {
         inputMode,
         reel: attached.result,
         artifacts,
-        error: attached.artifactError || null,
+        error: attached.ok ? null : (attached.error || attached.artifactError || attached.text),
         toolRounds: 0,
       };
     }
@@ -254,7 +285,7 @@ function install() {
         built.ok ? 'reel_factory_completed' : 'reel_factory_blocked',
         built.ok
           ? { inputMode, output: built.result.output?.path, jobId: built.result.job?.id, artifactId: built.artifact?.id || null, artifactError: built.artifactError || null }
-          : { inputMode, blocker: built.result.blocker }
+          : { inputMode, blocker: built.error || built.result?.blocker || 'unknown production blocker' }
       );
       void voice.enqueue(built.text);
       return {
@@ -269,6 +300,7 @@ function install() {
         reel: built.result,
         artifacts,
         artifactError: built.artifactError || null,
+        error: built.ok ? null : (built.error || built.result?.blocker || built.text),
         toolRounds: 0,
       };
     } catch (error) {
@@ -305,6 +337,7 @@ module.exports = {
   parseDuration,
   parseStyle,
   extractBrief,
+  readinessSnapshot,
   statusText,
   artifactName,
   registerReelArtifact,
