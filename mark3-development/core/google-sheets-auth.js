@@ -130,8 +130,12 @@ function base64url(buffer) {
 }
 
 function openBrowser(url) {
+  // Do not launch the OAuth URL through `cmd /c start` on Windows. OAuth URLs
+  // contain `&`; cmd.exe treats that character as a command separator and can
+  // silently truncate the query string, which makes Google report parameters
+  // such as response_type as missing. rundll32 passes the URL intact.
   const command = process.platform === 'win32'
-    ? ['cmd', ['/c', 'start', '', url]]
+    ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
     : process.platform === 'darwin'
       ? ['open', [url]]
       : ['xdg-open', [url]];
