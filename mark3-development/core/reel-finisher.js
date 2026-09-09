@@ -4,6 +4,7 @@ const pipeline = require('./reel-pipeline');
 const elevateReelEngine = require('./elevate-reel-engine');
 const characterRenderer = require('./elevate-character-renderer');
 const elevateTextLayout = require('./elevate-text-layout');
+const vaultCompositor = require('./elevate-vault-compositor');
 
 function transitionName(value) {
   const text = String(value || '').toLowerCase();
@@ -143,9 +144,10 @@ function applyElevateGraphics(videoPath, result, plan, options = {}) {
       path: videoPath,
       meta: {
         applied: true,
-        engine: 'elevate-character-story-graphics-v2',
+        engine: 'elevate-character-story-graphics-v3',
         characterAware: true,
         activeRoles: true,
+        builtInVault: true,
         replacedGenericPanels: true,
         genericMetricStackDisabled: true,
       },
@@ -181,12 +183,27 @@ async function finish(result, options = {}) {
   const scenes = renderedSceneFiles(result);
   const joined = cinematicJoin(scenes, plan, tempDir);
 
-  const characters = applyElevateCharacters(joined.path, result, plan, options);
+  // Built-in scene backgrounds are applied before actors. This turns provider
+  // footage into optional moving texture instead of letting random stock dictate
+  // the visual universe.
+  const vaultBackgrounds = vaultCompositor.applyBackgrounds(joined.path, result, plan, options);
+  if (plan?.characterUniverse?.required && !vaultBackgrounds.meta?.applied) {
+    throw new Error(`Elevate graphics vault background pass failed: ${vaultBackgrounds.meta?.reason || 'unknown vault background failure'}`);
+  }
+
+  const characters = applyElevateCharacters(vaultBackgrounds.path, result, plan, options);
   if (plan?.characterUniverse?.required && !characters.meta?.applied) {
     throw new Error(`Elevate character universe was required but not rendered: ${characters.meta?.reason || 'unknown character renderer failure'}`);
   }
 
-  const graphics = applyElevateGraphics(characters.path, result, plan, options);
+  // Transparent metric icons, skip/low-retention/follow badges and reaction FX
+  // sit above the actors while remaining outside the speech-text band.
+  const vaultForeground = vaultCompositor.applyForegroundKit(characters.path, result, plan, options);
+  if (plan?.characterUniverse?.required && !vaultForeground.meta?.applied) {
+    throw new Error(`Elevate graphics vault foreground pass failed: ${vaultForeground.meta?.reason || 'unknown vault foreground failure'}`);
+  }
+
+  const graphics = applyElevateGraphics(vaultForeground.path, result, plan, options);
   const polish = applyTextPolish(graphics.path, plan, tempDir);
   if (!polish.captionsApplied || !polish.safeZoneApplied) throw new Error(`Premium caption finishing failed: ${polish.reason || 'safe-zone captions unavailable'}`);
 
@@ -215,6 +232,11 @@ async function finish(result, options = {}) {
       musicPath: audio.musicPath || null,
       characterUniverse: characters.meta,
       graphicsEngine: graphics.meta,
+      graphicsVault: {
+        applied: Boolean(vaultBackgrounds.meta?.applied && vaultForeground.meta?.applied),
+        backgrounds: vaultBackgrounds.meta,
+        foreground: vaultForeground.meta,
+      },
     },
     finisher: {
       applied: true,
@@ -226,6 +248,10 @@ async function finish(result, options = {}) {
       characterSceneCoverage: Number(characters.meta?.sceneCoverage || 0),
       activeCharacterRoles: Boolean(characters.meta?.activeRoleEngine),
       largeCharacterStaging: Boolean(characters.meta?.largeCharacterStaging),
+      graphicsVaultApplied: Boolean(vaultBackgrounds.meta?.applied && vaultForeground.meta?.applied),
+      graphicsVaultBackgroundCoverage: Number(vaultBackgrounds.meta?.sceneCoverage || 0),
+      graphicsVaultMetricCount: Number(vaultForeground.meta?.metricAssetsUsed?.length || 0),
+      graphicsVaultUiCount: Number(vaultForeground.meta?.uiAssetsUsed?.length || 0),
       semanticGraphicsApplied: Boolean(graphics.meta?.applied),
       semanticGraphicsEngine: graphics.meta?.engine || null,
       textLayout: polish.visualStyle || null,
