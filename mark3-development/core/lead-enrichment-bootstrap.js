@@ -4,12 +4,19 @@ const leadEnrichment = require('./lead-enrichment-operator');
 let installed = false;
 let originalHandle = null;
 
+function hasEnrichmentIntent(text) {
+  const value = String(text || '').trim();
+  const mentionsSheets = /\b(?:google\s+)?sheets?|spreadsheet\b/i.test(value) || /docs\.google\.com\/spreadsheets/i.test(value);
+  const mentionsApollo = /\bapollo\b/i.test(value);
+  const action = /\b(?:enrich|fill|find|get|add|update|phone|email|contact|lead)\b/i.test(value);
+  return mentionsSheets && mentionsApollo && action;
+}
+
 function isEnrichmentRequest(text) {
   const value = String(text || '').trim();
+  if (!hasEnrichmentIntent(value)) return null;
   const url = sheets.extractSheetUrl(value);
-  if (!url) return null;
-  if (!/\b(?:enrich|apollo|fill|find|get|add|update|phone|email|contact|lead)\b/i.test(value)) return null;
-  return { url };
+  return { url, invalidUrl: !url };
 }
 
 function isStatusRequest(text) {
@@ -89,9 +96,13 @@ function install() {
     const request = isEnrichmentRequest(text);
     if (request) {
       conversation.append('user', text, { taskType: 'lead-enrichment', inputMode });
-      emit('lead_enrichment_started', { inputMode });
-      result = await handleEnrichment(request.url);
-      emit(result.ok ? 'lead_enrichment_completed' : 'lead_enrichment_failed', { inputMode, error: result.error || null });
+      if (request.invalidUrl) {
+        result = responseShape(false, 'Use the full Google Sheet link, Sir. The URL must contain the real spreadsheet ID after /d/. Nothing was queued and the Sheet was not changed.', { error: 'INVALID_GOOGLE_SHEET_URL' });
+      } else {
+        emit('lead_enrichment_started', { inputMode });
+        result = await handleEnrichment(request.url);
+        emit(result.ok ? 'lead_enrichment_completed' : 'lead_enrichment_failed', { inputMode, error: result.error || null });
+      }
     } else if (isResumeRequest(text)) {
       conversation.append('user', text, { taskType: 'lead-enrichment-resume', inputMode });
       result = await handleResume();
@@ -128,6 +139,7 @@ module.exports = {
   uninstall,
   status,
   statusText,
+  hasEnrichmentIntent,
   isEnrichmentRequest,
   isStatusRequest,
   isResumeRequest,
