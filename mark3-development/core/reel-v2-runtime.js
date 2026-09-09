@@ -9,10 +9,19 @@ const assetRescue = require('./reel-asset-rescue');
 const scriptRescue = require('./reel-script-rescue');
 const characterUniverse = require('./elevate-character-universe');
 const characterRenderer = require('./elevate-character-renderer');
+const graphicsVault = require('./elevate-graphics-vault');
 const { writeJsonAtomic } = require('./persistence');
 
 let installed = false;
 let originalBuild = null;
+
+function ensureGraphicsVault() {
+  const state = graphicsVault.ensure();
+  if (!state?.ok || !graphicsVault.ready()) {
+    throw new Error('Elevate graphics vault could not be materialized locally.');
+  }
+  return state;
+}
 
 function install() {
   if (installed) return {
@@ -23,24 +32,40 @@ function install() {
     assetCompletion: assetRescue.status(),
     scriptRescue: scriptRescue.status(),
     characterUniverse: characterUniverse.status(),
+    graphicsVault: graphicsVault.status(),
   };
+
+  const graphicsVaultState = ensureGraphicsVault();
   const elevateStatus = elevateReelEngine.install();
   const scriptRescueStatus = scriptRescue.install();
   originalBuild = pipeline.build;
+
   pipeline.build = async (brief, options = {}) => {
+    let vaultState;
+    try {
+      vaultState = ensureGraphicsVault();
+    } catch (error) {
+      return {
+        ok: false,
+        blocker: `Elevate built-in graphics vault is unavailable: ${error.message}`,
+        graphicsVault: graphicsVault.status(),
+      };
+    }
+
     const characterState = characterUniverse.status();
     if (!characterState.configured) {
       return {
         ok: false,
         blocker: `Elevate character universe is not configured. ${characterState.installHint}`,
         characterUniverse: characterState,
+        graphicsVault: graphicsVault.status(),
       };
     }
 
     let base = await originalBuild(brief, { ...options, graphics: false });
 
-    // External media is optional texture, never the identity of an Elevate Reel.
-    // Missing provider assets are completed locally before the recurring cast is added.
+    // External media is optional texture. The permanent local graphics vault and
+    // recurring character universe are the visual identity of Elevate Reels.
     if (!base?.ok && assetRescue.missingAssetFailure(base)) {
       base = await assetRescue.rescue(base, brief, { ...options, graphics: false });
     }
@@ -49,12 +74,20 @@ function install() {
     const themeRadar = elevateThemeRadar.snapshot(brief);
     if (base.plan) {
       base.plan = characterUniverse.decoratePlan(base.plan, brief);
+      base.plan.scenes = (base.plan.scenes || []).map((scene, index) => ({
+        ...scene,
+        graphicsVault: {
+          background: graphicsVault.backgroundForScene(scene, index),
+          kit: graphicsVault.visualKitForScene(scene),
+        },
+      }));
       base.plan.elevateEngine = {
         ...(base.plan.elevateEngine || {}),
         themeRadar,
         assetCompletion: assetRescue.status(),
         scriptRescue: scriptRescue.status(),
         characterUniverse: characterRenderer.status(),
+        graphicsVault: graphicsVault.status(),
       };
       if (base.paths?.plan) writeJsonAtomic(base.paths.plan, base.plan);
     }
@@ -63,12 +96,13 @@ function install() {
       base.job.reelAssetCompletion = assetRescue.status();
       base.job.reelScriptRescue = scriptRescue.status();
       base.job.characterUniverse = characterRenderer.status();
+      base.job.elevateGraphicsVault = graphicsVault.status();
       if (base.paths?.job) writeJsonAtomic(base.paths.job, base.job);
     }
 
     let finished;
     try {
-      finished = await finisher.finish(base, options);
+      finished = await finisher.finish(base, { ...options, graphicsVault: true });
     } catch (error) {
       const job = { ...(base.job || {}) };
       job.state = 'finishing_failed';
@@ -107,6 +141,7 @@ function install() {
     job.reelAssetCompletion = assetRescue.status();
     job.reelScriptRescue = scriptRescue.status();
     job.characterUniverse = characterRenderer.status();
+    job.elevateGraphicsVault = graphicsVault.status();
     job.updatedAt = new Date().toISOString();
 
     if (!audit.ok) {
@@ -133,6 +168,7 @@ function install() {
       reelAssetCompletion: assetRescue.status(),
       reelScriptRescue: scriptRescue.status(),
       characterUniverse: characterRenderer.status(),
+      graphicsVault: graphicsVault.status(),
     };
     try {
       const recipe = reelLearning.recordRender(result);
@@ -142,6 +178,7 @@ function install() {
     }
     return result;
   };
+
   installed = true;
   return {
     installed: true,
@@ -150,6 +187,7 @@ function install() {
     assetCompletion: assetRescue.status(),
     scriptRescue: scriptRescueStatus,
     characterUniverse: characterUniverse.status(),
+    graphicsVault: { ...graphicsVault.status(), bootstrap: graphicsVaultState },
   };
 }
 
@@ -174,8 +212,9 @@ function status() {
     scriptRescue: scriptRescue.status(),
     characterUniverse: characterUniverse.status(),
     characterRenderer: characterRenderer.status(),
+    graphicsVault: graphicsVault.status(),
     creativeRecipeLearning: reelLearning.status(),
   };
 }
 
-module.exports = { install, uninstall, status };
+module.exports = { install, uninstall, status, ensureGraphicsVault };
