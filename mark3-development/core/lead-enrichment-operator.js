@@ -86,6 +86,10 @@ function isNullSentinel(value) {
   return String(value ?? '').trim().toLowerCase() === 'null';
 }
 
+function isCompanyLinkedIn(value) {
+  return /(?:https?:\/\/)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\/company\//i.test(String(value || ''));
+}
+
 function clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone) {
   if (needEmail && layout.emailColumnIndex >= 0 && isNullSentinel(row[layout.emailColumnIndex])) {
     changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: '' });
@@ -123,6 +127,7 @@ async function enrichSheet(sheetUrl, options = {}) {
     pendingPhones: 0,
     skippedComplete: 0,
     invalidLinkedIn: 0,
+    companyLinkedIn: 0,
     ambiguousMatches: 0,
     unresolvedRows: 0,
     failedRows: 0,
@@ -147,7 +152,27 @@ async function enrichSheet(sheetUrl, options = {}) {
 
     const linkedinUrl = apollo.normalizeLinkedIn(rawLinkedIn);
     if (!linkedinUrl) {
-      // Undo old false-null damage but do not replace it with another guessed value.
+      if (isCompanyLinkedIn(rawLinkedIn)) {
+        // This workflow uses Apollo People Enrichment. A /company/ URL is a known,
+        // deterministic non-person target, so do not waste an Apollo person credit.
+        // Mark missing output cells as literal null instead of leaving mysterious blanks.
+        stats.companyLinkedIn++;
+        if (needEmail) {
+          changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: 'null' });
+          stats.emailsWritten++;
+          stats.nullsWritten++;
+        }
+        if (needPhone) {
+          changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: 'null' });
+          stats.phonesWritten++;
+          stats.nullsWritten++;
+        }
+        if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
+        continue;
+      }
+
+      // Truly malformed/uncertain LinkedIn data is different from a known company URL.
+      // Leave it untouched so we never convert a parsing problem into fake no-data.
       clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone);
       stats.invalidLinkedIn++;
       stats.unresolvedRows++;
@@ -335,11 +360,14 @@ function formatResult(stats) {
   const phoneTail = stats.pendingPhones
     ? ` ${stats.pendingPhones} phone${stats.pendingPhones === 1 ? '' : 's'} are still verifying and will auto-fill when Apollo returns them.`
     : '';
+  const companyTail = stats.companyLinkedIn
+    ? ` ${stats.companyLinkedIn} company LinkedIn row${stats.companyLinkedIn === 1 ? '' : 's'} were marked null without spending People Enrichment credits.`
+    : '';
   const unresolvedTail = stats.unresolvedRows
     ? ` ${stats.unresolvedRows} uncertain row${stats.unresolvedRows === 1 ? '' : 's'} were left untouched.`
     : '';
   const errorTail = stats.failedRows ? ` ${stats.failedRows} row${stats.failedRows === 1 ? '' : 's'} failed and were left untouched.` : '';
-  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${phoneTail}${unresolvedTail}${errorTail}`;
+  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${phoneTail}${companyTail}${unresolvedTail}${errorTail}`;
 }
 
 function authInstruction() {
