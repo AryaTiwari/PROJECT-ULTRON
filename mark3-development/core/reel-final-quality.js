@@ -11,6 +11,7 @@ function audit(result, brief, options = {}) {
   const finisher = result?.finisher || {};
   const completion = result?.completion || {};
   const characterMeta = polish.characterUniverse || {};
+  const vaultMeta = polish.graphicsVault || {};
   const content = quality.auditPlan(plan, brief, options);
   const branded = quality.shouldBrandPlan(plan, brief, options);
   const req = quality.requirements(plan?.durationSec || options.durationSec);
@@ -68,6 +69,15 @@ function audit(result, brief, options = {}) {
   if (characterUniverseExpected && !storyStages.includes('diagnosis-split')) issues.push('character storyline is missing the Elevate Doctor diagnosis stage');
   if (characterUniverseExpected && !storyStages.includes('prescription-stage') && expectedCharacterScenes >= 5) issues.push('character storyline is missing the Elevate prescription/Devil-defeat stage');
 
+  // A character Reel is now a complete internal graphics product, not a stock Reel
+  // with characters pasted on top. Require the permanent vault to survive into the
+  // final image and actually contribute both environment and metric/UI information.
+  if (characterUniverseExpected && vaultMeta.applied !== true) issues.push('built-in Elevate graphics vault was not applied to the final Reel');
+  if (characterUniverseExpected && !finisher.graphicsVaultApplied) issues.push('premium finisher did not confirm the built-in graphics vault survived into final output');
+  if (characterUniverseExpected && Number(finisher.graphicsVaultBackgroundCoverage || 0) < expectedCharacterScenes) issues.push('built-in graphics vault did not provide a background for every character-story scene');
+  if (characterUniverseExpected && Number(finisher.graphicsVaultMetricCount || 0) < Math.max(1, expectedCharacterScenes - 1)) issues.push('built-in metric icon system was not used across enough Reel scenes');
+  if (characterUniverseExpected && Number(finisher.graphicsVaultUiCount || 0) < 2) issues.push('built-in Reel UI elements were not used for the problem/solution storyline');
+
   if (semanticGraphicsExpected && !polish.graphicsEngine?.applied) issues.push('planned Elevate semantic graphics were not applied to the final visual pass');
   if (semanticGraphicsExpected && !finisher.semanticGraphicsApplied) issues.push('premium finisher did not confirm the Elevate graphics pass survived into final output');
   if (branded && !plan.brandPromotion) issues.push('creator-growth Reel is missing Elevate OS promotion');
@@ -102,6 +112,10 @@ function audit(result, brief, options = {}) {
     largeCharacterStaging: Boolean(characterMeta.largeCharacterStaging && finisher.largeCharacterStaging),
     storyStages,
     ffmpegTextExpansion: characterMeta.ffmpegTextExpansion || null,
+    graphicsVaultApplied: Boolean(vaultMeta.applied && finisher.graphicsVaultApplied),
+    graphicsVaultBackgroundCoverage: Number(finisher.graphicsVaultBackgroundCoverage || 0),
+    graphicsVaultMetricCount: Number(finisher.graphicsVaultMetricCount || 0),
+    graphicsVaultUiCount: Number(finisher.graphicsVaultUiCount || 0),
     semanticGraphicsExpected: Boolean(semanticGraphicsExpected),
     semanticGraphicsApplied: Boolean(polish.graphicsEngine?.applied && finisher.semanticGraphicsApplied),
     sfxApplied: Boolean(finisher.sfxApplied),
