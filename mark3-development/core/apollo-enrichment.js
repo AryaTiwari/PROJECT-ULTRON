@@ -54,17 +54,11 @@ function migrateCache(parsed) {
   for (const [url, record] of Object.entries(parsed?.people || {})) {
     if (!record) continue;
 
-    // Versions 2 and 3 could mark a valid Apollo LinkedIn match as ambiguous solely
-    // because Apollo returned a canonical/current vanity URL, sometimes without a
-    // match_confidence field. Drop only those ambiguous records so they are rechecked
-    // once under the corrected matching rule.
     if (version === 2 || version === 3) {
       if (!record.ambiguous) people[url] = record;
       continue;
     }
 
-    // Version 1 could create false negative records. Preserve only known positive
-    // Apollo-person matches and safely re-check everything else once.
     if (record.noMatch === false && record.apolloPersonId) people[url] = record;
   }
   return { version: CACHE_VERSION, people };
@@ -84,14 +78,33 @@ function saveCache(cache) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify({ version: CACHE_VERSION, people: cache.people || {} }, null, 2));
 }
 
-function cacheDays() {
-  const value = Number(setting('ULTRON_M3_APOLLO_CACHE_DAYS', '30'));
-  return Number.isFinite(value) && value > 0 ? value : 30;
+function numericSetting(name, fallback) {
+  const value = Number(setting(name, String(fallback)));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function cacheDays(record) {
+  // Positive data is expensive to reveal again, especially mobile numbers. Keep it
+  // much longer than negatives. Pending/ambiguous records are intentionally short-lived
+  // so quality does not get frozen merely to save credits.
+  if (record?.phoneStatus === 'found' || record?.phone || record?.email) {
+    return numericSetting('ULTRON_M3_APOLLO_POSITIVE_CACHE_DAYS', 180);
+  }
+  if (record?.phoneStatus === 'pending') {
+    return numericSetting('ULTRON_M3_APOLLO_PENDING_CACHE_DAYS', 1);
+  }
+  if (record?.ambiguous) {
+    return numericSetting('ULTRON_M3_APOLLO_AMBIGUOUS_CACHE_DAYS', 7);
+  }
+  if (record?.noMatch || record?.emailKnown || record?.phoneStatus === 'not_found') {
+    return numericSetting('ULTRON_M3_APOLLO_NEGATIVE_CACHE_DAYS', 30);
+  }
+  return numericSetting('ULTRON_M3_APOLLO_CACHE_DAYS', 30);
 }
 
 function isFresh(record) {
   const checked = Date.parse(record?.checkedAt || '');
-  return Number.isFinite(checked) && Date.now() - checked < cacheDays() * 86400000;
+  return Number.isFinite(checked) && Date.now() - checked < cacheDays(record) * 86400000;
 }
 
 function satisfies(record, { needEmail, needPhone }) {
@@ -146,18 +159,10 @@ function matchDecision(requestedLinkedIn, data) {
   if (!person?.id || confidence === 'none') return { state: 'no_match', confidence, person: person || null };
 
   const returned = normalizeLinkedIn(person.linkedin_url || person.linkedin || '');
-
-  // For a People Enrichment request keyed by linkedin_url, a returned Apollo person ID
-  // is the match. Apollo's standard single-person response does not always include a
-  // match_confidence field, and it may return a canonical/current LinkedIn vanity URL.
-  // Do not reject that valid result merely because the returned slug changed.
   if (confidence !== 'low' || !returned || returned === requestedLinkedIn) {
     return { state: 'accepted', confidence, person, returnedLinkedIn: returned || null };
   }
 
-  // Only an explicitly low-confidence result that also points at a different LinkedIn
-  // URL remains ambiguous. That is the one case where protecting the office Sheet is
-  // more important than forcing a fill.
   return { state: 'ambiguous', confidence, person, returnedLinkedIn: returned };
 }
 
@@ -170,7 +175,11 @@ async function apiCall(linkedinUrl, { needPhone }) {
   }
   const url = new URL(APOLLO_MATCH);
   url.searchParams.set('linkedin_url', linkedinUrl);
+  // Credit-saver defaults: do not run personal-email or waterfall enrichment here.
+  // The office Sheet/post itself is checked first by the lead operator.
   url.searchParams.set('reveal_personal_emails', 'false');
+  url.searchParams.set('run_waterfall_email', 'false');
+  url.searchParams.set('run_waterfall_phone', 'false');
   url.searchParams.set('reveal_phone_number', needPhone ? 'true' : 'false');
   if (needPhone) {
     const callback = webhookUrl();
@@ -316,6 +325,8 @@ function status() {
     apiKeyReady: Boolean(setting('APOLLO_API_KEY')),
     webhookReady: Boolean(setting('APOLLO_WEBHOOK_URL') && setting('APOLLO_WEBHOOK_SECRET')),
     cacheFile: CACHE_FILE,
+    positiveCacheDays: numericSetting('ULTRON_M3_APOLLO_POSITIVE_CACHE_DAYS', 180),
+    negativeCacheDays: numericSetting('ULTRON_M3_APOLLO_NEGATIVE_CACHE_DAYS', 30),
   };
 }
 
@@ -325,6 +336,7 @@ module.exports = {
   matchDecision,
   readCache,
   saveCache,
+  cacheDays,
   status,
   enrich,
   fetchPhoneResults,
