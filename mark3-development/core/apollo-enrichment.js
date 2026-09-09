@@ -4,7 +4,7 @@ const config = require('./config');
 
 const APOLLO_MATCH = 'https://api.apollo.io/api/v1/people/match';
 const CACHE_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'apollo-cache.json');
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -48,10 +48,11 @@ function migrateCache(parsed) {
   for (const [url, record] of Object.entries(parsed?.people || {})) {
     if (!record) continue;
 
-    if (version === 2) {
-      // Version 2 treated every canonical LinkedIn slug difference as ambiguous.
-      // Apollo can legitimately return a canonical/current LinkedIn URL that differs
-      // from the submitted alias. Re-check only those ambiguous records once.
+    // Versions 2 and 3 could mark a valid Apollo LinkedIn match as ambiguous solely
+    // because Apollo returned a canonical/current vanity URL, sometimes without a
+    // match_confidence field. Drop only those ambiguous records so they are rechecked
+    // once under the corrected matching rule.
+    if (version === 2 || version === 3) {
       if (!record.ambiguous) people[url] = record;
       continue;
     }
@@ -139,19 +140,18 @@ function matchDecision(requestedLinkedIn, data) {
   if (!person?.id || confidence === 'none') return { state: 'no_match', confidence, person: person || null };
 
   const returned = normalizeLinkedIn(person.linkedin_url || person.linkedin || '');
-  if (!returned || returned === requestedLinkedIn) {
+
+  // For a People Enrichment request keyed by linkedin_url, a returned Apollo person ID
+  // is the match. Apollo's standard single-person response does not always include a
+  // match_confidence field, and it may return a canonical/current LinkedIn vanity URL.
+  // Do not reject that valid result merely because the returned slug changed.
+  if (confidence !== 'low' || !returned || returned === requestedLinkedIn) {
     return { state: 'accepted', confidence, person, returnedLinkedIn: returned || null };
   }
 
-  // Apollo may canonicalize/refresh a LinkedIn vanity URL. When Apollo itself says
-  // the match confidence is high or medium, trust the enrichment match rather than
-  // rejecting 80+ valid people solely because the returned slug changed.
-  if (confidence === 'high' || confidence === 'medium') {
-    return { state: 'accepted', confidence, person, returnedLinkedIn: returned };
-  }
-
-  // A mismatched URL with only low/unknown confidence stays untouched. Office data
-  // is more important than filling a cell with a possibly different human.
+  // Only an explicitly low-confidence result that also points at a different LinkedIn
+  // URL remains ambiguous. That is the one case where protecting the office Sheet is
+  // more important than forcing a fill.
   return { state: 'ambiguous', confidence, person, returnedLinkedIn: returned };
 }
 
