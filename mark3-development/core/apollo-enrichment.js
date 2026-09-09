@@ -4,7 +4,7 @@ const config = require('./config');
 
 const APOLLO_MATCH = 'https://api.apollo.io/api/v1/people/match';
 const CACHE_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'apollo-cache.json');
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -41,13 +41,24 @@ function normalizeLinkedIn(input) {
 }
 
 function migrateCache(parsed) {
-  if (Number(parsed?.version) === CACHE_VERSION) return { version: CACHE_VERSION, people: parsed.people || {} };
-  // Version 1 could mark a person as noMatch when Apollo returned a person whose
-  // canonical LinkedIn URL differed from the submitted slug. Keep positive records,
-  // discard old negative records so they are safely re-checked once.
+  const version = Number(parsed?.version || 0);
+  if (version === CACHE_VERSION) return { version: CACHE_VERSION, people: parsed.people || {} };
+
   const people = {};
   for (const [url, record] of Object.entries(parsed?.people || {})) {
-    if (record && record.noMatch === false && record.apolloPersonId) people[url] = record;
+    if (!record) continue;
+
+    if (version === 2) {
+      // Version 2 treated every canonical LinkedIn slug difference as ambiguous.
+      // Apollo can legitimately return a canonical/current LinkedIn URL that differs
+      // from the submitted alias. Re-check only those ambiguous records once.
+      if (!record.ambiguous) people[url] = record;
+      continue;
+    }
+
+    // Version 1 could create false negative records. Preserve only known positive
+    // Apollo-person matches and safely re-check everything else once.
+    if (record.noMatch === false && record.apolloPersonId) people[url] = record;
   }
   return { version: CACHE_VERSION, people };
 }
@@ -126,11 +137,21 @@ function matchDecision(requestedLinkedIn, data) {
   const person = personFromResponse(data);
   const confidence = String(data?.match_confidence || person?.match_confidence || '').toLowerCase();
   if (!person?.id || confidence === 'none') return { state: 'no_match', confidence, person: person || null };
+
   const returned = normalizeLinkedIn(person.linkedin_url || person.linkedin || '');
-  if (!returned || returned === requestedLinkedIn) return { state: 'accepted', confidence, person };
-  // A returned person with a different LinkedIn URL is not the same thing as Apollo
-  // confirming there is no match. Keep the office Sheet untouched rather than writing
-  // a false null. A future run can force-retry if needed.
+  if (!returned || returned === requestedLinkedIn) {
+    return { state: 'accepted', confidence, person, returnedLinkedIn: returned || null };
+  }
+
+  // Apollo may canonicalize/refresh a LinkedIn vanity URL. When Apollo itself says
+  // the match confidence is high or medium, trust the enrichment match rather than
+  // rejecting 80+ valid people solely because the returned slug changed.
+  if (confidence === 'high' || confidence === 'medium') {
+    return { state: 'accepted', confidence, person, returnedLinkedIn: returned };
+  }
+
+  // A mismatched URL with only low/unknown confidence stays untouched. Office data
+  // is more important than filling a cell with a possibly different human.
   return { state: 'ambiguous', confidence, person, returnedLinkedIn: returned };
 }
 
@@ -207,6 +228,7 @@ async function enrich(input, options = {}) {
       phoneStatus: needPhone ? 'not_found' : (previous.phoneStatus || null),
       phone: needPhone ? null : (previous.phone ?? null),
       matchConfidence: decision.confidence || 'none',
+      returnedLinkedIn: null,
       checkedAt: new Date().toISOString(),
     };
   } else if (decision.state === 'ambiguous') {
@@ -233,6 +255,7 @@ async function enrich(input, options = {}) {
       phoneStatus: needPhone ? 'pending' : (previous.phoneStatus || null),
       phone: needPhone ? null : (previous.phone ?? null),
       matchConfidence: decision.confidence || '',
+      returnedLinkedIn: decision.returnedLinkedIn || null,
       checkedAt: new Date().toISOString(),
       phoneRequestedAt: needPhone ? new Date().toISOString() : (previous.phoneRequestedAt || null),
     };
