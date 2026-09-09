@@ -48,6 +48,9 @@ http.createServer = (...args) => {
         if (!id) return json(res, { ok: false, error: 'session id is required' }, 400);
         return json(res, { ok: true, id, messages: require('../conversation').sessionHistory(id, 160) });
       }
+      if (req.method === 'GET' && pathname === '/api/input/status') {
+        return json(res, { ok: true, ...require('../input-intelligence').status() });
+      }
       if (req.method === 'GET' && pathname === '/api/forge/status') return json(res, require('./dashboard').payload());
       if (req.method === 'GET' && pathname === '/api/turbo/status') return json(res, require('../turbo-engine').audit());
       if (req.method === 'GET' && ['/forge', '/forge/', '/forge-dashboard'].includes(pathname)) {
@@ -121,6 +124,15 @@ setImmediate(async () => {
     const leads = require('../lead-enrichment-bootstrap').install();
     console.log(`[Mark 3] Apollo + Google Sheets lead enrichment ${leads.status.ready ? 'ready' : 'installed; one-time auth/config check pending'}.`);
   } catch (error) { console.error(`[Mark 3] Lead enrichment bootstrap failed: ${error.message}`); }
+
+  // Input Intelligence deliberately wraps the feature stack after domain operators.
+  // Vague follow-ups can therefore be reconstructed into the same explicit command the
+  // operator already understands. It stays model-free, confidence-gated and portable
+  // as the stable Mark 4 command-understanding contract.
+  try {
+    const input = require('../input-intelligence').install();
+    console.log(`[Mark 3] Input Intelligence ready; persistent similar-command matching on, model calls=${input.modelCallsForResolution}, Mark 4 contract ready.`);
+  } catch (error) { console.error(`[Mark 3] Input Intelligence bootstrap failed: ${error.message}`); }
 
   // Install local artifact retrieval last so attachment/delivery requests win over
   // every model-backed generation route, including accidentally normalized requests.
