@@ -82,6 +82,19 @@ function valueOrNull(value) {
   return value ? String(value) : 'null';
 }
 
+function isNullSentinel(value) {
+  return String(value ?? '').trim().toLowerCase() === 'null';
+}
+
+function clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone) {
+  if (needEmail && layout.emailColumnIndex >= 0 && isNullSentinel(row[layout.emailColumnIndex])) {
+    changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: '' });
+  }
+  if (needPhone && layout.phoneColumnIndex >= 0 && isNullSentinel(row[layout.phoneColumnIndex])) {
+    changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
+  }
+}
+
 async function enrichSheet(sheetUrl, options = {}) {
   if (!sheetUrl) throw new Error('Google Sheet URL is required.');
   try { await syncPhoneResults({ quiet: true }); } catch {}
@@ -134,10 +147,11 @@ async function enrichSheet(sheetUrl, options = {}) {
 
     const linkedinUrl = apollo.normalizeLinkedIn(rawLinkedIn);
     if (!linkedinUrl) {
-      // Never write null merely because a cell's LinkedIn target could not be read.
-      // Office-sheet data stays untouched and can be retried after link resolution.
+      // Undo old false-null damage but do not replace it with another guessed value.
+      clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone);
       stats.invalidLinkedIn++;
       stats.unresolvedRows++;
+      if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
       continue;
     }
 
@@ -151,8 +165,10 @@ async function enrichSheet(sheetUrl, options = {}) {
       }
 
       if (result.ambiguous) {
+        clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone);
         stats.ambiguousMatches++;
         stats.unresolvedRows++;
+        if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
         continue;
       }
 
@@ -172,17 +188,26 @@ async function enrichSheet(sheetUrl, options = {}) {
           changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: String(result.phone) });
           stats.phonesWritten++;
         } else if (result.apolloPersonId) {
+          // A previous buggy run may have written literal null while this phone is now
+          // genuinely pending. Clear the stale sentinel until the webhook resolves it.
+          if (isNullSentinel(row[layout.phoneColumnIndex])) {
+            changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
+          }
           job.rows[String(rowNumber)] = rowPendingRecord(job, rowNumber, linkedinUrl, result.apolloPersonId);
           stats.pendingPhones++;
           job.updatedAt = new Date().toISOString();
           saveState(state);
         } else {
+          if (isNullSentinel(row[layout.phoneColumnIndex])) {
+            changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
+          }
           stats.unresolvedRows++;
         }
       }
 
       if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
     } catch (error) {
+      clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone);
       stats.failedRows++;
       job.rows[String(rowNumber)] = {
         rowNumber,
@@ -234,7 +259,6 @@ async function syncPhoneResults(options = {}) {
       try {
         const range = sheets.cellRange(match.job.sheetName, match.row.rowNumber, match.row.phoneColumnIndex);
         const current = await sheets.readCell(match.job.spreadsheetId, range);
-        // Literal "null" is ULTRON's no-data sentinel and is intentionally repairable.
         if (sheets.isBlank(current)) {
           await sheets.writeCells(match.job.spreadsheetId, [{ range, value: phone || 'null' }]);
         }
