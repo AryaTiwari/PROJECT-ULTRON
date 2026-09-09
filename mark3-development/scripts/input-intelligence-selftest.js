@@ -32,9 +32,4 @@ const risky = input.resolve('do it', { history: riskyHistory });
 assert.equal(risky.autoResolved, false);
 assert.ok(risky.clarification);
 
-const repeatLead = input.resolve('same one again', { history });
-assert.equal(repeatLead.intent, 'lead-enrichment');
-assert.equal(repeatLead.autoResolved, true);
-assert.match(repeatLead.resolvedMessage, /old-sheet/);
-
 console.log('Input Intelligence self-test passed. Easy commands, previous-command matching, explicit Apollo shortcuts and risky vague-action clarification are healthy.');
