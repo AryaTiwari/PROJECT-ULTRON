@@ -2,6 +2,7 @@
 const assert = require('assert');
 const sheets = require('../core/google-sheets-operator');
 const apollo = require('../core/apollo-enrichment');
+const leadOperator = require('../core/lead-enrichment-operator');
 const bootstrap = require('../core/lead-enrichment-bootstrap');
 
 const rows = [
@@ -32,6 +33,15 @@ assert.equal(sheets.hyperlinkFromCell({ textFormatRuns: [{ format: { link: { uri
 assert.equal(sheets.isBlank('null'), true);
 assert.equal(sheets.isBlank(' NULL '), true);
 assert.equal(sheets.isBlank('real@email.com'), false);
+
+assert.equal(
+  leadOperator.extractRowEmail(['Abhishek', 'L', 'Apply now: Abbhii478@gmail.com', 'L', 'ID: https://www.linkedin.com/in/abhishek', '', 'null'], [4, 6]),
+  'Abbhii478@gmail.com'
+);
+assert.equal(
+  leadOperator.extractRowEmail(['Company', 'L', 'No email in this post', 'L', 'ID: https://www.linkedin.com/company/acme', '', 'null'], [4, 6]),
+  null
+);
 
 const exact = apollo.matchDecision('https://www.linkedin.com/in/person-one', {
   match_confidence: 'high',
@@ -89,4 +99,4 @@ assert.equal(inferred.linkedinColumn, 'D');
 assert.equal(inferred.emailColumn, 'B');
 assert.equal(inferred.phoneColumn, 'C');
 
-console.log('Lead enrichment self-test passed. Labeled LinkedIn IDs, embedded hyperlinks, null repair, Apollo standard-response matching and natural command routing are healthy.');
+console.log('Lead enrichment self-test passed. Labeled LinkedIn IDs, visible post-email recovery, embedded hyperlinks, null repair, Apollo matching and natural command routing are healthy.');
