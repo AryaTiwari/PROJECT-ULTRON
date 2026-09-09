@@ -66,14 +66,12 @@ function headerScore(value, type) {
   const h = normalizeHeader(value);
   if (!h) return 0;
   if (ALIASES[type].has(h)) return 100;
-
   const words = new Set(h.split(' '));
   if (type === 'linkedin') {
     if (!words.has('linkedin')) return 0;
     if (words.has('company') || words.has('organization') || words.has('school')) return 0;
     return 80 + (words.has('profile') || words.has('person') || words.has('contact') || words.has('url') || words.has('link') ? 10 : 0);
   }
-
   if (type === 'phone') {
     if (/\b(?:phone|mobile|telephone|cell)\b/.test(h) || /\bdirect\s+dial\b/.test(h)) {
       if (/\b(?:status|verified|verification|type|label)\b/.test(h) && !/\bnumber\b/.test(h)) return 0;
@@ -82,13 +80,11 @@ function headerScore(value, type) {
     if (/\bcontact\s+(?:number|no)\b/.test(h)) return 85;
     return 0;
   }
-
   if (type === 'email') {
     if (/\bemail\b/.test(h) || /\be\s+mail\b/.test(h)) {
       if (/\b(?:status|verified|verification|validity|confidence)\b/.test(h) && !/\baddress\b/.test(h)) return 0;
       return 80 + (/\b(?:address|work|business|official|contact|primary|corporate|office)\b/.test(h) ? 10 : 0);
     }
-    return 0;
   }
   return 0;
 }
@@ -128,9 +124,7 @@ function detectLayout(rows) {
     const emailMatch = bestHeaderIndex(row, 'email');
     const inferredLinkedin = linkedinMatch.index >= 0 ? linkedinMatch.index : inferLinkedInColumn(rows, r);
     if (inferredLinkedin < 0 || (phoneMatch.index < 0 && emailMatch.index < 0)) continue;
-
-    const score = (linkedinMatch.index >= 0 ? linkedinMatch.score : 35)
-      + phoneMatch.score + emailMatch.score - r * 0.02;
+    const score = (linkedinMatch.index >= 0 ? linkedinMatch.score : 35) + phoneMatch.score + emailMatch.score - r * 0.02;
     if (!best || score > best.score) {
       best = {
         headerRowIndex: r,
@@ -192,6 +186,40 @@ async function values(id, range) {
   return data.values || [];
 }
 
+function hyperlinkFromCell(cell) {
+  const direct = String(cell?.hyperlink || '').trim();
+  if (looksLinkedInProfile(direct)) return direct;
+  const formula = String(cell?.userEnteredValue?.formulaValue || '').trim();
+  const match = formula.match(/^=HYPERLINK\(\s*["']([^"']+)["']/i);
+  if (match && looksLinkedInProfile(match[1])) return match[1];
+  for (const run of cell?.textFormatRuns || []) {
+    const uri = String(run?.format?.link?.uri || '').trim();
+    if (looksLinkedInProfile(uri)) return uri;
+  }
+  return null;
+}
+
+async function linkedInHyperlinks(id, sheetName, columnIndex, lastRow) {
+  if (columnIndex < 0 || lastRow < 1) return new Map();
+  const col = columnName(columnIndex);
+  const range = `${quoteSheet(sheetName)}!${col}1:${col}${lastRow}`;
+  const fields = encodeURIComponent('sheets(data(rowData(values(hyperlink,userEnteredValue,textFormatRuns(format(link(uri)))))))');
+  const url = `${API}/${encodeURIComponent(id)}?includeGridData=true&ranges=${encodeURIComponent(range)}&fields=${fields}`;
+  const data = await request(url);
+  const map = new Map();
+  const grids = data?.sheets?.[0]?.data || [];
+  let rowNumber = 1;
+  for (const grid of grids) {
+    const rows = grid?.rowData || [];
+    for (let i = 0; i < rows.length; i++) {
+      const link = hyperlinkFromCell(rows[i]?.values?.[0]);
+      if (link) map.set(rowNumber + i, link);
+    }
+    rowNumber += rows.length;
+  }
+  return map;
+}
+
 async function inspect(input) {
   const id = spreadsheetId(input);
   const meta = await metadata(id);
@@ -225,6 +253,15 @@ async function inspect(input) {
 async function readSheet(input, knownLayout = null) {
   const layout = knownLayout || await inspect(input);
   const rows = await values(layout.spreadsheetId, `${quoteSheet(layout.sheetName)}!A:ZZ`);
+  // Sheets Values API returns the visible label for cells whose LinkedIn URL is stored
+  // as a hyperlink. Read rich cell metadata for the LinkedIn column and replace only
+  // those visible labels with their actual target URL before Apollo sees the row.
+  const links = await linkedInHyperlinks(layout.spreadsheetId, layout.sheetName, layout.linkedinColumnIndex, Math.max(rows.length, layout.headerRowNumber));
+  for (const [rowNumber, link] of links.entries()) {
+    const index = rowNumber - 1;
+    if (!rows[index]) rows[index] = [];
+    rows[index][layout.linkedinColumnIndex] = link;
+  }
   return { ...layout, rows };
 }
 
@@ -248,7 +285,8 @@ async function readCell(id, range) {
 }
 
 function isBlank(value) {
-  return value == null || String(value).trim() === '';
+  const text = String(value ?? '').trim();
+  return value == null || text === '' || text.toLowerCase() === 'null';
 }
 
 module.exports = {
@@ -260,6 +298,7 @@ module.exports = {
   headerScore,
   bestHeaderIndex,
   looksLinkedInProfile,
+  hyperlinkFromCell,
   detectLayout,
   inspect,
   readSheet,
