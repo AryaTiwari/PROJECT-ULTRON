@@ -136,7 +136,10 @@ async function request(url, options = {}) {
 }
 
 async function metadata(id) {
-  const fields = encodeURIComponent('properties.title,sheets.properties(sheetId,title,index,rowCount,columnCount)');
+  // Only request SheetProperties fields we actually use. rowCount/columnCount live
+  // under gridProperties; asking for them directly makes the Sheets API reject the
+  // field mask with HTTP 400.
+  const fields = encodeURIComponent('properties.title,sheets.properties(sheetId,title,index)');
   return request(`${API}/${encodeURIComponent(id)}?includeGridData=false&fields=${fields}`);
 }
 
