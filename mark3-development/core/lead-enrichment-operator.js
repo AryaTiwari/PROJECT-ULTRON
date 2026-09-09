@@ -90,6 +90,21 @@ function isCompanyLinkedIn(value) {
   return /(?:https?:\/\/)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\/company\//i.test(String(value || ''));
 }
 
+function extractRowEmail(row, excludedIndexes = []) {
+  const excluded = new Set(excludedIndexes.filter((value) => Number.isInteger(value) && value >= 0));
+  const emailPattern = /[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+/ig;
+  for (let index = 0; index < (row || []).length; index++) {
+    if (excluded.has(index)) continue;
+    const text = String(row[index] ?? '');
+    const matches = text.match(emailPattern) || [];
+    for (const match of matches) {
+      const email = String(match).replace(/[),.;:!?]+$/, '').trim();
+      if (email && !/^(?:example|test)@/i.test(email)) return email;
+    }
+  }
+  return null;
+}
+
 function clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone) {
   if (needEmail && layout.emailColumnIndex >= 0 && isNullSentinel(row[layout.emailColumnIndex])) {
     changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: '' });
@@ -124,6 +139,7 @@ async function enrichSheet(sheetUrl, options = {}) {
     emailsWritten: 0,
     phonesWritten: 0,
     nullsWritten: 0,
+    sheetEmailsRecovered: 0,
     pendingPhones: 0,
     skippedComplete: 0,
     invalidLinkedIn: 0,
@@ -143,10 +159,28 @@ async function enrichSheet(sheetUrl, options = {}) {
     if (!rawLinkedIn || !String(rawLinkedIn).trim()) continue;
     stats.scannedRows++;
 
-    const needEmail = layout.emailColumnIndex >= 0 && sheets.isBlank(row[layout.emailColumnIndex]);
+    let needEmail = layout.emailColumnIndex >= 0 && sheets.isBlank(row[layout.emailColumnIndex]);
     const needPhone = layout.phoneColumnIndex >= 0 && sheets.isBlank(row[layout.phoneColumnIndex]);
     if (!needEmail && !needPhone) {
       stats.skippedComplete++;
+      continue;
+    }
+
+    // These office lead sheets already contain the original LinkedIn post text.
+    // If the recruiter published an email there, that is the strongest and cheapest
+    // source: recover it before Apollo, including rows previously poisoned with null.
+    if (needEmail) {
+      const visibleEmail = extractRowEmail(row, [layout.emailColumnIndex, layout.linkedinColumnIndex]);
+      if (visibleEmail) {
+        changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: visibleEmail });
+        stats.emailsWritten++;
+        stats.sheetEmailsRecovered++;
+        needEmail = false;
+      }
+    }
+
+    if (!needEmail && !needPhone) {
+      if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
       continue;
     }
 
@@ -155,7 +189,7 @@ async function enrichSheet(sheetUrl, options = {}) {
       if (isCompanyLinkedIn(rawLinkedIn)) {
         // This workflow uses Apollo People Enrichment. A /company/ URL is a known,
         // deterministic non-person target, so do not waste an Apollo person credit.
-        // Mark missing output cells as literal null instead of leaving mysterious blanks.
+        // If the post itself already supplied an email above, preserve that real value.
         stats.companyLinkedIn++;
         if (needEmail) {
           changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: 'null' });
@@ -360,14 +394,17 @@ function formatResult(stats) {
   const phoneTail = stats.pendingPhones
     ? ` ${stats.pendingPhones} phone${stats.pendingPhones === 1 ? '' : 's'} are still verifying and will auto-fill when Apollo returns them.`
     : '';
+  const recoveredTail = stats.sheetEmailsRecovered
+    ? ` ${stats.sheetEmailsRecovered} email${stats.sheetEmailsRecovered === 1 ? '' : 's'} were recovered directly from existing sheet/post text before Apollo.`
+    : '';
   const companyTail = stats.companyLinkedIn
-    ? ` ${stats.companyLinkedIn} company LinkedIn row${stats.companyLinkedIn === 1 ? '' : 's'} were marked null without spending People Enrichment credits.`
+    ? ` ${stats.companyLinkedIn} company LinkedIn row${stats.companyLinkedIn === 1 ? '' : 's'} skipped People Enrichment.`
     : '';
   const unresolvedTail = stats.unresolvedRows
     ? ` ${stats.unresolvedRows} uncertain row${stats.unresolvedRows === 1 ? '' : 's'} were left untouched.`
     : '';
   const errorTail = stats.failedRows ? ` ${stats.failedRows} row${stats.failedRows === 1 ? '' : 's'} failed and were left untouched.` : '';
-  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${phoneTail}${companyTail}${unresolvedTail}${errorTail}`;
+  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${recoveredTail}${phoneTail}${companyTail}${unresolvedTail}${errorTail}`;
 }
 
 function authInstruction() {
@@ -385,4 +422,5 @@ module.exports = {
   resume,
   formatResult,
   authInstruction,
+  extractRowEmail,
 };
