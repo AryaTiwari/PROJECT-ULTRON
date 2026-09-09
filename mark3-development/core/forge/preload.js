@@ -117,6 +117,11 @@ setImmediate(async () => {
     console.log(`[Mark 3] Adaptive Intelligence ready; ${adaptive.status.totalObservations || 0} learned observation(s), approval-gated proposals enabled.`);
   } catch (error) { console.error(`[Mark 3] Adaptive Intelligence bootstrap failed: ${error.message}`); }
 
+  try {
+    const leads = require('../lead-enrichment-bootstrap').install();
+    console.log(`[Mark 3] Apollo + Google Sheets lead enrichment ${leads.status.ready ? 'ready' : 'installed; one-time auth/config check pending'}.`);
+  } catch (error) { console.error(`[Mark 3] Lead enrichment bootstrap failed: ${error.message}`); }
+
   // Install local artifact retrieval last so attachment/delivery requests win over
   // every model-backed generation route, including accidentally normalized requests.
   try {
