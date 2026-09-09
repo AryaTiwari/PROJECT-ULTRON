@@ -23,7 +23,18 @@ assert.equal(sheets.columnName(26), 'AA');
 assert.equal(apollo.normalizeLinkedIn('https://www.linkedin.com/in/person-one/?trk=abc'), 'https://www.linkedin.com/in/person-one');
 assert.equal(apollo.normalizeLinkedIn('linkedin.com/in/person-two/'), 'https://www.linkedin.com/in/person-two');
 assert.equal(apollo.normalizeLinkedIn('https://www.linkedin.com/company/acme'), null);
-assert.ok(bootstrap.isEnrichmentRequest('Ultron, enrich this sheet with Apollo: https://docs.google.com/spreadsheets/d/abc123/edit#gid=0'));
+
+const validCommand = bootstrap.isEnrichmentRequest('Ultron, enrich this sheet with Apollo: https://docs.google.com/spreadsheets/d/abc123/edit#gid=0');
+assert.ok(validCommand);
+assert.equal(validCommand.invalidUrl, false);
+assert.equal(validCommand.url, 'https://docs.google.com/spreadsheets/d/abc123/edit#gid=0');
+
+const malformedCommand = bootstrap.isEnrichmentRequest('Ultron, enrich this sheet with Apollo: https://docs.google.com/spreadsheets/d/...');
+assert.ok(malformedCommand);
+assert.equal(malformedCommand.invalidUrl, true);
+assert.equal(malformedCommand.url, null);
+assert.equal(bootstrap.hasEnrichmentIntent('Ultron, enrich this sheet with Apollo: https://docs.google.com/spreadsheets/d/...'), true);
+
 assert.ok(bootstrap.isStatusRequest('Apollo enrichment status'));
 assert.ok(bootstrap.isResumeRequest('resume Apollo enrichment'));
 
@@ -37,4 +48,4 @@ assert.equal(inferred.linkedinColumn, 'D');
 assert.equal(inferred.emailColumn, 'B');
 assert.equal(inferred.phoneColumn, 'C');
 
-console.log('Lead enrichment self-test passed. Dynamic headers/columns, LinkedIn normalization and natural commands are healthy.');
+console.log('Lead enrichment self-test passed. Dynamic headers/columns, LinkedIn normalization and natural command routing are healthy.');
