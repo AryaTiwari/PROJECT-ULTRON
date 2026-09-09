@@ -78,7 +78,7 @@ async function flushChanges(spreadsheetId, changes, stats) {
   stats.updatedCells += result.updatedCells;
 }
 
-function valueForNull(value) {
+function valueOrNull(value) {
   return value ? String(value) : 'null';
 }
 
@@ -110,6 +110,8 @@ async function enrichSheet(sheetUrl, options = {}) {
     pendingPhones: 0,
     skippedComplete: 0,
     invalidLinkedIn: 0,
+    ambiguousMatches: 0,
+    unresolvedRows: 0,
     failedRows: 0,
     updatedCells: 0,
   };
@@ -132,16 +134,10 @@ async function enrichSheet(sheetUrl, options = {}) {
 
     const linkedinUrl = apollo.normalizeLinkedIn(rawLinkedIn);
     if (!linkedinUrl) {
+      // Never write null merely because a cell's LinkedIn target could not be read.
+      // Office-sheet data stays untouched and can be retried after link resolution.
       stats.invalidLinkedIn++;
-      if (needEmail) {
-        changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: 'null' });
-        stats.emailsWritten++; stats.nullsWritten++;
-      }
-      if (needPhone) {
-        changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: 'null' });
-        stats.phonesWritten++; stats.nullsWritten++;
-      }
-      if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
+      stats.unresolvedRows++;
       continue;
     }
 
@@ -154,8 +150,14 @@ async function enrichSheet(sheetUrl, options = {}) {
         if (delay) await sleep(delay);
       }
 
+      if (result.ambiguous) {
+        stats.ambiguousMatches++;
+        stats.unresolvedRows++;
+        continue;
+      }
+
       if (needEmail) {
-        const emailValue = result.noMatch ? 'null' : valueForNull(result.email);
+        const emailValue = result.noMatch ? 'null' : valueOrNull(result.email);
         changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: emailValue });
         stats.emailsWritten++;
         if (emailValue === 'null') stats.nullsWritten++;
@@ -164,7 +166,8 @@ async function enrichSheet(sheetUrl, options = {}) {
       if (needPhone) {
         if (result.noMatch || result.phoneStatus === 'not_found') {
           changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: 'null' });
-          stats.phonesWritten++; stats.nullsWritten++;
+          stats.phonesWritten++;
+          stats.nullsWritten++;
         } else if (result.phoneStatus === 'found' && result.phone) {
           changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: String(result.phone) });
           stats.phonesWritten++;
@@ -173,6 +176,8 @@ async function enrichSheet(sheetUrl, options = {}) {
           stats.pendingPhones++;
           job.updatedAt = new Date().toISOString();
           saveState(state);
+        } else {
+          stats.unresolvedRows++;
         }
       }
 
@@ -229,6 +234,7 @@ async function syncPhoneResults(options = {}) {
       try {
         const range = sheets.cellRange(match.job.sheetName, match.row.rowNumber, match.row.phoneColumnIndex);
         const current = await sheets.readCell(match.job.spreadsheetId, range);
+        // Literal "null" is ULTRON's no-data sentinel and is intentionally repairable.
         if (sheets.isBlank(current)) {
           await sheets.writeCells(match.job.spreadsheetId, [{ range, value: phone || 'null' }]);
         }
@@ -305,8 +311,11 @@ function formatResult(stats) {
   const phoneTail = stats.pendingPhones
     ? ` ${stats.pendingPhones} phone${stats.pendingPhones === 1 ? '' : 's'} are still verifying and will auto-fill when Apollo returns them.`
     : '';
-  const errorTail = stats.failedRows ? ` ${stats.failedRows} row${stats.failedRows === 1 ? '' : 's'} could not be enriched and were left untouched.` : '';
-  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${phoneTail}${errorTail}`;
+  const unresolvedTail = stats.unresolvedRows
+    ? ` ${stats.unresolvedRows} uncertain row${stats.unresolvedRows === 1 ? '' : 's'} were left untouched.`
+    : '';
+  const errorTail = stats.failedRows ? ` ${stats.failedRows} row${stats.failedRows === 1 ? '' : 's'} failed and were left untouched.` : '';
+  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${phoneTail}${unresolvedTail}${errorTail}`;
 }
 
 function authInstruction() {
