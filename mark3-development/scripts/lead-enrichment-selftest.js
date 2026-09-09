@@ -22,6 +22,9 @@ assert.equal(sheets.columnName(25), 'Z');
 assert.equal(sheets.columnName(26), 'AA');
 assert.equal(apollo.normalizeLinkedIn('https://www.linkedin.com/in/person-one/?trk=abc'), 'https://www.linkedin.com/in/person-one');
 assert.equal(apollo.normalizeLinkedIn('linkedin.com/in/person-two/'), 'https://www.linkedin.com/in/person-two');
+assert.equal(apollo.normalizeLinkedIn('ID: https://www.linkedin.com/in/person-three/'), 'https://www.linkedin.com/in/person-three');
+assert.equal(apollo.normalizeLinkedIn('LinkedIn Id = linkedin.com/in/person-four/?trk=sheet'), 'https://www.linkedin.com/in/person-four');
+assert.equal(apollo.normalizeLinkedIn('ID: https://www.linkedin.com/company/acme'), null);
 assert.equal(apollo.normalizeLinkedIn('https://www.linkedin.com/company/acme'), null);
 assert.equal(sheets.hyperlinkFromCell({ hyperlink: 'https://www.linkedin.com/in/hidden-target' }), 'https://www.linkedin.com/in/hidden-target');
 assert.equal(sheets.hyperlinkFromCell({ userEnteredValue: { formulaValue: '=HYPERLINK("https://www.linkedin.com/in/formula-target","LinkedIn")' } }), 'https://www.linkedin.com/in/formula-target');
@@ -86,4 +89,4 @@ assert.equal(inferred.linkedinColumn, 'D');
 assert.equal(inferred.emailColumn, 'B');
 assert.equal(inferred.phoneColumn, 'C');
 
-console.log('Lead enrichment self-test passed. Embedded LinkedIn hyperlinks, null repair, Apollo standard-response matching and natural command routing are healthy.');
+console.log('Lead enrichment self-test passed. Labeled LinkedIn IDs, embedded hyperlinks, null repair, Apollo standard-response matching and natural command routing are healthy.');
