@@ -23,6 +23,25 @@ assert.equal(sheets.columnName(26), 'AA');
 assert.equal(apollo.normalizeLinkedIn('https://www.linkedin.com/in/person-one/?trk=abc'), 'https://www.linkedin.com/in/person-one');
 assert.equal(apollo.normalizeLinkedIn('linkedin.com/in/person-two/'), 'https://www.linkedin.com/in/person-two');
 assert.equal(apollo.normalizeLinkedIn('https://www.linkedin.com/company/acme'), null);
+assert.equal(sheets.hyperlinkFromCell({ hyperlink: 'https://www.linkedin.com/in/hidden-target' }), 'https://www.linkedin.com/in/hidden-target');
+assert.equal(sheets.hyperlinkFromCell({ userEnteredValue: { formulaValue: '=HYPERLINK("https://www.linkedin.com/in/formula-target","LinkedIn")' } }), 'https://www.linkedin.com/in/formula-target');
+assert.equal(sheets.hyperlinkFromCell({ textFormatRuns: [{ format: { link: { uri: 'https://www.linkedin.com/in/rich-target' } } }] }), 'https://www.linkedin.com/in/rich-target');
+assert.equal(sheets.isBlank('null'), true);
+assert.equal(sheets.isBlank(' NULL '), true);
+assert.equal(sheets.isBlank('real@email.com'), false);
+
+const exact = apollo.matchDecision('https://www.linkedin.com/in/person-one', {
+  match_confidence: 'high',
+  person: { id: 'p1', linkedin_url: 'https://www.linkedin.com/in/person-one/' },
+});
+assert.equal(exact.state, 'accepted');
+const ambiguous = apollo.matchDecision('https://www.linkedin.com/in/person-one', {
+  match_confidence: 'high',
+  person: { id: 'p2', linkedin_url: 'https://www.linkedin.com/in/someone-else' },
+});
+assert.equal(ambiguous.state, 'ambiguous');
+const none = apollo.matchDecision('https://www.linkedin.com/in/person-one', { match_confidence: 'none', person: null });
+assert.equal(none.state, 'no_match');
 
 const validCommand = bootstrap.isEnrichmentRequest('Ultron, enrich this sheet with Apollo: https://docs.google.com/spreadsheets/d/abc123/edit#gid=0');
 assert.ok(validCommand);
@@ -48,4 +67,4 @@ assert.equal(inferred.linkedinColumn, 'D');
 assert.equal(inferred.emailColumn, 'B');
 assert.equal(inferred.phoneColumn, 'C');
 
-console.log('Lead enrichment self-test passed. Dynamic headers/columns, LinkedIn normalization and natural command routing are healthy.');
+console.log('Lead enrichment self-test passed. Embedded LinkedIn hyperlinks, null repair, conservative Apollo matching and natural command routing are healthy.');
