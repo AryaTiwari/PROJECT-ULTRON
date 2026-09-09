@@ -1,6 +1,6 @@
 {
   "name": "ultron-mark3",
-  "version": "3.0.0-beta.23",
+  "version": "3.0.0-beta.22",
   "private": true,
   "type": "commonjs",
   "description": "ULTRON Mark 3 founder operating assistant with persistent context, verified execution, proactive attention, native voice, multimodal artifacts, direct primary models, Forge multi-agent missions and evidence-driven coding/research",
