@@ -151,7 +151,7 @@ async function authorizeInteractive() {
   const server = http.createServer((req, res) => {
     try {
       const url = new URL(req.url || '/', 'http://127.0.0.1');
-      if (url.pathname !== '/oauth2/callback') {
+      if (url.pathname !== '/') {
         res.writeHead(404); res.end('Not found'); return;
       }
       const returnedState = url.searchParams.get('state');
@@ -174,7 +174,7 @@ async function authorizeInteractive() {
     server.listen(0, '127.0.0.1', resolve);
   });
   const port = server.address().port;
-  const redirectUri = `http://127.0.0.1:${port}/oauth2/callback`;
+  const redirectUri = `http://127.0.0.1:${port}`;
   const authUrl = new URL(client.authUri);
   authUrl.search = new URLSearchParams({
     client_id: client.clientId,
