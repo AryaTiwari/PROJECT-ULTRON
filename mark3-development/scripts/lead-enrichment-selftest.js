@@ -35,11 +35,25 @@ const exact = apollo.matchDecision('https://www.linkedin.com/in/person-one', {
   person: { id: 'p1', linkedin_url: 'https://www.linkedin.com/in/person-one/' },
 });
 assert.equal(exact.state, 'accepted');
-const ambiguous = apollo.matchDecision('https://www.linkedin.com/in/person-one', {
+
+const canonicalHigh = apollo.matchDecision('https://www.linkedin.com/in/old-person-slug', {
   match_confidence: 'high',
-  person: { id: 'p2', linkedin_url: 'https://www.linkedin.com/in/someone-else' },
+  person: { id: 'p2', linkedin_url: 'https://www.linkedin.com/in/current-person-slug' },
 });
-assert.equal(ambiguous.state, 'ambiguous');
+assert.equal(canonicalHigh.state, 'accepted');
+
+const canonicalMedium = apollo.matchDecision('https://www.linkedin.com/in/old-person-slug', {
+  match_confidence: 'medium',
+  person: { id: 'p3', linkedin_url: 'https://www.linkedin.com/in/current-person-slug' },
+});
+assert.equal(canonicalMedium.state, 'accepted');
+
+const ambiguousLow = apollo.matchDecision('https://www.linkedin.com/in/person-one', {
+  match_confidence: 'low',
+  person: { id: 'p4', linkedin_url: 'https://www.linkedin.com/in/someone-else' },
+});
+assert.equal(ambiguousLow.state, 'ambiguous');
+
 const none = apollo.matchDecision('https://www.linkedin.com/in/person-one', { match_confidence: 'none', person: null });
 assert.equal(none.state, 'no_match');
 
@@ -67,4 +81,4 @@ assert.equal(inferred.linkedinColumn, 'D');
 assert.equal(inferred.emailColumn, 'B');
 assert.equal(inferred.phoneColumn, 'C');
 
-console.log('Lead enrichment self-test passed. Embedded LinkedIn hyperlinks, null repair, conservative Apollo matching and natural command routing are healthy.');
+console.log('Lead enrichment self-test passed. Embedded LinkedIn hyperlinks, null repair, Apollo confidence matching and natural command routing are healthy.');
