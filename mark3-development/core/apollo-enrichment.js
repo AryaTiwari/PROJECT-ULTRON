@@ -4,6 +4,7 @@ const config = require('./config');
 
 const APOLLO_MATCH = 'https://api.apollo.io/api/v1/people/match';
 const CACHE_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'apollo-cache.json');
+const CACHE_VERSION = 2;
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -39,19 +40,30 @@ function normalizeLinkedIn(input) {
   }
 }
 
+function migrateCache(parsed) {
+  if (Number(parsed?.version) === CACHE_VERSION) return { version: CACHE_VERSION, people: parsed.people || {} };
+  // Version 1 could mark a person as noMatch when Apollo returned a person whose
+  // canonical LinkedIn URL differed from the submitted slug. Keep positive records,
+  // discard old negative records so they are safely re-checked once.
+  const people = {};
+  for (const [url, record] of Object.entries(parsed?.people || {})) {
+    if (record && record.noMatch === false && record.apolloPersonId) people[url] = record;
+  }
+  return { version: CACHE_VERSION, people };
+}
+
 function readCache() {
   try {
-    if (!fs.existsSync(CACHE_FILE)) return { version: 1, people: {} };
-    const parsed = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-    return { version: 1, people: parsed.people || {} };
+    if (!fs.existsSync(CACHE_FILE)) return { version: CACHE_VERSION, people: {} };
+    return migrateCache(JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')));
   } catch {
-    return { version: 1, people: {} };
+    return { version: CACHE_VERSION, people: {} };
   }
 }
 
 function saveCache(cache) {
   fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
+  fs.writeFileSync(CACHE_FILE, JSON.stringify({ version: CACHE_VERSION, people: cache.people || {} }, null, 2));
 }
 
 function cacheDays() {
@@ -66,7 +78,7 @@ function isFresh(record) {
 
 function satisfies(record, { needEmail, needPhone }) {
   if (!record || !isFresh(record)) return false;
-  if (record.noMatch) return true;
+  if (record.noMatch || record.ambiguous) return true;
   if (needEmail && !record.emailKnown) return false;
   if (needPhone && !['found', 'not_found', 'pending'].includes(record.phoneStatus)) return false;
   return true;
@@ -110,15 +122,16 @@ function personFromResponse(data) {
   return data?.person || data?.contact || null;
 }
 
-function matchAccepted(requestedLinkedIn, data) {
+function matchDecision(requestedLinkedIn, data) {
   const person = personFromResponse(data);
-  if (!person?.id) return false;
   const confidence = String(data?.match_confidence || person?.match_confidence || '').toLowerCase();
-  if (confidence === 'none') return false;
+  if (!person?.id || confidence === 'none') return { state: 'no_match', confidence, person: person || null };
   const returned = normalizeLinkedIn(person.linkedin_url || person.linkedin || '');
-  if (returned && returned !== requestedLinkedIn) return false;
-  if (!returned && confidence === 'low') return false;
-  return true;
+  if (!returned || returned === requestedLinkedIn) return { state: 'accepted', confidence, person };
+  // A returned person with a different LinkedIn URL is not the same thing as Apollo
+  // confirming there is no match. Keep the office Sheet untouched rather than writing
+  // a false null. A future run can force-retry if needed.
+  return { state: 'ambiguous', confidence, person, returnedLinkedIn: returned };
 }
 
 async function apiCall(linkedinUrl, { needPhone }) {
@@ -179,36 +192,52 @@ async function enrich(input, options = {}) {
   }
 
   const data = await apiCall(linkedinUrl, { needPhone });
-  const accepted = matchAccepted(linkedinUrl, data);
+  const decision = matchDecision(linkedinUrl, data);
   const previous = existing || {};
   let record;
-  if (!accepted) {
+
+  if (decision.state === 'no_match') {
     record = {
       ...previous,
       noMatch: true,
+      ambiguous: false,
       apolloPersonId: null,
       emailKnown: needEmail ? true : Boolean(previous.emailKnown),
       email: needEmail ? null : (previous.email ?? null),
       phoneStatus: needPhone ? 'not_found' : (previous.phoneStatus || null),
       phone: needPhone ? null : (previous.phone ?? null),
-      matchConfidence: String(data?.match_confidence || 'none'),
+      matchConfidence: decision.confidence || 'none',
       checkedAt: new Date().toISOString(),
     };
-  } else {
-    const person = personFromResponse(data);
+  } else if (decision.state === 'ambiguous') {
     record = {
       ...previous,
       noMatch: false,
+      ambiguous: true,
+      apolloPersonId: null,
+      emailKnown: false,
+      phoneStatus: null,
+      matchConfidence: decision.confidence || '',
+      returnedLinkedIn: decision.returnedLinkedIn || null,
+      checkedAt: new Date().toISOString(),
+    };
+  } else {
+    const person = decision.person;
+    record = {
+      ...previous,
+      noMatch: false,
+      ambiguous: false,
       apolloPersonId: String(person.id),
       emailKnown: needEmail ? true : Boolean(previous.emailKnown),
       email: needEmail ? validEmail(person.email) : (previous.email ?? null),
       phoneStatus: needPhone ? 'pending' : (previous.phoneStatus || null),
       phone: needPhone ? null : (previous.phone ?? null),
-      matchConfidence: String(data?.match_confidence || person?.match_confidence || ''),
+      matchConfidence: decision.confidence || '',
       checkedAt: new Date().toISOString(),
       phoneRequestedAt: needPhone ? new Date().toISOString() : (previous.phoneRequestedAt || null),
     };
   }
+
   cache.people[linkedinUrl] = record;
   saveCache(cache);
   return { ok: true, cached: false, linkedinUrl, ...record };
@@ -264,6 +293,7 @@ function status() {
 module.exports = {
   setting,
   normalizeLinkedIn,
+  matchDecision,
   readCache,
   saveCache,
   status,
