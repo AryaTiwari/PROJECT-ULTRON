@@ -27,8 +27,8 @@
     strip.innerHTML = '';
     for (const item of pending) {
       const chip = document.createElement('div');
-      chip.className = `attachment-chip${item.uploading ? ' uploading' : ''}`;
-      chip.innerHTML = `<span title="${String(item.name || '').replace(/"/g, '&quot;')}">${item.uploading ? 'UPLOADING · ' : ''}${item.name} · ${formatBytes(item.size)}</span><button type="button" aria-label="Remove attachment">×</button>`;
+      chip.className = `attachment-chip${item.uploading ? ' uploading' : ''}${item.error ? ' failed' : ''}`;
+      chip.innerHTML = `<span title="${String(item.name || '').replace(/"/g, '&quot;')}">${item.uploading ? 'UPLOADING · ' : ''}${item.name} · ${formatBytes(item.size)}</span><button type="button" aria-label="Remove file">×</button>`;
       chip.querySelector('button').addEventListener('click', () => {
         const index = pending.indexOf(item);
         if (index >= 0) pending.splice(index, 1);
@@ -62,6 +62,14 @@
       item.name = `${item.name} · FAILED`;
     }
     renderPending();
+  }
+
+  function readyIds() {
+    return pending.filter((item) => item.id && !item.uploading && !item.error).map((item) => item.id);
+  }
+
+  function hasUploading() {
+    return pending.some((item) => item.uploading);
   }
 
   function clearSent(ids) {
@@ -103,7 +111,7 @@
     try { body = typeof init.body === 'string' ? JSON.parse(init.body) : { ...(init.body || {}) }; } catch {}
     if (!body || typeof body !== 'object') return baseFetch(input, init);
 
-    const attachmentIds = pending.filter((item) => item.id && !item.uploading && !item.error).map((item) => item.id);
+    const attachmentIds = readyIds();
     if (attachmentIds.length) body.attachments = [...new Set([...(Array.isArray(body.attachments) ? body.attachments : []), ...attachmentIds])];
     const next = { ...init, body: JSON.stringify(body) };
 
@@ -117,36 +125,61 @@
     });
   };
 
-  window.addEventListener('DOMContentLoaded', () => {
+  function bindNativeControls() {
     const composer = document.querySelector('.composer');
     const textarea = document.querySelector('#input');
     if (!composer || !textarea) return;
 
-    const strip = document.createElement('div');
-    strip.id = 'attachmentStrip';
-    strip.className = 'attachment-strip';
-    composer.insertBefore(strip, composer.firstChild);
+    let strip = document.querySelector('#attachmentStrip');
+    if (!strip) {
+      strip = document.createElement('div');
+      strip.id = 'attachmentStrip';
+      strip.className = 'attachment-strip';
+      composer.insertBefore(strip, composer.firstChild);
+    }
 
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = true;
-    input.hidden = true;
-    input.accept = '.txt,.md,.csv,.json,.html,.htm,.pdf,.docx,.png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.m4a,.ogg,.webm,.mp4,.mov,.mkv';
-    composer.appendChild(input);
+    let input = document.querySelector('#fileInput');
+    if (!input) {
+      input = document.createElement('input');
+      input.id = 'fileInput';
+      input.type = 'file';
+      input.multiple = true;
+      input.hidden = true;
+      input.accept = '.txt,.md,.csv,.json,.html,.htm,.pdf,.docx,.png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.m4a,.ogg,.webm,.mp4,.mov,.mkv';
+      composer.appendChild(input);
+    }
 
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'attachment-button';
-    button.textContent = '+ FILE';
-    button.title = 'Attach a file for ULTRON to read';
-    composer.insertBefore(button, textarea);
+    let button = document.querySelector('#attachButton');
+    if (!button) {
+      button = document.createElement('button');
+      button.id = 'attachButton';
+      button.type = 'button';
+      button.className = 'attachment-button';
+      button.textContent = '+';
+      button.title = 'Add context or a file';
+      composer.insertBefore(button, textarea);
+    }
+
+    if (button.dataset.multimodalBound === '1') return;
+    button.dataset.multimodalBound = '1';
     button.addEventListener('click', () => input.click());
     input.addEventListener('change', () => {
       const files = Array.from(input.files || []);
       input.value = '';
       for (const file of files.slice(0, 4)) void uploadFile(file);
     });
-  });
+  }
 
-  window.__ULTRON_ATTACHMENTS = { pending, renderArtifacts };
+  window.addEventListener('DOMContentLoaded', bindNativeControls);
+
+  window.__ULTRON_ATTACHMENTS = {
+    pending,
+    readyIds,
+    hasUploading,
+    clearSent,
+    uploadFile,
+    renderPending,
+    renderArtifacts,
+    bindNativeControls,
+  };
 })();
