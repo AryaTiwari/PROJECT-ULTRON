@@ -24,8 +24,14 @@ function setting(name, fallback = '') {
 function normalizeLinkedIn(input) {
   const raw = String(input || '').trim();
   if (!raw) return null;
-  let value = raw;
+
+  // Office lead sheets often store values such as
+  // "ID: https://www.linkedin.com/in/person-name/" rather than a bare URL.
+  // Extract the profile URL from surrounding labels/text before normalizing it.
+  const embedded = raw.match(/(?:https?:\/\/)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\/in\/[a-z0-9%._~-]+\/?(?:[?#][^\s<>'"`]*)?/i)?.[0];
+  let value = (embedded || raw).replace(/[),.;!?]+$/, '');
   if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+
   try {
     const url = new URL(value);
     const host = url.hostname.toLowerCase().replace(/^(?:[a-z]{2,3}\.)?www\./, '').replace(/^[a-z]{2,3}\./, '');
