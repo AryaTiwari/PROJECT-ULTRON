@@ -36,7 +36,8 @@ function quoteSheet(name) {
 function normalizeHeader(value) {
   return String(value ?? '')
     .toLowerCase()
-    .replace(/[._/-]+/g, ' ')
+    .replace(/&/g, ' and ')
+    .replace(/[._/\\-]+/g, ' ')
     .replace(/[^a-z0-9 ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -45,21 +46,60 @@ function normalizeHeader(value) {
 const ALIASES = {
   linkedin: new Set([
     'linkedin', 'linkedin url', 'linkedin profile', 'linkedin profile url', 'linkedin link',
-    'linkedin profile link', 'profile linkedin', 'linkedin account',
-  ]),
+    'linkedin profile link', 'profile linkedin', 'linkedin account', 'person linkedin url',
+    'person linkedin', 'contact linkedin', 'linkedin profile address', 'linkedin address',
+  ].map(normalizeHeader)),
   phone: new Set([
-    'phone', 'phone number', 'phone no', 'phone no.', 'mobile', 'mobile number', 'mobile no',
+    'phone', 'phone number', 'phone no', 'mobile', 'mobile number', 'mobile no',
     'contact number', 'contact no', 'contact phone', 'work phone', 'business phone',
+    'mobile phone', 'phone mobile', 'direct dial', 'direct phone', 'cell', 'cell phone',
+    'telephone', 'telephone number', 'contact mobile', 'primary phone', 'phone 1',
   ].map(normalizeHeader)),
   email: new Set([
     'email', 'email id', 'email address', 'work email', 'business email', 'official email',
-    'contact email', 'professional email', 'work email address',
+    'contact email', 'professional email', 'work email address', 'business email address',
+    'primary email', 'corporate email', 'office email', 'email 1', 'e mail', 'e mail address',
   ].map(normalizeHeader)),
 };
 
-function aliasIndex(row, type) {
-  const aliases = ALIASES[type];
-  return row.findIndex((value) => aliases.has(normalizeHeader(value)));
+function headerScore(value, type) {
+  const h = normalizeHeader(value);
+  if (!h) return 0;
+  if (ALIASES[type].has(h)) return 100;
+
+  const words = new Set(h.split(' '));
+  if (type === 'linkedin') {
+    if (!words.has('linkedin')) return 0;
+    if (words.has('company') || words.has('organization') || words.has('school')) return 0;
+    return 80 + (words.has('profile') || words.has('person') || words.has('contact') || words.has('url') || words.has('link') ? 10 : 0);
+  }
+
+  if (type === 'phone') {
+    if (/\b(?:phone|mobile|telephone|cell)\b/.test(h) || /\bdirect\s+dial\b/.test(h)) {
+      if (/\b(?:status|verified|verification|type|label)\b/.test(h) && !/\bnumber\b/.test(h)) return 0;
+      return 80 + (/\b(?:number|no|direct|work|business|contact|primary)\b/.test(h) ? 10 : 0);
+    }
+    if (/\bcontact\s+(?:number|no)\b/.test(h)) return 85;
+    return 0;
+  }
+
+  if (type === 'email') {
+    if (/\bemail\b/.test(h) || /\be\s+mail\b/.test(h)) {
+      if (/\b(?:status|verified|verification|validity|confidence)\b/.test(h) && !/\baddress\b/.test(h)) return 0;
+      return 80 + (/\b(?:address|work|business|official|contact|primary|corporate|office)\b/.test(h) ? 10 : 0);
+    }
+    return 0;
+  }
+  return 0;
+}
+
+function bestHeaderIndex(row, type) {
+  let best = { index: -1, score: 0 };
+  row.forEach((value, index) => {
+    const score = headerScore(value, type);
+    if (score > best.score) best = { index, score };
+  });
+  return best;
 }
 
 function looksLinkedInProfile(value) {
@@ -68,7 +108,7 @@ function looksLinkedInProfile(value) {
 
 function inferLinkedInColumn(rows, headerRowIndex) {
   const counts = new Map();
-  for (let r = headerRowIndex + 1; r < Math.min(rows.length, headerRowIndex + 21); r++) {
+  for (let r = headerRowIndex + 1; r < Math.min(rows.length, headerRowIndex + 31); r++) {
     const row = rows[r] || [];
     row.forEach((value, index) => {
       if (looksLinkedInProfile(value)) counts.set(index, (counts.get(index) || 0) + 1);
@@ -80,32 +120,39 @@ function inferLinkedInColumn(rows, headerRowIndex) {
 
 function detectLayout(rows) {
   let best = null;
-  const maxHeaderRows = Math.min(rows.length, 25);
+  const maxHeaderRows = Math.min(rows.length, 30);
   for (let r = 0; r < maxHeaderRows; r++) {
     const row = rows[r] || [];
-    const explicitLinkedin = aliasIndex(row, 'linkedin');
-    const phone = aliasIndex(row, 'phone');
-    const email = aliasIndex(row, 'email');
-    const inferredLinkedin = explicitLinkedin >= 0 ? explicitLinkedin : inferLinkedInColumn(rows, r);
-    if (inferredLinkedin < 0 || (phone < 0 && email < 0)) continue;
-    const score = (explicitLinkedin >= 0 ? 7 : 3) + (phone >= 0 ? 5 : 0) + (email >= 0 ? 5 : 0) - r * 0.02;
+    const linkedinMatch = bestHeaderIndex(row, 'linkedin');
+    const phoneMatch = bestHeaderIndex(row, 'phone');
+    const emailMatch = bestHeaderIndex(row, 'email');
+    const inferredLinkedin = linkedinMatch.index >= 0 ? linkedinMatch.index : inferLinkedInColumn(rows, r);
+    if (inferredLinkedin < 0 || (phoneMatch.index < 0 && emailMatch.index < 0)) continue;
+
+    const score = (linkedinMatch.index >= 0 ? linkedinMatch.score : 35)
+      + phoneMatch.score + emailMatch.score - r * 0.02;
     if (!best || score > best.score) {
       best = {
         headerRowIndex: r,
         headerRowNumber: r + 1,
         linkedinColumnIndex: inferredLinkedin,
-        phoneColumnIndex: phone,
-        emailColumnIndex: email,
+        phoneColumnIndex: phoneMatch.index,
+        emailColumnIndex: emailMatch.index,
         linkedinColumn: columnName(inferredLinkedin),
-        phoneColumn: phone >= 0 ? columnName(phone) : null,
-        emailColumn: email >= 0 ? columnName(email) : null,
+        phoneColumn: phoneMatch.index >= 0 ? columnName(phoneMatch.index) : null,
+        emailColumn: emailMatch.index >= 0 ? columnName(emailMatch.index) : null,
         score,
       };
     }
   }
   if (!best) {
-    const error = new Error('Could not detect a LinkedIn column plus Phone/Email columns in this Sheet.');
+    const sample = rows.slice(0, 12)
+      .map((row, index) => ({ row: index + 1, headers: (row || []).filter((v) => String(v ?? '').trim()).slice(0, 18).map(String) }))
+      .filter((item) => item.headers.length)
+      .slice(0, 5);
+    const error = new Error(`Could not safely identify LinkedIn plus Phone/Email columns. Header preview: ${JSON.stringify(sample)}`);
     error.code = 'SHEET_COLUMNS_NOT_FOUND';
+    error.headerPreview = sample;
     throw error;
   }
   return best;
@@ -136,9 +183,6 @@ async function request(url, options = {}) {
 }
 
 async function metadata(id) {
-  // Only request SheetProperties fields we actually use. rowCount/columnCount live
-  // under gridProperties; asking for them directly makes the Sheets API reject the
-  // field mask with HTTP 400.
   const fields = encodeURIComponent('properties.title,sheets.properties(sheetId,title,index)');
   return request(`${API}/${encodeURIComponent(id)}?includeGridData=false&fields=${fields}`);
 }
@@ -152,21 +196,27 @@ async function inspect(input) {
   const id = spreadsheetId(input);
   const meta = await metadata(id);
   let best = null;
+  let bestFailure = null;
   for (const sheet of meta.sheets || []) {
     const title = sheet?.properties?.title;
     if (!title) continue;
-    const preview = await values(id, `${quoteSheet(title)}!A1:ZZ60`);
+    const preview = await values(id, `${quoteSheet(title)}!A1:ZZ80`);
     try {
       const layout = detectLayout(preview);
       const candidate = { ...layout, sheetName: title, sheetId: sheet.properties.sheetId, previewRows: preview.length };
       if (!best || candidate.score > best.score) best = candidate;
     } catch (error) {
       if (error.code !== 'SHEET_COLUMNS_NOT_FOUND') throw error;
+      if (!bestFailure || (error.headerPreview?.length || 0) > (bestFailure.headerPreview?.length || 0)) {
+        bestFailure = { sheetName: title, headerPreview: error.headerPreview || [] };
+      }
     }
   }
   if (!best) {
-    const error = new Error('No tab contains a detectable LinkedIn column with Phone or Email columns.');
+    const previewText = bestFailure ? ` Closest tab: ${bestFailure.sheetName}. Header preview: ${JSON.stringify(bestFailure.headerPreview)}` : '';
+    const error = new Error(`No tab contains a safely detectable LinkedIn column with Phone or Email columns.${previewText}`);
     error.code = 'SHEET_COLUMNS_NOT_FOUND';
+    error.headerPreview = bestFailure?.headerPreview || [];
     throw error;
   }
   return { spreadsheetId: id, spreadsheetTitle: meta?.properties?.title || '', ...best };
@@ -207,6 +257,8 @@ module.exports = {
   columnName,
   quoteSheet,
   normalizeHeader,
+  headerScore,
+  bestHeaderIndex,
   looksLinkedInProfile,
   detectLayout,
   inspect,
