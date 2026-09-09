@@ -35,13 +35,24 @@ assert.equal(sheets.isBlank(' NULL '), true);
 assert.equal(sheets.isBlank('real@email.com'), false);
 
 assert.equal(
-  leadOperator.extractRowEmail(['Abhishek', 'L', 'Apply now: Abbhii478@gmail.com', 'L', 'ID: https://www.linkedin.com/in/abhishek', '', 'null'], [4, 6]),
-  'Abbhii478@gmail.com'
+  leadOperator.extractRowEmail(['Person', 'Apply: recruiter@examplecompany.com', '']),
+  'recruiter@examplecompany.com'
 );
 assert.equal(
-  leadOperator.extractRowEmail(['Company', 'L', 'No email in this post', 'L', 'ID: https://www.linkedin.com/company/acme', '', 'null'], [4, 6]),
-  null
+  leadOperator.extractRowPhone(['Person', 'Call/WhatsApp: +91 84483 33703', '']),
+  '+918448333703'
 );
+assert.equal(
+  leadOperator.extractRowPhone(['Person', 'Phone No: 8707872961', '']),
+  '+918707872961'
+);
+assert.equal(leadOperator.extractRowPhone(['Person', 'Experience: 8 years; salary 1200000']), null);
+
+assert.equal(apollo.cacheDays({ email: 'real@example.com', checkedAt: new Date().toISOString() }), 180);
+assert.equal(apollo.cacheDays({ phoneStatus: 'found', phone: '+919999999999' }), 180);
+assert.equal(apollo.cacheDays({ noMatch: true }), 30);
+assert.equal(apollo.cacheDays({ ambiguous: true }), 7);
+assert.equal(apollo.cacheDays({ phoneStatus: 'pending' }), 1);
 
 const exact = apollo.matchDecision('https://www.linkedin.com/in/person-one', {
   match_confidence: 'high',
@@ -99,4 +110,4 @@ assert.equal(inferred.linkedinColumn, 'D');
 assert.equal(inferred.emailColumn, 'B');
 assert.equal(inferred.phoneColumn, 'C');
 
-console.log('Lead enrichment self-test passed. Labeled LinkedIn IDs, visible post-email recovery, embedded hyperlinks, null repair, Apollo matching and natural command routing are healthy.');
+console.log('Lead enrichment self-test passed. Credit-saver local email/phone recovery, long positive cache, LinkedIn parsing, null repair and natural command routing are healthy.');
