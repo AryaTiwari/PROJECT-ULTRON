@@ -2,6 +2,7 @@
 const assert = require('assert');
 const microsoft = require('../core/microsoft-excel-operator');
 const bootstrap = require('../core/lead-enrichment-bootstrap');
+const auth = require('../core/microsoft-onedrive-auth');
 
 const url = 'https://1drv.ms/x/c/35c43b64ad90686a/IQDHg33o3RX8SZYKHa90f_DGAaJ5HYDsFONKtngxtE_MnUo?e=GF2etW';
 assert.equal(microsoft.extractWorkbookUrl(`please use ${url}`), url);
@@ -23,4 +24,11 @@ assert.equal(request.provider, 'microsoft');
 assert.equal(request.invalidUrl, false);
 assert.equal(request.unsupportedProvider, null);
 
-console.log('Microsoft OneDrive self-test passed. OneDrive links route to the real Excel adapter and remain behind the Apollo approval gate.');
+const authState = auth.status();
+assert.equal(authState.authFlow, 'authorization-code-pkce');
+assert.match(authState.redirectUri, /^http:\/\/localhost:\d+$/);
+const pkce = auth.pkcePair();
+assert.ok(pkce.verifier.length >= 43);
+assert.match(pkce.challenge, /^[A-Za-z0-9_-]+$/);
+
+console.log('Microsoft OneDrive self-test passed. OneDrive routes to the real Excel adapter, PKCE browser login is configured, and Apollo remains approval-gated.');
