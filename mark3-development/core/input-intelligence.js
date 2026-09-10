@@ -3,7 +3,7 @@ const assistant = require('./assistant');
 const voice = require('./voice-orchestrator');
 const { emit } = require('./events');
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const MAX_HISTORY = 180;
 const SAFE_AUTO_THRESHOLD = 0.72;
 const CLARIFY_THRESHOLD = 0.50;
@@ -53,6 +53,7 @@ function classify(text) {
   if (!value) return 'empty';
   if (/\b(?:apollo|lead\s+enrich|enrich(?:ment)?\s+(?:this\s+)?sheet|phone\s*(?:and|\+|&)\s*email|email\s*(?:and|\+|&)\s*phone)\b/.test(value)) return 'lead-enrichment';
   if (/\b(?:google\s*sheet|spreadsheet|sheet)\b/.test(value) && /\b(?:enrich|fill|find|get|fetch|phone|email|contact|lead)\b/.test(value)) return 'lead-enrichment';
+  if (/^@[\w .()\-]+\s+[\s\S]*\b(?:enrich|fill|populate|complete)\b[\s\S]*\b(?:email|phone|mobile|number|contact)\b/i.test(value)) return 'lead-enrichment';
   if (/\b(?:reel|video|clip|animation|b-?roll|image|poster|thumbnail|logo|pdf|docx|document|report|proposal)\b/.test(value)
       && /\b(?:make|create|generate|render|design|produce|build|export|prepare)\b/.test(value)) return 'artifact-generation';
   if (/\b(?:github|repo|repository|codebase|branch|bug|code|implement|refactor|function|script|commit|deploy)\b/.test(value)) return 'coding';
@@ -85,6 +86,18 @@ function extractTarget(text) {
 
 function isRepeatSameTarget(text) {
   return /\b(?:again|retry|resume|same\s+(?:one|sheet|task)|do\s+it\s+again|run\s+it\s+again)\b/i.test(stripWake(text));
+}
+
+function pendingApolloApprovalMessage(text) {
+  try {
+    const paidTools = require('./paid-tool-approval');
+    if (!paidTools.pending('apollo')) return false;
+    const value = stripWake(text);
+    return paidTools.approvalAttempt(value)
+      || /^(?:no|nope|deny|denied|cancel|don'?t|do not|skip(?:\s+it)?)[.!?\s]*$/i.test(value);
+  } catch {
+    return false;
+  }
 }
 
 function candidateIntent(row) {
@@ -203,6 +216,23 @@ function clarification(current, candidates) {
 function resolve(message, options = {}) {
   const originalMessage = normalize(message);
   const normalizedMessage = stripWake(originalMessage);
+
+  if (pendingApolloApprovalMessage(originalMessage)) {
+    return {
+      version: VERSION,
+      originalMessage,
+      normalizedMessage,
+      resolvedMessage: originalMessage,
+      intent: 'paid-tool-approval',
+      confidence: 1,
+      source: 'pending-apollo-approval',
+      vague: false,
+      autoResolved: false,
+      clarification: null,
+      candidate: null,
+    };
+  }
+
   const directLead = explicitLeadShortcut(originalMessage);
   if (directLead) {
     return {
@@ -353,6 +383,7 @@ function status() {
     clarificationThreshold: CLARIFY_THRESHOLD,
     persistentSimilarity: true,
     modelCallsForResolution: 0,
+    pendingApolloPassThrough: true,
     mark4ContractReady: true,
   };
 }
@@ -364,6 +395,7 @@ module.exports = {
   classify,
   isVague,
   extractTarget,
+  pendingApolloApprovalMessage,
   previousCandidates,
   resolve,
   install,
