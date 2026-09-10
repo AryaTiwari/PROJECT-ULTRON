@@ -14,15 +14,16 @@ const excel = require('../core/microsoft-excel-operator');
       'MICROSOFT_GRAPH_CLIENT_ID is not configured.',
       '',
       'One-time Microsoft setup:',
-      '1. Microsoft Entra admin center -> App registrations -> New registration.',
-      '2. Supported account types: organizational directories + personal Microsoft accounts.',
-      '3. Authentication -> enable Allow public client flows.',
-      '4. API permissions -> Microsoft Graph -> Delegated -> Files.ReadWrite.',
-      '5. Copy the Application (client) ID into the root .env as:',
+      '1. Entra -> App registrations -> open ULTRON OneDrive Operator.',
+      '2. Authentication -> Add a platform -> Mobile and desktop applications.',
+      '3. Add redirect URI: http://localhost',
+      '4. Save. Public client flows may remain enabled.',
+      '5. API permissions -> Microsoft Graph -> Delegated -> Files.ReadWrite.',
+      '6. Copy the Application (client) ID into the root .env as:',
       '   MICROSOFT_GRAPH_CLIENT_ID=your-client-id',
-      '6. Run this command again.',
+      '7. Run this command again.',
       '',
-      'No client secret is required. ULTRON uses device-code login and stores the refresh token under .ultron/credentials.',
+      'No client secret is required. ULTRON uses authorization-code + PKCE and stores the refresh token under .ultron/credentials.',
     ].join('\n'));
     process.exitCode = 1;
     return;
@@ -33,7 +34,8 @@ const excel = require('../core/microsoft-excel-operator');
     return;
   }
 
-  console.log('Starting Microsoft device-code login for Files.ReadWrite...');
+  console.log('Starting Microsoft browser login with PKCE for Files.ReadWrite...');
+  console.log(`Registered redirect URI required in Entra: http://localhost`);
   const result = await auth.authorizeInteractive();
   console.log(`Microsoft OneDrive/Excel connected. Token saved to: ${result.tokenPath}`);
 })().catch((error) => {
