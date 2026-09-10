@@ -44,7 +44,12 @@
     "check:providers": "node --env-file=../.env scripts/provider-test.js",
     "check:models": "node --env-file=../.env scripts/model-test.js",
     "check:voice": "node --env-file=../.env scripts/voice-test.js",
+    "check:onedrive": "node --env-file=../.env scripts/microsoft-onedrive-selftest.js",
+    "onedrive:setup": "node --env-file=../.env scripts/microsoft-onedrive-setup.js",
     "check:runtime": "npm run check && npm run check:providers && npm run check:voice",
     "preflight": "node --env-file=../.env scripts/preflight.js && node --env-file=../.env scripts/flow-selftest.js && node --env-file=../.env scripts/reliability-selftest.js && node --env-file=../.env scripts/operator-selftest.js && node --env-file=../.env scripts/creator-outreach-selftest.js && node --env-file=../.env scripts/adaptive-intelligence-selftest.js && node --env-file=../.env scripts/continuity-selftest.js && node --env-file=../.env scripts/turbo-selftest.js && node --env-file=../.env scripts/buffer-selftest.js && node --env-file=../.env scripts/telegram-selftest.js && node --env-file=../.env scripts/reel-intelligence-selftest.js && node --env-file=../.env scripts/reel-learning-selftest.js && node --env-file=../.env scripts/reel-operator-selftest.js && node --env-file=../.env scripts/reel-finisher-selftest.js && node --env-file=../.env scripts/elevate-reel-engine-selftest.js && node --env-file=../.env scripts/reel-asset-pack-selftest.js && node --env-file=../.env scripts/elevate-graphics-vault-selftest.js && node --env-file=../.env scripts/reel-characters-selftest.js && node --env-file=../.env scripts/reel-script-rescue-selftest.js && node --env-file=../.env scripts/forge-preferences-selftest.js && node --env-file=../.env scripts/forge-selftest.js && node --env-file=../.env scripts/forge-routing-selftest.js && node --env-file=../.env scripts/research-selftest.js && node --env-file=../.env scripts/routing-selftest.js && node --env-file=../.env scripts/multimodal-selftest.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
   }
 }
