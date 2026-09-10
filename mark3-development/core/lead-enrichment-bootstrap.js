@@ -21,6 +21,10 @@ function spreadsheetSource(text) {
   return null;
 }
 
+function wantsContactColumns(text) {
+  return /\b(?:make|add|create|ensure)\b[\s\S]{0,50}\b(?:phone|mobile)\b[\s\S]{0,30}\b(?:email|e\s*mail)\b[\s\S]{0,20}\bcolumns?\b|\b(?:make|add|create|ensure)\b[\s\S]{0,50}\b(?:email|e\s*mail)\b[\s\S]{0,30}\b(?:phone|mobile)\b[\s\S]{0,20}\bcolumns?\b/i.test(String(text || ''));
+}
+
 function hasEnrichmentIntent(text) {
   const value = String(text || '').trim();
   const source = spreadsheetSource(value);
@@ -34,12 +38,13 @@ function isEnrichmentRequest(text) {
   const value = String(text || '').trim();
   if (!hasEnrichmentIntent(value)) return null;
   const source = spreadsheetSource(value);
-  if (!source) return { url: null, provider: null, invalidUrl: true, unsupportedProvider: null };
+  if (!source) return { url: null, provider: null, invalidUrl: true, unsupportedProvider: null, ensureContactColumns: wantsContactColumns(value) };
   return {
     url: source.url,
     provider: source.provider,
     invalidUrl: false,
     unsupportedProvider: source.supported ? null : source.provider,
+    ensureContactColumns: wantsContactColumns(value),
   };
 }
 
@@ -88,9 +93,10 @@ function researchResponseShape(ok, text, extra = {}) {
 }
 
 function approvalResponse(item, extra = {}) {
-  return researchResponseShape(true, paidTools.prompt(item), {
-    taskType: 'paid-tool-approval',
+  return responseShape(true, paidTools.prompt(item), {
+    model: 'apollo-approval-gate',
     provider: 'local-approval-gate',
+    taskType: 'paid-tool-approval',
     paidToolApproval: { id: item.id, tool: item.tool, operation: item.operation, expiresAt: item.expiresAt },
     ...extra,
   });
@@ -124,9 +130,9 @@ function unsupportedSpreadsheetResponse(request) {
   );
 }
 
-async function handleEnrichment(url, provider = null) {
+async function handleEnrichment(url, provider = null, options = {}) {
   try {
-    const stats = await leadEnrichment.enrichSheet(url, { provider });
+    const stats = await leadEnrichment.enrichSheet(url, { provider, ...options });
     return responseShape(true, leadEnrichment.formatResult(stats), { leadEnrichment: stats, spreadsheetProvider: stats.provider || provider || 'google' });
   } catch (error) {
     if (error.code === 'GOOGLE_SHEETS_AUTH_REQUIRED') {
@@ -192,21 +198,22 @@ async function handleResearch(requestData) {
 async function handlePaidToolDecision(decision) {
   if (!decision) return null;
   if (decision.status === 'denied') {
-    return researchResponseShape(true, `${decision.label} was not used, Sir. The pending Apollo action was cancelled.`, {
-      taskType: 'paid-tool-approval', provider: 'local-approval-gate', paidToolApproval: decision,
+    return responseShape(true, `${decision.label} was not used, Sir. The pending Apollo action was cancelled.`, {
+      model: 'apollo-approval-gate', taskType: 'paid-tool-approval', provider: 'local-approval-gate', paidToolApproval: decision,
     });
   }
 
   if (decision.tool === 'apollo' && ['lead-enrichment', 'lead-research-enrichment'].includes(decision.operation)) {
-    return paidTools.withPermit(decision, () => handleEnrichment(decision.payload.url, decision.payload.provider || null));
+    const ensureContactColumns = Boolean(decision.payload?.ensureContactColumns || decision.modifiers?.ensureContactColumns);
+    return paidTools.withPermit(decision, () => handleEnrichment(decision.payload.url, decision.payload.provider || null, { ensureContactColumns }));
   }
 
   if (decision.tool === 'apollo' && decision.operation === 'lead-enrichment-resume') {
     return paidTools.withPermit(decision, () => handleResume());
   }
 
-  return researchResponseShape(false, `I received Apollo approval, Sir, but the pending operation is no longer valid. Nothing was executed.`, {
-    taskType: 'paid-tool-approval', provider: 'local-approval-gate', error: 'STALE_PAID_TOOL_OPERATION',
+  return responseShape(false, `I received Apollo approval, Sir, but the pending operation is no longer valid. Nothing was executed.`, {
+    model: 'apollo-approval-gate', taskType: 'paid-tool-approval', provider: 'local-approval-gate', error: 'STALE_PAID_TOOL_OPERATION',
   });
 }
 
@@ -229,47 +236,56 @@ function install() {
       conversation.append('user', text, { taskType: 'paid-tool-approval', inputMode, tool: paidDecision.tool, decision: paidDecision.status });
       result = await handlePaidToolDecision(paidDecision);
     } else {
-      const researchRequest = leadResearch.parseRequest(text);
-      if (researchRequest) {
-        conversation.append('user', text, { taskType: 'lead-research', inputMode });
-        if (researchRequest.invalidUrl) {
-          result = researchResponseShape(false, 'Use the full Google Sheet link, Sir. I need the real spreadsheet ID after /d/ before I research or write any leads.', { error: 'INVALID_GOOGLE_SHEET_URL' });
-        } else {
-          emit('lead_research_started', { inputMode, count: researchRequest.count, criteria: researchRequest.criteria });
-          result = await handleResearch(researchRequest);
-          emit(result.ok ? 'lead_research_completed' : 'lead_research_failed', { inputMode, error: result.error || null });
-        }
+      const pendingApollo = paidTools.pending('apollo');
+      if (pendingApollo && paidTools.approvalAttempt(text)) {
+        conversation.append('user', text, { taskType: 'paid-tool-approval', inputMode, tool: 'apollo', decision: 'ambiguous' });
+        result = responseShape(false,
+          'Apollo approval is still pending, Sir. I did not send this command to Forge or another operator. Use “Approve Apollo” or “Approve and add phone and email columns”. Extra unrelated actions need a separate command.',
+          { model: 'apollo-approval-gate', provider: 'local-approval-gate', taskType: 'paid-tool-approval', error: 'AMBIGUOUS_APOLLO_APPROVAL', apolloCalled: false }
+        );
       } else {
-        const request = isEnrichmentRequest(text);
-        if (request) {
-          conversation.append('user', text, { taskType: 'lead-enrichment', inputMode, spreadsheetProvider: request.provider });
-          if (request.unsupportedProvider) {
-            result = unsupportedSpreadsheetResponse(request);
-          } else if (request.invalidUrl) {
-            result = responseShape(false, 'Use a full Google Sheets or Microsoft OneDrive/Excel workbook link. Nothing was queued and Apollo was not called.', { error: 'INVALID_SPREADSHEET_URL' });
-          } else if (request.provider === 'microsoft' && microsoftSetupResponse()) {
-            result = microsoftSetupResponse();
+        const researchRequest = leadResearch.parseRequest(text);
+        if (researchRequest) {
+          conversation.append('user', text, { taskType: 'lead-research', inputMode });
+          if (researchRequest.invalidUrl) {
+            result = researchResponseShape(false, 'Use the full Google Sheet link, Sir. I need the real spreadsheet ID after /d/ before I research or write any leads.', { error: 'INVALID_GOOGLE_SHEET_URL' });
           } else {
+            emit('lead_research_started', { inputMode, count: researchRequest.count, criteria: researchRequest.criteria });
+            result = await handleResearch(researchRequest);
+            emit(result.ok ? 'lead_research_completed' : 'lead_research_failed', { inputMode, error: result.error || null });
+          }
+        } else {
+          const request = isEnrichmentRequest(text);
+          if (request) {
+            conversation.append('user', text, { taskType: 'lead-enrichment', inputMode, spreadsheetProvider: request.provider });
+            if (request.unsupportedProvider) {
+              result = unsupportedSpreadsheetResponse(request);
+            } else if (request.invalidUrl) {
+              result = responseShape(false, 'Use a full Google Sheets or Microsoft OneDrive/Excel workbook link. Nothing was queued and Apollo was not called.', { error: 'INVALID_SPREADSHEET_URL' });
+            } else if (request.provider === 'microsoft' && microsoftSetupResponse()) {
+              result = microsoftSetupResponse();
+            } else {
+              const approval = paidTools.request(
+                'apollo',
+                'lead-enrichment',
+                { url: request.url, provider: request.provider, ensureContactColumns: request.ensureContactColumns },
+                `I will use local spreadsheet/post details and the Apollo cache first, then make live Apollo calls only for fields that are still missing in this ${request.provider === 'microsoft' ? 'OneDrive/Excel workbook' : 'Google Sheet'}.`
+              );
+              result = approvalResponse(approval, { leadEnrichmentRequest: request });
+            }
+          } else if (isResumeRequest(text)) {
+            conversation.append('user', text, { taskType: 'lead-enrichment-resume', inputMode });
             const approval = paidTools.request(
               'apollo',
-              'lead-enrichment',
-              { url: request.url, provider: request.provider },
-              `I will use local spreadsheet/post details and the Apollo cache first, then make live Apollo calls only for fields that are still missing in this ${request.provider === 'microsoft' ? 'OneDrive/Excel workbook' : 'Google Sheet'}.`
+              'lead-enrichment-resume',
+              {},
+              'Resume can re-run missing enrichment after syncing existing webhook results, so Apollo remains blocked until this one-run approval is granted.'
             );
-            result = approvalResponse(approval, { leadEnrichmentRequest: request });
+            result = approvalResponse(approval);
+          } else if (isStatusRequest(text)) {
+            conversation.append('user', text, { taskType: 'lead-enrichment-status', inputMode });
+            result = responseShape(true, statusText(), { leadEnrichment: leadEnrichment.status(), paidTools: paidTools.status() });
           }
-        } else if (isResumeRequest(text)) {
-          conversation.append('user', text, { taskType: 'lead-enrichment-resume', inputMode });
-          const approval = paidTools.request(
-            'apollo',
-            'lead-enrichment-resume',
-            {},
-            'Resume can re-run missing enrichment after syncing existing webhook results, so Apollo remains blocked until this one-run approval is granted.'
-          );
-          result = approvalResponse(approval);
-        } else if (isStatusRequest(text)) {
-          conversation.append('user', text, { taskType: 'lead-enrichment-status', inputMode });
-          result = responseShape(true, statusText(), { leadEnrichment: leadEnrichment.status(), paidTools: paidTools.status() });
         }
       }
     }
@@ -303,6 +319,7 @@ module.exports = {
   status,
   statusText,
   spreadsheetSource,
+  wantsContactColumns,
   hasEnrichmentIntent,
   isEnrichmentRequest,
   isStatusRequest,
