@@ -6,9 +6,26 @@ const paidTools = require('./paid-tool-approval');
 let installed = false;
 let originalHandle = null;
 
+function cleanUrl(value) {
+  return String(value || '').trim().replace(/[),.;!?]+$/, '');
+}
+
+function spreadsheetSource(text) {
+  const value = String(text || '').trim();
+  const google = sheets.extractSheetUrl(value);
+  if (google) return { provider: 'google', url: google, supported: true };
+
+  const oneDrive = value.match(/https:\/\/1drv\.ms\/x\/[^\s<>'"`]+/i)?.[0]
+    || value.match(/https:\/\/(?:www\.)?onedrive\.live\.com\/[^\s<>'"`]+/i)?.[0]
+    || value.match(/https:\/\/[^/\s]+\.sharepoint\.com\/[^\s<>'"`]+\.xlsx(?:\?[^\s<>'"`]*)?/i)?.[0];
+  if (oneDrive) return { provider: 'microsoft', url: cleanUrl(oneDrive), supported: false };
+  return null;
+}
+
 function hasEnrichmentIntent(text) {
   const value = String(text || '').trim();
-  const mentionsSheets = /\b(?:google\s+)?sheets?|spreadsheet\b/i.test(value) || /docs\.google\.com\/spreadsheets/i.test(value);
+  const source = spreadsheetSource(value);
+  const mentionsSheets = /\b(?:google\s+)?sheets?|spreadsheet|excel|workbook\b/i.test(value) || Boolean(source);
   const mentionsApollo = /\bapollo\b/i.test(value);
   const action = /\b(?:enrich|fill|find|get|add|update|phone|email|contact|lead)\b/i.test(value);
   return mentionsSheets && mentionsApollo && action;
@@ -17,8 +34,14 @@ function hasEnrichmentIntent(text) {
 function isEnrichmentRequest(text) {
   const value = String(text || '').trim();
   if (!hasEnrichmentIntent(value)) return null;
-  const url = sheets.extractSheetUrl(value);
-  return { url, invalidUrl: !url };
+  const source = spreadsheetSource(value);
+  if (!source) return { url: null, provider: null, invalidUrl: true, unsupportedProvider: null };
+  return {
+    url: source.url,
+    provider: source.provider,
+    invalidUrl: false,
+    unsupportedProvider: source.supported ? null : source.provider,
+  };
 }
 
 function isStatusRequest(text) {
@@ -75,6 +98,22 @@ function approvalResponse(item, extra = {}) {
     paidToolApproval: { id: item.id, tool: item.tool, operation: item.operation, expiresAt: item.expiresAt },
     ...extra,
   });
+}
+
+function unsupportedSpreadsheetResponse(request) {
+  const provider = request?.unsupportedProvider || request?.provider || 'unknown';
+  const label = provider === 'microsoft' ? 'Microsoft OneDrive/Excel' : provider;
+  return responseShape(false,
+    `${label} link detected, Sir. This Mark 3 build does not yet have a verified write adapter for that spreadsheet provider, so I did not call Apollo and I did not edit the workbook. The command was stopped before the language-model path, so ULTRON cannot invent a completed enrichment result.`,
+    {
+      model: 'mark3-spreadsheet-guard',
+      provider: 'local-spreadsheet-guard',
+      error: provider === 'microsoft' ? 'MICROSOFT_SPREADSHEET_ADAPTER_REQUIRED' : 'SPREADSHEET_ADAPTER_REQUIRED',
+      spreadsheetProvider: provider,
+      spreadsheetUrl: request?.url || null,
+      apolloCalled: false,
+    }
+  );
 }
 
 async function handleEnrichment(url) {
@@ -186,7 +225,9 @@ function install() {
         const request = isEnrichmentRequest(text);
         if (request) {
           conversation.append('user', text, { taskType: 'lead-enrichment', inputMode });
-          if (request.invalidUrl) {
+          if (request.unsupportedProvider) {
+            result = unsupportedSpreadsheetResponse(request);
+          } else if (request.invalidUrl) {
             result = responseShape(false, 'Use the full Google Sheet link, Sir. The URL must contain the real spreadsheet ID after /d/. Nothing was queued and the Sheet was not changed.', { error: 'INVALID_GOOGLE_SHEET_URL' });
           } else {
             const approval = paidTools.request(
@@ -241,10 +282,12 @@ module.exports = {
   uninstall,
   status,
   statusText,
+  spreadsheetSource,
   hasEnrichmentIntent,
   isEnrichmentRequest,
   isStatusRequest,
   isResumeRequest,
+  unsupportedSpreadsheetResponse,
   handleEnrichment,
   handleResume,
   handleResearch,
