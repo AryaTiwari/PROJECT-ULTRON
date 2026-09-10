@@ -140,6 +140,11 @@ setImmediate(async () => {
     console.log(`[Mark 3] Local phone repair ready; stale-null recovery=${nullPhoneRepair.repairsNullSentinels ? 'on' : 'off'}, Apollo calls=${nullPhoneRepair.apolloCalls}.`);
   } catch (error) { console.error(`[Mark 3] Local phone repair bootstrap failed: ${error.message}`); }
 
+  try {
+    const leadWorkspace = require('../lead-workspace-bootstrap').install();
+    console.log(`[Mark 3] Lead Workspace ready; Google Sheet creation=on, public-web sourcing=on, remembered layouts=${leadWorkspace.status.templatesRemembered || 0}, max mission=${leadWorkspace.status.maxLeadsPerMission || 200} leads.`);
+  } catch (error) { console.error(`[Mark 3] Lead Workspace bootstrap failed: ${error.message}`); }
+
   // Input Intelligence deliberately wraps the feature stack after domain operators.
   // Vague follow-ups can therefore be reconstructed into the same explicit command the
   // operator already understands. It stays model-free, confidence-gated and portable
