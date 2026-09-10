@@ -130,6 +130,11 @@ setImmediate(async () => {
     console.log(`[Mark 3] Lead enrichment progress monitor ready; live webhook status=${progress.liveStatus ? 'on' : 'off'}, contextual phone recovery=${progress.contextualPhoneRecovery ? 'on' : 'off'}.`);
   } catch (error) { console.error(`[Mark 3] Lead enrichment progress monitor bootstrap failed: ${error.message}`); }
 
+  try {
+    const stableProgress = require('../lead-enrichment-stable-status').install();
+    console.log(`[Mark 3] Stable Apollo status ready; two-pass settling=${stableProgress.stableSnapshot ? 'on' : 'off'}, blank-row diagnosis=${stableProgress.blankPhoneDiagnosis ? 'on' : 'off'}.`);
+  } catch (error) { console.error(`[Mark 3] Stable Apollo status bootstrap failed: ${error.message}`); }
+
   // Input Intelligence deliberately wraps the feature stack after domain operators.
   // Vague follow-ups can therefore be reconstructed into the same explicit command the
   // operator already understands. It stays model-free, confidence-gated and portable
