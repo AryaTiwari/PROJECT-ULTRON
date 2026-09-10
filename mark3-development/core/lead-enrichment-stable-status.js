@@ -46,17 +46,21 @@ function sameTarget(job, summary) {
   return Boolean(job.spreadsheetId || job.sheetUrl);
 }
 
-function pendingRowNumbers(summary, state = leadEnrichment.loadState()) {
-  const result = new Set();
+function pendingRowsByNumber(summary, state = leadEnrichment.loadState()) {
+  const result = new Map();
   for (const job of state.jobs || []) {
     if (!sameTarget(job, summary)) continue;
     for (const [key, row] of Object.entries(job.rows || {})) {
       if (!row?.phonePending) continue;
       const rowNumber = Number(row.rowNumber || key);
-      if (Number.isFinite(rowNumber) && rowNumber > 0) result.add(rowNumber);
+      if (Number.isFinite(rowNumber) && rowNumber > 0) result.set(rowNumber, row);
     }
   }
   return result;
+}
+
+function pendingRowNumbers(summary, state = leadEnrichment.loadState()) {
+  return new Set(pendingRowsByNumber(summary, state).keys());
 }
 
 function leadName(row, rowNumber, linkedinColumnIndex) {
@@ -77,27 +81,48 @@ async function diagnoseBlankPhones(summary) {
     const layout = await adapter.inspect(summary.sheetUrl);
     if (layout.phoneColumnIndex < 0 || layout.linkedinColumnIndex < 0) return null;
     const data = await adapter.readSheet(summary.sheetUrl, layout);
-    const pendingRows = pendingRowNumbers(summary);
+    const pendingRows = pendingRowsByNumber(summary);
     const blanks = [];
+    const terminalPendingFlags = [];
     const start = Number(layout.headerRowIndex || 0) + 1;
 
     for (let index = start; index < (data.rows || []).length; index++) {
       const row = data.rows[index] || [];
       const linkedin = String(row[layout.linkedinColumnIndex] ?? '').trim();
       if (!linkedin) continue;
-      if (!adapter.isBlank(row[layout.phoneColumnIndex])) continue;
       const rowNumber = index + 1;
-      blanks.push({
-        rowNumber,
-        name: leadName(row, rowNumber, layout.linkedinColumnIndex),
-        pending: pendingRows.has(rowNumber),
-      });
+      const phoneState = progress.cellState(row[layout.phoneColumnIndex]);
+      const pending = pendingRows.has(rowNumber);
+
+      // IMPORTANT: adapter.isBlank() intentionally treats the literal string "null"
+      // as fillable during enrichment. Status diagnosis must not. A literal null is a
+      // terminal "checked, no data" value and must never be reported as a blank row.
+      if (phoneState === 'blank') {
+        blanks.push({
+          rowNumber,
+          name: leadName(row, rowNumber, layout.linkedinColumnIndex),
+          pending,
+          requestedAt: pendingRows.get(rowNumber)?.requestedAt || null,
+        });
+        continue;
+      }
+
+      // Async callback state can lag behind a spreadsheet write. Track that drift so a
+      // terminal cell is not presented as something that needs another paid Apollo run.
+      if (pending) {
+        terminalPendingFlags.push({
+          rowNumber,
+          name: leadName(row, rowNumber, layout.linkedinColumnIndex),
+          cellState: phoneState,
+        });
+      }
     }
 
     return {
       total: blanks.length,
       pending: blanks.filter((item) => item.pending),
       untracked: blanks.filter((item) => !item.pending),
+      terminalPendingFlags,
       rows: blanks,
     };
   } catch (error) {
@@ -118,11 +143,17 @@ function appendDiagnosis(text, diagnosis, refreshed) {
     if (diagnosis?.error) output += ` Blank-phone diagnosis could not be read: ${diagnosis.error}.`;
     return output;
   }
-  if (!diagnosis.total) return `${output} No phone cells remain blank in the current target.`;
 
-  output += ` Blank-phone diagnosis: ${diagnosis.total} row${diagnosis.total === 1 ? '' : 's'} remain blank.`;
-  if (diagnosis.pending.length) output += ` Active Apollo callback${diagnosis.pending.length === 1 ? '' : 's'}: ${names(diagnosis.pending)}.`;
-  if (diagnosis.untracked.length) output += ` Not actively pending and therefore candidates for an approved retry: ${names(diagnosis.untracked)}.`;
+  if (!diagnosis.total) output += ' No truly blank phone cells remain in the current target.';
+  else {
+    output += ` Blank-phone diagnosis: ${diagnosis.total} truly blank row${diagnosis.total === 1 ? '' : 's'} remain.`;
+    if (diagnosis.pending.length) output += ` Active Apollo callback${diagnosis.pending.length === 1 ? '' : 's'}: ${names(diagnosis.pending)}.`;
+    if (diagnosis.untracked.length) output += ` Not actively pending and therefore candidates for an approved retry: ${names(diagnosis.untracked)}.`;
+  }
+
+  if (diagnosis.terminalPendingFlags?.length) {
+    output += ` ${diagnosis.terminalPendingFlags.length} tracked pending callback flag${diagnosis.terminalPendingFlags.length === 1 ? '' : 's'} already point to terminal phone cells and are ignored for retry decisions: ${names(diagnosis.terminalPendingFlags)}.`;
+  }
   return output;
 }
 
@@ -192,7 +223,7 @@ function install() {
   };
 
   installed = true;
-  return { installed: true, stableSnapshot: true, blankPhoneDiagnosis: true, settleDelayMs: SETTLE_DELAY_MS };
+  return { installed: true, stableSnapshot: true, blankPhoneDiagnosis: true, terminalPendingDriftDetection: true, settleDelayMs: SETTLE_DELAY_MS };
 }
 
 function uninstall() {
@@ -211,6 +242,7 @@ module.exports = {
   coverageFingerprint,
   combineSync,
   sameTarget,
+  pendingRowsByNumber,
   pendingRowNumbers,
   leadName,
   diagnoseBlankPhones,
