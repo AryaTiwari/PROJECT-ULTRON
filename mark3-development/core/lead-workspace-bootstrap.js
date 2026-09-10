@@ -1,4 +1,4 @@
-const workspace = require('./lead-workspace-operator-v2');
+const workspace = require('./lead-workspace-operator-v3');
 const paidTools = require('./paid-tool-approval');
 
 let installed = false;
@@ -26,8 +26,8 @@ function responseShape(ok, text, extra = {}) {
     ok,
     response: text,
     text,
-    model: 'lead-workspace-v2',
-    provider: 'public-web+google-sheets',
+    model: 'lead-workspace-v3',
+    provider: 'source-fusion+public-web+google-sheets',
     taskType: 'lead-workspace',
     mode: 'operator',
     toolRounds: 0,
@@ -41,7 +41,7 @@ function approvalForMission(mission) {
     'apollo',
     'lead-research-enrichment',
     { url: mission.sheetUrl, provider: 'google' },
-    `The public-web lead mission is complete. Apollo would now check only phone/email fields still missing in ${mission.sheetName || 'the new lead sheet'}, after local sheet/post-detail recovery and cache checks.`
+    `The multi-source lead mission is complete. Apollo would now check only phone/email fields still missing in ${mission.sheetName || 'the new lead sheet'}, after public-source research, local sheet/post-detail recovery and cache checks.`
   );
 }
 
