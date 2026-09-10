@@ -135,6 +135,11 @@ setImmediate(async () => {
     console.log(`[Mark 3] Stable Apollo status ready; two-pass settling=${stableProgress.stableSnapshot ? 'on' : 'off'}, blank-row diagnosis=${stableProgress.blankPhoneDiagnosis ? 'on' : 'off'}.`);
   } catch (error) { console.error(`[Mark 3] Stable Apollo status bootstrap failed: ${error.message}`); }
 
+  try {
+    const nullPhoneRepair = require('../lead-enrichment-null-phone-repair').install();
+    console.log(`[Mark 3] Local phone repair ready; stale-null recovery=${nullPhoneRepair.repairsNullSentinels ? 'on' : 'off'}, Apollo calls=${nullPhoneRepair.apolloCalls}.`);
+  } catch (error) { console.error(`[Mark 3] Local phone repair bootstrap failed: ${error.message}`); }
+
   // Input Intelligence deliberately wraps the feature stack after domain operators.
   // Vague follow-ups can therefore be reconstructed into the same explicit command the
   // operator already understands. It stays model-free, confidence-gated and portable
