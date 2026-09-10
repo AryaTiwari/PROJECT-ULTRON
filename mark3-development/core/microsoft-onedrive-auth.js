@@ -1,11 +1,14 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const http = require('http');
+const crypto = require('crypto');
 const config = require('./config');
 
 const TENANT = String(process.env.ULTRON_M3_MICROSOFT_TENANT || 'common').trim() || 'common';
 const AUTH_ROOT = `https://login.microsoftonline.com/${encodeURIComponent(TENANT)}/oauth2/v2.0`;
-const SCOPE = 'offline_access Files.ReadWrite';
+const SCOPE = 'offline_access https://graph.microsoft.com/Files.ReadWrite';
+const REDIRECT_PORT = Math.max(1024, Math.min(65535, Number(process.env.ULTRON_M3_MICROSOFT_REDIRECT_PORT || 53682)));
+const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}`;
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -48,18 +51,6 @@ function saveToken(token) {
   return file;
 }
 
-function openBrowser(url) {
-  try {
-    const command = process.platform === 'win32'
-      ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
-      : process.platform === 'darwin'
-        ? ['open', [url]]
-        : ['xdg-open', [url]];
-    const child = spawn(command[0], command[1], { detached: true, stdio: 'ignore', windowsHide: true });
-    child.unref();
-  } catch {}
-}
-
 async function formRequest(url, params) {
   const response = await fetch(url, {
     method: 'POST',
@@ -80,6 +71,7 @@ function tokenWithExpiry(data, previous = null) {
     scope: data.scope || previous?.scope || SCOPE,
     expires_at: Date.now() + Math.max(60, Number(data.expires_in || 3600)) * 1000,
     saved_at: new Date().toISOString(),
+    auth_flow: 'authorization-code-pkce',
   };
 }
 
@@ -129,8 +121,79 @@ async function accessToken() {
   return token.access_token;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function base64url(buffer) {
+  return Buffer.from(buffer).toString('base64').replace(/=+$/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function pkcePair() {
+  const verifier = base64url(crypto.randomBytes(48));
+  const challenge = base64url(crypto.createHash('sha256').update(verifier).digest());
+  return { verifier, challenge };
+}
+
+function waitForAuthorizationCode(expectedState) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value, server) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { server.close(); } catch {}
+      fn(value);
+    };
+
+    const server = http.createServer((req, res) => {
+      try {
+        const url = new URL(req.url || '/', REDIRECT_URI);
+        const errorCode = url.searchParams.get('error');
+        const errorDescription = url.searchParams.get('error_description');
+        const state = url.searchParams.get('state');
+        const code = url.searchParams.get('code');
+
+        if (errorCode) {
+          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end('<h2>Microsoft sign-in was not completed.</h2><p>You can close this window and return to PowerShell.</p>');
+          const error = new Error(errorDescription || errorCode);
+          error.code = 'MICROSOFT_GRAPH_AUTH_REQUIRED';
+          finish(reject, error, server);
+          return;
+        }
+
+        if (state !== expectedState || !code) {
+          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end('<h2>Invalid Microsoft sign-in callback.</h2><p>You can close this window.</p>');
+          const error = new Error('Microsoft sign-in callback was missing a valid state or authorization code.');
+          error.code = 'MICROSOFT_GRAPH_AUTH_REQUIRED';
+          finish(reject, error, server);
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end('<h2>ULTRON OneDrive connected.</h2><p>You can close this window and return to PowerShell.</p>');
+        finish(resolve, code, server);
+      } catch (error) {
+        try {
+          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('ULTRON could not process the Microsoft sign-in callback.');
+        } catch {}
+        finish(reject, error, server);
+      }
+    });
+
+    server.on('error', (error) => {
+      const wrapped = new Error(`ULTRON could not open local Microsoft callback port ${REDIRECT_PORT}: ${error.message}`);
+      wrapped.code = 'MICROSOFT_LOCAL_CALLBACK_FAILED';
+      finish(reject, wrapped, server);
+    });
+
+    server.listen(REDIRECT_PORT);
+    const timer = setTimeout(() => {
+      const error = new Error('Microsoft sign-in timed out after 5 minutes. Run the setup command again.');
+      error.code = 'MICROSOFT_GRAPH_AUTH_REQUIRED';
+      finish(reject, error, server);
+    }, 5 * 60 * 1000);
+    timer.unref?.();
+  });
 }
 
 async function authorizeInteractive() {
@@ -141,41 +204,47 @@ async function authorizeInteractive() {
     throw error;
   }
 
-  const start = await formRequest(`${AUTH_ROOT}/devicecode`, { client_id: id, scope: SCOPE });
-  if (!start.response.ok) {
-    throw new Error(start.data.error_description || start.data.error || `Microsoft device login failed (${start.response.status}).`);
+  const state = base64url(crypto.randomBytes(24));
+  const { verifier, challenge } = pkcePair();
+  const params = new URLSearchParams({
+    client_id: id,
+    response_type: 'code',
+    redirect_uri: REDIRECT_URI,
+    response_mode: 'query',
+    scope: SCOPE,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state,
+    prompt: 'select_account',
+  });
+  const authorizationUrl = `${AUTH_ROOT}/authorize?${params.toString()}`;
+
+  console.log('Open this official Microsoft sign-in URL in your normal browser:');
+  console.log(authorizationUrl);
+  console.log('');
+  console.log(`ULTRON is waiting locally at ${REDIRECT_URI}. Do not open any nativeclient/device-login URL.`);
+
+  const codePromise = waitForAuthorizationCode(state);
+  const code = await codePromise;
+
+  const { response, data } = await formRequest(`${AUTH_ROOT}/token`, {
+    client_id: id,
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: REDIRECT_URI,
+    code_verifier: verifier,
+    scope: SCOPE,
+  });
+
+  if (!response.ok) {
+    const error = new Error(data.error_description || data.error || `Microsoft token exchange failed (${response.status}).`);
+    error.code = 'MICROSOFT_GRAPH_AUTH_REQUIRED';
+    throw error;
   }
 
-  const device = start.data;
-  const verificationUri = String(device.verification_uri || device.verification_uri_complete || 'https://microsoft.com/devicelogin');
-  console.log(device.message || `Open ${verificationUri} and enter code ${device.user_code}.`);
-  openBrowser(verificationUri);
-
-  let intervalMs = Math.max(1000, Number(device.interval || 5) * 1000);
-  const deadline = Date.now() + Math.max(60, Number(device.expires_in || 900)) * 1000;
-  while (Date.now() < deadline) {
-    await sleep(intervalMs);
-    const poll = await formRequest(`${AUTH_ROOT}/token`, {
-      client_id: id,
-      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      device_code: device.device_code,
-    });
-    if (poll.response.ok) {
-      const stored = tokenWithExpiry(poll.data);
-      const file = saveToken(stored);
-      return { ok: true, tokenPath: file, scope: stored.scope, tenant: TENANT };
-    }
-    const code = String(poll.data.error || '');
-    if (code === 'authorization_pending') continue;
-    if (code === 'slow_down') {
-      intervalMs += 5000;
-      continue;
-    }
-    if (code === 'authorization_declined') throw new Error('Microsoft sign-in was declined.');
-    if (code === 'expired_token') throw new Error('Microsoft device code expired. Run the setup command again.');
-    throw new Error(poll.data.error_description || code || `Microsoft token request failed (${poll.response.status}).`);
-  }
-  throw new Error('Microsoft sign-in timed out. Run the setup command again.');
+  const stored = tokenWithExpiry(data);
+  const file = saveToken(stored);
+  return { ok: true, tokenPath: file, scope: stored.scope, tenant: TENANT, authFlow: 'authorization-code-pkce', redirectUri: REDIRECT_URI };
 }
 
 function status() {
@@ -186,16 +255,21 @@ function status() {
     tokenPath: tokenPath(),
     scope: SCOPE,
     tenant: TENANT,
+    authFlow: 'authorization-code-pkce',
+    redirectUri: REDIRECT_URI,
   };
 }
 
 module.exports = {
   SCOPE,
   TENANT,
+  REDIRECT_URI,
+  REDIRECT_PORT,
   setting,
   clientId,
   tokenPath,
   status,
   accessToken,
   authorizeInteractive,
+  pkcePair,
 };
