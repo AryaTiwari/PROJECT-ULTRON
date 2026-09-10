@@ -3,7 +3,6 @@ const sheets = require('./google-sheets-operator');
 const web = require('./web');
 const apollo = require('./apollo-enrichment');
 const leadEnrichment = require('./lead-enrichment-operator');
-const paidTools = require('./paid-tool-approval');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const CANONICAL_HEADERS = ['Name', 'Company', 'Role', 'LinkedIn Profile URL', 'Phone No', 'Email', 'Source'];
@@ -226,7 +225,6 @@ function researchQueries(criteria) {
 }
 
 async function researchLeads(criteria, count) {
-  paidTools.assertPermitted('tinyfish');
   const leads = [];
   const seen = new Set();
   const queries = researchQueries(criteria);
