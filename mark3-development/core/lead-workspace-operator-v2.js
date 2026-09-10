@@ -253,6 +253,7 @@ async function formatSpreadsheet(id, sheetId, headers, rowCount) {
     method: 'POST',
     body: JSON.stringify({ requests }),
   });
+  return true;
 }
 
 async function createSpreadsheet(title, headers, rowTarget = 100) {
@@ -269,8 +270,9 @@ async function createSpreadsheet(title, headers, rowTarget = 100) {
   const sheetId = Number(created?.sheets?.[0]?.properties?.sheetId);
   if (!id) throw new Error('Google created a spreadsheet but did not return its ID.');
   await writeValues(id, 'Leads', `A1:${sheets.columnName(headers.length - 1)}1`, [headers]);
+  let formatted = false;
   if (Number.isInteger(sheetId)) {
-    try { await formatSpreadsheet(id, sheetId, headers, rowCount); } catch {}
+    try { formatted = await formatSpreadsheet(id, sheetId, headers, rowCount); } catch {}
   }
   return {
     spreadsheetId: id,
@@ -278,7 +280,7 @@ async function createSpreadsheet(title, headers, rowTarget = 100) {
     sheetName: 'Leads',
     title: created?.properties?.title || title,
     url: `https://docs.google.com/spreadsheets/d/${id}/edit`,
-    formatted: Number.isInteger(sheetId),
+    formatted,
   };
 }
 
@@ -386,7 +388,7 @@ function leadRelevanceScore(lead, criteria) {
   const tokens = criteriaTokens(criteria);
   if (!tokens.length) return 60;
   const titleText = `${lead?.name || ''} ${lead?.role || ''} ${lead?.company || ''}`.toLowerCase();
-  const bodyText = `${lead?.snippet || ''} ${lead?.query || ''}`.toLowerCase();
+  const bodyText = String(lead?.snippet || '').toLowerCase();
   let strong = 0;
   let weak = 0;
   for (const token of tokens) {
@@ -401,6 +403,26 @@ function qualifiedLead(lead, criteria) {
   const tokens = criteriaTokens(criteria);
   if (tokens.length <= 1) return true;
   return leadRelevanceScore(lead, criteria) >= 27;
+}
+
+function identityTokens(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 && !/^(?:the|and|for|pvt|ltd|llp|inc|corp|company|technologies|solutions)$/.test(token));
+}
+
+function identityEvidence(text, lead) {
+  const haystack = String(text || '').toLowerCase();
+  if (!haystack) return false;
+  const nameTokens = identityTokens(lead?.name);
+  const companyTokens = identityTokens(lead?.company);
+  const nameHits = nameTokens.filter((token) => haystack.includes(token)).length;
+  const companyHits = companyTokens.filter((token) => haystack.includes(token)).length;
+  if (nameTokens.length >= 2 && nameHits >= 2) return true;
+  if (nameTokens.length === 1 && nameHits === 1 && companyHits >= 1) return true;
+  return nameHits >= 1 && companyHits >= 1;
 }
 
 function queryPlan(criteria, count) {
@@ -483,24 +505,26 @@ async function deepPublicContactPass(leads, criteria, mission, saveMission) {
       continue;
     }
     const company = lead.company ? `"${lead.company}"` : criteria;
-    const queries = [
-      `"${lead.name}" ${company} email phone contact`,
-      `"${lead.name}" ${company} contact`,
-    ];
+    const queries = [`"${lead.name}" ${company} email phone contact`, `"${lead.name}" ${company} contact`];
     for (const q of queries) {
       if ((lead.email && lead.phone) || searches >= budgets.maxSearches) break;
       try {
         const result = await searchWithRetry(q, { limit: 5 });
         searches++;
         for (const item of result.results || []) {
-          const snippet = String(item?.snippet || '');
-          if (!lead.email) lead.email = leadEnrichment.extractRowEmail([snippet]) || lead.email;
-          if (!lead.phone) lead.phone = leadEnrichment.extractRowPhone([snippet]) || lead.phone;
+          const snippet = `${item?.title || ''}\n${item?.snippet || ''}`;
+          const snippetMatchesIdentity = identityEvidence(snippet, lead);
+          if (snippetMatchesIdentity) {
+            if (!lead.email) lead.email = leadEnrichment.extractRowEmail([snippet]) || lead.email;
+            if (!lead.phone) lead.phone = leadEnrichment.extractRowPhone([snippet]) || lead.phone;
+            if ((lead.email || lead.phone) && !lead.publicContactSource) lead.publicContactSource = String(item?.url || '').trim() || lead.publicContactSource;
+          }
           if (lead.email && lead.phone) break;
           if (fetches >= budgets.maxFetches || !publicScrapeCandidate(item?.url)) continue;
           try {
             const page = await web.fetchPage(item.url, { maxTextChars: 18000 });
             fetches++;
+            if (!identityEvidence(page.text, lead)) continue;
             if (!lead.email) lead.email = leadEnrichment.extractRowEmail([page.text]) || lead.email;
             if (!lead.phone) lead.phone = leadEnrichment.extractRowPhone([page.text]) || lead.phone;
             if ((lead.email || lead.phone) && !lead.publicContactSource) lead.publicContactSource = page.url;
@@ -611,6 +635,7 @@ async function continueMission(id) {
     mission.queries = queries;
     mission.failures = mission.failures || [];
     mission.rejectedLowRelevance = Number(mission.rejectedLowRelevance || 0);
+    const failuresAtStart = mission.failures.length;
 
     for (let i = Number(mission.queryIndex || 0); i < queries.length && mission.leads.length < mission.requested; i++) {
       const query = queries[i];
@@ -641,6 +666,14 @@ async function continueMission(id) {
       mission.queryIndex = i + 1;
       mission.updatedAt = nowIso();
       saveMission();
+    }
+
+    const failuresThisPass = mission.failures.length - failuresAtStart;
+    if (!mission.leads.length && mission.queryIndex >= queries.length && failuresThisPass >= queries.length) {
+      mission.queryIndex = 0;
+      const error = new Error('Public web search failed for every lead query. The mission checkpoint and empty destination sheet were preserved; fix web search and resume the lead mission.');
+      error.code = 'LEAD_RESEARCH_UNAVAILABLE';
+      throw error;
     }
 
     mission.phase = 'deep-public-contact-research';
@@ -676,7 +709,7 @@ async function continueMission(id) {
     rememberTemplate(mission.headers, { sourceTitle: mission.spreadsheetTitle, sourceUrl: mission.sheetUrl, provider: 'google' });
     return mission;
   } catch (error) {
-    mission.status = 'failed';
+    mission.status = error.code === 'LEAD_RESEARCH_UNAVAILABLE' ? 'research-blocked' : 'failed';
     mission.lastError = error.message;
     mission.updatedAt = nowIso();
     saveMission();
@@ -685,6 +718,12 @@ async function continueMission(id) {
 }
 
 async function startMission(plan, headers) {
+  const webStatus = typeof web.status === 'function' ? web.status() : {};
+  if (!webStatus.configured) {
+    const error = new Error('Public web lead search is not configured. Configure the existing TinyFish search connection before starting a lead mission; no spreadsheet was created.');
+    error.code = 'LEAD_WEB_SEARCH_NOT_CONFIGURED';
+    throw error;
+  }
   const finalHeaders = ensureCoreHeaders(headers, plan.wantsContactEnrichment);
   const created = await createSpreadsheet(safeTitle(plan.criteria), finalHeaders, plan.count);
   const state = loadState();
@@ -779,7 +818,7 @@ function statusText() {
   const mission = latestMission();
   const template = latestTemplate();
   if (!mission) {
-    return `Lead Workspace v2 is ready. Google Sheet creation, formatted lead sheets, public-web sourcing, bounded public-page scraping, relevance filtering, resumable checkpoints and format memory are available. Latest remembered layout: ${templatePreview(template)}.`;
+    return `Lead Workspace v2 is ready. Google Sheet creation, formatted lead sheets, public-web sourcing, bounded public-page scraping, identity-checked contact recovery, relevance filtering, resumable checkpoints and format memory are available. Latest remembered layout: ${templatePreview(template)}.`;
   }
   const discovered = Number(mission.leads?.length || 0);
   const shortfall = discovered < Number(mission.requested || 0)
@@ -796,25 +835,28 @@ function formatMission(mission) {
     ? ` I found ${discovered} unique qualifying public LinkedIn profiles in this pass, below the requested ${mission.requested}.`
     : '';
   const contacts = ` Public web research found ${mission.publicEmails || 0} email${mission.publicEmails === 1 ? '' : 's'} and ${mission.publicPhones || 0} phone${mission.publicPhones === 1 ? '' : 's'} before Apollo.`;
-  const deep = ` Selective public-page research used ${mission.deepSearches || 0} targeted search${mission.deepSearches === 1 ? '' : 'es'} and ${mission.deepFetches || 0} page fetch${mission.deepFetches === 1 ? '' : 'es'}.`;
+  const deep = ` Selective public-page research used ${mission.deepSearches || 0} targeted search${mission.deepSearches === 1 ? '' : 'es'} and ${mission.deepFetches || 0} page fetch${mission.deepFetches === 1 ? '' : 'es'}; scraped contact evidence had to match the lead identity before being accepted.`;
   const quality = ` Quality controls skipped ${mission.duplicatesRemoved || 0} duplicate result${mission.duplicatesRemoved === 1 ? '' : 's'} and rejected ${mission.rejectedLowRelevance || 0} low-relevance result${mission.rejectedLowRelevance === 1 ? '' : 's'}${mission.averageRelevance ? `; average accepted relevance ${mission.averageRelevance}/100` : ''}.`;
   return `Lead mission complete, Sir. Created “${mission.spreadsheetTitle}” and added ${mission.added || 0} lead${mission.added === 1 ? '' : 's'} for “${mission.criteria}”.${contacts}${deep}${quality}${shortfall} ${mission.sheetUrl}`;
 }
 
 function status() {
   const state = loadState();
+  const webStatus = typeof web.status === 'function' ? web.status() : {};
   return {
-    ready: Boolean(googleAuth.status().credentialsReady && googleAuth.status().authorized),
+    ready: Boolean(googleAuth.status().credentialsReady && googleAuth.status().authorized && webStatus.configured),
     stateVersion: 2,
     stateFile: STATE_FILE,
     maxLeadsPerMission: MAX_LEADS,
     templatesRemembered: state.templates.length,
     pendingPlan: Boolean(pendingPlan()),
     latestMission: latestMission(),
+    publicWebSearchReady: Boolean(webStatus.configured),
     publicWebOnly: true,
     privateLoginScraping: false,
     formattedSheets: true,
     relevanceFiltering: true,
+    identityCheckedContactRecovery: true,
     secondaryDedupe: true,
     resumableDeepResearch: true,
   };
@@ -842,6 +884,8 @@ module.exports = {
   criteriaTokens,
   leadRelevanceScore,
   qualifiedLead,
+  identityTokens,
+  identityEvidence,
   queryPlan,
   publicScrapeCandidate,
   retryableWebError,
