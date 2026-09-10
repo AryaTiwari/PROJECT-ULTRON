@@ -113,13 +113,15 @@ function referencedTool(text, item) {
 }
 
 function approvalAttempt(text) {
-  return /^(?:approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|go\s+ahead|proceed|use\s+(?:it|apollo)|do\s+it)\b/i.test(String(text || '').trim());
+  const value = String(text || '').trim();
+  return /^(?:approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|go\s+ahead|go\s+for\s+it|proceed|use\s+(?:it|apollo)|do\s+it)\b/i.test(value)
+    || /^(?:go\s+for\s+it|go\s+ahead)[\s,;:-]+approve(?:d)?\b/i.test(value);
 }
 
 function approvalModifiers(text) {
   const original = String(text || '').trim();
   if (!original || /https?:\/\/|docs\.google\.com|@\w/.test(original)) return null;
-  const prefix = original.match(/^(?:approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|go\s+ahead|proceed|use\s+(?:it|apollo)|do\s+it)(?:\s+apollo)?(?:\s+for\s+this\s+(?:one\s+)?run(?:\s+only)?)?[\s,:;.!-]*/i);
+  const prefix = original.match(/^(?:(?:go\s+for\s+it|go\s+ahead)(?:[\s,;:-]+approve(?:d)?)?|approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|proceed|use\s+(?:it|apollo)|do\s+it)(?:\s+apollo)?(?:\s+for\s+this\s+(?:one\s+)?run(?:\s+only)?)?[\s,:;.!-]*/i);
   if (!prefix) return null;
   let tail = original.slice(prefix[0].length).trim();
   tail = tail.replace(/^and\s+/i, '').replace(/^also\s+/i, '').trim();
