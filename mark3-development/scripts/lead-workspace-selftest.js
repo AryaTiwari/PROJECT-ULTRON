@@ -73,6 +73,8 @@ const weakLead = {
 assert.ok(workspace.leadRelevanceScore(strongLead, 'HR recruiters India') > workspace.leadRelevanceScore(weakLead, 'HR recruiters India'));
 assert.equal(workspace.qualifiedLead(strongLead, 'HR recruiters India'), true);
 assert.equal(workspace.qualifiedLead(weakLead, 'HR recruiters India'), false);
+assert.equal(workspace.identityEvidence('Aarti Maurya is a recruiter at RCV World. Contact aarti@example.com', strongLead), true);
+assert.equal(workspace.identityEvidence('Generic contact page for Another Company support@example.com', strongLead), false);
 
 const deduped = workspace.dedupeLeads([
   strongLead,
@@ -96,7 +98,8 @@ const state = workspace.status();
 assert.equal(state.stateVersion, 2);
 assert.equal(state.formattedSheets, true);
 assert.equal(state.relevanceFiltering, true);
+assert.equal(state.identityCheckedContactRecovery, true);
 assert.equal(state.secondaryDedupe, true);
 assert.equal(state.resumableDeepResearch, true);
 
-console.log('Lead Workspace v2 self-test passed. Direct lead commands, remembered/custom layouts, relevance scoring, cross-result dedupe, formatted Google Sheets, retry-aware public research, larger bounded scrape budgets and resumable checkpoints are structurally healthy.');
+console.log('Lead Workspace v2 self-test passed. Direct lead commands, remembered/custom layouts, relevance scoring, identity-checked contact recovery, cross-result dedupe, formatted Google Sheets, retry-aware public research, larger bounded scrape budgets and resumable checkpoints are structurally healthy.');
