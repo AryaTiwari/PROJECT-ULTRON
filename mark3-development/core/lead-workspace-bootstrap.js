@@ -1,4 +1,4 @@
-const workspace = require('./lead-workspace-operator');
+const workspace = require('./lead-workspace-operator-v2');
 const paidTools = require('./paid-tool-approval');
 
 let installed = false;
@@ -6,7 +6,7 @@ let originalHandle = null;
 
 function normalizeMissionCriteria(value) {
   const cleaned = String(value || '')
-    .replace(/^(?:bring|find|get|source|collect|research|discover|scrape|build|generate)\s+(?:me\s+)?/i, '')
+    .replace(/^(?:bring|find|get|source|collect|research|discover|scrape|build|generate|make)\s+(?:me\s+)?/i, '')
     .replace(/^(?:of|for)\s+/i, '')
     .replace(/\b(?:and|with|for|to)\s*$/i, '')
     .replace(/\s+/g, ' ')
@@ -16,7 +16,7 @@ function normalizeMissionCriteria(value) {
 
 function implicitWorkspaceRequest(text) {
   const value = String(text || '').trim().replace(/^(?:hey\s+)?ultron\b[\s,:;.!-]*/i, '');
-  const direct = /^(?:find|get|research|source|collect|discover|scrape|build|generate)\s+(?:me\s+)?\d{1,4}\s+[\s\S]*\b(?:leads?|prospects?|contacts?|profiles?|founders?|recruiters?|managers?|creators?)\b/i.test(value);
+  const direct = /^(?:find|get|bring|research|source|collect|discover|scrape|build|generate|make)\s+(?:me\s+)?\d{1,4}\s+[\s\S]*\b(?:leads?|prospects?|contacts?|profiles?|founders?|recruiters?|managers?|creators?)\b/i.test(value);
   if (!direct) return null;
   return workspace.parseRequest(`${value} and create a Google Sheet`);
 }
@@ -26,7 +26,7 @@ function responseShape(ok, text, extra = {}) {
     ok,
     response: text,
     text,
-    model: 'lead-workspace-operator',
+    model: 'lead-workspace-v2',
     provider: 'public-web+google-sheets',
     taskType: 'lead-workspace',
     mode: 'operator',
