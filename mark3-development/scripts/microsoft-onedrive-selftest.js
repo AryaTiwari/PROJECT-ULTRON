@@ -3,6 +3,7 @@ const assert = require('assert');
 const microsoft = require('../core/microsoft-excel-operator');
 const bootstrap = require('../core/lead-enrichment-bootstrap');
 const auth = require('../core/microsoft-onedrive-auth');
+const paidTools = require('../core/paid-tool-approval');
 
 const url = 'https://1drv.ms/x/c/35c43b64ad90686a/IQDHg33o3RX8SZYKHa90f_DGAaJ5HYDsFONKtngxtE_MnUo?e=GF2etW';
 assert.equal(microsoft.extractWorkbookUrl(`please use ${url}`), url);
@@ -18,11 +19,27 @@ assert.ok(source);
 assert.equal(source.provider, 'microsoft');
 assert.equal(source.supported, true);
 
-const request = bootstrap.isEnrichmentRequest(`${url} enrich this with apollo`);
+const request = bootstrap.isEnrichmentRequest(`${url} enrich this with apollo and make phone and email columns`);
 assert.ok(request);
 assert.equal(request.provider, 'microsoft');
 assert.equal(request.invalidUrl, false);
 assert.equal(request.unsupportedProvider, null);
+assert.equal(request.ensureContactColumns, true);
+
+const linkedinOnly = [
+  ['Name', 'Company', 'LinkedIn'],
+  ['Aakash', 'Acme', 'https://www.linkedin.com/in/aakash-test'],
+  ['Riya', 'Beta', 'https://www.linkedin.com/in/riya-test'],
+];
+const leadLayout = microsoft.detectLeadLayout(linkedinOnly);
+assert.equal(leadLayout.linkedinColumnIndex, 2);
+assert.equal(leadLayout.phoneColumnIndex, -1);
+assert.equal(leadLayout.emailColumnIndex, -1);
+
+assert.deepEqual(paidTools.approvalModifiers('approve and also make phone and email columns'), { ensureContactColumns: true });
+assert.deepEqual(paidTools.approvalModifiers('Approve Apollo'), {});
+assert.equal(paidTools.approvalModifiers('approve and deploy'), null);
+assert.equal(paidTools.approvalAttempt('approve and deploy'), true);
 
 const authState = auth.status();
 assert.equal(authState.authFlow, 'authorization-code-pkce');
@@ -31,4 +48,4 @@ const pkce = auth.pkcePair();
 assert.ok(pkce.verifier.length >= 43);
 assert.match(pkce.challenge, /^[A-Za-z0-9_-]+$/);
 
-console.log('Microsoft OneDrive self-test passed. OneDrive routes to the real Excel adapter, PKCE browser login is configured, and Apollo remains approval-gated.');
+console.log('Microsoft OneDrive self-test passed. OneDrive routing, PKCE auth, safe contact-column creation intent and compound Apollo approvals are wired without Forge fallthrough.');
