@@ -1,5 +1,7 @@
 const sheets = require('./google-sheets-operator');
 const microsoft = require('./microsoft-excel-operator');
+const localExcel = require('./local-excel-operator');
+const fileVault = require('./file-vault');
 const leadEnrichment = require('./lead-enrichment-operator');
 const leadResearch = require('./lead-research-operator');
 const paidTools = require('./paid-tool-approval');
@@ -11,33 +13,55 @@ function cleanUrl(value) {
   return String(value || '').trim().replace(/[),.;!?]+$/, '');
 }
 
-function spreadsheetSource(text) {
+function localAttachmentSource(text, options = {}) {
+  const current = Array.isArray(options.attachments) ? options.attachments.filter((item) => item?.id) : [];
+  const explicitMention = /@[\w .()\-]{2,}/.test(String(text || ''));
+  const candidates = current.length ? current : explicitMention ? fileVault.list(40) : [];
+  return candidates.length ? localExcel.attachmentSource(candidates, text) : null;
+}
+
+function spreadsheetSource(text, options = {}) {
   const value = String(text || '').trim();
   const google = sheets.extractSheetUrl(value);
   if (google) return { provider: 'google', url: google, supported: true };
 
   const oneDrive = microsoft.extractWorkbookUrl(value);
   if (oneDrive) return { provider: 'microsoft', url: cleanUrl(oneDrive), supported: true };
-  return null;
+
+  return localAttachmentSource(value, options);
+}
+
+function requestedContactFields(text) {
+  const value = String(text || '');
+  return {
+    email: /\b(?:email|e\s*mail)\b/i.test(value),
+    phone: /\b(?:phone|mobile|phone\s*number|contact\s*number|number)\b/i.test(value),
+  };
 }
 
 function wantsContactColumns(text) {
-  return /\b(?:make|add|create|ensure)\b[\s\S]{0,50}\b(?:phone|mobile)\b[\s\S]{0,30}\b(?:email|e\s*mail)\b[\s\S]{0,20}\bcolumns?\b|\b(?:make|add|create|ensure)\b[\s\S]{0,50}\b(?:email|e\s*mail)\b[\s\S]{0,30}\b(?:phone|mobile)\b[\s\S]{0,20}\bcolumns?\b/i.test(String(text || ''));
+  const value = String(text || '');
+  const fields = requestedContactFields(value);
+  const explicitColumns = /\b(?:make|add|create|ensure)\b[\s\S]{0,80}\bcolumns?\b/i.test(value) && (fields.email || fields.phone);
+  const explicitBoth = fields.email && fields.phone && /\b(?:enrich|fill|populate|complete|add|update)\b/i.test(value);
+  return explicitColumns || explicitBoth;
 }
 
-function hasEnrichmentIntent(text) {
+function hasEnrichmentIntent(text, options = {}) {
   const value = String(text || '').trim();
-  const source = spreadsheetSource(value);
+  const source = spreadsheetSource(value, options);
   const mentionsSheets = /\b(?:google\s+)?sheets?|spreadsheet|excel|workbook\b/i.test(value) || Boolean(source);
   const mentionsApollo = /\bapollo\b/i.test(value);
-  const action = /\b(?:enrich|fill|find|get|add|update|phone|email|contact|lead)\b/i.test(value);
-  return mentionsSheets && mentionsApollo && action;
+  const action = /\b(?:enrich|fill|populate|complete|find|get|add|update|phone|email|contact|lead)\b/i.test(value);
+  const contactEnrichment = /\b(?:enrich|fill|populate|complete|add|update)\b/i.test(value)
+    && /\b(?:email|e\s*mail|phone|mobile|number|contact)\b/i.test(value);
+  return mentionsSheets && action && (mentionsApollo || contactEnrichment);
 }
 
-function isEnrichmentRequest(text) {
+function isEnrichmentRequest(text, options = {}) {
   const value = String(text || '').trim();
-  if (!hasEnrichmentIntent(value)) return null;
-  const source = spreadsheetSource(value);
+  if (!hasEnrichmentIntent(value, options)) return null;
+  const source = spreadsheetSource(value, options);
   if (!source) return { url: null, provider: null, invalidUrl: true, unsupportedProvider: null, ensureContactColumns: wantsContactColumns(value) };
   return {
     url: source.url,
@@ -45,6 +69,7 @@ function isEnrichmentRequest(text) {
     invalidUrl: false,
     unsupportedProvider: source.supported ? null : source.provider,
     ensureContactColumns: wantsContactColumns(value),
+    attachment: source.attachment || null,
   };
 }
 
@@ -60,8 +85,9 @@ function statusText() {
   const state = leadEnrichment.status();
   const googleReady = Boolean(state.providers?.google);
   const microsoftReady = Boolean(state.providers?.microsoft);
+  const localReady = Boolean(state.providers?.localExcel);
   const apolloReady = Boolean(state.apollo?.apiKeyReady && state.apollo?.webhookReady);
-  return `Lead enrichment providers: Google Sheets ${googleReady ? 'ready' : 'not ready'}; Microsoft OneDrive/Excel ${microsoftReady ? 'ready' : 'not ready'}; Apollo ${apolloReady ? 'configured' : 'not fully configured'}. Pending phone checks: ${state.pendingPhones}. Explicit approval is mandatory before every new Apollo run.`;
+  return `Lead enrichment providers: Google Sheets ${googleReady ? 'ready' : 'not ready'}; Microsoft OneDrive/Excel ${microsoftReady ? 'ready' : 'not ready'}; attached Excel ${localReady ? 'ready' : 'not ready'}; Apollo ${apolloReady ? 'configured' : 'not fully configured'}. Pending phone checks: ${state.pendingPhones}. Explicit approval is mandatory before every new Apollo run.`;
 }
 
 function responseShape(ok, text, extra = {}) {
@@ -133,7 +159,9 @@ function unsupportedSpreadsheetResponse(request) {
 async function handleEnrichment(url, provider = null, options = {}) {
   try {
     const stats = await leadEnrichment.enrichSheet(url, { provider, ...options });
-    return responseShape(true, leadEnrichment.formatResult(stats), { leadEnrichment: stats, spreadsheetProvider: stats.provider || provider || 'google' });
+    const extra = { leadEnrichment: stats, spreadsheetProvider: stats.provider || provider || 'google' };
+    if (stats.artifact) extra.artifacts = [stats.artifact];
+    return responseShape(true, leadEnrichment.formatResult(stats), extra);
   } catch (error) {
     if (error.code === 'GOOGLE_SHEETS_AUTH_REQUIRED') {
       return responseShape(false, leadEnrichment.authInstruction('google'), { error: error.code });
@@ -146,6 +174,9 @@ async function handleEnrichment(url, provider = null, options = {}) {
     }
     if (error.code === 'MICROSOFT_EXCEL_DEPENDENCY_MISSING') {
       return responseShape(false, 'OneDrive Excel support needs exceljs. Run npm install in mark3-development, restart ULTRON, then retry. Apollo was not called.', { error: error.code, spreadsheetProvider: 'microsoft' });
+    }
+    if (['LOCAL_EXCEL_DEPENDENCY_MISSING', 'LOCAL_EXCEL_ATTACHMENT_NOT_FOUND', 'LOCAL_XLSX_REQUIRED'].includes(error.code)) {
+      return responseShape(false, `Attached Excel enrichment stopped safely: ${error.message} Apollo was not called.`, { error: error.code, spreadsheetProvider: 'local-excel', apolloCalled: false });
     }
     if (error.code === 'MICROSOFT_WORKBOOK_CHANGED_DURING_RUN') {
       return responseShape(false, 'The Excel workbook changed while ULTRON was working, so the write was cancelled instead of overwriting someone else’s edits. Retry the enrichment after the workbook is idle.', { error: error.code, spreadsheetProvider: 'microsoft' });
@@ -163,7 +194,9 @@ async function handleResume() {
     const text = result.resumed && result.stats
       ? leadEnrichment.formatResult(result.stats)
       : `Apollo phone sync checked, Sir. Resolved ${result.resolved || 0}; ${result.pending || 0} still pending.`;
-    return responseShape(true, text, { leadEnrichment: result });
+    const extra = { leadEnrichment: result };
+    if (result.stats?.artifact) extra.artifacts = [result.stats.artifact];
+    return responseShape(true, text, extra);
   } catch (error) {
     if (error.code === 'GOOGLE_SHEETS_AUTH_REQUIRED') return responseShape(false, leadEnrichment.authInstruction('google'), { error: error.code });
     if (error.code === 'MICROSOFT_GRAPH_AUTH_REQUIRED') return responseShape(false, leadEnrichment.authInstruction('microsoft'), { error: error.code });
@@ -217,6 +250,12 @@ async function handlePaidToolDecision(decision) {
   });
 }
 
+function providerDescription(provider) {
+  if (provider === 'microsoft') return 'OneDrive/Excel workbook';
+  if (provider === 'local-excel') return 'attached Excel workbook';
+  return 'Google Sheet';
+}
+
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true, status: leadEnrichment.status(), approvals: paidTools.status() };
   const assistant = require('./assistant');
@@ -255,13 +294,13 @@ function install() {
             emit(result.ok ? 'lead_research_completed' : 'lead_research_failed', { inputMode, error: result.error || null });
           }
         } else {
-          const request = isEnrichmentRequest(text);
+          const request = isEnrichmentRequest(text, { attachments: options.attachments });
           if (request) {
             conversation.append('user', text, { taskType: 'lead-enrichment', inputMode, spreadsheetProvider: request.provider });
             if (request.unsupportedProvider) {
               result = unsupportedSpreadsheetResponse(request);
             } else if (request.invalidUrl) {
-              result = responseShape(false, 'Use a full Google Sheets or Microsoft OneDrive/Excel workbook link. Nothing was queued and Apollo was not called.', { error: 'INVALID_SPREADSHEET_URL' });
+              result = responseShape(false, 'Use a full Google Sheets/OneDrive link or attach an Excel workbook and reference it with @filename. Nothing was queued and Apollo was not called.', { error: 'INVALID_SPREADSHEET_URL' });
             } else if (request.provider === 'microsoft' && microsoftSetupResponse()) {
               result = microsoftSetupResponse();
             } else {
@@ -269,7 +308,7 @@ function install() {
                 'apollo',
                 'lead-enrichment',
                 { url: request.url, provider: request.provider, ensureContactColumns: request.ensureContactColumns },
-                `I will use local spreadsheet/post details and the Apollo cache first, then make live Apollo calls only for fields that are still missing in this ${request.provider === 'microsoft' ? 'OneDrive/Excel workbook' : 'Google Sheet'}.`
+                `I will use local spreadsheet/post details and the Apollo cache first, then make live Apollo calls only for fields that are still missing in this ${providerDescription(request.provider)}.`
               );
               result = approvalResponse(approval, { leadEnrichmentRequest: request });
             }
@@ -319,6 +358,8 @@ module.exports = {
   status,
   statusText,
   spreadsheetSource,
+  localAttachmentSource,
+  requestedContactFields,
   wantsContactColumns,
   hasEnrichmentIntent,
   isEnrichmentRequest,
