@@ -11,13 +11,25 @@ assert.equal(workspace.isWorkspaceRequest('https://docs.google.com/spreadsheets/
 assert.ok(bootstrap.implicitWorkspaceRequest('Find me 80 fitness creator leads in India'));
 assert.ok(bootstrap.implicitWorkspaceRequest('Bring me 80 fitness creator leads in India'));
 assert.ok(bootstrap.implicitWorkspaceRequest('Make me 80 fitness creator leads in India'));
+assert.ok(bootstrap.implicitWorkspaceRequest('Find me 25 marketing agencies in Kolkata from Google Maps'));
+assert.ok(bootstrap.implicitWorkspaceRequest('Find me 30 companies hiring SAP consultants on Naukri'));
+assert.ok(bootstrap.implicitWorkspaceRequest('Get me 20 employers with Python vacancies from Indeed'));
 assert.equal(bootstrap.implicitWorkspaceRequest('How do I find leads for my business?'), null);
+assert.equal(bootstrap.implicitWorkspaceRequest('Find me 5 good movies'), null);
+
+const mapsImplicit = bootstrap.implicitWorkspaceRequest('Find me 25 marketing agencies in Kolkata from Google Maps');
+assert.equal(mapsImplicit.count, 25);
+assert.ok(/founder|owner|marketing decision maker/i.test(mapsImplicit.criteria));
+const jobsImplicit = bootstrap.implicitWorkspaceRequest('Find me 30 companies hiring SAP consultants on Naukri');
+assert.equal(jobsImplicit.count, 30);
+assert.ok(/recruiter|talent acquisition/i.test(jobsImplicit.criteria));
 
 const parsed = workspace.parseRequest('Find me 120 HR recruiter leads in India and create a Google Sheet with phone and email');
 assert.equal(parsed.count, 120);
 assert.equal(parsed.wantsContactEnrichment, true);
 assert.ok(/HR recruiter/i.test(parsed.criteria));
 assert.equal(bootstrap.normalizeMissionCriteria('bring me SaaS founder'), 'SaaS founder');
+assert.equal(bootstrap.normalizeMissionCriteria('find me 25 marketing agencies in Kolkata'), 'marketing agencies in Kolkata');
 assert.equal(bootstrap.normalizeMissionCriteria('HR recruiters in India and'), 'HR recruiters in India');
 
 const headers = ['Person or Company Name', 'L', 'Post Details', 'L', 'Linkedin Id', 'PHONE', 'EMAIL'];
@@ -115,4 +127,4 @@ assert.equal(state.sourceAwareColumns, true);
 assert.ok(state.sourceFusion && typeof state.sourceFusion.serpApiConfigured === 'boolean');
 assert.ok(state.sourceFusion && typeof state.sourceFusion.apifyConfigured === 'boolean');
 
-console.log('Lead Workspace v3 self-test passed. Direct lead commands, remembered/custom layouts, source-aware columns, relevance scoring, identity-checked contact recovery, cross-result dedupe, formatted Google Sheets, resumable checkpoints and SerpApi/Apify source-fusion wiring are structurally healthy.');
+console.log('Lead Workspace v3 self-test passed. Direct lead, Google Maps and job-board commands, remembered/custom layouts, source-aware columns, relevance scoring, identity-checked contact recovery, dedupe, formatted Google Sheets, resumable checkpoints and SerpApi/Apify source-fusion wiring are structurally healthy.');
