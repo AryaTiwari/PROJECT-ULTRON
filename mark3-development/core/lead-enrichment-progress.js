@@ -140,6 +140,12 @@ function latestJobSummary(state = leadEnrichment.loadState()) {
   return summarizeJob(latest);
 }
 
+function jobSummaryById(jobId, state = leadEnrichment.loadState()) {
+  if (!jobId) return null;
+  const jobs = Array.isArray(state?.jobs) ? state.jobs : [];
+  return summarizeJob(jobs.find((job) => job?.id === jobId));
+}
+
 function providerLabel(provider) {
   if (provider === 'microsoft') return 'OneDrive/Excel';
   if (provider === 'local-excel') return 'attached Excel';
@@ -200,6 +206,21 @@ async function liveStatus() {
   return { runtime, summary, sync, text: buildStatusText(runtime, summary, sync) };
 }
 
+async function syncCurrentJob(stats) {
+  if (!stats?.jobId || !stats.pendingPhones) return stats;
+  const initialPending = Number(stats.pendingPhones || 0);
+  let sync = null;
+  try { sync = await leadEnrichment.syncPhoneResults({ quiet: true }); } catch {}
+  const summary = jobSummaryById(stats.jobId);
+  stats.pendingPhonesInitial = initialPending;
+  stats.pendingPhonesCurrent = summary ? summary.pending : initialPending;
+  stats.phoneCallbacksProcessed = summary ? summary.resolved : 0;
+  stats.phoneCallbacksFound = summary ? summary.resolvedWithPhone : 0;
+  stats.phoneCallbacksNoPhone = summary ? summary.resolvedNoPhone : 0;
+  stats.postRunPhoneSync = sync;
+  return stats;
+}
+
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true };
 
@@ -210,15 +231,28 @@ function install() {
     try { contextual = await recoverContextualPhones(sheetUrl, options); } catch {}
     const stats = await originalEnrichSheet(sheetUrl, options);
     stats.contextualPhonesRecovered = contextual.recovered || 0;
+    await syncCurrentJob(stats);
     return stats;
   };
   leadEnrichment.formatResult = (stats) => {
-    let text = originalFormatResult(stats);
+    const currentPending = Number.isFinite(Number(stats.pendingPhonesCurrent))
+      ? Number(stats.pendingPhonesCurrent)
+      : Number(stats.pendingPhones || 0);
+    const displayStats = { ...stats, pendingPhones: currentPending };
+    let text = originalFormatResult(displayStats);
     if (stats.contextualPhonesRecovered) {
       text += ` Preflight recovered ${stats.contextualPhonesRecovered} extra phone${stats.contextualPhonesRecovered === 1 ? '' : 's'} from contact-context text before Apollo.`;
     }
-    if (stats.pendingPhones) {
-      text += ' The pending-phone number is a completion-time snapshot; “enrichment status” now refreshes webhook results before reporting live progress.';
+    const initialPending = Number(stats.pendingPhonesInitial || stats.pendingPhones || 0);
+    const processed = Math.max(0, initialPending - currentPending);
+    if (processed) {
+      text += ` Live callback refresh already processed ${processed} of the ${initialPending} originally queued phone checks before this response`;
+      if (stats.phoneCallbacksFound || stats.phoneCallbacksNoPhone) {
+        text += ` (${stats.phoneCallbacksFound || 0} phones found, ${stats.phoneCallbacksNoPhone || 0} confirmed no phone)`;
+      }
+      text += '.';
+    } else if (currentPending) {
+      text += ' “Enrichment status” now refreshes webhook results before reporting live progress.';
     }
     return text;
   };
@@ -242,7 +276,7 @@ function install() {
   };
 
   installed = true;
-  return { installed: true, liveStatus: true, contextualPhoneRecovery: true, approvalFreeWebhookSync: true };
+  return { installed: true, liveStatus: true, contextualPhoneRecovery: true, approvalFreeWebhookSync: true, postRunCallbackSync: true };
 }
 
 function uninstall() {
@@ -269,6 +303,8 @@ module.exports = {
   recoverContextualPhones,
   summarizeJob,
   latestJobSummary,
+  jobSummaryById,
   buildStatusText,
   liveStatus,
+  syncCurrentJob,
 };
