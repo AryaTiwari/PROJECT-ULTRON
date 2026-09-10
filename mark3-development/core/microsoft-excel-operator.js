@@ -170,6 +170,48 @@ function rowsFromWorksheet(worksheet, maxRows = 5000, maxCols = 200) {
   return rows;
 }
 
+function inferLinkedInColumn(rows, headerRowIndex) {
+  const counts = new Map();
+  for (let r = headerRowIndex + 1; r < Math.min(rows.length, headerRowIndex + 31); r++) {
+    (rows[r] || []).forEach((value, index) => {
+      if (/linkedin\.com\/in\//i.test(String(value || ''))) counts.set(index, (counts.get(index) || 0) + 1);
+    });
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? -1;
+}
+
+function detectLeadLayout(rows) {
+  let best = null;
+  const maxHeaderRows = Math.min(rows.length, 30);
+  for (let r = 0; r < maxHeaderRows; r++) {
+    const row = rows[r] || [];
+    const linkedinMatch = googleLayout.bestHeaderIndex(row, 'linkedin');
+    const phoneMatch = googleLayout.bestHeaderIndex(row, 'phone');
+    const emailMatch = googleLayout.bestHeaderIndex(row, 'email');
+    const linkedinColumnIndex = linkedinMatch.index >= 0 ? linkedinMatch.index : inferLinkedInColumn(rows, r);
+    if (linkedinColumnIndex < 0) continue;
+    const score = (linkedinMatch.index >= 0 ? linkedinMatch.score : 35) + phoneMatch.score + emailMatch.score - r * 0.02;
+    const candidate = {
+      headerRowIndex: r,
+      headerRowNumber: r + 1,
+      linkedinColumnIndex,
+      phoneColumnIndex: phoneMatch.index,
+      emailColumnIndex: emailMatch.index,
+      linkedinColumn: googleLayout.columnName(linkedinColumnIndex),
+      phoneColumn: phoneMatch.index >= 0 ? googleLayout.columnName(phoneMatch.index) : null,
+      emailColumn: emailMatch.index >= 0 ? googleLayout.columnName(emailMatch.index) : null,
+      score,
+    };
+    if (!best || candidate.score > best.score) best = candidate;
+  }
+  if (!best) {
+    const error = new Error('Could not safely identify a person LinkedIn column in this workbook.');
+    error.code = 'SHEET_LINKEDIN_COLUMN_NOT_FOUND';
+    throw error;
+  }
+  return best;
+}
+
 async function loadWorkbook(sourceUrl) {
   const ExcelJS = excelJs();
   const item = await resolveItem(sourceUrl);
@@ -177,6 +219,62 @@ async function loadWorkbook(sourceUrl) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
   return { item, workbook };
+}
+
+async function ensureContactColumns(sourceUrl, options = {}) {
+  const loaded = await loadWorkbook(sourceUrl);
+  let best = null;
+  for (const worksheet of loaded.workbook.worksheets || []) {
+    const rows = rowsFromWorksheet(worksheet);
+    try {
+      const layout = detectLeadLayout(rows);
+      const candidate = { worksheet, rows, layout };
+      if (!best || layout.score > best.layout.score) best = candidate;
+    } catch (error) {
+      if (error.code !== 'SHEET_LINKEDIN_COLUMN_NOT_FOUND') throw error;
+    }
+  }
+  if (!best) {
+    const error = new Error('No worksheet contains a safely detectable person LinkedIn column, so ULTRON will not invent contact columns in an unrelated table.');
+    error.code = 'SHEET_LINKEDIN_COLUMN_NOT_FOUND';
+    throw error;
+  }
+
+  const wantPhone = options.phone !== false;
+  const wantEmail = options.email !== false;
+  const created = [];
+  const { worksheet, rows, layout } = best;
+  const widestUsed = rows.reduce((max, row) => Math.max(max, (row || []).length), 0);
+  let nextIndex = Math.max(widestUsed, (rows[layout.headerRowIndex] || []).length);
+
+  if (wantPhone && layout.phoneColumnIndex < 0) {
+    worksheet.getCell(layout.headerRowNumber, nextIndex + 1).value = 'Phone No';
+    layout.phoneColumnIndex = nextIndex;
+    layout.phoneColumn = googleLayout.columnName(nextIndex);
+    created.push('Phone');
+    nextIndex += 1;
+  }
+  if (wantEmail && layout.emailColumnIndex < 0) {
+    worksheet.getCell(layout.headerRowNumber, nextIndex + 1).value = 'Email';
+    layout.emailColumnIndex = nextIndex;
+    layout.emailColumn = googleLayout.columnName(nextIndex);
+    created.push('Email');
+    nextIndex += 1;
+  }
+
+  if (created.length) {
+    const out = Buffer.from(await loaded.workbook.xlsx.writeBuffer());
+    await uploadItem(loaded.item, out);
+  }
+
+  return {
+    provider: 'microsoft',
+    created,
+    sheetName: worksheet.name,
+    headerRowNumber: layout.headerRowNumber,
+    phoneColumn: layout.phoneColumn,
+    emailColumn: layout.emailColumn,
+  };
 }
 
 async function inspect(sourceUrl) {
@@ -272,6 +370,8 @@ module.exports = {
   extractWorkbookUrl,
   shareToken,
   resolveItem,
+  detectLeadLayout,
+  ensureContactColumns,
   inspect,
   readSheet,
   writeCells,
