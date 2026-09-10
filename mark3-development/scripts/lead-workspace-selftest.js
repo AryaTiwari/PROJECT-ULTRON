@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const assert = require('assert');
 const workspace = require('../core/lead-workspace-operator');
+const bootstrap = require('../core/lead-workspace-bootstrap');
 
 assert.equal(workspace.MAX_LEADS, 200);
 assert.equal(workspace.isWorkspaceRequest('Find me 100 HR recruiter leads in India and create a Google Sheet'), true);
@@ -11,6 +12,8 @@ const parsed = workspace.parseRequest('Find me 120 HR recruiter leads in India a
 assert.equal(parsed.count, 120);
 assert.equal(parsed.wantsContactEnrichment, true);
 assert.ok(/HR recruiter/i.test(parsed.criteria));
+assert.equal(bootstrap.normalizeMissionCriteria('bring me SaaS founder'), 'SaaS founder');
+assert.equal(bootstrap.normalizeMissionCriteria('HR recruiters in India and'), 'HR recruiters in India');
 
 const headers = ['Person or Company Name', 'L', 'Post Details', 'L', 'Linkedin Id', 'PHONE', 'EMAIL'];
 const ensured = workspace.ensureCoreHeaders(headers, true);
@@ -50,4 +53,4 @@ assert.equal(workspace.publicScrapeCandidate('https://www.linkedin.com/in/exampl
 assert.equal(workspace.publicScrapeCandidate('https://www.instagram.com/example'), false);
 assert.ok(workspace.queryPlan('HR recruiters India', 100).length >= 10);
 
-console.log('Lead Workspace self-test passed. Sheet creation routing, previous-format compatibility, custom headings, 200-lead mission limits, public-web safety and row mapping are structurally healthy.');
+console.log('Lead Workspace self-test passed. Google Sheet creation routing, raw follow-up handling, previous-format compatibility, custom headings, 200-lead mission limits, resumable checkpoints, public-web scraping safety and row mapping are structurally healthy.');
