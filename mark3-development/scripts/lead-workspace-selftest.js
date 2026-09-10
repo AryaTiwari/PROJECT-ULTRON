@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const assert = require('assert');
-const workspace = require('../core/lead-workspace-operator-v2');
+const workspace = require('../core/lead-workspace-operator-v3');
 const bootstrap = require('../core/lead-workspace-bootstrap');
 
 assert.equal(workspace.MAX_LEADS, 200);
@@ -29,6 +29,9 @@ assert.equal(workspace.keyForHeader('Linkedin Id'), 'linkedin');
 assert.equal(workspace.keyForHeader('PHONE'), 'phone');
 assert.equal(workspace.keyForHeader('EMAIL'), 'email');
 assert.equal(workspace.keyForHeader('Lead Score'), 'quality');
+assert.equal(workspace.sourceKeyForHeader('Hiring Signal'), 'hiring');
+assert.equal(workspace.sourceKeyForHeader('Maps Signal'), 'maps');
+assert.equal(workspace.sourceKeyForHeader('Source Count'), 'source_count');
 assert.equal(workspace.keyForHeader('L'), null);
 
 assert.deepEqual(
@@ -46,7 +49,10 @@ const row = workspace.leadRow({
   email: 'aarti@example.com',
   source: 'https://www.linkedin.com/in/aarti/',
   relevanceScore: 88,
-}, [...headers, 'Lead Score']);
+  hiringSignal: 'SAP Consultant via Indeed',
+  sourceCount: 1,
+  sourceEvidence: ['google-jobs'],
+}, [...headers, 'Lead Score', 'Hiring Signal', 'Source Count', 'Evidence Sources']);
 assert.equal(row[0], 'Aarti');
 assert.equal(row[1], '');
 assert.equal(row[2], 'Hiring post details');
@@ -55,6 +61,9 @@ assert.equal(row[4], 'https://www.linkedin.com/in/aarti/');
 assert.equal(row[5], '+919876543210');
 assert.equal(row[6], 'aarti@example.com');
 assert.equal(row[7], 88);
+assert.equal(row[8], 'SAP Consultant via Indeed');
+assert.equal(row[9], 1);
+assert.equal(row[10], 'google-jobs');
 
 const strongLead = {
   name: 'Aarti Maurya',
@@ -95,11 +104,15 @@ assert.ok(budgets.maxLeads >= 60);
 assert.ok(budgets.maxFetches >= 40);
 
 const state = workspace.status();
-assert.equal(state.stateVersion, 2);
+assert.equal(state.stateVersion, 3);
 assert.equal(state.formattedSheets, true);
 assert.equal(state.relevanceFiltering, true);
 assert.equal(state.identityCheckedContactRecovery, true);
 assert.equal(state.secondaryDedupe, true);
 assert.equal(state.resumableDeepResearch, true);
+assert.equal(state.multiSourceRanking, true);
+assert.equal(state.sourceAwareColumns, true);
+assert.ok(state.sourceFusion && typeof state.sourceFusion.serpApiConfigured === 'boolean');
+assert.ok(state.sourceFusion && typeof state.sourceFusion.apifyConfigured === 'boolean');
 
-console.log('Lead Workspace v2 self-test passed. Direct lead commands, remembered/custom layouts, relevance scoring, identity-checked contact recovery, cross-result dedupe, formatted Google Sheets, retry-aware public research, larger bounded scrape budgets and resumable checkpoints are structurally healthy.');
+console.log('Lead Workspace v3 self-test passed. Direct lead commands, remembered/custom layouts, source-aware columns, relevance scoring, identity-checked contact recovery, cross-result dedupe, formatted Google Sheets, resumable checkpoints and SerpApi/Apify source-fusion wiring are structurally healthy.');
