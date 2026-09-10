@@ -14,6 +14,13 @@ function normalizeMissionCriteria(value) {
   return cleaned || 'business professionals';
 }
 
+function implicitWorkspaceRequest(text) {
+  const value = String(text || '').trim().replace(/^(?:hey\s+)?ultron\b[\s,:;.!-]*/i, '');
+  const direct = /^(?:find|get|research|source|collect|discover|scrape|build|generate)\s+(?:me\s+)?\d{1,4}\s+[\s\S]*\b(?:leads?|prospects?|contacts?|profiles?|founders?|recruiters?|managers?|creators?)\b/i.test(value);
+  if (!direct) return null;
+  return workspace.parseRequest(`${value} and create a Google Sheet`);
+}
+
 function responseShape(ok, text, extra = {}) {
   return {
     ok,
@@ -86,7 +93,7 @@ function install() {
         else if (resumed.alreadyComplete) result = responseShape(true, `The latest lead mission is already complete. ${workspace.statusText()}`, { leadMission: resumed.mission });
         else result = missionResponse(resumed.mission);
       } else {
-        const request = workspace.parseRequest(text);
+        const request = workspace.parseRequest(text) || implicitWorkspaceRequest(text);
         if (request) {
           request.criteria = normalizeMissionCriteria(request.criteria);
           conversation.append('user', text, { taskType: 'lead-workspace', inputMode, count: request.count, criteria: request.criteria });
@@ -131,6 +138,7 @@ module.exports = {
   install,
   uninstall,
   normalizeMissionCriteria,
+  implicitWorkspaceRequest,
   responseShape,
   approvalForMission,
   missionResponse,
