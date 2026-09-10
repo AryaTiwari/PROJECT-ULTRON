@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const config = require('./config');
 const googleAuth = require('./google-sheets-auth');
 const sheets = require('./google-sheets-operator');
+const microsoft = require('./microsoft-excel-operator');
 const apollo = require('./apollo-enrichment');
 
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'jobs.json');
@@ -35,6 +36,11 @@ function apolloDelayMs() {
   return Number.isFinite(value) && value >= 0 ? Math.min(value, 10_000) : 800;
 }
 
+function adapterFor(input, provider = null) {
+  if (provider === 'microsoft' || microsoft.isMicrosoftUrl(input)) return microsoft;
+  return sheets;
+}
+
 function pendingCount(state = loadState()) {
   let count = 0;
   for (const job of state.jobs || []) {
@@ -43,9 +49,10 @@ function pendingCount(state = loadState()) {
   return count;
 }
 
-function makeJob(layout, sheetUrl) {
+function makeJob(layout, sheetUrl, adapter) {
   return {
     id: `apollo-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+    provider: adapter.provider || 'google',
     sheetUrl,
     spreadsheetId: layout.spreadsheetId,
     spreadsheetTitle: layout.spreadsheetTitle,
@@ -72,9 +79,9 @@ function rowPendingRecord(job, rowNumber, linkedinUrl, apolloPersonId) {
   };
 }
 
-async function flushChanges(spreadsheetId, changes, stats) {
+async function flushChanges(adapter, spreadsheetId, changes, stats) {
   if (!changes.length) return;
-  const result = await sheets.writeCells(spreadsheetId, changes.splice(0, changes.length));
+  const result = await adapter.writeCells(spreadsheetId, changes.splice(0, changes.length));
   stats.updatedCells += result.updatedCells;
 }
 
@@ -111,7 +118,6 @@ function normalizePublishedPhone(value) {
   const hasPlus = raw.includes('+');
   const digits = raw.replace(/\D/g, '');
   if (hasPlus && digits.length >= 10 && digits.length <= 15) return `+${digits}`;
-  // Conservative India fallback. Only the labelled extractor sends bare numbers here.
   if (digits.length === 10 && /^[6-9]/.test(digits)) return `+91${digits}`;
   if (digits.length >= 10 && digits.length <= 15) return digits;
   return null;
@@ -133,8 +139,6 @@ function extractRowPhone(row, excludedIndexes = []) {
     }
   }
 
-  // A leading +country-code number is specific enough to be useful even when the post
-  // omits a Phone/WhatsApp label. Bare numbers are never accepted in this fallback.
   for (let index = 0; index < (row || []).length; index++) {
     if (excluded.has(index)) continue;
     const text = String(row[index] ?? '');
@@ -147,28 +151,30 @@ function extractRowPhone(row, excludedIndexes = []) {
   return null;
 }
 
-function clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone) {
+function clearStaleNulls(adapter, changes, layout, rowNumber, row, needEmail, needPhone) {
   if (needEmail && layout.emailColumnIndex >= 0 && isNullSentinel(row[layout.emailColumnIndex])) {
-    changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: '' });
+    changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: '' });
   }
   if (needPhone && layout.phoneColumnIndex >= 0 && isNullSentinel(row[layout.phoneColumnIndex])) {
-    changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
+    changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
   }
 }
 
 async function enrichSheet(sheetUrl, options = {}) {
-  if (!sheetUrl) throw new Error('Google Sheet URL is required.');
+  if (!sheetUrl) throw new Error('Spreadsheet URL is required.');
   try { await syncPhoneResults({ quiet: true }); } catch {}
 
-  const layout = await sheets.inspect(sheetUrl);
-  const data = await sheets.readSheet(sheetUrl, layout);
+  const adapter = adapterFor(sheetUrl, options.provider);
+  const layout = await adapter.inspect(sheetUrl);
+  const data = await adapter.readSheet(sheetUrl, layout);
   const state = loadState();
-  const job = makeJob(layout, sheetUrl);
+  const job = makeJob(layout, sheetUrl, adapter);
   state.jobs.push(job);
   saveState(state);
 
   const stats = {
     jobId: job.id,
+    provider: job.provider,
     spreadsheetTitle: layout.spreadsheetTitle,
     sheetName: layout.sheetName,
     headerRow: layout.headerRowNumber,
@@ -203,8 +209,8 @@ async function enrichSheet(sheetUrl, options = {}) {
     if (!rawLinkedIn || !String(rawLinkedIn).trim()) continue;
     stats.scannedRows++;
 
-    let needEmail = layout.emailColumnIndex >= 0 && sheets.isBlank(row[layout.emailColumnIndex]);
-    let needPhone = layout.phoneColumnIndex >= 0 && sheets.isBlank(row[layout.phoneColumnIndex]);
+    let needEmail = layout.emailColumnIndex >= 0 && adapter.isBlank(row[layout.emailColumnIndex]);
+    let needPhone = layout.phoneColumnIndex >= 0 && adapter.isBlank(row[layout.phoneColumnIndex]);
     if (!needEmail && !needPhone) {
       stats.skippedComplete++;
       continue;
@@ -212,12 +218,10 @@ async function enrichSheet(sheetUrl, options = {}) {
 
     const neededBeforeLocal = needEmail || needPhone;
 
-    // Cheapest/highest-signal source first: use contact details the recruiter explicitly
-    // published in the source post before spending Apollo credits.
     if (needEmail) {
       const visibleEmail = extractRowEmail(row, [layout.emailColumnIndex, layout.linkedinColumnIndex]);
       if (visibleEmail) {
-        changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: visibleEmail });
+        changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: visibleEmail });
         stats.emailsWritten++;
         stats.sheetEmailsRecovered++;
         needEmail = false;
@@ -227,7 +231,7 @@ async function enrichSheet(sheetUrl, options = {}) {
     if (needPhone) {
       const visiblePhone = extractRowPhone(row, [layout.phoneColumnIndex, layout.linkedinColumnIndex]);
       if (visiblePhone) {
-        changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: visiblePhone });
+        changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: visiblePhone });
         stats.phonesWritten++;
         stats.sheetPhonesRecovered++;
         needPhone = false;
@@ -236,7 +240,7 @@ async function enrichSheet(sheetUrl, options = {}) {
 
     if (!needEmail && !needPhone) {
       if (neededBeforeLocal) stats.localApolloSkips++;
-      if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
+      if (changes.length >= 40) await flushChanges(adapter, layout.spreadsheetId, changes, stats);
       continue;
     }
 
@@ -245,23 +249,23 @@ async function enrichSheet(sheetUrl, options = {}) {
       if (isCompanyLinkedIn(rawLinkedIn)) {
         stats.companyLinkedIn++;
         if (needEmail) {
-          changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: 'null' });
+          changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: 'null' });
           stats.emailsWritten++;
           stats.nullsWritten++;
         }
         if (needPhone) {
-          changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: 'null' });
+          changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: 'null' });
           stats.phonesWritten++;
           stats.nullsWritten++;
         }
-        if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
+        if (changes.length >= 40) await flushChanges(adapter, layout.spreadsheetId, changes, stats);
         continue;
       }
 
-      clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone);
+      clearStaleNulls(adapter, changes, layout, rowNumber, row, needEmail, needPhone);
       stats.invalidLinkedIn++;
       stats.unresolvedRows++;
-      if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
+      if (changes.length >= 40) await flushChanges(adapter, layout.spreadsheetId, changes, stats);
       continue;
     }
 
@@ -275,31 +279,31 @@ async function enrichSheet(sheetUrl, options = {}) {
       }
 
       if (result.ambiguous) {
-        clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone);
+        clearStaleNulls(adapter, changes, layout, rowNumber, row, needEmail, needPhone);
         stats.ambiguousMatches++;
         stats.unresolvedRows++;
-        if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
+        if (changes.length >= 40) await flushChanges(adapter, layout.spreadsheetId, changes, stats);
         continue;
       }
 
       if (needEmail) {
         const emailValue = result.noMatch ? 'null' : valueOrNull(result.email);
-        changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: emailValue });
+        changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: emailValue });
         stats.emailsWritten++;
         if (emailValue === 'null') stats.nullsWritten++;
       }
 
       if (needPhone) {
         if (result.noMatch || result.phoneStatus === 'not_found') {
-          changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: 'null' });
+          changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: 'null' });
           stats.phonesWritten++;
           stats.nullsWritten++;
         } else if (result.phoneStatus === 'found' && result.phone) {
-          changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: String(result.phone) });
+          changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: String(result.phone) });
           stats.phonesWritten++;
         } else if (result.apolloPersonId) {
           if (isNullSentinel(row[layout.phoneColumnIndex])) {
-            changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
+            changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
           }
           job.rows[String(rowNumber)] = rowPendingRecord(job, rowNumber, linkedinUrl, result.apolloPersonId);
           stats.pendingPhones++;
@@ -307,15 +311,15 @@ async function enrichSheet(sheetUrl, options = {}) {
           saveState(state);
         } else {
           if (isNullSentinel(row[layout.phoneColumnIndex])) {
-            changes.push({ range: sheets.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
+            changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: '' });
           }
           stats.unresolvedRows++;
         }
       }
 
-      if (changes.length >= 40) await flushChanges(layout.spreadsheetId, changes, stats);
+      if (changes.length >= 40) await flushChanges(adapter, layout.spreadsheetId, changes, stats);
     } catch (error) {
-      clearStaleNulls(changes, layout, rowNumber, row, needEmail, needPhone);
+      clearStaleNulls(adapter, changes, layout, rowNumber, row, needEmail, needPhone);
       stats.failedRows++;
       job.rows[String(rowNumber)] = {
         rowNumber,
@@ -329,7 +333,7 @@ async function enrichSheet(sheetUrl, options = {}) {
     }
   }
 
-  await flushChanges(layout.spreadsheetId, changes, stats);
+  await flushChanges(adapter, layout.spreadsheetId, changes, stats);
   job.status = stats.failedRows ? 'completed_with_errors' : (stats.pendingPhones ? 'waiting_for_phone_webhooks' : 'completed');
   job.stats = stats;
   job.updatedAt = new Date().toISOString();
@@ -365,10 +369,11 @@ async function syncPhoneResults(options = {}) {
     let allHandled = true;
     for (const match of matches) {
       try {
-        const range = sheets.cellRange(match.job.sheetName, match.row.rowNumber, match.row.phoneColumnIndex);
-        const current = await sheets.readCell(match.job.spreadsheetId, range);
-        if (sheets.isBlank(current)) {
-          await sheets.writeCells(match.job.spreadsheetId, [{ range, value: phone || 'null' }]);
+        const adapter = adapterFor(match.job.sheetUrl, match.job.provider);
+        const range = adapter.cellRange(match.job.sheetName, match.row.rowNumber, match.row.phoneColumnIndex);
+        const current = await adapter.readCell(match.job.spreadsheetId, range);
+        if (adapter.isBlank(current)) {
+          await adapter.writeCells(match.job.spreadsheetId, [{ range, value: phone || 'null' }]);
         }
         match.row.phonePending = false;
         match.row.phoneResolved = true;
@@ -418,17 +423,22 @@ async function resume() {
   const state = loadState();
   const latest = [...(state.jobs || [])].reverse().find((job) => ['running', 'completed_with_errors'].includes(job.status));
   if (!latest) return { ...synced, resumed: false };
-  const stats = await enrichSheet(latest.sheetUrl);
+  const stats = await enrichSheet(latest.sheetUrl, { provider: latest.provider });
   return { ...synced, resumed: true, stats };
 }
 
 function status() {
   const google = googleAuth.status();
+  const microsoftStatus = microsoft.status();
   const apolloStatus = apollo.status();
   const pending = pendingCount();
+  const googleReady = google.credentialsReady && google.authorized;
+  const microsoftReady = microsoftStatus.clientIdReady && microsoftStatus.authorized && microsoftStatus.dependencyReady;
   return {
-    ready: google.credentialsReady && google.authorized && apolloStatus.apiKeyReady && apolloStatus.webhookReady,
+    ready: (googleReady || microsoftReady) && apolloStatus.apiKeyReady && apolloStatus.webhookReady,
     google,
+    microsoft: microsoftStatus,
+    providers: { google: googleReady, microsoft: microsoftReady },
     apollo: apolloStatus,
     pendingPhones: pending,
     stateFile: STATE_FILE,
@@ -454,10 +464,14 @@ function formatResult(stats) {
     ? ` ${stats.unresolvedRows} uncertain row${stats.unresolvedRows === 1 ? '' : 's'} were left untouched.`
     : '';
   const errorTail = stats.failedRows ? ` ${stats.failedRows} row${stats.failedRows === 1 ? '' : 's'} failed and were left untouched.` : '';
-  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${localTail}${apolloTail}${phoneTail}${companyTail}${unresolvedTail}${errorTail}`;
+  const providerLabel = stats.provider === 'microsoft' ? ' Microsoft Excel/OneDrive workbook' : ' Google Sheet';
+  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'} in the${providerLabel}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${localTail}${apolloTail}${phoneTail}${companyTail}${unresolvedTail}${errorTail}`;
 }
 
-function authInstruction() {
+function authInstruction(provider = 'google') {
+  if (provider === 'microsoft') {
+    return 'Microsoft OneDrive needs its one-time login. Add MICROSOFT_GRAPH_CLIENT_ID to the root .env, then in the Mark 3 folder run: node --env-file=../.env scripts/microsoft-onedrive-setup.js';
+  }
   return 'Google Sheets needs its one-time login. In the Mark 3 folder run: node --env-file=../.env scripts/google-sheets-auth.js';
 }
 
@@ -466,6 +480,7 @@ module.exports = {
   saveState,
   pendingCount,
   status,
+  adapterFor,
   enrichSheet,
   syncPhoneResults,
   startPhoneWatcher,
