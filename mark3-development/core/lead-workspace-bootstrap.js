@@ -4,6 +4,16 @@ const paidTools = require('./paid-tool-approval');
 let installed = false;
 let originalHandle = null;
 
+function normalizeMissionCriteria(value) {
+  const cleaned = String(value || '')
+    .replace(/^(?:bring|find|get|source|collect|research|discover|scrape|build|generate)\s+(?:me\s+)?/i, '')
+    .replace(/^(?:of|for)\s+/i, '')
+    .replace(/\b(?:and|with|for|to)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || 'business professionals';
+}
+
 function responseShape(ok, text, extra = {}) {
   return {
     ok,
@@ -74,11 +84,11 @@ function install() {
         const resumed = await workspace.resumeLatestMission();
         if (!resumed.ok) result = responseShape(false, resumed.text, { leadWorkspace: workspace.status() });
         else if (resumed.alreadyComplete) result = responseShape(true, `The latest lead mission is already complete. ${workspace.statusText()}`, { leadMission: resumed.mission });
-        else if (resumed.awaitingApollo) result = missionResponse(resumed.mission);
         else result = missionResponse(resumed.mission);
       } else {
         const request = workspace.parseRequest(text);
         if (request) {
+          request.criteria = normalizeMissionCriteria(request.criteria);
           conversation.append('user', text, { taskType: 'lead-workspace', inputMode, count: request.count, criteria: request.criteria });
           emit('lead_workspace_requested', { inputMode, count: request.count, criteria: request.criteria });
           const prepared = await workspace.prepareRequest(request);
@@ -120,6 +130,7 @@ function uninstall() {
 module.exports = {
   install,
   uninstall,
+  normalizeMissionCriteria,
   responseShape,
   approvalForMission,
   missionResponse,
