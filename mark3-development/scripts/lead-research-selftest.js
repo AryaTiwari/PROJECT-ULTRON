@@ -30,6 +30,10 @@ assert.equal(lead.company, 'Acme Labs');
 assert.equal(lead.email, 'aakash@acme.example.com');
 assert.equal(lead.phone, '+919876543210');
 
+// Only Apollo is approval-gated. Research/search tools are allowed normally.
+assert.equal(paid.isPermitted('tinyfish'), true);
+assert.doesNotThrow(() => paid.assertPermitted('tinyfish'));
+assert.throws(() => paid.request('tinyfish', 'lead-research'), (error) => error?.code === 'NON_APOLLO_APPROVAL_DISABLED');
 assert.throws(() => paid.assertPermitted('apollo'), (error) => error?.code === 'PAID_TOOL_APPROVAL_REQUIRED');
 
 (async () => {
@@ -37,7 +41,7 @@ assert.throws(() => paid.assertPermitted('apollo'), (error) => error?.code === '
   const permitted = await paid.withPermit(fakeApproval, async () => paid.isPermitted('apollo'));
   assert.equal(permitted, true);
   assert.equal(paid.isPermitted('apollo'), false);
-  console.log('Lead research self-test passed. Research-to-Sheets parsing, public contact recovery and one-run paid-tool approval boundaries are healthy.');
+  console.log('Lead research self-test passed. Research runs normally, public contact recovery is healthy, and only Apollo requires one-run approval.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
