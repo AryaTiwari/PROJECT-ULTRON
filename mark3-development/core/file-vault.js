@@ -34,6 +34,7 @@ function mimeFromName(name, fallback = 'application/octet-stream') {
   return ({
     '.txt':'text/plain','.md':'text/markdown','.json':'application/json','.csv':'text/csv','.html':'text/html','.htm':'text/html',
     '.pdf':'application/pdf','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.xlsm':'application/vnd.ms-excel.sheet.macroEnabled.12',
     '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif',
     '.mp3':'audio/mpeg','.wav':'audio/wav','.m4a':'audio/mp4','.ogg':'audio/ogg','.webm':'audio/webm',
     '.mp4':'video/mp4','.mov':'video/quicktime','.mkv':'video/x-matroska',
@@ -45,7 +46,9 @@ function extensionForMime(mime, originalName = '') {
   if (existing) return existing;
   return ({
     'image/png':'.png','image/jpeg':'.jpg','image/webp':'.webp','video/mp4':'.mp4','audio/mpeg':'.mp3','audio/wav':'.wav',
-    'application/pdf':'.pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document':'.docx','text/plain':'.txt',
+    'application/pdf':'.pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document':'.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'.xlsx','application/vnd.ms-excel.sheet.macroEnabled.12':'.xlsm',
+    'text/plain':'.txt',
   })[String(mime || '').toLowerCase()] || '.bin';
 }
 
