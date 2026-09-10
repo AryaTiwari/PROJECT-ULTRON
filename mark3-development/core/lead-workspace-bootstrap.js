@@ -7,6 +7,7 @@ let originalHandle = null;
 function normalizeMissionCriteria(value) {
   const cleaned = String(value || '')
     .replace(/^(?:bring|find|get|source|collect|research|discover|scrape|build|generate|make)\s+(?:me\s+)?/i, '')
+    .replace(/^\d{1,4}\s+/, '')
     .replace(/^(?:of|for)\s+/i, '')
     .replace(/\b(?:and|with|for|to)\s*$/i, '')
     .replace(/\s+/g, ' ')
@@ -16,9 +17,22 @@ function normalizeMissionCriteria(value) {
 
 function implicitWorkspaceRequest(text) {
   const value = String(text || '').trim().replace(/^(?:hey\s+)?ultron\b[\s,:;.!-]*/i, '');
-  const direct = /^(?:find|get|bring|research|source|collect|discover|scrape|build|generate|make)\s+(?:me\s+)?\d{1,4}\s+[\s\S]*\b(?:leads?|prospects?|contacts?|profiles?|founders?|recruiters?|managers?|creators?)\b/i.test(value);
-  if (!direct) return null;
-  return workspace.parseRequest(`${value} and create a Google Sheet`);
+  const actionAndCount = /^(?:find|get|bring|research|source|collect|discover|scrape|build|generate|make)\s+(?:me\s+)?\d{1,4}\b/i.test(value);
+  if (!actionAndCount) return null;
+
+  const peopleOrLeadNoun = /\b(?:leads?|prospects?|contacts?|profiles?|founders?|co[- ]?founders?|owners?|recruiters?|hiring managers?|hr managers?|talent acquisition|managers?|creators?|decision makers?)\b/i.test(value);
+  const mapsSource = /\b(?:google\s*maps?|maps?)\b/i.test(value)
+    && /\b(?:business(?:es)?|companies|agencies|agency|gyms?|fitness studios?|clinics?|hospitals?|dentists?|doctors?|salons?|spas?|restaurants?|cafes?|hotels?|consultanc(?:y|ies)|real estate|realtors?|shops?|stores?|coaching|institutes?|schools?|colleges?|dietitians?|nutritionists?|law firms?|accountants?|coworking|studios?|photographers?|wedding planners?)\b/i.test(value);
+  const jobSource = /\b(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/i.test(value)
+    && /\b(?:companies|business(?:es)?|employers?|organizations?|organisations?|recruiters?|hiring|jobs?|vacanc(?:y|ies)|roles?)\b/i.test(value);
+
+  if (!peopleOrLeadNoun && !mapsSource && !jobSource) return null;
+  const expanded = peopleOrLeadNoun
+    ? `${value} and create a Google Sheet`
+    : mapsSource
+      ? `${value} and find founder owner or marketing decision maker leads and create a Google Sheet`
+      : `${value} and find recruiter or talent acquisition leads and create a Google Sheet`;
+  return workspace.parseRequest(expanded);
 }
 
 function responseShape(ok, text, extra = {}) {
