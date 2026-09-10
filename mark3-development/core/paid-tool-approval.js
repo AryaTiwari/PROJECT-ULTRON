@@ -112,14 +112,33 @@ function referencedTool(text, item) {
   return value.includes(item.tool) || value.includes(String(item.label || '').toLowerCase());
 }
 
+function approvalAttempt(text) {
+  return /^(?:approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|go\s+ahead|proceed|use\s+(?:it|apollo)|do\s+it)\b/i.test(String(text || '').trim());
+}
+
+function approvalModifiers(text) {
+  const original = String(text || '').trim();
+  if (!original || /https?:\/\/|docs\.google\.com|@\w/.test(original)) return null;
+  const prefix = original.match(/^(?:approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|go\s+ahead|proceed|use\s+(?:it|apollo)|do\s+it)(?:\s+apollo)?(?:\s+for\s+this\s+(?:one\s+)?run(?:\s+only)?)?[\s,:;.!-]*/i);
+  if (!prefix) return null;
+  let tail = original.slice(prefix[0].length).trim();
+  tail = tail.replace(/^and\s+/i, '').replace(/^also\s+/i, '').trim();
+  if (!tail) return {};
+
+  const contactColumns = /^(?:make|add|create|ensure)\s+(?:the\s+)?(?:(?:phone|mobile)(?:\s+(?:and|&|\+)\s+(?:email|e\s*mail))?|(?:email|e\s*mail)(?:\s+(?:and|&|\+)\s+(?:phone|mobile))?)\s+columns?(?:\s+(?:too|as\s+well))?[.!\s]*$/i;
+  if (contactColumns.test(tail)) return { ensureContactColumns: true };
+  return null;
+}
+
 function affirmativeFor(text, item, allowGeneric = false) {
   const value = String(text || '').trim().toLowerCase();
   if (!value || /https?:\/\/|docs\.google\.com|@\w/.test(value)) return false;
-  if (allowGeneric && /^(?:yes|yep|yeah|ok|okay|approved?|allow it|go ahead|proceed|use it|do it)(?:[.!\s]*)$/i.test(value)) return true;
+  if (allowGeneric && approvalModifiers(value) !== null) return true;
   const tool = String(item?.tool || '').toLowerCase();
   const label = String(item?.label || '').toLowerCase();
   const mentions = tool && (value.includes(tool) || (label && value.includes(label)));
   if (!mentions) return false;
+  if (approvalModifiers(value) !== null) return true;
   if (/\b(?:approve|approved|allow|yes|yep|yeah|okay|ok)\b/i.test(value)) return true;
   if (/\bgo\s+ahead\s+(?:with|and\s+use)\b/i.test(value)) return true;
   if (/^use\s+apollo(?:\s+(?:now|for\s+this\s+run|this\s+time))?[.!\s]*$/i.test(value)) return true;
@@ -142,8 +161,9 @@ function resolveMessage(text) {
   else if (affirmativeFor(value, item, state.pending.length === 1)) decision = 'approved';
   if (!decision) return null;
 
+  const modifiers = decision === 'approved' ? (approvalModifiers(value) || {}) : {};
   state.pending = state.pending.filter((row) => row.id !== item.id);
-  const resolved = { ...item, status: decision, resolvedAt: new Date().toISOString() };
+  const resolved = { ...item, status: decision, modifiers, resolvedAt: new Date().toISOString() };
   state.history.push(resolved);
   save(state);
   return resolved;
@@ -211,6 +231,8 @@ module.exports = {
   allPending,
   resolveMessage,
   prompt,
+  approvalAttempt,
+  approvalModifiers,
   isPermitted,
   assertPermitted,
   withPermit,
