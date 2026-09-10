@@ -7,6 +7,8 @@ assert.equal(workspace.MAX_LEADS, 200);
 assert.equal(workspace.isWorkspaceRequest('Find me 100 HR recruiter leads in India and create a Google Sheet'), true);
 assert.equal(workspace.isWorkspaceRequest('Bring me 50 SaaS founder leads with email and phone'), true);
 assert.equal(workspace.isWorkspaceRequest('https://docs.google.com/spreadsheets/d/abc/edit enrich this with apollo'), false);
+assert.ok(bootstrap.implicitWorkspaceRequest('Find me 80 fitness creator leads in India'));
+assert.equal(bootstrap.implicitWorkspaceRequest('How do I find leads for my business?'), null);
 
 const parsed = workspace.parseRequest('Find me 120 HR recruiter leads in India and create a Google Sheet with phone and email');
 assert.equal(parsed.count, 120);
@@ -53,4 +55,4 @@ assert.equal(workspace.publicScrapeCandidate('https://www.linkedin.com/in/exampl
 assert.equal(workspace.publicScrapeCandidate('https://www.instagram.com/example'), false);
 assert.ok(workspace.queryPlan('HR recruiters India', 100).length >= 10);
 
-console.log('Lead Workspace self-test passed. Google Sheet creation routing, raw follow-up handling, previous-format compatibility, custom headings, 200-lead mission limits, resumable checkpoints, public-web scraping safety and row mapping are structurally healthy.');
+console.log('Lead Workspace self-test passed. Google Sheet creation routing, direct no-sheet missions, raw follow-up handling, previous-format compatibility, custom headings, 200-lead mission limits, resumable checkpoints, public-web scraping safety and row mapping are structurally healthy.');
