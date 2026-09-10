@@ -37,10 +37,15 @@ function status() {
   };
 }
 
+function regexEscape(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function detectLocation(text) {
   const value = String(text || '');
-  for (const location of INDIAN_LOCATIONS) {
-    if (new RegExp(`\\b${location.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'i').test(value)) {
+  const ordered = [...INDIAN_LOCATIONS].sort((a, b) => b.length - a.length);
+  for (const location of ordered) {
+    if (new RegExp(`\\b${regexEscape(location)}\\b`, 'i').test(value)) {
       return /india/i.test(location) ? 'India' : `${location}, India`;
     }
   }
@@ -58,6 +63,25 @@ function sourcePlan(originalMessage, criteria) {
     explicitJobs,
     explicitMaps,
   };
+}
+
+function jobSearchQuery(criteria) {
+  return String(criteria || '')
+    .replace(/\b(?:leads?|prospects?|contacts?|profiles?|decision makers?)\b/gi, ' ')
+    .replace(/\b(?:from|using|via)\s+(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || String(criteria || '').trim();
+}
+
+function mapsSearchQuery(criteria) {
+  let value = String(criteria || '')
+    .replace(/\b(?:leads?|prospects?|contacts?|profiles?|decision makers?|founders?|co[- ]?founders?|owners?|marketing managers?|hr managers?|recruiters?|talent acquisition)\b/gi, ' ')
+    .replace(/\b(?:from|using|via)\s+(?:google\s*)?maps?\b/gi, ' ');
+  for (const location of [...INDIAN_LOCATIONS].sort((a, b) => b.length - a.length)) {
+    value = value.replace(new RegExp(`\\b${regexEscape(location)}\\b`, 'gi'), ' ');
+  }
+  value = value.replace(/\b(?:in|at|near|around)\b\s*$/i, ' ').replace(/\s+/g, ' ').trim();
+  return value || String(criteria || '').trim();
 }
 
 async function fetchJson(url, options = {}, timeoutMs = 20000) {
@@ -116,7 +140,7 @@ async function googleJobs(criteria, options = {}) {
   const max = Math.max(1, Math.min(status().maxJobSignals, Number(options.limit || status().maxJobSignals)));
   const params = new URLSearchParams({
     engine: 'google_jobs',
-    q: String(criteria || '').trim(),
+    q: jobSearchQuery(criteria),
     api_key: key,
     hl: 'en',
     gl: 'in',
@@ -140,7 +164,7 @@ async function apifyGoogleMaps(criteria, options = {}) {
   const max = Math.max(1, Math.min(status().maxMapPlaces, Number(options.limit || status().maxMapPlaces)));
   const actor = String(process.env.APIFY_GOOGLE_MAPS_ACTOR || DEFAULT_MAPS_ACTOR).trim().replace('/', '~');
   const input = {
-    searchStringsArray: [String(criteria || '').trim()],
+    searchStringsArray: [mapsSearchQuery(criteria)],
     locationQuery: String(options.location || detectLocation(criteria)),
     maxCrawledPlacesPerSearch: max,
     language: 'en',
@@ -218,12 +242,6 @@ function seedQueries(signals, criteria, count = 25) {
     queries.push(`site:linkedin.com/in "${company}" founder OR owner`);
     queries.push(`site:linkedin.com/in "${company}" marketing manager`);
   }
-  if (signals?.plan?.explicitJobs) {
-    queries.push(`site:naukri.com ${criteria}`);
-    queries.push(`site:in.indeed.com ${criteria}`);
-    queries.push(`site:apna.co ${criteria}`);
-    queries.push(`site:workindia.in ${criteria}`);
-  }
   return [...new Set(queries.map((q) => q.replace(/\s+/g, ' ').trim()))].slice(0, 24);
 }
 
@@ -300,6 +318,8 @@ module.exports = {
   apifyApiKey,
   detectLocation,
   sourcePlan,
+  jobSearchQuery,
+  mapsSearchQuery,
   serpSearch,
   googleJobs,
   apifyGoogleMaps,
