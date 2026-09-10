@@ -97,12 +97,6 @@ function allPending() {
   return prune().pending.slice();
 }
 
-function affirmative(text) {
-  const value = String(text || '').trim().toLowerCase();
-  return /^(?:yes|yep|yeah|ok|okay|approved?|allow(?: it)?|go ahead|proceed|use it|do it)(?:[.!\s]*)$/i.test(value)
-    || /\b(?:approve|allow|yes\s+use|go\s+ahead\s+with|use)\b/i.test(value);
-}
-
 function negative(text) {
   return /^(?:no|nope|deny|denied|cancel|don'?t|do not|skip it|skip)(?:[.!\s]*)$/i.test(String(text || '').trim());
 }
@@ -113,6 +107,20 @@ function referencedTool(text, item) {
   return value.includes(item.tool) || value.includes(String(item.label || '').toLowerCase());
 }
 
+function affirmativeFor(text, item, allowGeneric = false) {
+  const value = String(text || '').trim().toLowerCase();
+  if (!value || /https?:\/\/|docs\.google\.com|@\w/.test(value)) return false;
+  if (allowGeneric && /^(?:yes|yep|yeah|ok|okay|approved?|allow it|go ahead|proceed|use it|do it)(?:[.!\s]*)$/i.test(value)) return true;
+  const tool = String(item?.tool || '').toLowerCase();
+  const label = String(item?.label || '').toLowerCase();
+  const mentions = tool && (value.includes(tool) || (label && value.includes(label)));
+  if (!mentions) return false;
+  if (/\b(?:approve|approved|allow|yes|yep|yeah|okay|ok)\b/i.test(value)) return true;
+  if (/\bgo\s+ahead\s+(?:with|and\s+use)\b/i.test(value)) return true;
+  if (new RegExp(`^use\\s+(?:${tool.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}|${label.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')})(?:\\s+(?:now|for\\s+this\\s+run|this\\s+time))?[.!\\s]*$`, 'i').test(value)) return true;
+  return false;
+}
+
 function resolveMessage(text) {
   const state = prune();
   if (!state.pending.length) return null;
@@ -120,13 +128,13 @@ function resolveMessage(text) {
   if (!value) return null;
 
   let candidates = state.pending.filter((item) => referencedTool(value, item));
-  if (!candidates.length && state.pending.length === 1 && (affirmative(value) || negative(value))) candidates = [state.pending[0]];
+  if (!candidates.length && state.pending.length === 1 && (affirmativeFor(value, state.pending[0], true) || negative(value))) candidates = [state.pending[0]];
   if (candidates.length !== 1) return null;
   const item = candidates[0];
 
   let decision = null;
   if (negative(value)) decision = 'denied';
-  else if (affirmative(value)) decision = 'approved';
+  else if (affirmativeFor(value, item, state.pending.length === 1)) decision = 'approved';
   if (!decision) return null;
 
   state.pending = state.pending.filter((row) => row.id !== item.id);
