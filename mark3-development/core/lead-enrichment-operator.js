@@ -5,6 +5,7 @@ const config = require('./config');
 const googleAuth = require('./google-sheets-auth');
 const sheets = require('./google-sheets-operator');
 const microsoft = require('./microsoft-excel-operator');
+const localExcel = require('./local-excel-operator');
 const apollo = require('./apollo-enrichment');
 
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'jobs.json');
@@ -37,6 +38,7 @@ function apolloDelayMs() {
 }
 
 function adapterFor(input, provider = null) {
+  if (provider === 'local-excel' || localExcel.isLocalExcelSource(input)) return localExcel;
   if (provider === 'microsoft' || microsoft.isMicrosoftUrl(input)) return microsoft;
   return sheets;
 }
@@ -339,6 +341,7 @@ async function enrichSheet(sheetUrl, options = {}) {
   }
 
   await flushChanges(adapter, layout.spreadsheetId, changes, stats);
+  stats.artifact = typeof adapter.artifact === 'function' ? adapter.artifact(layout.spreadsheetId) : null;
   job.status = stats.failedRows ? 'completed_with_errors' : (stats.pendingPhones ? 'waiting_for_phone_webhooks' : 'completed');
   job.stats = stats;
   job.updatedAt = new Date().toISOString();
@@ -435,15 +438,18 @@ async function resume() {
 function status() {
   const google = googleAuth.status();
   const microsoftStatus = microsoft.status();
+  const localStatus = localExcel.status();
   const apolloStatus = apollo.status();
   const pending = pendingCount();
   const googleReady = google.credentialsReady && google.authorized;
   const microsoftReady = microsoftStatus.clientIdReady && microsoftStatus.authorized && microsoftStatus.dependencyReady;
+  const localReady = localStatus.dependencyReady;
   return {
-    ready: (googleReady || microsoftReady) && apolloStatus.apiKeyReady && apolloStatus.webhookReady,
+    ready: (googleReady || microsoftReady || localReady) && apolloStatus.apiKeyReady && apolloStatus.webhookReady,
     google,
     microsoft: microsoftStatus,
-    providers: { google: googleReady, microsoft: microsoftReady },
+    localExcel: localStatus,
+    providers: { google: googleReady, microsoft: microsoftReady, localExcel: localReady },
     apollo: apolloStatus,
     pendingPhones: pending,
     stateFile: STATE_FILE,
@@ -472,7 +478,11 @@ function formatResult(stats) {
     ? ` ${stats.unresolvedRows} uncertain row${stats.unresolvedRows === 1 ? '' : 's'} were left untouched.`
     : '';
   const errorTail = stats.failedRows ? ` ${stats.failedRows} row${stats.failedRows === 1 ? '' : 's'} failed and were left untouched.` : '';
-  const providerLabel = stats.provider === 'microsoft' ? ' Microsoft Excel/OneDrive workbook' : ' Google Sheet';
+  const providerLabel = stats.provider === 'microsoft'
+    ? ' Microsoft Excel/OneDrive workbook'
+    : stats.provider === 'local-excel'
+      ? ' attached Excel workbook'
+      : ' Google Sheet';
   return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'} in the${providerLabel}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${createdTail}${localTail}${apolloTail}${phoneTail}${companyTail}${unresolvedTail}${errorTail}`;
 }
 
