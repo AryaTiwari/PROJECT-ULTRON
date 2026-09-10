@@ -125,6 +125,11 @@ setImmediate(async () => {
     console.log(`[Mark 3] Apollo + Google Sheets lead enrichment ${leads.status.ready ? 'ready' : 'installed; one-time auth/config check pending'}.`);
   } catch (error) { console.error(`[Mark 3] Lead enrichment bootstrap failed: ${error.message}`); }
 
+  try {
+    const progress = require('../lead-enrichment-progress').install();
+    console.log(`[Mark 3] Lead enrichment progress monitor ready; live webhook status=${progress.liveStatus ? 'on' : 'off'}, contextual phone recovery=${progress.contextualPhoneRecovery ? 'on' : 'off'}.`);
+  } catch (error) { console.error(`[Mark 3] Lead enrichment progress monitor bootstrap failed: ${error.message}`); }
+
   // Input Intelligence deliberately wraps the feature stack after domain operators.
   // Vague follow-ups can therefore be reconstructed into the same explicit command the
   // operator already understands. It stays model-free, confidence-gated and portable
