@@ -36,8 +36,8 @@ function statusText() {
   if (!state.apollo.webhookReady) blockers.push('Apollo webhook');
   if (!state.google.credentialsReady) blockers.push('Google OAuth JSON');
   if (!state.google.authorized) blockers.push('one-time Google login');
-  if (blockers.length) return `Apollo + Sheets enrichment is installed, Sir. Still needed: ${blockers.join(', ')}. Pending phone checks: ${state.pendingPhones}. Paid-tool approval is mandatory before every new Apollo run.`;
-  return `Apollo + Sheets enrichment is ready, Sir. Pending phone checks: ${state.pendingPhones}. Paid-tool approval is mandatory before every new Apollo run.`;
+  if (blockers.length) return `Apollo + Sheets enrichment is installed, Sir. Still needed: ${blockers.join(', ')}. Pending phone checks: ${state.pendingPhones}. Apollo approval is mandatory before every new Apollo run.`;
+  return `Apollo + Sheets enrichment is ready, Sir. Pending phone checks: ${state.pendingPhones}. Apollo approval is mandatory before every new Apollo run.`;
 }
 
 function responseShape(ok, text, extra = {}) {
@@ -89,7 +89,7 @@ async function handleEnrichment(url) {
       return responseShape(false, `Google OAuth JSON is missing, Sir. Expected: ${require('./google-sheets-auth').status().credentialsPath}`, { error: error.code });
     }
     if (error.code === 'PAID_TOOL_APPROVAL_REQUIRED') {
-      return responseShape(false, 'Apollo was blocked because this run does not have explicit paid-tool approval. Nothing was queried or charged.', { error: error.code });
+      return responseShape(false, 'Apollo was blocked because this run does not have explicit approval. Nothing was queried or charged.', { error: error.code });
     }
     return responseShape(false, `Lead enrichment stopped safely: ${error.message}`, { error: error.code || error.message });
   }
@@ -104,14 +104,14 @@ async function handleResume() {
     return responseShape(true, text, { leadEnrichment: result });
   } catch (error) {
     if (error.code === 'GOOGLE_SHEETS_AUTH_REQUIRED') return responseShape(false, leadEnrichment.authInstruction(), { error: error.code });
-    if (error.code === 'PAID_TOOL_APPROVAL_REQUIRED') return responseShape(false, 'Apollo resume was blocked because this run does not have explicit paid-tool approval.', { error: error.code });
+    if (error.code === 'PAID_TOOL_APPROVAL_REQUIRED') return responseShape(false, 'Apollo resume was blocked because this run does not have explicit approval.', { error: error.code });
     return responseShape(false, `Apollo enrichment resume failed safely: ${error.message}`, { error: error.code || error.message });
   }
 }
 
-async function handleResearchApproval(decision) {
+async function handleResearch(requestData) {
   try {
-    const result = await paidTools.withPermit(decision, () => leadResearch.run(decision.payload));
+    const result = await leadResearch.run(requestData);
     let text = leadResearch.formatResult(result);
     const extra = { leadResearch: result };
 
@@ -120,7 +120,7 @@ async function handleResearchApproval(decision) {
         'apollo',
         'lead-research-enrichment',
         { url: result.sheetUrl },
-        `The public-research step is complete. Apollo would now check missing phone/email fields in ${result.sheetName}, using existing sheet data and cache before any live call.`
+        `Research is already complete. Apollo would now check only missing phone/email fields in ${result.sheetName}, using existing sheet data and cache before any live Apollo call.`
       );
       text += ` ${paidTools.prompt(apolloApproval)}`;
       extra.paidToolApproval = { id: apolloApproval.id, tool: apolloApproval.tool, operation: apolloApproval.operation, expiresAt: apolloApproval.expiresAt };
@@ -128,7 +128,6 @@ async function handleResearchApproval(decision) {
     return researchResponseShape(true, text, extra);
   } catch (error) {
     if (error.code === 'GOOGLE_SHEETS_AUTH_REQUIRED') return researchResponseShape(false, leadEnrichment.authInstruction(), { error: error.code });
-    if (error.code === 'PAID_TOOL_APPROVAL_REQUIRED') return researchResponseShape(false, 'The external research API was blocked because this run does not have explicit paid-tool approval.', { error: error.code });
     return researchResponseShape(false, `Lead research stopped safely: ${error.message}`, { error: error.code || error.message });
   }
 }
@@ -136,13 +135,9 @@ async function handleResearchApproval(decision) {
 async function handlePaidToolDecision(decision) {
   if (!decision) return null;
   if (decision.status === 'denied') {
-    return researchResponseShape(true, `${decision.label} was not used, Sir. The pending paid-tool action was cancelled.`, {
+    return researchResponseShape(true, `${decision.label} was not used, Sir. The pending Apollo action was cancelled.`, {
       taskType: 'paid-tool-approval', provider: 'local-approval-gate', paidToolApproval: decision,
     });
-  }
-
-  if (decision.tool === 'tinyfish' && decision.operation === 'lead-research') {
-    return handleResearchApproval(decision);
   }
 
   if (decision.tool === 'apollo' && ['lead-enrichment', 'lead-research-enrichment'].includes(decision.operation)) {
@@ -153,7 +148,7 @@ async function handlePaidToolDecision(decision) {
     return paidTools.withPermit(decision, () => handleResume());
   }
 
-  return researchResponseShape(false, `I received approval for ${decision.label}, Sir, but the pending operation is no longer valid. Nothing was executed.`, {
+  return researchResponseShape(false, `I received Apollo approval, Sir, but the pending operation is no longer valid. Nothing was executed.`, {
     taskType: 'paid-tool-approval', provider: 'local-approval-gate', error: 'STALE_PAID_TOOL_OPERATION',
   });
 }
@@ -183,13 +178,9 @@ function install() {
         if (researchRequest.invalidUrl) {
           result = researchResponseShape(false, 'Use the full Google Sheet link, Sir. I need the real spreadsheet ID after /d/ before I research or write any leads.', { error: 'INVALID_GOOGLE_SHEET_URL' });
         } else {
-          const approval = paidTools.request(
-            'tinyfish',
-            'lead-research',
-            researchRequest,
-            `I will research up to ${researchRequest.count} public LinkedIn leads for “${researchRequest.criteria}” and append only new profiles to the Sheet. Apollo will remain blocked unless you separately approve it afterward.`
-          );
-          result = approvalResponse(approval, { leadResearchRequest: researchRequest });
+          emit('lead_research_started', { inputMode, count: researchRequest.count, criteria: researchRequest.criteria });
+          result = await handleResearch(researchRequest);
+          emit(result.ok ? 'lead_research_completed' : 'lead_research_failed', { inputMode, error: result.error || null });
         }
       } else {
         const request = isEnrichmentRequest(text);
@@ -202,7 +193,7 @@ function install() {
               'apollo',
               'lead-enrichment',
               { url: request.url },
-              'I will use the local Sheet/post details and Apollo cache first, then make live Apollo calls only for fields that are still missing.'
+              'I will use local Sheet/post details and the Apollo cache first, then make live Apollo calls only for fields that are still missing.'
             );
             result = approvalResponse(approval, { leadEnrichmentRequest: request });
           }
@@ -256,5 +247,6 @@ module.exports = {
   isResumeRequest,
   handleEnrichment,
   handleResume,
+  handleResearch,
   handlePaidToolDecision,
 };
