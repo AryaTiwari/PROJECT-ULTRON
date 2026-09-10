@@ -165,6 +165,10 @@ async function enrichSheet(sheetUrl, options = {}) {
   try { await syncPhoneResults({ quiet: true }); } catch {}
 
   const adapter = adapterFor(sheetUrl, options.provider);
+  let contactColumnSetup = null;
+  if (options.ensureContactColumns && typeof adapter.ensureContactColumns === 'function') {
+    contactColumnSetup = await adapter.ensureContactColumns(sheetUrl, { phone: true, email: true });
+  }
   const layout = await adapter.inspect(sheetUrl);
   const data = await adapter.readSheet(sheetUrl, layout);
   const state = loadState();
@@ -181,6 +185,7 @@ async function enrichSheet(sheetUrl, options = {}) {
     linkedinColumn: layout.linkedinColumn,
     phoneColumn: layout.phoneColumn,
     emailColumn: layout.emailColumn,
+    contactColumnsCreated: contactColumnSetup?.created || [],
     scannedRows: 0,
     enrichedProfiles: 0,
     cachedProfiles: 0,
@@ -450,6 +455,9 @@ function formatResult(stats) {
     stats.emailColumn ? `email ${stats.emailColumn}` : null,
     stats.phoneColumn ? `phone ${stats.phoneColumn}` : null,
   ].filter(Boolean).join(', ');
+  const createdTail = Array.isArray(stats.contactColumnsCreated) && stats.contactColumnsCreated.length
+    ? ` Added missing ${stats.contactColumnsCreated.join(' and ')} column${stats.contactColumnsCreated.length === 1 ? '' : 's'} before enrichment.`
+    : '';
   const phoneTail = stats.pendingPhones
     ? ` ${stats.pendingPhones} phone${stats.pendingPhones === 1 ? '' : 's'} are still verifying and will auto-fill when Apollo returns them.`
     : '';
@@ -465,7 +473,7 @@ function formatResult(stats) {
     : '';
   const errorTail = stats.failedRows ? ` ${stats.failedRows} row${stats.failedRows === 1 ? '' : 's'} failed and were left untouched.` : '';
   const providerLabel = stats.provider === 'microsoft' ? ' Microsoft Excel/OneDrive workbook' : ' Google Sheet';
-  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'} in the${providerLabel}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${localTail}${apolloTail}${phoneTail}${companyTail}${unresolvedTail}${errorTail}`;
+  return `Done, Sir. ${stats.sheetName}: checked ${stats.scannedRows} LinkedIn row${stats.scannedRows === 1 ? '' : 's'} in the${providerLabel}; wrote ${stats.emailsWritten} email cell${stats.emailsWritten === 1 ? '' : 's'} and ${stats.phonesWritten} phone cell${stats.phonesWritten === 1 ? '' : 's'}${columns ? ` (${columns})` : ''}.${createdTail}${localTail}${apolloTail}${phoneTail}${companyTail}${unresolvedTail}${errorTail}`;
 }
 
 function authInstruction(provider = 'google') {
