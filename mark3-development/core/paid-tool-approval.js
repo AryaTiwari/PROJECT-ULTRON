@@ -14,29 +14,25 @@ const TOOLS = {
     reason: 'credit-consuming office-owned lead-enrichment API',
     oneRunOnly: true,
   },
-  tinyfish: {
-    label: 'TinyFish Search',
-    reason: 'external search API that may consume account quota',
-    oneRunOnly: true,
-  },
 };
 
 function load() {
   try {
-    if (!fs.existsSync(STATE_FILE)) return { version: 1, pending: [], history: [] };
+    if (!fs.existsSync(STATE_FILE)) return { version: 2, pending: [], history: [] };
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     return {
-      version: 1,
+      version: 2,
       pending: Array.isArray(parsed.pending) ? parsed.pending : [],
       history: Array.isArray(parsed.history) ? parsed.history : [],
     };
   } catch {
-    return { version: 1, pending: [], history: [] };
+    return { version: 2, pending: [], history: [] };
   }
 }
 
 function save(state) {
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+  state.version = 2;
   state.pending = (state.pending || []).slice(-12);
   state.history = (state.history || []).slice(-80);
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
@@ -48,25 +44,34 @@ function fresh(item) {
 }
 
 function prune(state = load()) {
-  const expired = [];
+  const retired = [];
   const active = [];
   for (const item of state.pending || []) {
+    if (String(item?.tool || '').toLowerCase() !== 'apollo') {
+      retired.push({ ...item, status: 'retired-non-apollo-gate', resolvedAt: new Date().toISOString() });
+      continue;
+    }
     if (fresh(item)) active.push(item);
-    else expired.push({ ...item, status: 'expired', resolvedAt: new Date().toISOString() });
+    else retired.push({ ...item, status: 'expired', resolvedAt: new Date().toISOString() });
   }
   state.pending = active;
-  if (expired.length) state.history.push(...expired);
+  if (retired.length) state.history.push(...retired);
   save(state);
   return state;
 }
 
 function definition(tool) {
   const key = String(tool || '').trim().toLowerCase();
-  return { key, ...(TOOLS[key] || { label: key || 'Paid tool', reason: 'credit/quota-consuming external tool', oneRunOnly: true }) };
+  return { key, ...(TOOLS[key] || { label: key || 'Tool', reason: 'external tool', oneRunOnly: false }) };
 }
 
 function request(tool, operation, payload = {}, summary = '') {
   const def = definition(tool);
+  if (def.key !== 'apollo') {
+    const error = new Error(`${def.label} does not require ULTRON paid-tool approval. Only Apollo is approval-gated.`);
+    error.code = 'NON_APOLLO_APPROVAL_DISABLED';
+    throw error;
+  }
   const state = prune();
   state.pending = state.pending.filter((item) => item.tool !== def.key);
   const item = {
@@ -117,7 +122,7 @@ function affirmativeFor(text, item, allowGeneric = false) {
   if (!mentions) return false;
   if (/\b(?:approve|approved|allow|yes|yep|yeah|okay|ok)\b/i.test(value)) return true;
   if (/\bgo\s+ahead\s+(?:with|and\s+use)\b/i.test(value)) return true;
-  if (new RegExp(`^use\\s+(?:${tool.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}|${label.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')})(?:\\s+(?:now|for\\s+this\\s+run|this\\s+time))?[.!\\s]*$`, 'i').test(value)) return true;
+  if (/^use\s+apollo(?:\s+(?:now|for\s+this\s+run|this\s+time))?[.!\s]*$/i.test(value)) return true;
   return false;
 }
 
@@ -145,31 +150,34 @@ function resolveMessage(text) {
 }
 
 function prompt(item) {
-  const def = definition(item?.tool);
   const detail = item?.summary ? ` ${item.summary}` : '';
-  return `${def.label} requires approval before I use it, Sir. It is a ${def.reason}.${detail} Approve ${def.label} for this one run only? Nothing will be charged or queried until you approve.`;
+  return `Apollo requires approval before I use it, Sir. It is an office-owned API that can consume credits.${detail} Approve Apollo for this one run only? Nothing will be queried or charged until you approve.`;
 }
 
 function isPermitted(tool) {
+  const key = definition(tool).key;
+  if (key !== 'apollo') return true;
   const store = permitStore.getStore();
-  return Boolean(store?.tools?.has(definition(tool).key));
+  return Boolean(store?.tools?.has('apollo'));
 }
 
 function assertPermitted(tool) {
-  if (isPermitted(tool)) return true;
-  const def = definition(tool);
-  const error = new Error(`${def.label} is blocked until the user explicitly approves this run.`);
+  const key = definition(tool).key;
+  if (key !== 'apollo') return true;
+  if (isPermitted('apollo')) return true;
+  const error = new Error('Apollo is blocked until the user explicitly approves this run.');
   error.code = 'PAID_TOOL_APPROVAL_REQUIRED';
-  error.tool = def.key;
+  error.tool = 'apollo';
   throw error;
 }
 
 async function withPermit(approval, fn) {
-  if (!approval || approval.status !== 'approved') throw new Error('A resolved paid-tool approval is required.');
-  const tool = definition(approval.tool).key;
+  if (!approval || approval.status !== 'approved' || String(approval.tool || '').toLowerCase() !== 'apollo') {
+    throw new Error('A resolved Apollo approval is required.');
+  }
   const parent = permitStore.getStore();
   const tools = new Set(parent?.tools || []);
-  tools.add(tool);
+  tools.add('apollo');
   return permitStore.run({ tools, approvalId: approval.id }, fn);
 }
 
@@ -187,6 +195,7 @@ function installApolloGuard() {
 function status() {
   return {
     ready: true,
+    approvalScope: 'apollo-only',
     stateFile: STATE_FILE,
     ttlMs: TTL_MS,
     tools: TOOLS,
