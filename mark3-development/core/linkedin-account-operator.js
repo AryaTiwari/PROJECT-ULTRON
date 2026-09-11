@@ -499,6 +499,28 @@ function passesCompanyHardFilters(record, request = {}) {
   return companyFilterFailures(record, request).length === 0;
 }
 
+function rejectedRecordSnapshot(record, reasons = [], request = {}) {
+  const locationMatch = locationEvidenceDetails(record, request.location, { allowJobEvidence: Boolean(request.hiring) });
+  const jobLocation = linkedinPublic.locationFromText(record?.jobEvidenceText || '');
+  return {
+    company: String(record?.company || record?.name || '').trim(),
+    linkedin: String(record?.linkedin || '').trim(),
+    location: locationMatch.source === 'job'
+      ? (jobLocation || locationMatch.label || request.location || '')
+      : (record?.companyLocation || linkedinPublic.locationFromText(record?.companySearchEvidenceText || '') || locationMatch.label || ''),
+    locationEvidenceSource: locationMatch.source || '',
+    workType: record?.workType || detectWorkType(record?.jobEvidenceText || ''),
+    employeeCount: record?.employeeCount || null,
+    applicants: record?.applicants || '',
+    relevanceScore: Number(record?.relevanceScore || 0),
+    hiringSignal: String(record?.hiringSignal || '').slice(0, 1000),
+    jobEvidenceText: String(record?.jobEvidenceText || '').slice(0, 2500),
+    companyEvidenceText: String(record?.companyEvidenceText || record?.companySearchEvidenceText || '').slice(0, 2500),
+    rejectionReasons: [...new Set((reasons || []).map((value) => String(value || '').trim()).filter(Boolean))],
+    sourceEvidence: [...new Set(record?.sourceEvidence || [])],
+  };
+}
+
 function mergeDuplicateRecord(target, source) {
   if (!target || !source) return target || source;
   for (const key of ['name', 'company', 'role', 'website', 'applicants', 'email', 'phone', 'companyLocation']) {
@@ -749,17 +771,20 @@ async function companyMission(request) {
     topic: 0,
   };
   const accepted = [];
+  const rejectedRecords = [];
   let rejectedCandidates = 0;
   for (const record of merged) {
     if (Number(record.relevanceScore || 0) < 50) {
       rejected.low_relevance++;
       rejectedCandidates++;
+      rejectedRecords.push(rejectedRecordSnapshot(record, ['low_relevance'], request));
       continue;
     }
     const failures = companyFilterFailures(record, request);
     if (failures.length) {
       rejectedCandidates++;
       for (const reason of failures) rejected[reason] = Number(rejected[reason] || 0) + 1;
+      rejectedRecords.push(rejectedRecordSnapshot(record, failures, request));
       continue;
     }
     const locationMatch = locationEvidenceDetails(record, request.location, { allowJobEvidence: Boolean(request.hiring) });
@@ -799,6 +824,7 @@ async function companyMission(request) {
       rejectedCandidates,
       candidateCount: candidateCountBeforeGate,
     },
+    rejectedRecords,
   };
 }
 
@@ -962,6 +988,108 @@ function websiteDomain(value) {
   try { return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; }
 }
 
+function rejectedSheetHeaders() {
+  return [
+    'COMPANY NAME',
+    'COMPANY LINK',
+    'LOCATION',
+    'LOCATION EVIDENCE',
+    'WORK TYPE',
+    'EMPLOYEES',
+    'NO. OF APPLICANTS',
+    'LEAD SCORE',
+    'REJECTION REASONS',
+    'HIRING SIGNAL',
+    'JOB EVIDENCE',
+    'COMPANY EVIDENCE',
+  ];
+}
+
+function rejectedSheetRow(record) {
+  return [
+    record?.company || '',
+    record?.linkedin || '',
+    record?.location || '',
+    record?.locationEvidenceSource || '',
+    record?.workType || '',
+    record?.employeeCount?.label || '',
+    record?.applicants || '',
+    record?.relevanceScore ?? '',
+    Array.isArray(record?.rejectionReasons) ? record.rejectionReasons.join(', ') : '',
+    record?.hiringSignal || '',
+    record?.jobEvidenceText || '',
+    record?.companyEvidenceText || '',
+  ];
+}
+
+function latestRejectedMission() {
+  return [...loadState().missions].reverse().find((mission) =>
+    mission?.status === 'completed'
+    && mission?.request?.entityMode === 'company'
+    && mission?.filterVerification?.hardGate
+    && Number(mission?.filterVerification?.rejectedCandidates || 0) > 0
+  ) || null;
+}
+
+function isRejectedSheetRequest(text) {
+  const value = String(text || '').trim();
+  if (!/\b(?:sheet|spreadsheet|google\s+sheet)\b/i.test(value)) return false;
+  if (/\b(?:rejected|failed|filtered\s*out|excluded|disqualified)\b/i.test(value)) return true;
+  if (/\bthose\b[\s\S]{0,25}\b(?:candidates?|companies|results?|leads?)\b/i.test(value)) {
+    return Boolean(latestRejectedMission());
+  }
+  return false;
+}
+
+async function createRejectedCandidatesSheet() {
+  const state = loadState();
+  const mission = [...state.missions].reverse().find((item) =>
+    item?.status === 'completed'
+    && item?.request?.entityMode === 'company'
+    && item?.filterVerification?.hardGate
+    && Number(item?.filterVerification?.rejectedCandidates || 0) > 0
+  );
+  if (!mission) {
+    const error = new Error('No completed LinkedIn company mission with rejected candidates is available.');
+    error.code = 'LINKEDIN_REJECTED_MISSION_NOT_FOUND';
+    throw error;
+  }
+
+  const rejectedRecords = Array.isArray(mission.rejectedRecords) ? mission.rejectedRecords : [];
+  if (!rejectedRecords.length) {
+    return {
+      ok: false,
+      legacyMissing: true,
+      missionId: mission.id,
+      rejectedCandidates: Number(mission.filterVerification?.rejectedCandidates || 0),
+      message: 'That mission recorded only rejection counts, not the rejected candidate rows. The exact old candidates cannot be reconstructed without rerunning the LinkedIn mission.',
+    };
+  }
+
+  const headers = rejectedSheetHeaders();
+  const topic = String(mission.request?.topic || 'Candidates').replace(/[^a-z0-9 ()&+._-]+/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 50);
+  const title = `ULTRON LinkedIn Rejected - ${topic} - ${new Date().toISOString().slice(0, 10)}`;
+  const created = await v2.createSpreadsheet(title, headers, rejectedRecords.length);
+  const added = await appendRows(created.spreadsheetId, created.sheetName, rejectedRecords.map(rejectedSheetRow));
+
+  mission.rejectedSheetUrl = created.url;
+  mission.rejectedSheetName = created.sheetName;
+  mission.rejectedSheetTitle = created.title;
+  mission.rejectedSheetAdded = added;
+  mission.rejectedSheetCreatedAt = nowIso();
+  saveState(state);
+
+  return {
+    ok: true,
+    missionId: mission.id,
+    sheetUrl: created.url,
+    sheetName: created.sheetName,
+    spreadsheetTitle: created.title,
+    added,
+    rejectedCandidates: rejectedRecords.length,
+  };
+}
+
 function apolloSearchDelayMs() {
   const value = Number(apollo.setting('ULTRON_M3_APOLLO_PEOPLE_SEARCH_DELAY_MS', '900'));
   return Math.max(300, Math.min(10000, Number.isFinite(value) ? value : 900));
@@ -1105,6 +1233,7 @@ async function run(request, headers) {
     mission.budgetStopped = researched.budgetStopped || null;
     mission.filters = researched.filters || request.filters || {};
     mission.filterVerification = researched.filterVerification || null;
+    mission.rejectedRecords = Array.isArray(researched.rejectedRecords) ? researched.rejectedRecords : [];
     mission.safety = policy.status();
 
     const latest = loadState();
@@ -1204,6 +1333,7 @@ module.exports = {
   topicEvidenceMatches,
   companyFilterFailures,
   passesCompanyHardFilters,
+  rejectedRecordSnapshot,
   dedupeRecords,
   companyMission,
   personMission,
@@ -1211,6 +1341,11 @@ module.exports = {
   contactRemark,
   rowFor,
   websiteDomain,
+  rejectedSheetHeaders,
+  rejectedSheetRow,
+  latestRejectedMission,
+  isRejectedSheetRequest,
+  createRejectedCandidatesSheet,
   prepareApolloCompanyContacts,
   run,
   latestMission,
