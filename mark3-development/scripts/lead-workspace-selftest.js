@@ -2,6 +2,7 @@
 const assert = require('assert');
 const workspace = require('../core/lead-workspace-operator-v3');
 const bootstrap = require('../core/lead-workspace-bootstrap');
+const linkedin = require('../core/linkedin-public-research');
 
 assert.equal(workspace.MAX_LEADS, 200);
 assert.equal(workspace.isWorkspaceRequest('Find me 100 HR recruiter leads in India and create a Google Sheet'), true);
@@ -14,6 +15,8 @@ assert.ok(bootstrap.implicitWorkspaceRequest('Make me 80 fitness creator leads i
 assert.ok(bootstrap.implicitWorkspaceRequest('Find me 25 marketing agencies in Kolkata from Google Maps'));
 assert.ok(bootstrap.implicitWorkspaceRequest('Find me 30 companies hiring SAP consultants on Naukri'));
 assert.ok(bootstrap.implicitWorkspaceRequest('Get me 20 employers with Python vacancies from Indeed'));
+assert.ok(bootstrap.implicitWorkspaceRequest('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra'));
+assert.ok(bootstrap.implicitWorkspaceRequest('Find me 40 SAP recruiters on LinkedIn from Pune'));
 assert.equal(bootstrap.implicitWorkspaceRequest('How do I find leads for my business?'), null);
 assert.equal(bootstrap.implicitWorkspaceRequest('Find me 5 good movies'), null);
 
@@ -27,8 +30,42 @@ assert.equal(mapsImplicit.originalMessage, 'Find me 25 marketing agencies in Kol
 assert.equal(jobsImplicit.originalMessage, 'Find me 30 companies hiring SAP consultants on Naukri');
 assert.equal(workspace.sourceFusion.mapsSearchQuery(mapsImplicit.originalMessage), 'marketing agencies');
 assert.equal(workspace.sourceFusion.jobSearchQuery(jobsImplicit.originalMessage), 'SAP consultants');
+
+const linkedinCompanyRequest = bootstrap.implicitWorkspaceRequest('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra');
+assert.equal(linkedinCompanyRequest.count, 50);
+assert.equal(linkedinCompanyRequest.originalMessage, 'Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra');
+const companyPlan = linkedin.plan(linkedinCompanyRequest.originalMessage, linkedinCompanyRequest.criteria);
+assert.equal(companyPlan.enabled, true);
+assert.equal(companyPlan.entityMode, 'company');
+assert.equal(companyPlan.location, 'Maharashtra');
+assert.equal(companyPlan.hiring, true);
+assert.ok(linkedin.queryPlan(linkedinCompanyRequest.originalMessage, 50, companyPlan).some((q) => /site:linkedin\.com\/company/i.test(q)));
+
+const linkedinPersonRequest = bootstrap.implicitWorkspaceRequest('Find me 40 SAP recruiters on LinkedIn from Pune');
+const personPlan = linkedin.plan(linkedinPersonRequest.originalMessage, linkedinPersonRequest.criteria);
+assert.equal(personPlan.enabled, true);
+assert.equal(personPlan.entityMode, 'person');
+assert.equal(personPlan.location, 'Pune');
+assert.ok(linkedin.queryPlan(linkedinPersonRequest.originalMessage, 40, personPlan).some((q) => /site:linkedin\.com\/in/i.test(q)));
+
+assert.equal(linkedin.normalizeLinkedInEntityUrl('https://www.linkedin.com/company/acme-tech/', 'company').url, 'https://www.linkedin.com/company/acme-tech');
+assert.equal(linkedin.normalizeLinkedInEntityUrl('https://linkedin.com/in/aarti-maurya/', 'person').url, 'https://www.linkedin.com/in/aarti-maurya');
+assert.equal(linkedin.normalizeLinkedInEntityUrl('https://linkedin.com/company/acme', 'person'), null);
+const parsedCompany = linkedin.parseResult({
+  title: 'Acme Technologies | LinkedIn',
+  snippet: 'Pune, Maharashtra · We are hiring SAP professionals across S/4HANA roles.',
+  url: 'https://www.linkedin.com/company/acme-technologies/',
+}, { entityMode: 'company', location: 'Maharashtra' });
+assert.equal(parsedCompany.entityType, 'company');
+assert.equal(parsedCompany.company, 'Acme Technologies');
+assert.ok(/hiring SAP/i.test(parsedCompany.hiringSignal));
+assert.equal(workspace.sourceKeyForHeader('LinkedIn Company URL'), 'linkedin');
+assert.ok(workspace.ensureCompanyHeaders(['Company', 'LinkedIn Company URL'], false).includes('Hiring Signal'));
+
 assert.equal(workspace.isSourceStatusRequest('lead source status'), true);
 assert.equal(workspace.isSourceStatusRequest('Apify health'), true);
+assert.equal(workspace.isLinkedInStatusRequest('LinkedIn scraper status'), true);
+assert.equal(workspace.isLinkedInStatusRequest('LinkedIn research health'), true);
 
 const parsed = workspace.parseRequest('Find me 120 HR recruiter leads in India and create a Google Sheet with phone and email');
 assert.equal(parsed.count, 120);
@@ -132,5 +169,8 @@ assert.equal(state.multiSourceRanking, true);
 assert.equal(state.sourceAwareColumns, true);
 assert.ok(state.sourceFusion && typeof state.sourceFusion.serpApiConfigured === 'boolean');
 assert.ok(state.sourceFusion && typeof state.sourceFusion.apifyConfigured === 'boolean');
+assert.ok(state.linkedinPublicResearch && typeof state.linkedinPublicResearch.configured === 'boolean');
+assert.equal(state.linkedinPublicResearch.directLinkedInLogin, false);
+assert.equal(state.linkedinPublicResearch.antiBotBypass, false);
 
-console.log('Lead Workspace v3 self-test passed. Direct lead, Google Maps and job-board commands, remembered/custom layouts, source-aware columns, relevance scoring, identity-checked contact recovery, dedupe, formatted Google Sheets, resumable checkpoints and SerpApi/Apify source-fusion wiring are structurally healthy.');
+console.log('Lead Workspace v3 self-test passed. Direct lead, Google Maps, job-board and public LinkedIn company/person commands, remembered/custom layouts, source-aware columns, relevance scoring, identity-checked contact recovery, dedupe, formatted Google Sheets, resumable checkpoints and SerpApi/Apify/LinkedIn source-fusion wiring are structurally healthy.');
