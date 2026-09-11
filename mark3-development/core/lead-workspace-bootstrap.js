@@ -32,7 +32,9 @@ function implicitWorkspaceRequest(text) {
     : mapsSource
       ? `${value} and find founder owner or marketing decision maker leads and create a Google Sheet`
       : `${value} and find recruiter or talent acquisition leads and create a Google Sheet`;
-  return workspace.parseRequest(expanded);
+  const parsed = workspace.parseRequest(expanded);
+  if (parsed) parsed.originalMessage = value;
+  return parsed;
 }
 
 function responseShape(ok, text, extra = {}) {
