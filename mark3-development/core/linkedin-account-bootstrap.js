@@ -114,6 +114,19 @@ function install() {
         conversation.append('user', text, { taskType: 'linkedin-account-unlock', inputMode });
         const safety = policy.clearManualLock('user explicitly confirmed LinkedIn account unlock after manual verification');
         result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} today. Normal rate limits still apply.`, { linkedinSafety: safety });
+      } else if (operator.isRejectedSheetRequest(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-account-rejected-export', inputMode });
+        const exported = await operator.createRejectedCandidatesSheet();
+        if (exported.legacyMissing) {
+          result = responseShape(true, `${exported.message} The previous “${exported.rejectedCandidates}” figure was a rejection count from that run, not a recoverable list of ${exported.rejectedCandidates} stored rows. Rerun the original LinkedIn mission once with this updated build; rejected candidates will then be retained and this same follow-up command will create their Sheet.`, {
+            linkedinRejectedExport: exported,
+          });
+        } else {
+          result = responseShape(true, `Created “${exported.spreadsheetTitle}” with ${exported.added} rejected LinkedIn candidate${exported.added === 1 ? '' : 's'}, including rejection reasons and the evidence used by the hard-filter gate. ${exported.sheetUrl}`, {
+            linkedinRejectedExport: exported,
+            spreadsheetUrl: exported.sheetUrl,
+          });
+        }
       } else {
         const request = operator.parseRequest(text);
         if (request) {
