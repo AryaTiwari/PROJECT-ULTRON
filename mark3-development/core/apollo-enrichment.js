@@ -166,8 +166,16 @@ function hostname(value) {
   }
 }
 
-function decisionPriority(title) {
+function decisionPriority(title, mode = 'general') {
   const value = normalizedWords(title);
+  if (mode === 'hiring') {
+    if (/\b(?:head|director|vp|vice president)\b.*\b(?:talent acquisition|recruitment|human resources|hr|people)\b/.test(value)
+        || /\b(?:talent acquisition|recruitment|human resources|hr|people)\b.*\b(?:head|director|vp|vice president)\b/.test(value)) return 1;
+    if (/\b(?:talent acquisition manager|recruitment manager|recruiting manager|hiring manager|hr manager|human resources manager|people operations manager|people ops manager)\b/.test(value)) return 2;
+    if (/\b(?:senior recruiter|technical recruiter|hr recruiter|human resources recruiter|recruiter|talent acquisition|recruitment lead|talent lead|hr business partner|hrbp)\b/.test(value)) return 3;
+    if (/\b(?:founder|co founder|owner|chief executive officer|ceo|managing director|director)\b/.test(value)) return 4;
+    return 99;
+  }
   if (/\b(?:founder|co founder|owner|director|managing director)\b/.test(value)) return 1;
   if (/\b(?:manager|head|talent acquisition lead|recruitment lead)\b/.test(value)) return 2;
   if (/\b(?:hr recruiter|human resources recruiter|recruiter|talent acquisition)\b/.test(value)) return 3;
@@ -184,19 +192,19 @@ function sameOrganization(person, company, domain = '') {
   return expected === actual || expected.includes(actual) || actual.includes(expected);
 }
 
-function rankedDecisionMakers(people, company, domain = '') {
+function rankedDecisionMakers(people, company, domain = '', priorityMode = 'general') {
   return (Array.isArray(people) ? people : [])
     .filter((person) => sameOrganization(person, company, domain))
     .map((person) => ({
       ...person,
-      decisionPriority: decisionPriority(person.title || person.headline || ''),
+      decisionPriority: decisionPriority(person.title || person.headline || '', priorityMode),
       linkedinUrl: normalizeLinkedIn(person.linkedin_url || person.linkedin || ''),
     }))
     .filter((person) => person.decisionPriority < 99 && person.linkedinUrl)
     .sort((a, b) => a.decisionPriority - b.decisionPriority || String(a.name || '').localeCompare(String(b.name || '')));
 }
 
-async function searchCompanyDecisionMaker({ company, domain = '', location = '' } = {}) {
+async function searchCompanyDecisionMaker({ company, domain = '', location = '', priorityMode = 'general' } = {}) {
   const apiKey = setting('APOLLO_API_KEY');
   if (!apiKey) {
     const error = new Error('APOLLO_API_KEY is missing.');
@@ -204,12 +212,22 @@ async function searchCompanyDecisionMaker({ company, domain = '', location = '' 
     throw error;
   }
   const url = new URL(APOLLO_PEOPLE_SEARCH);
-  const titles = [
-    'founder', 'co-founder', 'owner', 'director', 'managing director',
-    'manager', 'head recruiter', 'hiring manager', 'recruitment manager', 'talent acquisition head',
-    'HR recruiter', 'human resources recruiter', 'recruiter',
-  ];
-  const seniorities = ['owner', 'founder', 'head', 'director', 'manager'];
+  const titles = priorityMode === 'hiring'
+    ? [
+      'head of talent acquisition', 'talent acquisition director', 'head of recruitment', 'recruitment director',
+      'head of HR', 'HR director', 'human resources director', 'head of people',
+      'talent acquisition manager', 'recruitment manager', 'recruiting manager', 'hiring manager', 'HR manager',
+      'senior recruiter', 'technical recruiter', 'HR recruiter', 'recruiter', 'talent acquisition',
+      'founder', 'co-founder', 'owner', 'managing director',
+    ]
+    : [
+      'founder', 'co-founder', 'owner', 'director', 'managing director',
+      'manager', 'head recruiter', 'hiring manager', 'recruitment manager', 'talent acquisition head',
+      'HR recruiter', 'human resources recruiter', 'recruiter',
+    ];
+  const seniorities = priorityMode === 'hiring'
+    ? ['head', 'director', 'vp', 'manager', 'owner', 'founder']
+    : ['owner', 'founder', 'head', 'director', 'manager'];
   for (const title of titles) url.searchParams.append('person_titles[]', title);
   for (const seniority of seniorities) url.searchParams.append('person_seniorities[]', seniority);
   const cleanDomain = hostname(domain);
@@ -227,7 +245,7 @@ async function searchCompanyDecisionMaker({ company, domain = '', location = '' 
     let data = {};
     try { data = JSON.parse(text); } catch {}
     if (response.ok) {
-      const ranked = rankedDecisionMakers(data.people || data.contacts || [], company, cleanDomain);
+      const ranked = rankedDecisionMakers(data.people || data.contacts || [], company, cleanDomain, priorityMode);
       return { ok: true, company, domain: cleanDomain, candidate: ranked[0] || null, candidatesChecked: Array.isArray(data.people) ? data.people.length : 0 };
     }
     const message = data?.error || data?.error_message || data?.message || `Apollo people search failed (${response.status}).`;
@@ -418,7 +436,10 @@ function status() {
     webhookReady: Boolean(setting('APOLLO_WEBHOOK_URL') && setting('APOLLO_WEBHOOK_SECRET')),
     peopleSearchReady: Boolean(setting('APOLLO_API_KEY')),
     companySearchMax: Math.max(1, Math.min(100, numericSetting('ULTRON_M3_APOLLO_COMPANY_SEARCH_MAX', 50))),
-    decisionMakerPriority: ['director/founder/owner', 'manager/head recruiter', 'HR recruiter'],
+    decisionMakerPriority: {
+      general: ['director/founder/owner', 'manager/head recruiter', 'HR recruiter'],
+      hiring: ['talent/HR head or director', 'talent/recruitment/HR manager', 'recruiter/talent acquisition', 'founder/owner fallback'],
+    },
     cacheFile: CACHE_FILE,
     positiveCacheDays: numericSetting('ULTRON_M3_APOLLO_POSITIVE_CACHE_DAYS', 180),
     negativeCacheDays: numericSetting('ULTRON_M3_APOLLO_NEGATIVE_CACHE_DAYS', 30),
