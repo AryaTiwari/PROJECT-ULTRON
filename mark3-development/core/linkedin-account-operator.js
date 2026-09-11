@@ -216,8 +216,8 @@ function collectReferences(value, out = [], depth = 0) {
   if (url) out.push({
     url,
     kind: String(value.kind || '').trim(),
-    text: String(value.text || value.label || value.title || '').trim(),
-    context: String(value.context || '').trim(),
+    text: String(value.text || value.label || value.title || value.aria_label || '').trim(),
+    context: String(value.context || value.heading || value.aria_label || '').trim(),
   });
   for (const [key, item] of Object.entries(value)) {
     if (['url', 'href', 'text', 'label', 'title', 'context'].includes(key)) continue;
@@ -353,6 +353,7 @@ async function companyMission(request) {
       const record = referenceRecord(ref, request);
       if (record) {
         record.hiringSignal = [ref.text, ref.context].filter(Boolean).join(' · ').slice(0, 700) || 'Company appeared in LinkedIn job-search evidence.';
+        record.hiringVerified = true;
         record.relevanceScore = qualityScore(record, request, { hiring: true });
         records.push(record);
       }
@@ -373,7 +374,8 @@ async function companyMission(request) {
       const companyKey = String(record.company || record.name || '').toLowerCase();
       const hiringEvidence = Boolean(request.hiring && companyKey && jobsText.includes(companyKey));
       record.hiringSignal = hiringEvidence ? 'Company also appears in LinkedIn Jobs results for this mission.' : record.hiringSignal || '';
-      record.relevanceScore = qualityScore(record, request, { hiring: hiringEvidence });
+      record.hiringVerified = Boolean(record.hiringVerified || hiringEvidence);
+      record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified });
       records.push(record);
     }
   }
@@ -398,8 +400,11 @@ async function companyMission(request) {
       record.phone = request.wantsContacts ? phoneFromText(text) : '';
       const hiringDeep = request.hiring && /\b(?:hiring|jobs?|vacanc(?:y|ies)|openings?)\b/i.test(text)
         && String(text).toLowerCase().includes(keyword.toLowerCase().split(/\s+/)[0] || keyword.toLowerCase());
-      if (hiringDeep) record.hiringSignal = `LinkedIn company jobs section contains current ${keyword} hiring evidence.`;
-      record.relevanceScore = qualityScore(record, request, { hiring: Boolean(record.hiringSignal), deep: true });
+      if (hiringDeep) {
+        record.hiringSignal = `LinkedIn company jobs section contains current ${keyword} hiring evidence.`;
+        record.hiringVerified = true;
+      }
+      record.relevanceScore = qualityScore(record, request, { hiring: Boolean(record.hiringVerified), deep: true });
       record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'linkedin-account-company-profile'])];
     } catch (error) {
       if (error.code === 'LINKEDIN_COOLDOWN_ACTIVE' || error.code === 'LINKEDIN_MANUAL_LOCK') throw error;
@@ -409,6 +414,7 @@ async function companyMission(request) {
 
   merged = merged
     .filter((record) => Number(record.relevanceScore || 0) >= 50)
+    .filter((record) => !request.hiring || Boolean(record.hiringVerified))
     .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0))
     .slice(0, request.count);
 
