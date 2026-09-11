@@ -20,6 +20,9 @@ assert.equal(company.topic, 'SAP');
 assert.equal(company.wantsContacts, true);
 
 const filtered = operator.parseRequest('Find me 20 companies on LinkedIn with SAP roles under 1000 employees, remote, located in Maharashtra');
+const exactUserSapRequest = operator.parseRequest('Find me 20 companies on LinkedIn with SAP role openings, under 1000 employees, remote, and located in Maharashtra.');
+assert.equal(exactUserSapRequest.topic, 'SAP');
+assert.equal(operator.requestTopic('Find me companies on LinkedIn with SAP FICO role openings in Maharashtra', 'company', 'Maharashtra'), 'SAP FICO');
 assert.equal(filtered.filters.employeeMax, 1000);
 assert.equal(filtered.filters.workType, 'remote');
 assert.equal(filtered.filters.datePosted, null);
@@ -80,9 +83,13 @@ const strictPass = {
 assert.equal(operator.locationEvidenceMatches(strictPass, 'Maharashtra'), true);
 assert.equal(operator.workTypeEvidenceMatches(strictPass, 'remote'), true);
 assert.equal(operator.topicEvidenceMatches(strictPass, 'SAP'), true);
+assert.equal(operator.topicEvidenceMatches(strictPass, 'SAP in .'), true);
 assert.deepEqual(operator.companyFilterFailures(strictPass, filtered), []);
 assert.equal(operator.passesCompanyHardFilters(strictPass, filtered), true);
 assert.deepEqual(operator.jobLevelFailures(strictPass, filtered), []);
+const hiringIndependentOfTopic = { ...strictPass, hiringVerified: true, jobEvidenceText: 'Oracle Cloud Consultant · Remote · Maharashtra, India' };
+assert.ok(operator.jobLevelFailures(hiringIndependentOfTopic, filtered).includes('topic'));
+assert.ok(!operator.jobLevelFailures(hiringIndependentOfTopic, filtered).includes('hiring'));
 
 const remoteMaharashtraJobFromKarnatakaCompany = { ...strictPass, companyEvidenceText: 'Headquarters Bengaluru, Karnataka, India.' };
 assert.equal(operator.locationEvidenceMatches(remoteMaharashtraJobFromKarnatakaCompany, 'Maharashtra', { allowJobEvidence: true }), true);
@@ -184,4 +191,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, adaptive SAP role/city discovery, job-first hiring linkage, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, adaptive SAP role/city discovery, job-first hiring linkage, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
