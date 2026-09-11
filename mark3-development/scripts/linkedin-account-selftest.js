@@ -45,6 +45,17 @@ assert.equal(operator.contactRemark('Ashok Singh', 'Director'), 'Ashok Singh (Di
 assert.equal(operator.contactRemark('Avani Gupta', 'HR Recruiter'), 'Avani Gupta (HR Recruiter)');
 assert.equal(operator.applicantCountFromText('Acme · 100+ applicants', 'Acme'), '100+');
 assert.deepEqual(operator.jobIdsFromResult({ job_ids: ['4252026496'], url: 'https://www.linkedin.com/jobs/view/sap-consultant-4252026496/' }), ['4252026496']);
+
+const mockJobDetail = {
+  sections: { job_posting: 'SAP FICO Consultant\nPune, Maharashtra, India · Remote\nAcme Systems' },
+  references: {
+    job_posting: [{ kind: 'company', url: '/company/acme-systems/', text: 'Acme Systems', context: 'job posting' }],
+  },
+};
+const mockJobCompanyRefs = operator.linkedInReferences(mockJobDetail, 'company');
+assert.equal(mockJobCompanyRefs.length, 1);
+assert.equal(mockJobCompanyRefs[0].url, 'https://www.linkedin.com/company/acme-systems');
+assert.equal(mockJobCompanyRefs[0].context, 'job posting');
 assert.equal(operator.employeeCountFromText('Company size 501-1,000 employees').max, 1000);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: { min: 501, max: 1000 } }, filtered.filters), true);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: null }, filtered.filters), false);
@@ -132,6 +143,7 @@ assert.equal(typeof limits.localBudgetBypass, 'boolean');
 const previousBudgetBypass = process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = '1';
 assert.equal(policy.settings().localBudgetBypass, true);
+assert.ok(policy.settings().testMissionToolMax >= 41);
 if (previousBudgetBypass == null) delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 else process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = previousBudgetBypass;
 assert.ok(limits.minGapMs >= 5000);
@@ -160,4 +172,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, job-first hiring linkage, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
