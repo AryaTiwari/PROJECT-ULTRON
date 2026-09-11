@@ -150,7 +150,7 @@ setImmediate(async () => {
 
   try {
     const leadWorkspace = require('../lead-workspace-bootstrap').install();
-    console.log(`[Mark 3] Lead Workspace ready; Google Sheet creation=on, public-web sourcing=on, remembered layouts=${leadWorkspace.status.templatesRemembered || 0}, max mission=${leadWorkspace.status.maxLeadsPerMission || 200} leads.`);
+    console.log(`[Mark 3] Lead Workspace ready; Google Sheet creation=on, public-web sourcing=on, LinkedIn public research=${leadWorkspace.status.linkedinPublicResearch?.configured ? 'ready' : 'needs SERP_API_KEY'}, remembered layouts=${leadWorkspace.status.templatesRemembered || 0}, max mission=${leadWorkspace.status.maxLeadsPerMission || 200} leads.`);
   } catch (error) { console.error(`[Mark 3] Lead Workspace bootstrap failed: ${error.message}`); }
 
   // Install local artifact retrieval last so attachment/delivery requests win over
