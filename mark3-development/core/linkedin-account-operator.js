@@ -542,13 +542,15 @@ function isBudgetStop(error) {
 
 function missionCallBudget() {
   const safety = policy.status();
-  const maximum = Math.max(0, Math.min(
-    safety.missionToolMax,
-    safety.burstMax - safety.burstUsed,
-    safety.hourlyMax - safety.hourlyUsed,
-    safety.dailyMax - safety.dailyUsed,
-  ));
-  return { maximum, used: 0, stopped: null };
+  const maximum = safety.localBudgetBypass
+    ? Math.max(1, Number(safety.missionToolMax || 1))
+    : Math.max(0, Math.min(
+      safety.missionToolMax,
+      safety.burstMax - safety.burstUsed,
+      safety.hourlyMax - safety.hourlyUsed,
+      safety.dailyMax - safety.dailyUsed,
+    ));
+  return { maximum, used: 0, stopped: null, localBudgetBypass: Boolean(safety.localBudgetBypass) };
 }
 
 async function budgetedCall(budget, tool, args) {
@@ -1281,7 +1283,8 @@ function statusText() {
   const safety = s.safety;
   const lock = safety.manualLock ? ` LOCKED: ${safety.manualLock.reason}` : safety.cooldownUntil ? ` Cooldown until ${safety.cooldownUntil}.` : '';
   const apolloReady = apollo.status().apiKeyReady && apollo.status().webhookReady;
-  return `LinkedIn Account Research: dedicated LinkedIn-only routing is ready. Primary backend: stickerdaniel/linkedin-mcp-server through loopback-only MCP; Apollo company-head selection/contact enrichment ${apolloReady ? 'ready' : 'needs API key + webhook setup'}. Optional joeyism fallback ${s.joeyism.enabled ? (s.joeyism.sessionReady ? 'enabled and session-ready' : 'enabled but needs manual session setup') : 'disabled'}. Usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour, ${safety.dailyUsed}/${safety.dailyMax} today. Minimum call gap ${Math.round(safety.minGapMs / 1000)}s, deep-profile cap ${safety.deepProfilesPerMission}/mission. LinkedIn write actions are disabled.${lock}`;
+  const testMode = safety.localBudgetBypass ? ' TEMP TEST MODE: local burst/hourly/daily budgets are bypassed; real LinkedIn cooldowns, checkpoints and write-action blocks remain enforced.' : '';
+  return `LinkedIn Account Research: dedicated LinkedIn-only routing is ready. Primary backend: stickerdaniel/linkedin-mcp-server through loopback-only MCP; Apollo company-head selection/contact enrichment ${apolloReady ? 'ready' : 'needs API key + webhook setup'}. Optional joeyism fallback ${s.joeyism.enabled ? (s.joeyism.sessionReady ? 'enabled and session-ready' : 'enabled but needs manual session setup') : 'disabled'}. Usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour, ${safety.dailyUsed}/${safety.dailyMax} today. Minimum call gap ${Math.round(safety.minGapMs / 1000)}s, deep-profile cap ${safety.deepProfilesPerMission}/mission. LinkedIn write actions are disabled.${testMode}${lock}`;
 }
 
 function formatMission(mission) {
