@@ -1708,6 +1708,110 @@ async function prepareApolloCompanyContacts(missionId) {
   return { mission, selected: selected.length, unresolved: unresolved.length };
 }
 
+function verifiedRecordSnapshot(record) {
+  return {
+    name: record?.name || '',
+    company: record?.company || '',
+    role: record?.role || '',
+    jobId: record?.jobId || '',
+    jobUrl: record?.jobUrl || '',
+    linkedin: record?.linkedin || '',
+    location: record?.location || '',
+    locationEvidenceSource: record?.locationEvidenceSource || '',
+    workType: record?.workType || '',
+    workTypeEvidenceSource: record?.workTypeEvidenceSource || '',
+    employeeCount: record?.employeeCount || null,
+    applicants: record?.applicants || '',
+    relevanceScore: Number(record?.relevanceScore || 0),
+    hiringSignal: record?.hiringSignal || '',
+    website: record?.website || '',
+    email: record?.email || '',
+    phone: record?.phone || '',
+    sourceEvidence: [...new Set(record?.sourceEvidence || [])],
+  };
+}
+
+function isExistingSheetFillRequest(text) {
+  const value = String(text || '').trim();
+  const url = sheets.extractSheetUrl(value);
+  if (!url) return false;
+  if (isRequest(value)) return false;
+  const mission = [...loadState().missions].reverse().find((item) =>
+    item?.status === 'completed' && Array.isArray(item?.verifiedRecords) && item.verifiedRecords.length
+  );
+  if (!mission) return false;
+  return /\b(?:fill|put|write|copy|add|append|use|move|send)\b/i.test(value)
+    || /^https:\/\/docs\.google\.com\/spreadsheets\//i.test(value);
+}
+
+async function fillLatestMissionIntoSheet(sheetUrl) {
+  const state = loadState();
+  const mission = [...state.missions].reverse().find((item) =>
+    item?.status === 'completed' && Array.isArray(item?.verifiedRecords) && item.verifiedRecords.length
+  );
+  if (!mission) {
+    const error = new Error('No completed LinkedIn mission with reusable verified records is available.');
+    error.code = 'LINKEDIN_VERIFIED_RECORDS_NOT_FOUND';
+    throw error;
+  }
+
+  const request = { ...mission.request, destinationSheetUrl: sheetUrl };
+  const destination = await inspectDestinationSheet(sheetUrl, request);
+  const outputHeaders = ensureHeaders(destination.headers, request);
+  const storageHeaders = [...outputHeaders];
+  const needsInternalContact = request.entityMode === 'company' && request.wantsContacts;
+  if (needsInternalContact && !storageHeaders.some((header) => headerKey(header) === 'contactLinkedin')) {
+    storageHeaders.push(INTERNAL_CONTACT_HEADER);
+  }
+  await syncDestinationHeaders(destination, storageHeaders);
+
+  const existingKeys = destinationExistingKeys(destination, storageHeaders);
+  const records = mission.verifiedRecords.filter((record) => {
+    const keys = recordDestinationKeys(record);
+    const duplicate = keys.some((key) => existingKeys.has(key));
+    if (!duplicate) for (const key of keys) existingKeys.add(key);
+    return !duplicate;
+  });
+  const rows = records.map((record) => rowFor(record, storageHeaders));
+  const firstAppendedRow = Math.max(destination.lastNonEmptyRow + 1, destination.headerRowNumber + 1);
+  const added = await appendRows(destination.spreadsheetId, destination.sheetName, rows);
+
+  if (needsInternalContact) {
+    const helperIndex = storageHeaders.findIndex((header) => headerKey(header) === 'contactLinkedin');
+    if (helperIndex >= 0) {
+      try { await hideInternalContactColumn(destination.spreadsheetId, destination.sheetId, helperIndex); } catch {}
+    }
+  }
+
+  mission.copiedToSheet = {
+    url: sheetUrl,
+    sheetName: destination.sheetName,
+    added,
+    skippedDuplicates: mission.verifiedRecords.length - records.length,
+    copiedAt: nowIso(),
+  };
+  if (request.entityMode === 'company' && records.length) {
+    mission.copiedContactTargets = records.map((record, index) => ({
+      rowNumber: firstAppendedRow + index,
+      company: record.company,
+      companyLinkedin: record.linkedin,
+      website: record.website || '',
+      domain: websiteDomain(record.website),
+    }));
+  }
+  saveState(state);
+
+  return {
+    ok: true,
+    sheetUrl,
+    spreadsheetTitle: destination.spreadsheetTitle,
+    sheetName: destination.sheetName,
+    added,
+    skippedDuplicates: mission.verifiedRecords.length - records.length,
+    sourceMissionId: mission.id,
+  };
+}
+
 function rowFor(record, headers) {
   return headers.map((header) => {
     const key = headerKey(header);
@@ -1850,6 +1954,7 @@ async function run(request, headers) {
     mission.linkedinSearchWarning = researched.linkedinSearchWarning || null;
     mission.linkedinSearchWarnings = Array.isArray(researched.linkedinSearchWarnings) ? researched.linkedinSearchWarnings : [];
     mission.rejectedRecords = Array.isArray(researched.rejectedRecords) ? researched.rejectedRecords : [];
+    mission.verifiedRecords = researched.records.map(verifiedRecordSnapshot);
     mission.safety = policy.status();
 
     const latest = loadState();
@@ -1983,6 +2088,9 @@ module.exports = {
   personMission,
   exactMission,
   contactRemark,
+  verifiedRecordSnapshot,
+  isExistingSheetFillRequest,
+  fillLatestMissionIntoSheet,
   rowFor,
   destinationHeaderCandidate,
   destinationExistingKeys,
