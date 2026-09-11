@@ -6,6 +6,7 @@ const policy = require('../core/linkedin-account-policy');
 const mcp = require('../core/linkedin-mcp-client');
 const joeyism = require('../core/linkedin-joeyism-bridge');
 const sheetOperator = require('../core/google-sheets-operator');
+const apollo = require('../core/apollo-enrichment');
 
 assert.equal(operator.isRequest('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra'), true);
 assert.equal(operator.isRequest('Find me 30 SAP recruiters on LinkedIn from Pune'), true);
@@ -28,7 +29,14 @@ assert.equal(filtered.filters.workType, 'remote');
 assert.equal(filtered.filters.datePosted, null);
 assert.equal(operator.parseRequest('Find SAP jobs on LinkedIn in Maharashtra remote past month').filters.datePosted, 'past_month');
 assert.equal(filtered.location, 'Maharashtra');
+assert.equal(filtered.locationScope, 'job');
 assert.equal(filtered.topic, 'SAP');
+const companyLocationRequest = operator.parseRequest('Find companies on LinkedIn that are based in Maharashtra and hiring SAP');
+assert.equal(companyLocationRequest.locationScope, 'company');
+const sheetRequest = operator.parseRequest('Find me 20 companies on LinkedIn with SAP role openings, remote, located in Maharashtra and fill https://docs.google.com/spreadsheets/d/testSheet123/edit#gid=987');
+assert.equal(sheetRequest.destinationSheetUrl, 'https://docs.google.com/spreadsheets/d/testSheet123/edit#gid=987');
+assert.equal(sheetRequest.topic, 'SAP');
+assert.equal(sheetOperator.sheetGid(sheetRequest.destinationSheetUrl), 987);
 assert.equal(operator.parseCount('Find companies on LinkedIn under 1000 employees'), 25);
 
 const person = operator.parseRequest('Find me 30 SAP recruiters on LinkedIn from Pune with email and phone');
@@ -79,6 +87,22 @@ const priorityMap = new Map([
 ]);
 assert.equal(operator.prioritizedJobIds(priorityMap)[0], '4252026496');
 assert.ok(operator.jobIdPriority(priorityMap.get('4252026496')) > operator.jobIdPriority(priorityMap.get('4252026500')));
+const retainedTrust = operator.searchFilterTrust(
+  { job_ids: ['4252026496'], sections: { search_results: 'ok' } },
+  { keyword: 'SAP', location: 'Pune' },
+  filtered
+);
+assert.equal(retainedTrust.trustedLocation, 'Pune');
+assert.equal(retainedTrust.trustedWorkType, 'remote');
+const droppedTrust = operator.searchFilterTrust(
+  { section_errors: { search_results: { error_type: 'filters_dropped', error_message: 'LinkedIn did not keep location, work type, so the results are broader.' } } },
+  { keyword: 'SAP', location: 'Pune' },
+  filtered
+);
+assert.equal(droppedTrust.trustedLocation, '');
+assert.equal(droppedTrust.trustedWorkType, '');
+assert.ok(operator.droppedSearchFilters({ section_errors: { search_results: { error_type: 'filters_dropped', error_message: 'LinkedIn did not keep location and work type.' } } }).has('location'));
+assert.ok(operator.droppedSearchFilters({ section_errors: { search_results: { error_type: 'filters_dropped', error_message: 'LinkedIn did not keep location and work type.' } } }).has('work_type'));
 assert.equal(operator.jobTitleFromDetail(mockJobDetail), 'SAP FICO Consultant');
 const sapVariants = operator.sapRoleKeywordVariants('SAP');
 assert.ok(sapVariants.includes('SAP'));
@@ -89,6 +113,9 @@ assert.equal(sapPlan[0].location, 'Maharashtra');
 assert.equal(sapPlan[1].location, 'Pune');
 assert.equal(sapPlan[2].location, 'Mumbai');
 assert.equal(sapPlan[3].location, 'Navi Mumbai');
+assert.equal(sapPlan[4].location, 'Nagpur');
+assert.equal(sapPlan[5].location, 'Thane');
+assert.equal(sapPlan[6].location, 'Nashik');
 assert.ok(sapPlan.some((item) => item.keyword === 'SAP FICO'));
 assert.ok(sapPlan.some((item) => item.keyword === 'SAP ABAP'));
 assert.equal(operator.employeeCountFromText('Company size 501-1,000 employees').max, 1000);
@@ -109,6 +136,27 @@ assert.equal(operator.topicEvidenceMatches(strictPass, 'SAP in .'), true);
 assert.deepEqual(operator.companyFilterFailures(strictPass, filtered), []);
 assert.equal(operator.passesCompanyHardFilters(strictPass, filtered), true);
 assert.deepEqual(operator.jobLevelFailures(strictPass, filtered), []);
+assert.deepEqual(operator.companyFilterFailures({ ...strictPass, relevanceScore: 1 }, filtered), []);
+assert.equal(operator.detectWorkType('We build hybrid cloud infrastructure. This role is fully remote.'), 'remote');
+
+const trustedSearchOnly = {
+  company: 'Trusted Search Systems',
+  role: 'ABAP Developer',
+  employeeCount: { min: 201, max: 500, label: '201-500' },
+  jobEvidenceText: 'ABAP Developer\nEnterprise application development',
+  hiringVerified: true,
+  searchProvenance: {
+    title: 'ABAP Developer',
+    keywords: ['SAP ABAP'],
+    trustedLocations: ['Pune'],
+    trustedWorkTypes: ['remote'],
+  },
+};
+assert.equal(operator.topicEvidenceMatches(trustedSearchOnly, 'SAP'), true);
+assert.equal(operator.locationEvidenceMatches(trustedSearchOnly, 'Maharashtra', { allowJobEvidence: true, allowCompanyEvidence: false }), true);
+assert.equal(operator.workTypeEvidenceMatches(trustedSearchOnly, 'remote'), true);
+assert.deepEqual(operator.jobLevelFailures(trustedSearchOnly, filtered), []);
+assert.equal(operator.workTypeEvidenceDetails(trustedSearchOnly, 'remote').source, 'linkedin_search_filter');
 const hiringIndependentOfTopic = { ...strictPass, hiringVerified: true, jobEvidenceText: 'Oracle Cloud Consultant · Remote · Maharashtra, India' };
 assert.ok(operator.jobLevelFailures(hiringIndependentOfTopic, filtered).includes('topic'));
 assert.ok(!operator.jobLevelFailures(hiringIndependentOfTopic, filtered).includes('hiring'));
@@ -151,6 +199,24 @@ assert.ok(dynamicHeaders.includes('LOCATION'));
 assert.ok(dynamicHeaders.includes('WORK TYPE'));
 assert.ok(dynamicHeaders.includes('EMPLOYEES'));
 assert.ok(dynamicHeaders.includes('HIRING SIGNAL'));
+assert.equal(operator.headerKey('Business Name'), 'company');
+assert.equal(operator.headerKey('Job Opening Link'), 'jobLink');
+assert.equal(operator.headerKey('Work Mode'), 'workType');
+const customHeader = operator.destinationHeaderCandidate([
+  ['notes only'],
+  ['Business Name', 'Company Profile', 'Job Opening Link', 'Work Mode'],
+]);
+assert.equal(customHeader.rowNumber, 2);
+const destinationKeys = operator.destinationExistingKeys({
+  headerRowNumber: 1,
+  rows: [
+    ['Business Name', 'Company Profile', 'Job Opening Link'],
+    ['Acme', 'https://www.linkedin.com/company/acme', 'https://www.linkedin.com/jobs/view/4252026496'],
+  ],
+}, ['Business Name', 'Company Profile', 'Job Opening Link']);
+assert.ok(destinationKeys.has('linkedin:https://www.linkedin.com/company/acme'));
+assert.ok(destinationKeys.has('job:https://www.linkedin.com/jobs/view/4252026496'));
+assert.ok(operator.recordDestinationKeys({ company: 'Acme', linkedin: 'https://www.linkedin.com/company/acme' }).includes('company:acme'));
 
 const storageHeaders = [...operator.COMPANY_HEADERS, operator.INTERNAL_CONTACT_HEADER];
 const storageRow = operator.rowFor({
@@ -184,7 +250,7 @@ assert.equal(typeof limits.localBudgetBypass, 'boolean');
 const previousBudgetBypass = process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = '1';
 assert.equal(policy.settings().localBudgetBypass, true);
-assert.ok(policy.settings().testMissionToolMax >= 60);
+assert.ok(policy.settings().testMissionToolMax >= 100);
 if (previousBudgetBypass == null) delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 else process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = previousBudgetBypass;
 assert.ok(limits.minGapMs >= 5000);
@@ -198,6 +264,10 @@ assert.ok(limits.maxJobPages <= 3);
 assert.equal(joeyism.equivalentTool('person'), 'get_person_profile');
 assert.equal(joeyism.equivalentTool('company'), 'get_company_profile');
 assert.equal(joeyism.equivalentTool('jobs'), 'search_jobs');
+assert.equal(apollo.decisionPriority('Head of Talent Acquisition', 'hiring'), 1);
+assert.equal(apollo.decisionPriority('Talent Acquisition Manager', 'hiring'), 2);
+assert.equal(apollo.decisionPriority('Technical Recruiter', 'hiring'), 3);
+assert.ok(apollo.decisionPriority('Founder', 'hiring') > apollo.decisionPriority('Head of Talent Acquisition', 'hiring'));
 
 const parsed = mcp.parsePayload('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n');
 assert.equal(parsed.result.ok, true);
@@ -213,4 +283,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, target-driven ranked SAP discovery, adaptive SAP role/city discovery, job-first hiring linkage, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, target-driven ranked SAP discovery, trusted retained-filter evidence, adaptive SAP role/city discovery, criteria-only hard gates, existing-Sheet fill/dedupe, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
