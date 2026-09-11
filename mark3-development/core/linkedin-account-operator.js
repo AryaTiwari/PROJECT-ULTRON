@@ -611,9 +611,12 @@ function detectWorkType(text) {
     { value: 'remote', regex: /workplace\s+type\s*[:·-]?\s*remote\b/i },
     { value: 'hybrid', regex: /workplace\s+type\s*[:·-]?\s*hybrid\b/i },
     { value: 'on_site', regex: /workplace\s+type\s*[:·-]?\s*on[- ]?site\b/i },
-    { value: 'remote', regex: /(?:^|\n)\s*remote\s*(?:$|\n)/im },
-    { value: 'hybrid', regex: /(?:^|\n)\s*hybrid\s*(?:$|\n)/im },
-    { value: 'on_site', regex: /(?:^|\n)\s*on[- ]?site\s*(?:$|\n)/im },
+    { value: 'remote', regex: /(?:^|\n)\s*remote(?:\s*\([^\n)]+\))?\s*(?:$|\n)/im },
+    { value: 'hybrid', regex: /(?:^|\n)\s*hybrid(?:\s*\([^\n)]+\))?\s*(?:$|\n)/im },
+    { value: 'on_site', regex: /(?:^|\n)\s*on[- ]?site(?:\s*\([^\n)]+\))?\s*(?:$|\n)/im },
+    { value: 'remote', regex: /(?:^|[·|,])\s*remote\s*(?=$|[·|,\n])/im },
+    { value: 'hybrid', regex: /(?:^|[·|,])\s*hybrid\s*(?=$|[·|,\n])/im },
+    { value: 'on_site', regex: /(?:^|[·|,])\s*on[- ]?site\s*(?=$|[·|,\n])/im },
     { value: 'remote', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+(?:fully\s+)?remote\b/i },
     { value: 'hybrid', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+hybrid\b/i },
     { value: 'on_site', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+on[- ]?site\b/i },
@@ -715,7 +718,728 @@ function topicEvidenceMatches(record, topic) {
       const titleEvidence = [record?.role, record?.searchProvenance?.title].filter(Boolean).join(' ');
       if (/\b(?:ABAP|FICO|S\/?4HANA|HANA|SuccessFactors|Ariba)\b/i.test(titleEvidence)) return true;
       const keywords = Array.isArray(record?.searchProvenance?.keywords) ? record.searchProvenance.keywords : [];
-      if (/\bBasis\b/i.test(titleEvidence) && keywords.some((value) => /^SAP\s+Basis$/i.test(String(value)))) return true;
+      const queryBackedModules = ['Basis', 'MM', 'SD', 'EWM', 'TM', 'BW', 'BPC'];
+      for (const module of queryBackedModules) {
+        if (containsEvidenceTerm(titleEvidence, module)
+            && keywords.some((value) => new RegExp(`^SAP\\s+${evidenceRegexEscape(module)}const fs = require('fs');
+const path = require('path');
+const googleAuth = require('./google-sheets-auth');
+const sheets = require('./google-sheets-operator');
+const v2 = require('./lead-workspace-operator-v2');
+const linkedinPublic = require('./linkedin-public-research');
+const mcp = require('./linkedin-mcp-client');
+const joeyism = require('./linkedin-joeyism-bridge');
+const policy = require('./linkedin-account-policy');
+const apollo = require('./apollo-enrichment');
+const config = require('./config');
+
+const API = 'https://sheets.googleapis.com/v4/spreadsheets';
+const STATE_FILE = path.join(config.projectRoot, '.ultron', 'linkedin-account', 'operator-state.json');
+const PENDING_TTL_MS = 45 * 60 * 1000;
+
+const COMPANY_HEADERS = ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS'];
+const PERSON_HEADERS = ['Name', 'Company', 'Role', 'LinkedIn', 'Location', 'Post Details', 'Email', 'Phone No', 'Source', 'Lead Score'];
+const INTERNAL_CONTACT_HEADER = '__ULTRON CONTACT LINKEDIN';
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function loadState() {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return { version: 1, pending: null, missions: [] };
+    const parsed = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    return { version: 1, pending: null, missions: [], ...parsed, missions: Array.isArray(parsed.missions) ? parsed.missions : [] };
+  } catch {
+    return { version: 1, pending: null, missions: [] };
+  }
+}
+
+function saveState(state) {
+  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
+  try { fs.chmodSync(STATE_FILE, 0o600); } catch {}
+}
+
+function isRequest(text) {
+  const value = String(text || '').trim();
+  if (!/linkedin\.com\/(?:in|company)\//i.test(value) && !/\blinkedin\b/i.test(value)) return false;
+  if (/\b(?:status|health|doctor|setup|login|unlock)\b/i.test(value) && !/\b(?:find|get|scrape|research|source|bring|collect|search|list)\b/i.test(value)) return false;
+  return /\b(?:find|get|scrape|research|source|bring|collect|search|list|show|extract|companies|company|people|profiles?|recruiters?|founders?|hiring)\b/i.test(value)
+    || /linkedin\.com\/(?:in|company)\//i.test(value);
+}
+
+function parseCount(text) {
+  const value = String(text || '');
+  const match = value.match(/\b(?:find|get|bring|research|source|collect|search|list|show|extract)\s+(?:me\s+)?(\d{1,3})\b/i)
+    || value.match(/\b(\d{1,3})\s+(?:companies|company|people|profiles?|professionals?|recruiters?|founders?|leads?)\b/i);
+  return Math.max(1, Math.min(100, match ? Number(match[1]) : 25));
+}
+
+function wantsContacts(text) {
+  return /\b(?:email|e-mail|phone|mobile|number|contact info|contact details?)\b/i.test(String(text || ''));
+}
+
+function parseEmployeeRange(text) {
+  const value = String(text || '');
+  const range = value.match(/\b(\d[\d,]*)\s*(?:-|to)\s*(\d[\d,]*)\s+employees?\b/i);
+  if (range) return { min: Number(range[1].replace(/,/g, '')), max: Number(range[2].replace(/,/g, '')) };
+  const max = value.match(/\b(?:under|below|fewer than|less than|up to|maximum|max)\s*(\d[\d,]*)\s+employees?\b/i);
+  const min = value.match(/\b(?:over|above|more than|at least|minimum|min)\s*(\d[\d,]*)\s+employees?\b/i);
+  return {
+    min: min ? Number(min[1].replace(/,/g, '')) : null,
+    max: max ? Number(max[1].replace(/,/g, '')) : null,
+  };
+}
+
+function parseFilters(text) {
+  const value = String(text || '');
+  const employeeRange = parseEmployeeRange(value);
+  const workType = /\bremote\b/i.test(value) ? 'remote'
+    : /\bhybrid\b/i.test(value) ? 'hybrid'
+      : /\b(?:on[- ]?site|in[- ]?office)\b/i.test(value) ? 'on_site' : null;
+  const jobType = /\bpart[- ]?time\b/i.test(value) ? 'part_time'
+    : /\bcontract\b/i.test(value) ? 'contract'
+      : /\bintern(?:ship)?\b/i.test(value) ? 'internship'
+        : /\bfull[- ]?time\b/i.test(value) ? 'full_time' : null;
+  const experienceLevel = /\bentry[- ]?level\b/i.test(value) ? 'entry'
+    : /\bassociate\b/i.test(value) ? 'associate'
+      : /\bmid[- ]?senior\b/i.test(value) ? 'mid_senior'
+        : /\bexecutive\b/i.test(value) ? 'executive' : null;
+  const datePosted = /\bpast\s+24\s+hours?\b|\blast\s+24\s+hours?\b/i.test(value) ? 'past_24_hours'
+    : /\bpast\s+week\b|\blast\s+week\b/i.test(value) ? 'past_week'
+      : /\bpast\s+month\b|\blast\s+month\b/i.test(value) ? 'past_month' : null;
+  return {
+    employeeMin: Number.isFinite(employeeRange.min) ? employeeRange.min : null,
+    employeeMax: Number.isFinite(employeeRange.max) ? employeeRange.max : null,
+    workType,
+    jobType,
+    experienceLevel,
+    datePosted,
+    easyApply: /\beasy apply\b/i.test(value),
+  };
+}
+
+function requestTopic(text, entityMode, location) {
+  let value = linkedinPublic.coreTopic(text, entityMode);
+  value = value
+    .replace(/\b(?:under|below|fewer than|less than|up to|maximum|max|over|above|more than|at least|minimum|min)\s*\d[\d,]*\s+employees?\b/gi, ' ')
+    .replace(/\b(?:under|below|fewer than|less than|up to|maximum|max|over|above|more than|at least|minimum|min)\s*\d[\d,]*\b/gi, ' ')
+    .replace(/\b\d[\d,]*\s*(?:-|to)\s*\d[\d,]*\s+employees?\b/gi, ' ')
+    .replace(/\b(?:remote|hybrid|on[- ]?site|in[- ]?office|easy apply|full[- ]?time|part[- ]?time|contract|internship)\b/gi, ' ')
+    .replace(/\b(?:roles?|positions?|should be|must be|located|location|with|employees?|and|from|in|at|near|around)\b/gi, ' ')
+    .replace(/[.,;:!?()[\]{}]+/g, ' ');
+  if (location) {
+    value = value.replace(
+      new RegExp(`\\b${String(location).replace(/[.*+?^$(){}|[\]\\]/g, '\\$&')}\\b`, 'gi'),
+      ' ',
+    );
+  }
+  value = value.replace(/\s+/g, ' ').trim();
+
+  // Generic SAP requests must canonicalize to "SAP". Preserve a module only
+  // when the user explicitly named one, e.g. SAP FICO or SAP ABAP.
+  if (/\bsap\b/i.test(value)) {
+    const module = value.match(/\bsap\s+(fico|mm|sd|abap|basis|s\/?4hana|successfactors|hana|bw|bpc|ariba|ewm|tm)\b/i);
+    if (!module) return 'SAP';
+    const raw = module[1];
+    return /^s\/?4hana$/i.test(raw) ? 'SAP S/4HANA' : `SAP ${raw.toUpperCase()}`;
+  }
+
+  return value || (entityMode === 'company' ? 'companies' : 'professionals');
+}
+
+function locationScopeFromText(text, hiring = false) {
+  const value = String(text || '');
+  if (/\bcompanies?\s+(?:that\s+are\s+)?(?:based|headquartered|located)\b/i.test(value)
+      || /\b(?:company|employer)\s+(?:headquarters?|hq)\b/i.test(value)) {
+    return 'company';
+  }
+  return hiring ? 'job' : 'company';
+}
+
+function parseRequest(text) {
+  const value = String(text || '').trim();
+  if (!isRequest(value)) return null;
+  const destinationSheetUrl = sheets.extractSheetUrl(value);
+  const criteriaText = String(destinationSheetUrl ? value.replace(destinationSheetUrl, ' ') : value)
+    .replace(/\b(?:and\s+)?(?:put|write|add|fill|save|append)\s+(?:the\s+)?(?:results?|companies|leads?|rows?)?\s*(?:into|in|to)?\s*(?:my|this|the)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const entity = linkedinPublic.normalizeLinkedInEntityUrl(criteriaText);
+  const entityMode = entity?.type || linkedinPublic.entityModeFromText(criteriaText);
+  const location = linkedinPublic.locationFromText(criteriaText);
+  const hiring = /\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?|roles?)\b/i.test(criteriaText);
+  return {
+    originalMessage: value,
+    criteriaText,
+    count: entity ? 1 : parseCount(criteriaText),
+    entityMode,
+    exactUrl: entity?.url || null,
+    exactSlug: entity?.slug || null,
+    location,
+    locationScope: locationScopeFromText(criteriaText, hiring),
+    hiring,
+    topic: requestTopic(criteriaText, entityMode, location),
+    wantsContacts: true,
+    filters: parseFilters(criteriaText),
+    destinationSheetUrl,
+    explicitHeaders: v2.headersFromText(value),
+    usePrevious: /\b(?:use|same as|like)\b[\s\S]{0,30}\b(?:previous|last)\b|\bprevious format\b|\bsame format\b/i.test(value),
+    useDefault: /\b(?:default|standard)\s+(?:format|layout|headers?|columns?)\b/i.test(value),
+  };
+}
+
+function normalizeHeader(value) {
+  return String(value || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function headerKey(value) {
+  const h = normalizeHeader(value);
+  if (/ultron contact linkedin/.test(h)) return 'contactLinkedin';
+  if (/^(?:person or company name|name|person|full name|contact name)$/.test(h)) return 'name';
+  if (/^(?:company|company name|organization|organisation|organization name|organisation name|employer|business|business name)$/.test(h)) return 'company';
+  if (/^(?:role|title|job title|job role|sap role|opening|job opening|position)$/.test(h)) return 'role';
+  if (/^(?:job link|job url|linkedin job|linkedin job link|job posting link|job opening link|opening url|posting url)$/.test(h)) return 'jobLink';
+  if (/linkedin|company link|company url|company profile/.test(h)) return 'linkedin';
+  if (/^(?:location|job location|city|region|state)$/.test(h)) return 'location';
+  if (/^(?:hiring signal|job signal|hiring activity|hiring evidence|job evidence)$/.test(h)) return 'hiring';
+  if (/^(?:work type|workplace type|workplace|remote status|work mode|working mode)$/.test(h)) return 'workType';
+  if (/^(?:employees?|employee count|company size|headcount|team size)$/.test(h)) return 'employees';
+  if (/^(?:post details|details|description|profile details|linkedin details|notes)$/.test(h)) return 'details';
+  if (/^(?:website|company website|site)$/.test(h)) return 'website';
+  if (/phone|mobile|contact number|telephone/.test(h)) return 'phone';
+  if (/email|e mail/.test(h)) return 'email';
+  if (/^(?:remarks?|contact remarks?|contact person|contact identity)$/.test(h)) return 'remarks';
+  if (/applicants?/.test(h)) return 'applicants';
+  if (/^(?:source|source url|linkedin source)$/.test(h)) return 'source';
+  if (/^(?:lead score|score|quality|relevance)$/.test(h)) return 'score';
+  return null;
+}
+
+function ensureHeaders(headers, request) {
+  const defaults = request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS;
+  const source = Array.isArray(headers) && headers.length ? headers : defaults;
+  const out = source.map((value) => String(value ?? '').trim()).slice(0, 30);
+  const keys = new Set(out.map(headerKey).filter(Boolean));
+  const needed = request.entityMode === 'company'
+    ? [['name', 'NAME'], ['company', 'COMPANY NAME'], ['linkedin', 'COMPANY LINK'], ['applicants', 'NO. OF APPLICANTS'], ['phone', 'PHONE NUMBER'], ['email', 'EMAIL']]
+    : [['name', 'Name'], ['company', 'Company'], ['role', 'Role'], ['linkedin', 'LinkedIn'], ['location', 'Location'], ['details', 'Post Details'], ['source', 'Source'], ['score', 'Lead Score']];
+  if (request.entityMode === 'company') {
+    if (request.hiring) needed.push(['role', 'SAP ROLE'], ['jobLink', 'JOB LINK']);
+    if (request.location) needed.push(['location', 'LOCATION']);
+    if (request.filters?.workType) needed.push(['workType', 'WORK TYPE']);
+    if (request.filters?.employeeMin != null || request.filters?.employeeMax != null) needed.push(['employees', 'EMPLOYEES']);
+    if (request.hiring) needed.push(['hiring', 'HIRING SIGNAL']);
+  }
+  if (request.wantsContacts) {
+    needed.push(['email', 'Email'], ['phone', 'Phone No']);
+  }
+  for (const [key, label] of needed) if (!keys.has(key)) { out.push(label); keys.add(key); }
+  if (request.entityMode === 'company' && !keys.has('remarks')) {
+    const emailIndex = out.findIndex((header) => headerKey(header) === 'email');
+    out.splice(emailIndex >= 0 ? emailIndex + 1 : out.length, 0, 'REMARKS');
+  }
+  return out.slice(0, 30);
+}
+
+function pendingRequest() {
+  const state = loadState();
+  if (!state.pending) return null;
+  const age = Date.now() - Date.parse(state.pending.createdAt || 0);
+  if (!Number.isFinite(age) || age > PENDING_TTL_MS) {
+    state.pending = null;
+    saveState(state);
+    return null;
+  }
+  return state.pending;
+}
+
+function setPending(request, template) {
+  const state = loadState();
+  state.pending = {
+    ...request,
+    suggestedHeaders: template?.headers || (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS),
+    suggestedSourceTitle: template?.sourceTitle || null,
+    createdAt: nowIso(),
+  };
+  saveState(state);
+  return state.pending;
+}
+
+function clearPending() {
+  const state = loadState();
+  state.pending = null;
+  saveState(state);
+}
+
+function destinationHeaderCandidate(rows) {
+  let best = null;
+  for (let r = 0; r < Math.min(rows.length, 30); r++) {
+    const row = Array.isArray(rows[r]) ? rows[r] : [];
+    const nonEmpty = row.filter((value) => String(value ?? '').trim()).length;
+    if (!nonEmpty) continue;
+    const recognized = row.map(headerKey).filter(Boolean).length;
+    const score = recognized * 20 + Math.min(nonEmpty, 12) - r * 0.1;
+    if (!best || score > best.score) {
+      best = { rowIndex: r, rowNumber: r + 1, headers: row.map((value) => String(value ?? '').trim()), recognized, score };
+    }
+  }
+  return best;
+}
+
+async function inspectDestinationSheet(url, request) {
+  const spreadsheetId = sheets.spreadsheetId(url);
+  const meta = await sheets.metadata(spreadsheetId);
+  const requestedGid = sheets.sheetGid(url);
+  const tabs = [...(meta.sheets || [])].sort((a, b) => {
+    if (requestedGid != null) {
+      if (a?.properties?.sheetId === requestedGid) return -1;
+      if (b?.properties?.sheetId === requestedGid) return 1;
+    }
+    return Number(a?.properties?.index || 0) - Number(b?.properties?.index || 0);
+  });
+
+  let chosen = null;
+  for (const tab of tabs) {
+    const title = tab?.properties?.title;
+    if (!title) continue;
+    const preview = await sheets.values(spreadsheetId, `${sheets.quoteSheet(title)}!A1:ZZ80`);
+    const candidate = destinationHeaderCandidate(preview);
+    if (candidate && (candidate.recognized > 0 || candidate.headers.filter(Boolean).length >= 2)) {
+      chosen = { ...candidate, sheetName: title, sheetId: tab.properties.sheetId, preview };
+      break;
+    }
+    if (!chosen && preview.length === 0) {
+      chosen = { rowIndex: 0, rowNumber: 1, headers: [], recognized: 0, score: 0, sheetName: title, sheetId: tab.properties.sheetId, preview: [] };
+      if (requestedGid != null && tab.properties.sheetId === requestedGid) break;
+    }
+  }
+
+  if (!chosen) {
+    const error = new Error('The provided Google Sheet does not contain a usable header row, and ULTRON stopped rather than guessing where to write.');
+    error.code = 'LINKEDIN_DESTINATION_HEADERS_NOT_FOUND';
+    throw error;
+  }
+
+  const baseHeaders = chosen.headers.some(Boolean)
+    ? chosen.headers
+    : (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS);
+  const headers = ensureHeaders(baseHeaders, request);
+  const fullRows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(chosen.sheetName)}!A:ZZ`);
+  let lastNonEmptyRow = 0;
+  for (let i = 0; i < fullRows.length; i++) {
+    if ((fullRows[i] || []).some((value) => String(value ?? '').trim())) lastNonEmptyRow = i + 1;
+  }
+
+  return {
+    spreadsheetId,
+    spreadsheetTitle: meta?.properties?.title || 'Google Sheet',
+    sheetName: chosen.sheetName,
+    sheetId: chosen.sheetId,
+    headerRowNumber: chosen.rowNumber,
+    originalHeaders: chosen.headers,
+    headers,
+    rows: fullRows,
+    lastNonEmptyRow,
+    url,
+  };
+}
+
+async function syncDestinationHeaders(destination, headers) {
+  const changes = [];
+  for (let index = 0; index < headers.length; index++) {
+    const current = String(destination.rows?.[destination.headerRowNumber - 1]?.[index] ?? '').trim();
+    const next = String(headers[index] ?? '').trim();
+    if (current !== next) {
+      changes.push({
+        range: sheets.cellRange(destination.sheetName, destination.headerRowNumber, index),
+        value: next,
+      });
+    }
+  }
+  if (changes.length) await sheets.writeCells(destination.spreadsheetId, changes);
+  destination.headers = headers;
+  destination.rows[destination.headerRowNumber - 1] = headers.slice();
+  return changes.length;
+}
+
+function destinationExistingKeys(destination, headers) {
+  const linkedinIndex = headers.findIndex((header) => headerKey(header) === 'linkedin');
+  const jobIndex = headers.findIndex((header) => headerKey(header) === 'jobLink');
+  const companyIndex = headers.findIndex((header) => headerKey(header) === 'company');
+  const keys = new Set();
+  for (let r = destination.headerRowNumber; r < (destination.rows || []).length; r++) {
+    const row = destination.rows[r] || [];
+    const linkedin = linkedinIndex >= 0 ? String(row[linkedinIndex] || '').trim().toLowerCase() : '';
+    const job = jobIndex >= 0 ? String(row[jobIndex] || '').trim().toLowerCase() : '';
+    const company = companyIndex >= 0 ? normalizeHeader(row[companyIndex]) : '';
+    if (linkedin) keys.add(`linkedin:${linkedin}`);
+    if (job) keys.add(`job:${job}`);
+    if (company) keys.add(`company:${company}`);
+  }
+  return keys;
+}
+
+function recordDestinationKeys(record) {
+  const keys = [];
+  if (record?.linkedin) keys.push(`linkedin:${String(record.linkedin).trim().toLowerCase()}`);
+  if (record?.jobUrl) keys.push(`job:${String(record.jobUrl).trim().toLowerCase()}`);
+  if (record?.company) keys.push(`company:${normalizeHeader(record.company)}`);
+  return keys.filter((key) => !/:$/.test(key));
+}
+
+async function prepare(request) {
+  if (request.destinationSheetUrl) {
+    const destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
+    const nextRequest = {
+      ...request,
+      destinationSheet: {
+        spreadsheetId: destination.spreadsheetId,
+        spreadsheetTitle: destination.spreadsheetTitle,
+        sheetName: destination.sheetName,
+        sheetId: destination.sheetId,
+        headerRowNumber: destination.headerRowNumber,
+      },
+    };
+    return { type: 'run', request: nextRequest, headers: destination.headers };
+  }
+  if (request.entityMode === 'company' && !request.explicitHeaders?.length && !request.usePrevious) {
+    return { type: 'run', request, headers: ensureHeaders([...COMPANY_HEADERS], request) };
+  }
+  if (request.exactUrl || request.explicitHeaders?.length || request.useDefault || request.usePrevious) {
+    let headers = request.explicitHeaders;
+    if (!headers && request.usePrevious) {
+      const template = v2.latestTemplate();
+      headers = template?.headers;
+    }
+    if (!headers) headers = request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS;
+    return { type: 'run', request, headers: ensureHeaders(headers, request) };
+  }
+  const template = v2.latestTemplate();
+  const pending = setPending(request, template);
+  const previous = template?.headers?.length ? v2.templatePreview(template) : 'none remembered yet';
+  const defaults = (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS).join(' | ');
+  return {
+    type: 'clarification',
+    pending,
+    text: `This is a dedicated LinkedIn-only mission. I will not use Google Jobs, Maps, TinyFish or SerpApi for discovery. Apollo may enrich only a LinkedIn-verified decision-maker after one-run approval. Previous sheet headings: ${previous}. LinkedIn default: ${defaults}. Use previous format, default format, send headers: ..., or send a Google Sheets URL and I will fill that sheet directly.`,
+  };
+}
+
+async function resolvePending(text) {
+  const pending = pendingRequest();
+  if (!pending) return null;
+  const value = String(text || '').trim();
+  if (/\b(?:cancel|stop|never mind|nevermind)\b/i.test(value)) {
+    clearPending();
+    return { type: 'cancelled', text: 'LinkedIn-only mission cancelled before account scraping started.' };
+  }
+  const destinationSheetUrl = sheets.extractSheetUrl(value);
+  if (destinationSheetUrl) {
+    const request = { ...pending, destinationSheetUrl };
+    clearPending();
+    const destination = await inspectDestinationSheet(destinationSheetUrl, request);
+    request.destinationSheet = {
+      spreadsheetId: destination.spreadsheetId,
+      spreadsheetTitle: destination.spreadsheetTitle,
+      sheetName: destination.sheetName,
+      sheetId: destination.sheetId,
+      headerRowNumber: destination.headerRowNumber,
+    };
+    return { type: 'run', request, headers: destination.headers };
+  }
+  const custom = v2.headersFromText(value);
+  if (custom) {
+    clearPending();
+    return { type: 'run', request: pending, headers: ensureHeaders(custom, pending) };
+  }
+  if (/\b(?:previous|last|same|use it|like before)\b/i.test(value)) {
+    clearPending();
+    return { type: 'run', request: pending, headers: ensureHeaders(pending.suggestedHeaders, pending) };
+  }
+  if (/\b(?:default|standard|linkedin default)\b/i.test(value)) {
+    clearPending();
+    const defaults = pending.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS;
+    return { type: 'run', request: pending, headers: ensureHeaders(defaults, pending) };
+  }
+  if (/\b(?:different|custom|new)\b[\s\S]{0,30}\b(?:format|headers?|columns?|layout)\b/i.test(value)) {
+    return { type: 'clarification', pending, text: 'Send the layout as: headers: NAME, COMPANY NAME, COMPANY LINK, NO. OF APPLICANTS, PHONE NUMBER, EMAIL, REMARKS.' };
+  }
+  return null;
+}
+
+function flattenText(value, depth = 0) {
+  if (depth > 5 || value == null) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map((item) => flattenText(item, depth + 1)).filter(Boolean).join('\n');
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .filter(([key]) => !/cookie|token|password|session/i.test(key))
+      .map(([, item]) => flattenText(item, depth + 1))
+      .filter(Boolean)
+      .join('\n');
+  }
+  return String(value);
+}
+
+function collectReferences(value, out = [], depth = 0) {
+  if (depth > 7 || value == null) return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectReferences(item, out, depth + 1);
+    return out;
+  }
+  if (typeof value !== 'object') return out;
+  const url = String(value.url || value.href || '').trim();
+  if (url) out.push({
+    url,
+    kind: String(value.kind || '').trim(),
+    text: String(value.text || value.label || value.title || value.aria_label || '').trim(),
+    context: String(value.context || value.heading || value.aria_label || '').trim(),
+  });
+  for (const [key, item] of Object.entries(value)) {
+    if (['url', 'href', 'text', 'label', 'title', 'context'].includes(key)) continue;
+    collectReferences(item, out, depth + 1);
+  }
+  return out;
+}
+
+function absoluteLinkedInUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) return 'https://www.linkedin.com' + raw;
+  return raw;
+}
+
+function linkedInReferences(result, entityMode = null) {
+  const refs = collectReferences(result);
+  const out = [];
+  const seen = new Set();
+  for (const ref of refs) {
+    const normalized = linkedinPublic.normalizeLinkedInEntityUrl(absoluteLinkedInUrl(ref.url), entityMode);
+    if (!normalized || seen.has(normalized.url)) continue;
+    seen.add(normalized.url);
+    out.push({ ...ref, ...normalized });
+  }
+  const raw = flattenText(result);
+  const regex = /https?:\/\/(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\/(?:in|company)\/[a-z0-9%._~-]+\/?/gi;
+  for (const match of raw.match(regex) || []) {
+    const normalized = linkedinPublic.normalizeLinkedInEntityUrl(match, entityMode);
+    if (!normalized || seen.has(normalized.url)) continue;
+    seen.add(normalized.url);
+    out.push({ url: normalized.url, kind: '', text: '', context: '', ...normalized });
+  }
+  return out;
+}
+
+function jobIdsFromResult(result) {
+  const direct = Array.isArray(result?.job_ids) ? result.job_ids : [];
+  const text = flattenText(result);
+  const fromUrls = [...text.matchAll(/linkedin\.com\/jobs\/view\/(?:[^\d\s/]*-)?(\d{6,})/gi)].map((match) => match[1]);
+  return [...new Set([...direct, ...fromUrls].map((value) => String(value || '').match(/\d{6,}/)?.[0]).filter(Boolean))];
+}
+
+function emailFromText(text) {
+  const match = String(text || '').match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
+  return match?.[0] || '';
+}
+
+function phoneFromText(text) {
+  const matches = String(text || '').match(/(?:\+?\d[\d\s().-]{7,}\d)/g) || [];
+  for (const value of matches) {
+    const digits = value.replace(/\D/g, '');
+    if (digits.length >= 10 && digits.length <= 15) return value.replace(/\s+/g, ' ').trim();
+  }
+  return '';
+}
+
+function websiteFromText(text) {
+  const matches = String(text || '').match(/https?:\/\/[^\s<>'")]+/gi) || [];
+  return matches.find((url) => !/linkedin\.com/i.test(url)) || '';
+}
+
+function compactNumber(value) {
+  const parsed = Number(String(value || '').replace(/,/g, ''));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function applicantCountFromText(text, company = '') {
+  const source = String(text || '');
+  const companyKey = String(company || '').trim();
+  const index = companyKey ? source.toLowerCase().indexOf(companyKey.toLowerCase()) : -1;
+  if (companyKey && index < 0) return '';
+  const scoped = companyKey ? source.slice(Math.max(0, index - 350), index + companyKey.length + 900) : source;
+  const match = scoped.match(/\b(\d[\d,]*\+?)\s+(?:people\s+clicked\s+apply|applicants?|applications?)\b/i);
+  return match?.[1] || '';
+}
+
+function employeeCountFromText(text) {
+  const source = String(text || '');
+  const range = source.match(/\b(\d[\d,]*)\s*(?:-|–|to)\s*(\d[\d,]*)\s+employees?\b/i);
+  if (range) return { min: compactNumber(range[1]), max: compactNumber(range[2]), label: `${range[1]}-${range[2]}` };
+  const exact = source.match(/\b(?:company size|employees?)\s*[:·-]?\s*(\d[\d,]*)\+?\b/i)
+    || source.match(/\b(\d[\d,]*)\+?\s+employees?\b/i);
+  if (!exact) return null;
+  const count = compactNumber(exact[1]);
+  return count == null ? null : { min: count, max: count, label: exact[1] };
+}
+
+function passesEmployeeFilter(record, filters = {}) {
+  if (filters.employeeMin == null && filters.employeeMax == null) return true;
+  const size = record.employeeCount;
+  if (!size) return false;
+  if (filters.employeeMin != null && Number(size.max) < filters.employeeMin) return false;
+  if (filters.employeeMax != null && Number(size.min) > filters.employeeMax) return false;
+  return true;
+}
+
+const LOCATION_REGION_ALIASES = {
+  maharashtra: [
+    'maharashtra', 'mumbai', 'navi mumbai', 'thane', 'pune', 'nagpur', 'nashik',
+    'aurangabad', 'chhatrapati sambhajinagar', 'kolhapur', 'solapur', 'amravati',
+    'satara', 'sangli', 'jalgaon', 'akola', 'latur', 'ratnagiri',
+  ],
+};
+
+function evidenceRegexEscape(value) {
+  return String(value || '').replace(/[.*+?^$(){}|[\]\\]/g, '\\$&');
+}
+
+function containsEvidenceTerm(text, term) {
+  const needle = String(term || '').trim();
+  if (!needle) return false;
+  return new RegExp(`\\b${evidenceRegexEscape(needle).replace(/\\ /g, '\\s+')}\\b`, 'i').test(String(text || ''));
+}
+
+function mergeEvidenceText(left, right, max = 12000) {
+  const parts = [left, right].map((value) => String(value || '').trim()).filter(Boolean);
+  return [...new Set(parts)].join('\n').slice(0, max);
+}
+
+function scopedCompanyEvidence(text, company, radius = 1400) {
+  const source = String(text || '');
+  const needle = String(company || '').trim();
+  if (!source || !needle) return '';
+  const lower = source.toLowerCase();
+  const at = lower.indexOf(needle.toLowerCase());
+  if (at < 0) return '';
+  return source.slice(Math.max(0, at - radius), Math.min(source.length, at + needle.length + radius));
+}
+
+function detectWorkType(text) {
+  const value = String(text || '');
+  const patterns = [
+    { value: 'remote', regex: /workplace\s+type\s*[:·-]?\s*remote\b/i },
+    { value: 'hybrid', regex: /workplace\s+type\s*[:·-]?\s*hybrid\b/i },
+    { value: 'on_site', regex: /workplace\s+type\s*[:·-]?\s*on[- ]?site\b/i },
+    { value: 'remote', regex: /(?:^|\n)\s*remote(?:\s*\([^\n)]+\))?\s*(?:$|\n)/im },
+    { value: 'hybrid', regex: /(?:^|\n)\s*hybrid(?:\s*\([^\n)]+\))?\s*(?:$|\n)/im },
+    { value: 'on_site', regex: /(?:^|\n)\s*on[- ]?site(?:\s*\([^\n)]+\))?\s*(?:$|\n)/im },
+    { value: 'remote', regex: /(?:^|[·|,])\s*remote\s*(?=$|[·|,\n])/im },
+    { value: 'hybrid', regex: /(?:^|[·|,])\s*hybrid\s*(?=$|[·|,\n])/im },
+    { value: 'on_site', regex: /(?:^|[·|,])\s*on[- ]?site\s*(?=$|[·|,\n])/im },
+    { value: 'remote', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+(?:fully\s+)?remote\b/i },
+    { value: 'hybrid', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+hybrid\b/i },
+    { value: 'on_site', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+on[- ]?site\b/i },
+    { value: 'remote', regex: /\bwork\s+from\s+(?:home|anywhere)\b/i },
+  ];
+  for (const item of patterns) if (item.regex.test(value)) return item.value;
+  return '';
+}
+
+function companyLocationEvidence(record) {
+  return [
+    record?.companyEvidenceText,
+    record?.companySearchEvidenceText,
+    record?.companyLocation,
+  ].filter(Boolean).join('\n');
+}
+
+function jobEvidence(record) {
+  return [
+    record?.role,
+    record?.searchProvenance?.title,
+    record?.jobEvidenceText,
+    record?.hiringSignal,
+  ].filter(Boolean).join('\n');
+}
+
+function locationLabelMatchesRequested(label, requestedLocation) {
+  const requested = String(requestedLocation || '').trim().toLowerCase();
+  const value = String(label || '').trim();
+  if (!requested) return true;
+  if (!value) return false;
+  const aliases = LOCATION_REGION_ALIASES[requested] || [requested];
+  return aliases.some((candidate) => containsEvidenceTerm(value, candidate));
+}
+
+function locationEvidenceDetails(record, requestedLocation, options = {}) {
+  const requested = String(requestedLocation || '').trim().toLowerCase();
+  if (!requested) return { matched: true, source: 'none', label: '' };
+  const allowJobEvidence = Boolean(options.allowJobEvidence);
+  const allowCompanyEvidence = options.allowCompanyEvidence == null ? !allowJobEvidence : Boolean(options.allowCompanyEvidence);
+  const aliases = LOCATION_REGION_ALIASES[requested] || [requested];
+
+  if (allowJobEvidence) {
+    const explicit = jobEvidence(record);
+    const alias = aliases.find((candidate) => containsEvidenceTerm(explicit, candidate));
+    if (alias) return { matched: true, source: 'job', label: alias };
+
+    const trustedLocations = Array.isArray(record?.searchProvenance?.trustedLocations)
+      ? record.searchProvenance.trustedLocations
+      : [];
+    const trusted = trustedLocations.find((value) => locationLabelMatchesRequested(value, requested));
+    if (trusted) return { matched: true, source: 'linkedin_search_filter', label: trusted };
+  }
+
+  if (allowCompanyEvidence) {
+    const evidence = companyLocationEvidence(record);
+    const alias = aliases.find((candidate) => containsEvidenceTerm(evidence, candidate));
+    if (alias) return { matched: true, source: 'company', label: alias };
+  }
+
+  return { matched: false, source: '', label: '' };
+}
+
+function locationEvidenceMatches(record, requestedLocation, options = {}) {
+  return locationEvidenceDetails(record, requestedLocation, options).matched;
+}
+
+function workTypeEvidenceDetails(record, requestedWorkType) {
+  const requested = String(requestedWorkType || '').trim().toLowerCase();
+  if (!requested) return { matched: true, source: 'none', value: '' };
+
+  const explicit = detectWorkType(jobEvidence(record));
+  if (explicit) return { matched: explicit === requested, source: 'job', value: explicit };
+
+  const trusted = Array.isArray(record?.searchProvenance?.trustedWorkTypes)
+    ? record.searchProvenance.trustedWorkTypes.map((value) => String(value || '').toLowerCase())
+    : [];
+  if (trusted.includes(requested)) return { matched: true, source: 'linkedin_search_filter', value: requested };
+
+  return { matched: false, source: '', value: '' };
+}
+
+function workTypeEvidenceMatches(record, requestedWorkType) {
+  return workTypeEvidenceDetails(record, requestedWorkType).matched;
+}
+
+function topicEvidenceMatches(record, topic) {
+  const requested = String(topic || '').trim().toLowerCase();
+  if (!requested || /^(?:companies|professionals)$/.test(requested)) return true;
+  const evidence = jobEvidence(record);
+  if (!evidence) return false;
+
+  if (/^sap(?:\s|$)/i.test(requested)) {
+    const rest = requested.replace(/^sap\s*/i, '').trim();
+    const literalSap = containsEvidenceTerm(evidence, 'SAP');
+
+    if (!rest) {
+      if (literalSap) return true;
+, 'i').test(String(value)))) return true;
+      }
       return false;
     }
 
