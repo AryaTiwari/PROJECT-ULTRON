@@ -1,5 +1,6 @@
 const operator = require('./linkedin-account-operator');
 const policy = require('./linkedin-account-policy');
+const config = require('./config');
 
 let installed = false;
 let originalHandle = null;
