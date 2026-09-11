@@ -448,13 +448,24 @@ function jobEvidence(record) {
   ].filter(Boolean).join('\n');
 }
 
-function locationEvidenceMatches(record, requestedLocation) {
+function locationEvidenceDetails(record, requestedLocation, { allowJobEvidence = false } = {}) {
   const requested = String(requestedLocation || '').trim().toLowerCase();
-  if (!requested) return true;
-  const evidence = companyLocationEvidence(record);
-  if (!evidence) return false;
+  if (!requested) return { matched: true, source: 'none', label: '' };
   const aliases = LOCATION_REGION_ALIASES[requested] || [requested];
-  return aliases.some((alias) => containsEvidenceTerm(evidence, alias));
+  const sources = [
+    ...(allowJobEvidence ? [{ source: 'job', text: jobEvidence(record) }] : []),
+    { source: 'company', text: companyLocationEvidence(record) },
+  ];
+  for (const item of sources) {
+    if (!item.text) continue;
+    const alias = aliases.find((candidate) => containsEvidenceTerm(item.text, candidate));
+    if (alias) return { matched: true, source: item.source, label: alias };
+  }
+  return { matched: false, source: '', label: '' };
+}
+
+function locationEvidenceMatches(record, requestedLocation, options = {}) {
+  return locationEvidenceDetails(record, requestedLocation, options).matched;
 }
 
 function workTypeEvidenceMatches(record, requestedWorkType) {
@@ -478,7 +489,7 @@ function companyFilterFailures(record, request = {}) {
   const failures = [];
   if (request.hiring && !record?.hiringVerified) failures.push('hiring');
   if (!passesEmployeeFilter(record, request.filters || {})) failures.push('employee_count');
-  if (request.location && !locationEvidenceMatches(record, request.location)) failures.push('location');
+  if (request.location && !locationEvidenceMatches(record, request.location, { allowJobEvidence: Boolean(request.hiring) })) failures.push('location');
   if (request.filters?.workType && !workTypeEvidenceMatches(record, request.filters.workType)) failures.push('work_type');
   if (request.hiring && request.topic && !topicEvidenceMatches(record, request.topic)) failures.push('topic');
   return [...new Set(failures)];
@@ -728,6 +739,7 @@ async function companyMission(request) {
     }
   }
 
+  const candidateCountBeforeGate = merged.length;
   const rejected = {
     low_relevance: 0,
     hiring: 0,
@@ -737,17 +749,25 @@ async function companyMission(request) {
     topic: 0,
   };
   const accepted = [];
+  let rejectedCandidates = 0;
   for (const record of merged) {
     if (Number(record.relevanceScore || 0) < 50) {
       rejected.low_relevance++;
+      rejectedCandidates++;
       continue;
     }
     const failures = companyFilterFailures(record, request);
     if (failures.length) {
+      rejectedCandidates++;
       for (const reason of failures) rejected[reason] = Number(rejected[reason] || 0) + 1;
       continue;
     }
-    record.location = record.companyLocation || linkedinPublic.locationFromText(record.companySearchEvidenceText) || '';
+    const locationMatch = locationEvidenceDetails(record, request.location, { allowJobEvidence: Boolean(request.hiring) });
+    const jobLocation = linkedinPublic.locationFromText(record.jobEvidenceText);
+    record.location = locationMatch.source === 'job'
+      ? (jobLocation || locationMatch.label || request.location || '')
+      : (record.companyLocation || linkedinPublic.locationFromText(record.companySearchEvidenceText) || locationMatch.label || '');
+    record.locationEvidenceSource = locationMatch.source;
     record.workType = detectWorkType(record.jobEvidenceText);
     accepted.push(record);
   }
@@ -776,6 +796,8 @@ async function companyMission(request) {
       employeeMax: request.filters?.employeeMax ?? null,
       topic: request.topic || null,
       rejected,
+      rejectedCandidates,
+      candidateCount: candidateCountBeforeGate,
     },
   };
 }
@@ -1140,8 +1162,14 @@ function formatMission(mission) {
     : ` ${mission.contactCandidates || 0} LinkedIn person profiles are ready for direct Apollo matching.`;
   const budget = mission.budgetStopped ? ` Safety stop: ${mission.budgetStopped}.` : '';
   const rejected = mission.filterVerification?.rejected || {};
-  const hardRejected = Object.values(rejected).reduce((sum, value) => sum + Number(value || 0), 0);
-  const hardGate = mission.filterVerification?.hardGate ? ` Hard-filter gate rejected ${hardRejected} candidate checks that lacked explicit requested evidence.` : '';
+  const rejectedCandidates = Number(mission.filterVerification?.rejectedCandidates || 0);
+  const reasonText = Object.entries(rejected)
+    .filter(([, value]) => Number(value || 0) > 0)
+    .map(([key, value]) => `${key.replace(/_/g, ' ')}:${value}`)
+    .join(', ');
+  const hardGate = mission.filterVerification?.hardGate
+    ? ` Hard-filter gate rejected ${rejectedCandidates} candidate${rejectedCandidates === 1 ? '' : 's'}${reasonText ? ` (${reasonText})` : ''}.`
+    : '';
   return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”. Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${hardGate}${contact}${shortfall}${budget} ${mission.sheetUrl}`;
 }
 
@@ -1170,6 +1198,7 @@ module.exports = {
   passesEmployeeFilter,
   scopedCompanyEvidence,
   detectWorkType,
+  locationEvidenceDetails,
   locationEvidenceMatches,
   workTypeEvidenceMatches,
   topicEvidenceMatches,
