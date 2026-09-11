@@ -146,13 +146,13 @@ async function prepare(request) {
   if (request.exactUrl || request.explicitHeaders?.length || request.useDefault || request.usePrevious) {
     let headers = request.explicitHeaders;
     if (!headers && request.usePrevious) {
-      const template = v2.latestTemplate() || await v2.learnLatestSpreadsheetTemplate();
+      const template = v2.latestTemplate();
       headers = template?.headers;
     }
     if (!headers) headers = request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS;
     return { type: 'run', request, headers: ensureHeaders(headers, request) };
   }
-  const template = v2.latestTemplate() || await v2.learnLatestSpreadsheetTemplate();
+  const template = v2.latestTemplate();
   const pending = setPending(request, template);
   const previous = template?.headers?.length ? v2.templatePreview(template) : 'none remembered yet';
   const defaults = (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS).join(' | ');
