@@ -116,6 +116,14 @@ function install() {
         conversation.append('user', text, { taskType: 'linkedin-account-unlock', inputMode });
         const safety = policy.clearManualLock('user explicitly confirmed LinkedIn account unlock after manual verification');
         result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} today. Normal rate limits still apply.`, { linkedinSafety: safety });
+      } else if (operator.isExistingSheetFillRequest(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-account-existing-sheet-fill', inputMode });
+        const sheetUrl = require('./google-sheets-operator').extractSheetUrl(text);
+        const filled = await operator.fillLatestMissionIntoSheet(sheetUrl);
+        result = responseShape(true, `Filled “${filled.spreadsheetTitle}” / ${filled.sheetName} with ${filled.added} verified LinkedIn row${filled.added === 1 ? '' : 's'}${filled.skippedDuplicates ? ` and skipped ${filled.skippedDuplicates} duplicate${filled.skippedDuplicates === 1 ? '' : 's'} already present` : ''}. ${filled.sheetUrl}`, {
+          linkedinExistingSheetFill: filled,
+          spreadsheetUrl: filled.sheetUrl,
+        });
       } else if (operator.isRejectedSheetRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-rejected-export', inputMode });
         const exported = await operator.createRejectedCandidatesSheet();
