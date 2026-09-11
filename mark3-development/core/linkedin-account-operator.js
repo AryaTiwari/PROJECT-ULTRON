@@ -763,15 +763,18 @@ function jobSearchPlan(request) {
   };
 
   if (/^maharashtra$/i.test(location) && /^sap$/i.test(String(request.topic || ''))) {
-    // Put high-signal geographic searches first. The old plan exhausted its
-    // raw-ID threshold before Pune/Mumbai were ever queried.
     add('SAP', 'Maharashtra');
     add('SAP', 'Pune');
     add('SAP', 'Mumbai');
     add('SAP', 'Navi Mumbai');
+    add('SAP', 'Nagpur');
+    add('SAP', 'Thane');
+    add('SAP', 'Nashik');
     add('SAP Consultant', 'Maharashtra');
     add('SAP FICO', 'Maharashtra');
     add('SAP ABAP', 'Maharashtra');
+    add('SAP S/4HANA', 'Maharashtra');
+    add('SAP SuccessFactors', 'Maharashtra');
     add('SAP MM', 'Maharashtra');
     add('SAP SD', 'Maharashtra');
     add('SAP Basis', 'Maharashtra');
@@ -781,6 +784,32 @@ function jobSearchPlan(request) {
   }
 
   return plan.map(({ key, ...item }) => item);
+}
+
+function droppedSearchFilters(result) {
+  const warning = result?.section_errors?.search_results || null;
+  const text = `${warning?.error_type || ''} ${warning?.error_message || ''}`.toLowerCase();
+  if (!/filters?_dropped|did not keep/.test(text)) return new Set();
+  const dropped = new Set();
+  const rules = [
+    ['location', /\blocation\b/],
+    ['work_type', /\bwork[_ ]?type\b|\bworkplace\b|\bf_wt\b/],
+    ['date_posted', /\bdate[_ ]?posted\b|\bposting date\b|\bf_tpr\b/],
+    ['job_type', /\bjob[_ ]?type\b|\bf_jt\b/],
+    ['experience_level', /\bexperience[_ ]?level\b|\bf_e\b/],
+    ['easy_apply', /\beasy[_ ]?apply\b|\bf_ea\b/],
+  ];
+  for (const [name, regex] of rules) if (regex.test(text)) dropped.add(name);
+  return dropped;
+}
+
+function searchFilterTrust(result, step, request) {
+  const dropped = droppedSearchFilters(result);
+  return {
+    dropped: [...dropped],
+    trustedLocation: step?.location && !dropped.has('location') ? String(step.location) : '',
+    trustedWorkType: request?.filters?.workType && !dropped.has('work_type') ? String(request.filters.workType) : '',
+  };
 }
 
 function jobReferenceMap(result) {
@@ -822,7 +851,10 @@ function prioritizedJobIds(jobMeta) {
 function jobLevelFailures(record, request = {}) {
   const failures = [];
   if (request.hiring && !record?.hiringVerified) failures.push('hiring');
-  if (request.location && !locationEvidenceMatches(record, request.location, { allowJobEvidence: true })) failures.push('location');
+  if (request.location && !locationEvidenceMatches(record, request.location, {
+    allowJobEvidence: true,
+    allowCompanyEvidence: request.locationScope === 'company',
+  })) failures.push('location');
   if (request.filters?.workType && !workTypeEvidenceMatches(record, request.filters.workType)) failures.push('work_type');
   if (request.hiring && request.topic && !topicEvidenceMatches(record, request.topic)) failures.push('topic');
   return [...new Set(failures)];
