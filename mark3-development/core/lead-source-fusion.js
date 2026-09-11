@@ -9,7 +9,7 @@ const INDIAN_LOCATIONS = [
 ];
 
 const LOCAL_BUSINESS_TERMS = /\b(?:google\s*maps?|maps?|local businesses?|gyms?|fitness studios?|clinics?|hospitals?|dentists?|doctors?|salons?|spas?|restaurants?|cafes?|hotels?|agencies|agency|consultancies|consultancy|real estate|realtors?|shops?|stores?|coaching|institutes?|schools?|colleges?|dietitians?|nutritionists?|law firms?|accountants?|coworking|studios?|photographers?|wedding planners?)\b/i;
-const HIRING_TERMS = /\b(?:jobs?|hiring|vacanc(?:y|ies)|recruit(?:er|ers|ment|ing)?|talent acquisition|staffing|hr\b|human resources|naukri|indeed|apna|workindia|google jobs?)\b/i;
+const HIRING_TERMS = /\b(?:jobs?|job openings?|hiring|actively hiring|vacanc(?:y|ies)|recruiting for|staffing needs?|naukri|indeed|apna|workindia|google jobs?)\b/i;
 
 function serpApiKey() {
   return String(process.env.SERP_API_KEY || process.env.SERPAPI_API_KEY || '').trim();
@@ -54,37 +54,56 @@ function detectLocation(text) {
 
 function sourcePlan(originalMessage, criteria) {
   const text = `${originalMessage || ''} ${criteria || ''}`;
+  const location = detectLocation(text);
   const explicitMaps = /\b(?:google\s*maps?|maps?)\b/i.test(text);
   const explicitJobs = /\b(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/i.test(text);
+  const locationSpecificLocalSearch = location !== 'India' && LOCAL_BUSINESS_TERMS.test(text);
   return {
-    location: detectLocation(text),
+    location,
     useJobs: Boolean(serpApiKey() && (explicitJobs || HIRING_TERMS.test(text))),
-    useMaps: Boolean(apifyApiKey() && (explicitMaps || LOCAL_BUSINESS_TERMS.test(text))),
+    useMaps: Boolean(apifyApiKey() && (explicitMaps || locationSpecificLocalSearch)),
     explicitJobs,
     explicitMaps,
   };
 }
 
-function jobSearchQuery(criteria) {
-  return String(criteria || '')
-    .replace(/\b(?:leads?|prospects?|contacts?|profiles?|decision makers?)\b/gi, ' ')
-    .replace(/\b(?:from|using|via)\s+(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim() || String(criteria || '').trim();
+function stripLeadCommandPrefix(value) {
+  return String(value || '')
+    .replace(/^(?:hey\s+)?ultron\b[\s,:;.!-]*/i, '')
+    .replace(/^(?:find|get|bring|research|source|collect|discover|scrape|build|generate|make)\s+(?:me\s+)?\d{0,4}\s*/i, '')
+    .trim();
 }
 
-function mapsSearchQuery(criteria) {
-  let value = String(criteria || '')
-    .replace(/\b(?:leads?|prospects?|contacts?|profiles?|decision makers?|founders?|co[- ]?founders?|owners?|marketing managers?|hr managers?|recruiters?|talent acquisition)\b/gi, ' ')
-    .replace(/\b(?:from|using|via)\s+(?:google\s*)?maps?\b/gi, ' ');
-  for (const location of [...INDIAN_LOCATIONS].sort((a, b) => b.length - a.length)) {
-    value = value.replace(new RegExp(`\\b${regexEscape(location)}\\b`, 'gi'), ' ');
-  }
-  value = value.replace(/\b(?:in|at|near|around)\b\s*$/i, ' ').replace(/\s+/g, ' ').trim();
+function jobSearchQuery(criteria) {
+  let value = stripLeadCommandPrefix(criteria)
+    .replace(/\b(?:leads?|prospects?|contacts?|profiles?|decision makers?)\b/gi, ' ')
+    .replace(/\b(?:companies|business(?:es)?|employers?|organizations?|organisations?)\s+(?:that\s+(?:are\s+)?)?(?:actively\s+)?(?:hiring|recruiting)\b/gi, ' ')
+    .replace(/\b(?:on|from|using|via)\s+(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/gi, ' ')
+    .replace(/\b(?:and\s+)?(?:find|identify|source)\s+(?:the\s+)?(?:recruiters?|talent acquisition|hiring managers?|hr managers?)[\s\S]*$/i, ' ')
+    .replace(/\b(?:and\s+)?create\s+(?:a\s+)?(?:google\s+)?(?:sheet|spreadsheet)\b[\s\S]*$/i, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return value || String(criteria || '').trim();
 }
 
-async function fetchJson(url, options = {}, timeoutMs = 20000) {
+function mapsSearchQuery(criteria) {
+  let value = stripLeadCommandPrefix(criteria)
+    .replace(/\b(?:leads?|prospects?|contacts?|profiles?|decision makers?|founders?|co[- ]?founders?|owners?|marketing managers?|hr managers?|recruiters?|talent acquisition)\b/gi, ' ')
+    .replace(/\b(?:from|using|via)\s+(?:google\s*)?maps?\b/gi, ' ')
+    .replace(/\b(?:and\s+)?(?:find|identify|source)\s+(?:the\s+)?(?:founders?|owners?|marketing decision makers?|marketing managers?|recruiters?|talent acquisition)[\s\S]*$/i, ' ')
+    .replace(/\b(?:and\s+)?create\s+(?:a\s+)?(?:google\s+)?(?:sheet|spreadsheet)\b[\s\S]*$/i, ' ');
+  for (const location of [...INDIAN_LOCATIONS].sort((a, b) => b.length - a.length)) {
+    value = value.replace(new RegExp(`\\b${regexEscape(location)}\\b`, 'gi'), ' ');
+  }
+  value = value
+    .replace(/\b(?:in|at|near|around)\b(?=\s*(?:$|and\b))/gi, ' ')
+    .replace(/\b(?:and|or)\b\s*$/i, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return value || String(criteria || '').trim();
+}
+
+async function fetchJson(async function fetchJson(url, options = {}, timeoutMs = 20000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(3000, timeoutMs));
   try {
@@ -138,27 +157,42 @@ async function googleJobs(criteria, options = {}) {
   const key = serpApiKey();
   if (!key) return [];
   const max = Math.max(1, Math.min(status().maxJobSignals, Number(options.limit || status().maxJobSignals)));
-  const params = new URLSearchParams({
-    engine: 'google_jobs',
-    q: jobSearchQuery(criteria),
-    api_key: key,
-    hl: 'en',
-    gl: 'in',
-    location: String(options.location || detectLocation(criteria)),
-  });
-  const data = await fetchJson(`${SERP_ENDPOINT}?${params}`, {}, Math.max(7000, Number(options.timeoutMs || 18000)));
-  return (Array.isArray(data?.jobs_results) ? data.jobs_results : []).slice(0, max).map((job) => ({
-    title: String(job?.title || '').trim(),
-    company: String(job?.company_name || '').trim(),
-    location: String(job?.location || '').trim(),
-    via: String(job?.via || '').trim(),
-    description: String(job?.description || '').replace(/\s+/g, ' ').trim().slice(0, 900),
-    jobId: String(job?.job_id || '').trim(),
-    source: 'serpapi-google-jobs',
-  })).filter((job) => job.company);
+  const timeoutMs = Math.max(7000, Number(options.timeoutMs || 18000));
+  const jobs = [];
+  let nextPageToken = '';
+  const maxPages = Math.min(2, Math.max(1, Math.ceil(max / 10)));
+
+  for (let page = 0; page < maxPages && jobs.length < max; page++) {
+    const params = new URLSearchParams({
+      engine: 'google_jobs',
+      q: jobSearchQuery(criteria),
+      api_key: key,
+      hl: 'en',
+      gl: 'in',
+      location: String(options.location || detectLocation(criteria)),
+    });
+    if (nextPageToken) params.set('next_page_token', nextPageToken);
+    const data = await fetchJson(`${SERP_ENDPOINT}?${params}`, {}, timeoutMs);
+    const pageJobs = Array.isArray(data?.jobs_results) ? data.jobs_results : [];
+    for (const job of pageJobs) {
+      jobs.push({
+        title: String(job?.title || '').trim(),
+        company: String(job?.company_name || '').trim(),
+        location: String(job?.location || '').trim(),
+        via: String(job?.via || '').trim(),
+        description: String(job?.description || '').replace(/\s+/g, ' ').trim().slice(0, 900),
+        jobId: String(job?.job_id || '').trim(),
+        source: 'serpapi-google-jobs',
+      });
+      if (jobs.length >= max) break;
+    }
+    nextPageToken = String(data?.serpapi_pagination?.next_page_token || '').trim();
+    if (!nextPageToken || !pageJobs.length) break;
+  }
+  return jobs.filter((job) => job.company).slice(0, max);
 }
 
-async function apifyGoogleMaps(criteria, options = {}) {
+async function apifyGoogleMaps(async function apifyGoogleMaps(criteria, options = {}) {
   const token = apifyApiKey();
   if (!token) return [];
   const max = Math.max(1, Math.min(status().maxMapPlaces, Number(options.limit || status().maxMapPlaces)));
@@ -168,7 +202,7 @@ async function apifyGoogleMaps(criteria, options = {}) {
     locationQuery: String(options.location || detectLocation(criteria)),
     maxCrawledPlacesPerSearch: max,
     language: 'en',
-    scrapeSocialMediaProfiles: { facebooks: false, instagrams: false, youtubes: false, tiktoks: false, twitters: false },
+    scrapeContacts: false,
     maximumLeadsEnrichmentRecords: 0,
     maxCompetitorsToAnalyze: 0,
   };
@@ -278,11 +312,13 @@ async function gatherSources(input = {}) {
   let maps = [];
 
   if (plan.useJobs) {
-    try { jobs = await googleJobs(criteria, { location: plan.location, limit: input.jobLimit }); }
+    const query = jobSearchQuery(plan.explicitJobs ? originalMessage : criteria);
+    try { jobs = await googleJobs(query, { location: plan.location, limit: input.jobLimit }); }
     catch (error) { errors.push({ source: 'serpapi-google-jobs', error: error.message }); }
   }
   if (plan.useMaps) {
-    try { maps = await apifyGoogleMaps(criteria, { location: plan.location, limit: input.mapLimit }); }
+    const query = mapsSearchQuery(plan.explicitMaps ? originalMessage : criteria);
+    try { maps = await apifyGoogleMaps(query, { location: plan.location, limit: input.mapLimit }); }
     catch (error) { errors.push({ source: 'apify-google-maps', error: error.message }); }
   }
 
