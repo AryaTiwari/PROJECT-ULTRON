@@ -49,6 +49,37 @@ assert.equal(operator.employeeCountFromText('Company size 501-1,000 employees').
 assert.equal(operator.passesEmployeeFilter({ employeeCount: { min: 501, max: 1000 } }, filtered.filters), true);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: null }, filtered.filters), false);
 
+const strictPass = {
+  company: 'Acme Maharashtra',
+  employeeCount: { min: 201, max: 500, label: '201-500' },
+  companyEvidenceText: 'Headquarters Pune, Maharashtra, India. Company size 201-500 employees.',
+  jobEvidenceText: 'SAP FICO Consultant · Remote · Maharashtra, India · actively hiring',
+  hiringVerified: true,
+};
+assert.equal(operator.locationEvidenceMatches(strictPass, 'Maharashtra'), true);
+assert.equal(operator.workTypeEvidenceMatches(strictPass, 'remote'), true);
+assert.equal(operator.topicEvidenceMatches(strictPass, 'SAP'), true);
+assert.deepEqual(operator.companyFilterFailures(strictPass, filtered), []);
+assert.equal(operator.passesCompanyHardFilters(strictPass, filtered), true);
+
+const wrongState = { ...strictPass, companyEvidenceText: 'Headquarters Bengaluru, Karnataka, India.' };
+assert.ok(operator.companyFilterFailures(wrongState, filtered).includes('location'));
+
+const hybridOnly = { ...strictPass, jobEvidenceText: 'SAP FICO Consultant · Hybrid · Pune, Maharashtra' };
+assert.ok(operator.companyFilterFailures(hybridOnly, filtered).includes('work_type'));
+
+const noEmployeeProof = { ...strictPass, employeeCount: null };
+assert.ok(operator.companyFilterFailures(noEmployeeProof, filtered).includes('employee_count'));
+
+const wrongTopic = { ...strictPass, jobEvidenceText: 'Oracle Cloud Consultant · Remote · Maharashtra, India' };
+assert.ok(operator.companyFilterFailures(wrongTopic, filtered).includes('topic'));
+
+const dynamicHeaders = operator.ensureHeaders(operator.COMPANY_HEADERS, filtered);
+assert.ok(dynamicHeaders.includes('LOCATION'));
+assert.ok(dynamicHeaders.includes('WORK TYPE'));
+assert.ok(dynamicHeaders.includes('EMPLOYEES'));
+assert.ok(dynamicHeaders.includes('HIRING SIGNAL'));
+
 const storageHeaders = [...operator.COMPANY_HEADERS, operator.INTERNAL_CONTACT_HEADER];
 const storageRow = operator.rowFor({
   name: 'Asha Singh', role: 'Director', company: 'Acme', linkedin: 'https://www.linkedin.com/company/acme',
@@ -103,4 +134,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, exact default Sheet schema, structured job/company filters, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
