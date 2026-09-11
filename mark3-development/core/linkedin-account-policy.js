@@ -40,8 +40,6 @@ function settings() {
     errorBackoffCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_ERROR_BACKOFF_MS', 15 * 60 * 1000, 5 * 60 * 1000, 60 * 60 * 1000),
     deepProfilesPerMission: numberSetting('ULTRON_M3_LINKEDIN_DEEP_PROFILE_MAX', 6, 1, 12),
     maxJobPages: numberSetting('ULTRON_M3_LINKEDIN_JOB_MAX_PAGES', 2, 1, 3),
-    decisionMakerSearchMax: numberSetting('ULTRON_M3_LINKEDIN_DECISION_MAKER_SEARCH_MAX', 3, 1, 4),
-    companyEmployeeFallbackMax: numberSetting('ULTRON_M3_LINKEDIN_EMPLOYEE_FALLBACK_MAX', 2, 0, 4),
     jobDetailMax: numberSetting('ULTRON_M3_LINKEDIN_JOB_DETAIL_MAX', 2, 0, 4),
   };
 }

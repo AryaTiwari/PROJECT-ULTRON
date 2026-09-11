@@ -3,6 +3,7 @@ const path = require('path');
 const config = require('./config');
 
 const APOLLO_MATCH = 'https://api.apollo.io/api/v1/people/match';
+const APOLLO_PEOPLE_SEARCH = 'https://api.apollo.io/api/v1/mixed_people/api_search';
 const CACHE_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'apollo-cache.json');
 const CACHE_VERSION = 4;
 
@@ -147,6 +148,97 @@ function workerUrl(pathname) {
 function validEmail(value) {
   const text = String(value || '').trim();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text : null;
+}
+
+function normalizedWords(value) {
+  return String(value || '').toLowerCase().replace(/\b(?:private|pvt|limited|ltd|llp|plc|inc|incorporated|corp|corporation|company|co)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function hostname(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return url.hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return raw.toLowerCase().replace(/^www\./, '').split('/')[0];
+  }
+}
+
+function decisionPriority(title) {
+  const value = normalizedWords(title);
+  if (/\b(?:founder|co founder|owner|director|managing director)\b/.test(value)) return 1;
+  if (/\b(?:manager|head|talent acquisition lead|recruitment lead)\b/.test(value)) return 2;
+  if (/\b(?:hr recruiter|human resources recruiter|recruiter|talent acquisition)\b/.test(value)) return 3;
+  return 99;
+}
+
+function sameOrganization(person, company, domain = '') {
+  const expectedDomain = hostname(domain);
+  const actualDomain = hostname(person?.organization?.website_url || person?.organization?.primary_domain || person?.organization?.domain || '');
+  if (expectedDomain && actualDomain && (actualDomain === expectedDomain || actualDomain.endsWith(`.${expectedDomain}`) || expectedDomain.endsWith(`.${actualDomain}`))) return true;
+  const expected = normalizedWords(company);
+  const actual = normalizedWords(person?.organization_name || person?.organization?.name || person?.employment_history?.[0]?.organization_name || '');
+  if (!expected || !actual) return false;
+  return expected === actual || expected.includes(actual) || actual.includes(expected);
+}
+
+function rankedDecisionMakers(people, company, domain = '') {
+  return (Array.isArray(people) ? people : [])
+    .filter((person) => sameOrganization(person, company, domain))
+    .map((person) => ({
+      ...person,
+      decisionPriority: decisionPriority(person.title || person.headline || ''),
+      linkedinUrl: normalizeLinkedIn(person.linkedin_url || person.linkedin || ''),
+    }))
+    .filter((person) => person.decisionPriority < 99 && person.linkedinUrl)
+    .sort((a, b) => a.decisionPriority - b.decisionPriority || String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+async function searchCompanyDecisionMaker({ company, domain = '', location = '' } = {}) {
+  const apiKey = setting('APOLLO_API_KEY');
+  if (!apiKey) {
+    const error = new Error('APOLLO_API_KEY is missing.');
+    error.code = 'APOLLO_NOT_CONFIGURED';
+    throw error;
+  }
+  const url = new URL(APOLLO_PEOPLE_SEARCH);
+  const titles = [
+    'founder', 'co-founder', 'owner', 'director', 'managing director',
+    'manager', 'head recruiter', 'hiring manager', 'recruitment manager', 'talent acquisition head',
+    'HR recruiter', 'human resources recruiter', 'recruiter',
+  ];
+  const seniorities = ['owner', 'founder', 'head', 'director', 'manager'];
+  for (const title of titles) url.searchParams.append('person_titles[]', title);
+  for (const seniority of seniorities) url.searchParams.append('person_seniorities[]', seniority);
+  const cleanDomain = hostname(domain);
+  if (cleanDomain) url.searchParams.append('q_organization_domains_list[]', cleanDomain);
+  else url.searchParams.set('q_keywords', String(company || '').trim());
+  if (location) url.searchParams.append('person_locations[]', String(location).trim());
+  url.searchParams.set('include_similar_titles', 'true');
+  url.searchParams.set('page', '1');
+  url.searchParams.set('per_page', '25');
+
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const response = await fetch(url, { method: 'POST', headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } });
+    const text = await response.text();
+    let data = {};
+    try { data = JSON.parse(text); } catch {}
+    if (response.ok) {
+      const ranked = rankedDecisionMakers(data.people || data.contacts || [], company, cleanDomain);
+      return { ok: true, company, domain: cleanDomain, candidate: ranked[0] || null, candidatesChecked: Array.isArray(data.people) ? data.people.length : 0 };
+    }
+    const message = data?.error || data?.error_message || data?.message || `Apollo people search failed (${response.status}).`;
+    const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
+    error.status = response.status;
+    error.code = response.status === 403 ? 'APOLLO_PEOPLE_SEARCH_ACCESS_REQUIRED' : 'APOLLO_PEOPLE_SEARCH_FAILED';
+    lastError = error;
+    if (response.status !== 429 && response.status < 500) throw error;
+    if (attempt < 3) await sleep(retryDelay(response, attempt));
+  }
+  throw lastError || new Error('Apollo people search failed.');
 }
 
 function personFromResponse(data) {
@@ -324,6 +416,9 @@ function status() {
   return {
     apiKeyReady: Boolean(setting('APOLLO_API_KEY')),
     webhookReady: Boolean(setting('APOLLO_WEBHOOK_URL') && setting('APOLLO_WEBHOOK_SECRET')),
+    peopleSearchReady: Boolean(setting('APOLLO_API_KEY')),
+    companySearchMax: Math.max(1, Math.min(100, numericSetting('ULTRON_M3_APOLLO_COMPANY_SEARCH_MAX', 50))),
+    decisionMakerPriority: ['director/founder/owner', 'manager/head recruiter', 'HR recruiter'],
     cacheFile: CACHE_FILE,
     positiveCacheDays: numericSetting('ULTRON_M3_APOLLO_POSITIVE_CACHE_DAYS', 180),
     negativeCacheDays: numericSetting('ULTRON_M3_APOLLO_NEGATIVE_CACHE_DAYS', 30),
@@ -334,6 +429,10 @@ module.exports = {
   setting,
   normalizeLinkedIn,
   matchDecision,
+  decisionPriority,
+  sameOrganization,
+  rankedDecisionMakers,
+  searchCompanyDecisionMaker,
   readCache,
   saveCache,
   cacheDays,

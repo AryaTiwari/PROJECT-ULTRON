@@ -7,6 +7,7 @@ const linkedinPublic = require('./linkedin-public-research');
 const mcp = require('./linkedin-mcp-client');
 const joeyism = require('./linkedin-joeyism-bridge');
 const policy = require('./linkedin-account-policy');
+const apollo = require('./apollo-enrichment');
 const config = require('./config');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
@@ -125,7 +126,7 @@ function parseRequest(text) {
     location,
     hiring,
     topic: requestTopic(value, entityMode, location),
-    wantsContacts: entityMode === 'company' || wantsContacts(value),
+    wantsContacts: true,
     filters: parseFilters(value),
     explicitHeaders: v2.headersFromText(value),
     usePrevious: /\b(?:use|same as|like)\b[\s\S]{0,30}\b(?:previous|last)\b|\bprevious format\b|\bsame format\b/i.test(value),
@@ -411,75 +412,6 @@ async function budgetedCall(budget, tool, args) {
   }
 }
 
-function personFromReference(ref, request, tier, priority) {
-  const snippet = [ref.text, ref.context].filter(Boolean).join(' · ').trim();
-  const parsed = linkedinPublic.parseResult({ title: ref.text || ref.slug, snippet, url: ref.url }, {
-    entityMode: 'person', location: request.location,
-  });
-  if (!parsed) return null;
-  return { ...parsed, snippet, decisionTier: tier, decisionPriority: priority };
-}
-
-function companyMentioned(person, company) {
-  const needle = String(company || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  const haystack = `${person.company || ''} ${person.role || ''} ${person.snippet || ''}`.toLowerCase().replace(/[^a-z0-9]+/g, ' ');
-  return needle.length >= 3 && haystack.includes(needle);
-}
-
-function applyDecisionMaker(record, person) {
-  if (!person || (record.decisionPriority != null && record.decisionPriority <= person.decisionPriority)) return;
-  record.name = person.name || '';
-  record.role = person.role || '';
-  record.contactLinkedin = person.linkedin || '';
-  record.decisionTier = person.decisionTier;
-  record.decisionPriority = person.decisionPriority;
-}
-
-async function discoverDecisionMakers(records, request, budget) {
-  const tiers = [
-    { tier: 'director/founder', priority: 1, keywords: 'founder co-founder owner director managing director' },
-    { tier: 'head recruiter/manager', priority: 2, keywords: 'head recruiter hiring manager talent acquisition manager recruitment manager' },
-    { tier: 'HR recruiter', priority: 3, keywords: 'HR recruiter human resources recruiter' },
-  ];
-  const companyHints = records.slice(0, 6).map((record) => `"${record.company}"`).filter((value) => value !== '""').join(' OR ');
-  for (const tier of tiers.slice(0, policy.settings().decisionMakerSearchMax)) {
-    const result = await budgetedCall(budget, 'search_people', {
-      keywords: `${tier.keywords} ${companyHints}`.trim().slice(0, 480),
-      location: request.location || undefined,
-    });
-    if (!result) break;
-    for (const ref of linkedInReferences(result, 'person')) {
-      const person = personFromReference(ref, request, tier.tier, tier.priority);
-      if (!person) continue;
-      for (const record of records) if (companyMentioned(person, record.company)) applyDecisionMaker(record, person);
-    }
-  }
-
-  let fallbackUsed = 0;
-  const fallbackMax = request.filters?.employeeMin != null || request.filters?.employeeMax != null
-    ? 0 : policy.settings().companyEmployeeFallbackMax;
-  for (const record of records.filter((item) => !item.contactLinkedin)) {
-    if (fallbackUsed >= fallbackMax || budget.used >= budget.maximum) break;
-    const slug = linkedinPublic.normalizeLinkedInEntityUrl(record.linkedin, 'company')?.slug;
-    if (!slug) continue;
-    const result = await budgetedCall(budget, 'get_company_employees', {
-      company_name: slug,
-      keywords: 'founder director owner recruiter hiring manager talent acquisition HR',
-    });
-    fallbackUsed++;
-    if (!result) break;
-    const people = linkedInReferences(result, 'person')
-      .map((ref) => personFromReference(ref, request, 'company employee decision-maker', 2))
-      .filter(Boolean)
-      .sort((a, b) => {
-        const score = (person) => /founder|co-founder|owner|managing director|\bdirector\b/i.test(`${person.role} ${person.snippet}`) ? 1
-          : /head|manager|talent acquisition/i.test(`${person.role} ${person.snippet}`) ? 2 : 3;
-        return score(a) - score(b);
-      });
-    if (people[0]) applyDecisionMaker(record, people[0]);
-  }
-}
-
 function referenceRecord(ref, request) {
   const snippet = [ref.text, ref.context].filter(Boolean).join(' · ').trim();
   if (request.entityMode === 'company') {
@@ -624,8 +556,6 @@ async function companyMission(request) {
   let merged = dedupeRecords(records, 'company')
     .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0));
 
-  await discoverDecisionMakers(merged.slice(0, request.count), request, budget);
-
   const deepMax = Math.min(policy.settings().deepProfilesPerMission, merged.length, request.count, Math.max(0, budget.maximum - budget.used));
   let deepProfiles = 0;
   for (let index = 0; index < deepMax; index++) {
@@ -642,8 +572,10 @@ async function companyMission(request) {
       const text = flattenText(deep);
       record.snippet = [record.snippet, text.slice(0, 3500)].filter(Boolean).join('\n').slice(0, 5000);
       record.website = websiteFromText(text);
-      record.email = request.wantsContacts ? emailFromText(text) : '';
-      record.phone = request.wantsContacts ? phoneFromText(text) : '';
+      // Company contact fields belong to the selected person, never to a generic
+      // company/about-page address. Apollo fills them after ranking one head.
+      record.email = '';
+      record.phone = '';
       record.employeeCount = employeeCountFromText(text) || record.employeeCount || null;
       record.applicants = record.applicants || applicantCountFromText(text, record.company);
       const hiringDeep = request.hiring && /\b(?:hiring|jobs?|vacanc(?:y|ies)|openings?)\b/i.test(text)
@@ -758,8 +690,8 @@ async function exactMission(request) {
         hiringSignal: request.hiring && /\b(?:hiring|jobs?|vacanc(?:y|ies)|openings?)\b/i.test(text) ? 'Hiring evidence found in LinkedIn company content.' : '',
         snippet: text.slice(0, 5000),
         website: websiteFromText(text),
-        email: request.wantsContacts ? emailFromText(text) : '',
-        phone: request.wantsContacts ? phoneFromText(text) : '',
+        email: '',
+        phone: '',
         source: request.exactUrl,
         relevanceScore: 90,
         sourceEvidence: ['linkedin-account-company-profile'],
@@ -836,6 +768,60 @@ async function hideInternalContactColumn(spreadsheetId, sheetId, columnIndex) {
   return true;
 }
 
+function websiteDomain(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try { return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; }
+}
+
+function apolloSearchDelayMs() {
+  const value = Number(apollo.setting('ULTRON_M3_APOLLO_PEOPLE_SEARCH_DELAY_MS', '900'));
+  return Math.max(300, Math.min(10000, Number.isFinite(value) ? value : 900));
+}
+
+async function prepareApolloCompanyContacts(missionId) {
+  const state = loadState();
+  const mission = state.missions.find((item) => item.id === missionId);
+  if (!mission?.sheetUrl || mission.request?.entityMode !== 'company') {
+    const error = new Error('The LinkedIn company mission is no longer available for Apollo decision-maker enrichment.');
+    error.code = 'LINKEDIN_APOLLO_MISSION_NOT_FOUND';
+    throw error;
+  }
+  const targets = Array.isArray(mission.contactTargets) ? mission.contactTargets : [];
+  const max = Math.max(1, Math.min(100, Number(apollo.setting('ULTRON_M3_APOLLO_COMPANY_SEARCH_MAX', '50')) || 50));
+  const changes = [];
+  const selected = [];
+  const unresolved = [];
+  const nameIndex = mission.headers.findIndex((header) => headerKey(header) === 'name');
+  const helperIndex = mission.storageHeaders.findIndex((header) => headerKey(header) === 'contactLinkedin');
+  const spreadsheetId = sheets.spreadsheetId(mission.sheetUrl);
+
+  for (const target of targets.slice(0, max)) {
+    try {
+      const result = await apollo.searchCompanyDecisionMaker({ company: target.company, domain: target.domain });
+      const person = result.candidate;
+      if (!person) {
+        unresolved.push({ company: target.company, reason: 'No Apollo candidate matched the company and requested priority titles.' });
+      } else {
+        const name = String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || '').trim();
+        if (nameIndex >= 0) changes.push({ range: sheets.cellRange(mission.sheetName, target.rowNumber, nameIndex), value: name });
+        if (helperIndex >= 0) changes.push({ range: sheets.cellRange(mission.sheetName, target.rowNumber, helperIndex), value: person.linkedinUrl });
+        selected.push({ rowNumber: target.rowNumber, company: target.company, name, title: person.title || '', linkedin: person.linkedinUrl, priority: person.decisionPriority });
+      }
+    } catch (error) {
+      if (/APOLLO_(?:PEOPLE_SEARCH_ACCESS_REQUIRED|NOT_CONFIGURED)/.test(String(error.code || '')) || Number(error.status) === 429) throw error;
+      unresolved.push({ company: target.company, reason: error.message });
+    }
+    await new Promise((resolve) => setTimeout(resolve, apolloSearchDelayMs()));
+  }
+  if (changes.length) await sheets.writeCells(spreadsheetId, changes);
+  mission.apolloDecisionMakers = selected;
+  mission.apolloDecisionMakerUnresolved = unresolved;
+  mission.apolloDecisionMakerPreparedAt = nowIso();
+  saveState(state);
+  return { mission, selected: selected.length, unresolved: unresolved.length };
+}
+
 function rowFor(record, headers) {
   return headers.map((header) => {
     const key = headerKey(header);
@@ -895,6 +881,7 @@ async function run(request, headers) {
     mission.sheetUrl = created.url;
     mission.sheetName = created.sheetName;
     mission.spreadsheetTitle = created.title;
+    mission.storageHeaders = storageHeaders;
     mission.requested = request.count;
     mission.found = researched.records.length;
     mission.added = added;
@@ -902,12 +889,17 @@ async function run(request, headers) {
     mission.averageScore = researched.records.length
       ? Math.round(researched.records.reduce((sum, record) => sum + Number(record.relevanceScore || 0), 0) / researched.records.length)
       : 0;
-    mission.contactsFromLinkedIn = {
+    mission.contactsFromLinkedIn = request.entityMode === 'company' ? { emails: 0, phones: 0 } : {
       emails: researched.records.filter((record) => record.email).length,
       phones: researched.records.filter((record) => record.phone).length,
     };
-    mission.contactCandidates = researched.records.filter((record) => record.contactLinkedin).length;
-    mission.missingContacts = researched.records.filter((record) => record.contactLinkedin && (!record.email || !record.phone)).length;
+    mission.contactTargets = request.entityMode === 'company'
+      ? researched.records.map((record, index) => ({ rowNumber: index + 2, company: record.company, companyLinkedin: record.linkedin, website: record.website || '', domain: websiteDomain(record.website) }))
+      : [];
+    mission.contactCandidates = request.entityMode === 'company'
+      ? mission.contactTargets.length
+      : researched.records.filter((record) => record.linkedin).length;
+    mission.missingContacts = researched.records.filter((record) => !record.email || !record.phone).length;
     mission.internalContactColumnHidden = needsInternalContact;
     mission.budgetStopped = researched.budgetStopped || null;
     mission.filters = researched.filters || request.filters || {};
@@ -947,6 +939,9 @@ function status() {
     latestMission: latestMission(),
     linkedinOnlyResearch: true,
     externalSourceFusionDisabledForExplicitLinkedIn: true,
+    companyLinkType: 'linkedin-company-profile',
+    apolloDecisionMakerSelection: true,
+    apolloDecisionMakerPriority: ['director/founder/owner', 'manager/head recruiter', 'HR recruiter'],
   };
 }
 
@@ -954,12 +949,15 @@ function statusText() {
   const s = status();
   const safety = s.safety;
   const lock = safety.manualLock ? ` LOCKED: ${safety.manualLock.reason}` : safety.cooldownUntil ? ` Cooldown until ${safety.cooldownUntil}.` : '';
-  return `LinkedIn Account Research: dedicated LinkedIn-only routing is ready. Primary backend: stickerdaniel/linkedin-mcp-server through loopback-only MCP; optional joeyism fallback ${s.joeyism.enabled ? (s.joeyism.sessionReady ? 'enabled and session-ready' : 'enabled but needs manual session setup') : 'disabled'}. Usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour, ${safety.dailyUsed}/${safety.dailyMax} today. Minimum call gap ${Math.round(safety.minGapMs / 1000)}s, deep-profile cap ${safety.deepProfilesPerMission}/mission. LinkedIn write actions are disabled.${lock}`;
+  const apolloReady = apollo.status().apiKeyReady && apollo.status().webhookReady;
+  return `LinkedIn Account Research: dedicated LinkedIn-only routing is ready. Primary backend: stickerdaniel/linkedin-mcp-server through loopback-only MCP; Apollo company-head selection/contact enrichment ${apolloReady ? 'ready' : 'needs API key + webhook setup'}. Optional joeyism fallback ${s.joeyism.enabled ? (s.joeyism.sessionReady ? 'enabled and session-ready' : 'enabled but needs manual session setup') : 'disabled'}. Usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour, ${safety.dailyUsed}/${safety.dailyMax} today. Minimum call gap ${Math.round(safety.minGapMs / 1000)}s, deep-profile cap ${safety.deepProfilesPerMission}/mission. LinkedIn write actions are disabled.${lock}`;
 }
 
 function formatMission(mission) {
   const shortfall = mission.found < mission.requested ? ` I found ${mission.found}/${mission.requested} high-confidence LinkedIn records within the account-safety budget.` : '';
-  const contact = mission.contactCandidates ? ` LinkedIn identified ${mission.contactCandidates} prioritized decision-maker profiles for Apollo contact enrichment.` : ' No verified decision-maker profile was found within this run’s LinkedIn-call budget.';
+  const contact = mission.request?.entityMode === 'company'
+    ? ` ${mission.contactCandidates || 0} verified company rows are ready for Apollo to select one highest-priority head and enrich that person’s contact details.`
+    : ` ${mission.contactCandidates || 0} LinkedIn person profiles are ready for direct Apollo matching.`;
   const budget = mission.budgetStopped ? ` Safety stop: ${mission.budgetStopped}.` : '';
   return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”. Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${contact}${shortfall}${budget} ${mission.sheetUrl}`;
 }
@@ -992,6 +990,8 @@ module.exports = {
   personMission,
   exactMission,
   rowFor,
+  websiteDomain,
+  prepareApolloCompanyContacts,
   run,
   latestMission,
   status,

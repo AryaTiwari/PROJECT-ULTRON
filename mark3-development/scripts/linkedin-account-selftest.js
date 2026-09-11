@@ -96,4 +96,4 @@ assert.equal(lock.kind, 'manual-lock');
 const rate = policy.classifyError(new Error('429 Too Many Requests'));
 assert.equal(rate.kind, 'rate-limit');
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, exact default Sheet schema, structured job/company filters, prioritized decision-maker selection, hidden Apollo helper linkage, bounded mission calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, exact default Sheet schema, structured job/company filters, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');

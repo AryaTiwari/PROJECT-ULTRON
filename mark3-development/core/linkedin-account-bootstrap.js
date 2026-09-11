@@ -73,8 +73,10 @@ async function handlePrepared(prepared) {
       const approval = paidTools.request(
         'apollo',
         'linkedin-account-enrichment',
-        { url: mission.sheetUrl, provider: 'google', ensureContactColumns: false },
-        `LinkedIn research is complete. Apollo would now match only the ${mission.contactCandidates} LinkedIn-verified decision-maker profiles stored in the hidden helper column and fill missing phone/email cells. It will not discover or replace companies.`
+        { url: mission.sheetUrl, provider: 'google', ensureContactColumns: false, missionId: mission.id, entityMode: mission.request?.entityMode },
+        mission.request?.entityMode === 'company'
+          ? `LinkedIn company research is complete. Apollo would search heads at these ${mission.contactCandidates} verified companies, rank Director/Founder/Owner first, Manager/Head Recruiter second, HR Recruiter last, and enrich only one highest-priority person per company.`
+          : `LinkedIn people research is complete. Apollo would directly match these ${mission.contactCandidates} verified person profiles and fill missing phone/email cells.`
       );
       text += ` ${paidTools.prompt(approval)}`;
       extra.paidToolApproval = { id: approval.id, tool: approval.tool, operation: approval.operation, expiresAt: approval.expiresAt };

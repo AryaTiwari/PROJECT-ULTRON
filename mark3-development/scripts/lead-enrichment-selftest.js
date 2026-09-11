@@ -27,6 +27,17 @@ assert.equal(apollo.normalizeLinkedIn('ID: https://www.linkedin.com/in/person-th
 assert.equal(apollo.normalizeLinkedIn('LinkedIn Id = linkedin.com/in/person-four/?trk=sheet'), 'https://www.linkedin.com/in/person-four');
 assert.equal(apollo.normalizeLinkedIn('ID: https://www.linkedin.com/company/acme'), null);
 assert.equal(apollo.normalizeLinkedIn('https://www.linkedin.com/company/acme'), null);
+assert.equal(apollo.decisionPriority('Managing Director'), 1);
+assert.equal(apollo.decisionPriority('Founder & CEO'), 1);
+assert.equal(apollo.decisionPriority('Head Recruiter'), 2);
+assert.equal(apollo.decisionPriority('HR Recruiter'), 3);
+const rankedHeads = apollo.rankedDecisionMakers([
+  { name: 'Recruiter', title: 'HR Recruiter', linkedin_url: 'https://www.linkedin.com/in/recruiter', organization: { name: 'Acme', primary_domain: 'acme.com' } },
+  { name: 'Manager', title: 'Hiring Manager', linkedin_url: 'https://www.linkedin.com/in/manager', organization: { name: 'Acme', primary_domain: 'acme.com' } },
+  { name: 'Founder', title: 'Co-Founder', linkedin_url: 'https://www.linkedin.com/in/founder', organization: { name: 'Acme', primary_domain: 'acme.com' } },
+  { name: 'Wrong Company', title: 'Director', linkedin_url: 'https://www.linkedin.com/in/wrong', organization: { name: 'Beta', primary_domain: 'beta.com' } },
+], 'Acme', 'acme.com');
+assert.deepEqual(rankedHeads.map((person) => person.name), ['Founder', 'Manager', 'Recruiter']);
 assert.equal(sheets.hyperlinkFromCell({ hyperlink: 'https://www.linkedin.com/in/hidden-target' }), 'https://www.linkedin.com/in/hidden-target');
 assert.equal(sheets.hyperlinkFromCell({ userEnteredValue: { formulaValue: '=HYPERLINK("https://www.linkedin.com/in/formula-target","LinkedIn")' } }), 'https://www.linkedin.com/in/formula-target');
 assert.equal(sheets.hyperlinkFromCell({ textFormatRuns: [{ format: { link: { uri: 'https://www.linkedin.com/in/rich-target' } } }] }), 'https://www.linkedin.com/in/rich-target');

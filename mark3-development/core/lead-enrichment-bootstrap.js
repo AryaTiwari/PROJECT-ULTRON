@@ -236,7 +236,30 @@ async function handlePaidToolDecision(decision) {
     });
   }
 
-  if (decision.tool === 'apollo' && ['lead-enrichment', 'lead-research-enrichment', 'linkedin-account-enrichment'].includes(decision.operation)) {
+  if (decision.tool === 'apollo' && decision.operation === 'linkedin-account-enrichment') {
+    return paidTools.withPermit(decision, async () => {
+      let selection = null;
+      if (decision.payload?.entityMode === 'company') {
+        try {
+          selection = await require('./linkedin-account-operator').prepareApolloCompanyContacts(decision.payload.missionId);
+        } catch (error) {
+          const access = error.code === 'APOLLO_PEOPLE_SEARCH_ACCESS_REQUIRED'
+            ? 'Apollo People API Search is not enabled for this API key. Use a key with mixed_people_api_search access or a Master API key.'
+            : error.message;
+          return responseShape(false, `Apollo company-head selection stopped safely: ${access} No contact was guessed and no fallback person was enriched.`, { error: error.code || error.message, apolloCalled: false });
+        }
+      }
+      const response = await handleEnrichment(decision.payload.url, decision.payload.provider || 'google', { ensureContactColumns: false });
+      if (selection && response?.text) {
+        response.text = `Apollo selected ${selection.selected} highest-priority company head${selection.selected === 1 ? '' : 's'}; ${selection.unresolved} compan${selection.unresolved === 1 ? 'y' : 'ies'} had no verified priority match. ${response.text}`;
+        response.response = response.text;
+        response.apolloDecisionMakers = selection;
+      }
+      return response;
+    });
+  }
+
+  if (decision.tool === 'apollo' && ['lead-enrichment', 'lead-research-enrichment'].includes(decision.operation)) {
     const ensureContactColumns = Boolean(decision.payload?.ensureContactColumns || decision.modifiers?.ensureContactColumns);
     return paidTools.withPermit(decision, () => handleEnrichment(decision.payload.url, decision.payload.provider || null, { ensureContactColumns }));
   }
