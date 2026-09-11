@@ -32,7 +32,7 @@ function isUnlockRequest(text) {
 }
 
 function setupText() {
-  return 'LinkedIn account setup is explicit and local. Stop ULTRON, then run: cd C:\\Users\\aryat\\Project-Ultron\\mark3-development ; npm run linkedin:setup. Complete LinkedIn login/2FA/checkpoints yourself in the visible browser. ULTRON never needs your LinkedIn password.';
+  return `LinkedIn account setup is explicit and local. Stop ULTRON, then run: cd "${config.mark3Root}" ; npm run linkedin:setup. Complete LinkedIn login/2FA/checkpoints yourself in the visible browser. ULTRON never needs your LinkedIn password.`;
 }
 
 function errorText(error) {
