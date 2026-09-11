@@ -1,6 +1,7 @@
 (() => {
   const nativeFetch = window.fetch.bind(window);
   const CHAT_TRANSPORT_TIMEOUT_MS = 10 * 60 * 1000;
+  const LINKEDIN_RESEARCH_TIMEOUT_MS = 30 * 60 * 1000;
   const MIN_REPLY_WINDOW_MS = 7000;
   const FLOW_REPLY_WINDOW_MS = 10000;
   const REPLY_OPEN_GRACE_MS = 18000;
@@ -122,6 +123,22 @@
     }
   }
 
+  function requestMessage(init = {}) {
+    try {
+      const parsed = typeof init.body === 'string' ? JSON.parse(init.body) : init.body;
+      return String(parsed?.message || '').trim();
+    } catch {
+      return '';
+    }
+  }
+
+  function chatTimeoutFor(init = {}) {
+    const message = requestMessage(init);
+    const linkedinResearch = /\blinkedin\b/i.test(message)
+      && /\b(?:find|get|search|research|source|collect|list|companies|company|jobs?|roles?|hiring|recruiters?|profiles?)\b/i.test(message);
+    return linkedinResearch ? LINKEDIN_RESEARCH_TIMEOUT_MS : CHAT_TRANSPORT_TIMEOUT_MS;
+  }
+
   function normalizeArtifactMessage(message) {
     const original = String(message || '').trim();
     if (!original) return original;
@@ -171,9 +188,11 @@
 
     const controller = new AbortController();
     const next = { ...normalizedInit, signal: controller.signal };
+    const timeoutMs = chatTimeoutFor(normalizedInit);
+    const timeoutMinutes = Math.round(timeoutMs / 60000);
     const timer = setTimeout(() => {
-      controller.abort(new Error('ULTRON chat transport exceeded 10 minutes.'));
-    }, CHAT_TRANSPORT_TIMEOUT_MS);
+      controller.abort(new Error(`ULTRON chat transport exceeded ${timeoutMinutes} minutes.`));
+    }, timeoutMs);
 
     return nativeFetch(input, next).then(async (response) => {
       try {
@@ -232,6 +251,8 @@
   });
 
   window.__ULTRON_CHAT_TRANSPORT_TIMEOUT_MS = CHAT_TRANSPORT_TIMEOUT_MS;
+  window.__ULTRON_LINKEDIN_RESEARCH_TIMEOUT_MS = LINKEDIN_RESEARCH_TIMEOUT_MS;
+  window.__ULTRON_CHAT_TIMEOUT_FOR = chatTimeoutFor;
   window.__ULTRON_MIN_REPLY_WINDOW_MS = MIN_REPLY_WINDOW_MS;
   window.__ULTRON_FLOW_REPLY_WINDOW_MS = FLOW_REPLY_WINDOW_MS;
   window.__ULTRON_PLAYBACK_SETTLE_MS = PLAYBACK_SETTLE_MS;
