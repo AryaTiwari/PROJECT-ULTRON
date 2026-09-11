@@ -87,6 +87,9 @@ const priorityMap = new Map([
 ]);
 assert.equal(operator.prioritizedJobIds(priorityMap)[0], '4252026496');
 assert.ok(operator.jobIdPriority(priorityMap.get('4252026496')) > operator.jobIdPriority(priorityMap.get('4252026500')));
+const trustedPriority = operator.jobIdPriority({ title: 'SAP Consultant', bestKeyword: 'SAP', hits: 1, firstRank: 3, trustedLocations: ['Pune'], trustedWorkTypes: ['remote'] });
+const untrustedPriority = operator.jobIdPriority({ title: 'SAP Consultant', bestKeyword: 'SAP', hits: 1, firstRank: 3, trustedLocations: [], trustedWorkTypes: [] });
+assert.ok(trustedPriority > untrustedPriority);
 const retainedTrust = operator.searchFilterTrust(
   { job_ids: ['4252026496'], sections: { search_results: 'ok' } },
   { keyword: 'SAP', location: 'Pune' },
@@ -138,6 +141,8 @@ assert.equal(operator.passesCompanyHardFilters(strictPass, filtered), true);
 assert.deepEqual(operator.jobLevelFailures(strictPass, filtered), []);
 assert.deepEqual(operator.companyFilterFailures({ ...strictPass, relevanceScore: 1 }, filtered), []);
 assert.equal(operator.detectWorkType('We build hybrid cloud infrastructure. This role is fully remote.'), 'remote');
+assert.equal(operator.detectWorkType('Pune, Maharashtra, India · Remote · Full-time'), 'remote');
+assert.equal(operator.detectWorkType('We build hybrid cloud infrastructure for enterprises.'), '');
 
 const trustedSearchOnly = {
   company: 'Trusted Search Systems',
@@ -153,6 +158,18 @@ const trustedSearchOnly = {
   },
 };
 assert.equal(operator.topicEvidenceMatches(trustedSearchOnly, 'SAP'), true);
+const trustedMmOnly = {
+  ...trustedSearchOnly,
+  role: 'MM Consultant',
+  jobEvidenceText: 'MM Consultant\nProcure-to-pay implementation',
+  searchProvenance: {
+    title: 'MM Consultant',
+    keywords: ['SAP MM'],
+    trustedLocations: ['Pune'],
+    trustedWorkTypes: ['remote'],
+  },
+};
+assert.equal(operator.topicEvidenceMatches(trustedMmOnly, 'SAP'), true);
 assert.equal(operator.locationEvidenceMatches(trustedSearchOnly, 'Maharashtra', { allowJobEvidence: true, allowCompanyEvidence: false }), true);
 assert.equal(operator.workTypeEvidenceMatches(trustedSearchOnly, 'remote'), true);
 assert.deepEqual(operator.jobLevelFailures(trustedSearchOnly, filtered), []);
@@ -217,6 +234,17 @@ const destinationKeys = operator.destinationExistingKeys({
 assert.ok(destinationKeys.has('linkedin:https://www.linkedin.com/company/acme'));
 assert.ok(destinationKeys.has('job:https://www.linkedin.com/jobs/view/4252026496'));
 assert.ok(operator.recordDestinationKeys({ company: 'Acme', linkedin: 'https://www.linkedin.com/company/acme' }).includes('company:acme'));
+const verifiedSnapshot = operator.verifiedRecordSnapshot({
+  company: 'Acme',
+  role: 'SAP FICO Consultant',
+  linkedin: 'https://www.linkedin.com/company/acme',
+  jobUrl: 'https://www.linkedin.com/jobs/view/4252026496',
+  employeeCount: { min: 201, max: 500, label: '201-500' },
+});
+assert.equal(verifiedSnapshot.company, 'Acme');
+assert.equal(verifiedSnapshot.role, 'SAP FICO Consultant');
+assert.equal(typeof operator.fillLatestMissionIntoSheet, 'function');
+assert.equal(typeof operator.isExistingSheetFillRequest, 'function');
 
 const storageHeaders = [...operator.COMPANY_HEADERS, operator.INTERNAL_CONTACT_HEADER];
 const storageRow = operator.rowFor({
@@ -283,4 +311,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, target-driven ranked SAP discovery, trusted retained-filter evidence, adaptive SAP role/city discovery, criteria-only hard gates, existing-Sheet fill/dedupe, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, target-driven ranked SAP discovery, trusted retained-filter evidence, adaptive SAP role/city discovery, criteria-only hard gates, existing-Sheet fill/dedupe/reuse, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
