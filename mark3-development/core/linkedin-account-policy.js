@@ -185,7 +185,8 @@ function recordError(tool, error) {
 function clearManualLock(reason = 'manual re-authentication confirmed') {
   const state = prune(loadState());
   state.manualLock = null;
-  state.cooldownUntil = null;
+  // Re-authentication may clear a checkpoint lock, but it must never erase a
+  // rate-limit cooldown. Cooldowns expire only by time.
   state.unlockedAt = new Date().toISOString();
   state.unlockReason = reason;
   saveState(state);
