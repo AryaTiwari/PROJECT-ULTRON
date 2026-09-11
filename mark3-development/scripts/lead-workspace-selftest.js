@@ -23,6 +23,12 @@ assert.ok(/founder|owner|marketing decision maker/i.test(mapsImplicit.criteria))
 const jobsImplicit = bootstrap.implicitWorkspaceRequest('Find me 30 companies hiring SAP consultants on Naukri');
 assert.equal(jobsImplicit.count, 30);
 assert.ok(/recruiter|talent acquisition/i.test(jobsImplicit.criteria));
+assert.equal(mapsImplicit.originalMessage, 'Find me 25 marketing agencies in Kolkata from Google Maps');
+assert.equal(jobsImplicit.originalMessage, 'Find me 30 companies hiring SAP consultants on Naukri');
+assert.equal(workspace.sourceFusion.mapsSearchQuery(mapsImplicit.originalMessage), 'marketing agencies');
+assert.equal(workspace.sourceFusion.jobSearchQuery(jobsImplicit.originalMessage), 'SAP consultants');
+assert.equal(workspace.isSourceStatusRequest('lead source status'), true);
+assert.equal(workspace.isSourceStatusRequest('Apify health'), true);
 
 const parsed = workspace.parseRequest('Find me 120 HR recruiter leads in India and create a Google Sheet with phone and email');
 assert.equal(parsed.count, 120);
