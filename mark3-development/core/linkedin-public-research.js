@@ -118,8 +118,12 @@ function queryPlan(criteria, count = 25, options = {}) {
   const location = options.location || locationFromText(criteria);
   const hiring = options.hiring ?? /\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?)\b/i.test(criteria);
   const topic = coreTopic(criteria, entityMode);
+  const requestedProfessionals = entityMode === 'company' && hiring && /\bprofessionals?\b/i.test(cleanCriteria(criteria));
+  const searchTopic = requestedProfessionals && !/^(?:companies|professionals)$/i.test(topic)
+    ? `${topic} professionals`
+    : topic;
   const site = entityMode === 'company' ? 'site:linkedin.com/company' : 'site:linkedin.com/in';
-  const quotedTopic = topic && !/^(?:companies|professionals)$/i.test(topic) ? '"' + topic.replace(/"/g, '') + '"' : topic;
+  const quotedTopic = searchTopic && !/^(?:companies|professionals)$/i.test(searchTopic) ? '"' + searchTopic.replace(/"/g, '') + '"' : searchTopic;
   const loc = location ? '"' + location + '"' : '';
   const variants = [];
   if (entityMode === 'company') {
