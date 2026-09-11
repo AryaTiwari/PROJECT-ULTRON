@@ -104,10 +104,26 @@ function requestTopic(text, entityMode, location) {
     .replace(/\b(?:under|below|fewer than|less than|up to|maximum|max|over|above|more than|at least|minimum|min)\s*\d[\d,]*\b/gi, ' ')
     .replace(/\b\d[\d,]*\s*(?:-|to)\s*\d[\d,]*\s+employees?\b/gi, ' ')
     .replace(/\b(?:remote|hybrid|on[- ]?site|in[- ]?office|easy apply|full[- ]?time|part[- ]?time|contract|internship)\b/gi, ' ')
-    .replace(/\b(?:roles?|positions?|should be|must be|located|with|employees?|and)\b/gi, ' ')
-    .replace(/[,;]+/g, ' ');
-  if (location) value = value.replace(new RegExp(`\\b${String(location).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), ' ');
-  return value.replace(/\s+/g, ' ').trim() || (entityMode === 'company' ? 'companies' : 'professionals');
+    .replace(/\b(?:roles?|positions?|should be|must be|located|location|with|employees?|and|from|in|at|near|around)\b/gi, ' ')
+    .replace(/[.,;:!?()[\]{}]+/g, ' ');
+  if (location) {
+    value = value.replace(
+      new RegExp(`\\b${String(location).replace(/[.*+?^$(){}|[\]\\]/g, '\\$&')}\\b`, 'gi'),
+      ' ',
+    );
+  }
+  value = value.replace(/\s+/g, ' ').trim();
+
+  // Generic SAP requests must canonicalize to "SAP". Preserve a module only
+  // when the user explicitly named one, e.g. SAP FICO or SAP ABAP.
+  if (/\bsap\b/i.test(value)) {
+    const module = value.match(/\bsap\s+(fico|mm|sd|abap|basis|s\/?4hana|successfactors|hana|bw|bpc|ariba|ewm|tm)\b/i);
+    if (!module) return 'SAP';
+    const raw = module[1];
+    return /^s\/?4hana$/i.test(raw) ? 'SAP S/4HANA' : `SAP ${raw.toUpperCase()}`;
+  }
+
+  return value || (entityMode === 'company' ? 'companies' : 'professionals');
 }
 
 function parseRequest(text) {
@@ -481,9 +497,21 @@ function topicEvidenceMatches(record, topic) {
   if (!requested || /^(?:companies|professionals)$/.test(requested)) return true;
   const evidence = jobEvidence(record);
   if (!evidence) return false;
+
+  if (/^sap(?:\s|$)/i.test(requested)) {
+    if (!containsEvidenceTerm(evidence, 'SAP')) return false;
+    const module = requested.replace(/^sap\s*/i, '').trim();
+    if (!module) return true;
+    if (/^s\/?4hana$/i.test(module)) return /\bS\/?4HANA\b/i.test(evidence);
+    return containsEvidenceTerm(evidence, module);
+  }
+
   if (containsEvidenceTerm(evidence, requested)) return true;
-  const stop = new Set(['role', 'roles', 'job', 'jobs', 'opening', 'openings', 'position', 'positions', 'hiring']);
-  const tokens = requested.split(/\s+/).map((token) => token.replace(/[^a-z0-9+#.-]/g, '')).filter((token) => token.length >= 2 && !stop.has(token));
+  const stop = new Set(['role', 'roles', 'job', 'jobs', 'opening', 'openings', 'position', 'positions', 'hiring', 'in', 'from', 'at', 'near']);
+  const tokens = requested
+    .split(/\s+/)
+    .map((token) => token.replace(/[^a-z0-9+#.-]/g, ''))
+    .filter((token) => token.length >= 2 && !stop.has(token));
   return tokens.length > 0 && tokens.every((token) => containsEvidenceTerm(evidence, token));
 }
 
@@ -744,7 +772,8 @@ async function companyMission(request) {
         jobIds: ids.length,
         uniqueJobIds: uniqueJobIds.length,
       });
-      if (uniqueJobIds.length >= desiredPool) break;
+      const minimumSearches = budget.localBudgetBypass && /^sap$/i.test(String(request.topic || '')) ? 4 : 1;
+      if (searchCalls.length >= minimumSearches && uniqueJobIds.length >= desiredPool) break;
     }
 
     jobIdsDiscovered = uniqueJobIds.length;
@@ -774,7 +803,7 @@ async function companyMission(request) {
       record.role = jobTitleFromDetail(detail, '');
       record.jobEvidenceText = detailText;
       record.hiringSignal = detailText.slice(0, 1000) || `Verified LinkedIn job ${jobId}.`;
-      record.hiringVerified = topicEvidenceMatches(record, request.topic);
+      record.hiringVerified = Boolean(detailText && preferred);
       record.workType = detectWorkType(detailText);
       record.applicants = applicantCountFromText(detailText, record.company);
       record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified, deep: true });
@@ -910,6 +939,7 @@ async function companyMission(request) {
     toolCalls: {
       searchJobs: searchCalls.length,
       searchPlan: searchCalls,
+      parsedTopic: request.topic,
       jobIdsDiscovered,
       jobDetails,
       jobCandidatesLinked,
@@ -1416,7 +1446,7 @@ function formatMission(mission) {
     ? ` Hard-filter gate rejected ${rejectedCandidates} candidate${rejectedCandidates === 1 ? '' : 's'}${reasonText ? ` (${reasonText})` : ''}.`
     : '';
   const jobTrace = mission.request?.entityMode === 'company' && mission.request?.hiring
-    ? ` Job-first verification: ${mission.toolCalls?.searchJobs || 0} searches, ${mission.toolCalls?.jobIdsDiscovered || 0} unique LinkedIn job IDs, ${mission.toolCalls?.jobDetails || 0} job details checked, ${mission.toolCalls?.jobCandidatesLinked || 0} linked to companies, ${mission.toolCalls?.jobCandidatesPassed || 0} passed job-level SAP/location/remote checks, ${mission.toolCalls?.deepCompanyProfiles || 0} company profiles checked.`
+    ? ` Job-first verification: topic “${mission.toolCalls?.parsedTopic || mission.request?.topic || ''}”, ${mission.toolCalls?.searchJobs || 0} searches, ${mission.toolCalls?.jobIdsDiscovered || 0} unique LinkedIn job IDs, ${mission.toolCalls?.jobDetails || 0} job details checked, ${mission.toolCalls?.jobCandidatesLinked || 0} linked to companies, ${mission.toolCalls?.jobCandidatesPassed || 0} passed job-level SAP/location/remote checks, ${mission.toolCalls?.deepCompanyProfiles || 0} company profiles checked.`
     : '';
   const warnings = Array.isArray(mission.linkedinSearchWarnings) ? mission.linkedinSearchWarnings : [];
   const searchWarning = warnings.length
