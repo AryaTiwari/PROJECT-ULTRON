@@ -128,7 +128,7 @@ function requestTopic(text, entityMode, location) {
 
 function locationScopeFromText(text, hiring = false) {
   const value = String(text || '');
-  if (/\bcompanies?\s+(?:that\s+are\s+)?(?:based|headquartered|located)\b/i.test(value)
+  if (/\bcompanies?\b[\s\S]{0,45}\b(?:that\s+are\s+)?(?:based|headquartered|located)\b/i.test(value)
       || /\b(?:company|employer)\s+(?:headquarters?|hq)\b/i.test(value)) {
     return 'company';
   }
