@@ -14,7 +14,7 @@ function run(args, label) {
 
 try {
   console.log('Installing the optional joeyism LinkedIn fallback in your local Python environment...');
-  run(['-m', 'pip', 'install', 'linkedin_scraper==3.1.2'], 'linkedin_scraper install');
+  run(['-m', 'pip', 'install', 'git+https://github.com/joeyism/linkedin_scraper.git@b1cdc1c0e85bee8764d62565d229c682e5eb81bb'], 'linkedin_scraper pinned GitHub install');
   run(['-m', 'playwright', 'install', 'chromium'], 'Playwright Chromium install');
   console.log('Starting one-time visible manual login. No LinkedIn password is stored by ULTRON.');
   run([path.join(__dirname, 'linkedin-joeyism-session.py')], 'LinkedIn manual session setup');
