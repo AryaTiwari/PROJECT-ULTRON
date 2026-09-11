@@ -543,7 +543,7 @@ function isBudgetStop(error) {
 function missionCallBudget() {
   const safety = policy.status();
   const maximum = safety.localBudgetBypass
-    ? Math.max(1, Number(safety.missionToolMax || 1))
+    ? Math.max(1, Number(safety.testMissionToolMax || safety.missionToolMax || 1))
     : Math.max(0, Math.min(
       safety.missionToolMax,
       safety.burstMax - safety.burstUsed,
@@ -646,9 +646,12 @@ async function companyMission(request) {
     error.code = 'LINKEDIN_BURST_CAP';
     throw error;
   }
+
   let jobsResult = null;
   let jobsRawText = '';
   let jobDetails = 0;
+  let jobIdsDiscovered = 0;
+  let jobCandidatesLinked = 0;
   const companySearches = [];
 
   if (request.hiring) {
@@ -663,85 +666,104 @@ async function companyMission(request) {
       easy_apply: Boolean(request.filters?.easyApply),
       sort_by: 'date',
     });
-    jobsRawText = flattenText(jobsResult);
-    for (const ref of linkedInReferences(jobsResult || {}, 'company')) {
-      const record = referenceRecord(ref, request);
-      if (!record) continue;
-      const scoped = scopedCompanyEvidence(jobsRawText, record.company) || [ref.text, ref.context].filter(Boolean).join(' · ');
-      record.jobEvidenceText = scoped;
-      record.hiringSignal = scoped.slice(0, 700) || 'Company appeared in LinkedIn job-search evidence.';
-      record.hiringVerified = topicEvidenceMatches(record, request.topic);
-      record.workType = detectWorkType(scoped);
-      record.applicants = applicantCountFromText(jobsRawText, record.company);
-      record.employeeCount = employeeCountFromText(record.snippet);
-      record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified });
-      records.push(record);
-    }
 
-    // Strict missions need per-job evidence whenever LinkedIn exposes job IDs.
-    // Search filters are candidate generators, not proof: we verify topic/workplace
-    // from the returned job text before a company may enter the Sheet.
-    for (const jobId of jobIdsFromResult(jobsResult).slice(0, policy.settings().jobDetailMax)) {
+    jobsRawText = flattenText(jobsResult);
+    const jobIds = jobIdsFromResult(jobsResult);
+    jobIdsDiscovered = jobIds.length;
+
+    // Hiring missions are job-first. The LinkedIn MCP's search_jobs contract
+    // gives us raw search text plus job_ids; company references on the search
+    // page are ancillary and are not safely associated with one specific job.
+    // Read job details first, then use that job's company link as the candidate.
+    const remainingAfterSearch = Math.max(0, budget.maximum - budget.used);
+    const detailLimit = budget.localBudgetBypass
+      ? Math.min(jobIds.length, Math.max(request.count, request.count * 2), Math.floor(remainingAfterSearch / 2))
+      : Math.min(jobIds.length, policy.settings().jobDetailMax);
+
+    for (const jobId of jobIds.slice(0, detailLimit)) {
       const detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
       if (!detail) break;
       jobDetails++;
+
       const detailText = flattenText(detail);
-      for (const ref of linkedInReferences(detail, 'company')) {
-        const record = referenceRecord(ref, request);
-        if (!record) continue;
-        record.jobEvidenceText = detailText;
-        record.hiringSignal = detailText.slice(0, 700) || `Verified LinkedIn job ${jobId}.`;
-        record.hiringVerified = topicEvidenceMatches(record, request.topic);
-        record.workType = detectWorkType(detailText);
-        record.applicants = applicantCountFromText(detailText, record.company);
-        record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified, deep: true });
-        record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), `linkedin-job-${jobId}`])];
-        records.push(record);
-      }
+      const companyRefs = linkedInReferences(detail, 'company');
+      const preferred = companyRefs.find((ref) => /job posting|job/i.test(String(ref.context || '')))
+        || companyRefs.find((ref) => String(ref.kind || '').toLowerCase() === 'company')
+        || companyRefs[0];
+      if (!preferred) continue;
+
+      const record = referenceRecord(preferred, request);
+      if (!record) continue;
+
+      record.jobId = String(jobId);
+      record.jobEvidenceText = detailText;
+      record.hiringSignal = detailText.slice(0, 1000) || `Verified LinkedIn job ${jobId}.`;
+      record.hiringVerified = topicEvidenceMatches(record, request.topic);
+      record.workType = detectWorkType(detailText);
+      record.applicants = applicantCountFromText(detailText, record.company);
+      record.employeeCount = employeeCountFromText(detailText) || record.employeeCount || null;
+      record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified, deep: true });
+      record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), `linkedin-job-${jobId}`, 'linkedin-job-detail'])];
+      records.push(record);
+      jobCandidatesLinked++;
     }
   }
 
-  const searches = [
-    keyword,
-    request.location ? `${keyword} ${request.location}` : '',
-  ].filter(Boolean);
-  for (const query of [...new Set(searches)].slice(0, 2)) {
-    const result = await budgetedCall(budget, 'search_companies', { keywords: query });
-    if (!result) break;
-    companySearches.push(result);
-    for (const ref of linkedInReferences(result, 'company')) {
-      const record = referenceRecord(ref, request);
-      if (!record) continue;
-      record.companySearchEvidenceText = [ref.text, ref.context].filter(Boolean).join(' · ');
-      record.jobEvidenceText = scopedCompanyEvidence(jobsRawText, record.company);
-      record.hiringVerified = Boolean(request.hiring && topicEvidenceMatches(record, request.topic));
-      record.hiringSignal = record.hiringVerified ? record.jobEvidenceText.slice(0, 700) : '';
-      record.workType = detectWorkType(record.jobEvidenceText);
-      record.applicants = applicantCountFromText(jobsRawText, record.company);
-      record.employeeCount = employeeCountFromText(record.companySearchEvidenceText) || employeeCountFromText(record.snippet);
-      record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified });
-      records.push(record);
+  // Company search is useful for non-hiring company discovery. For hiring
+  // missions it is only a fallback when LinkedIn returned no usable job→company
+  // linkage; otherwise it creates broad companies that were never tied to a job.
+  if (!request.hiring || records.length === 0) {
+    const searches = [
+      keyword,
+      request.location ? `${keyword} ${request.location}` : '',
+    ].filter(Boolean);
+
+    for (const query of [...new Set(searches)].slice(0, request.hiring ? 1 : 2)) {
+      const result = await budgetedCall(budget, 'search_companies', { keywords: query });
+      if (!result) break;
+      companySearches.push(result);
+
+      for (const ref of linkedInReferences(result, 'company')) {
+        const record = referenceRecord(ref, request);
+        if (!record) continue;
+        record.companySearchEvidenceText = [ref.text, ref.context].filter(Boolean).join(' · ');
+        record.jobEvidenceText = request.hiring ? scopedCompanyEvidence(jobsRawText, record.company) : '';
+        record.hiringVerified = Boolean(request.hiring && topicEvidenceMatches(record, request.topic));
+        record.hiringSignal = record.hiringVerified ? record.jobEvidenceText.slice(0, 700) : '';
+        record.workType = detectWorkType(record.jobEvidenceText);
+        record.applicants = applicantCountFromText(jobsRawText, record.company);
+        record.employeeCount = employeeCountFromText(record.companySearchEvidenceText) || employeeCountFromText(record.snippet);
+        record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified });
+        record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'linkedin-company-search-fallback'])];
+        records.push(record);
+      }
     }
   }
 
   let merged = dedupeRecords(records, 'company')
     .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0));
 
-  const deepMax = Math.min(policy.settings().deepProfilesPerMission, merged.length, request.count, Math.max(0, budget.maximum - budget.used));
+  // Company profiles are the authoritative LinkedIn source for headcount.
+  // In temporary test mode we may verify every job-linked candidate up to the
+  // mission budget; normal mode keeps the conservative deep-profile cap.
+  const remainingForProfiles = Math.max(0, budget.maximum - budget.used);
+  const deepMax = budget.localBudgetBypass
+    ? Math.min(merged.length, request.count, remainingForProfiles)
+    : Math.min(policy.settings().deepProfilesPerMission, merged.length, request.count, remainingForProfiles);
+
   let deepProfiles = 0;
   for (let index = 0; index < deepMax; index++) {
     const record = merged[index];
     const slug = linkedinPublic.normalizeLinkedInEntityUrl(record.linkedin, 'company')?.slug;
     if (!slug) continue;
+
     try {
-      // Keep company-location evidence separate from job evidence. Asking for the
-      // general company profile avoids accepting a non-Maharashtra company merely
-      // because one of its jobs mentions Pune/Mumbai.
       const deep = await budgetedCall(budget, 'get_company_profile', {
         company_name: slug,
       });
       if (!deep) break;
       deepProfiles++;
+
       const text = flattenText(deep);
       record.companyEvidenceText = text;
       record.snippet = [record.snippet, text.slice(0, 3500)].filter(Boolean).join('\n').slice(0, 5000);
@@ -775,6 +797,7 @@ async function companyMission(request) {
   const accepted = [];
   const rejectedRecords = [];
   let rejectedCandidates = 0;
+
   for (const record of merged) {
     if (Number(record.relevanceScore || 0) < 50) {
       rejected.low_relevance++;
@@ -782,6 +805,7 @@ async function companyMission(request) {
       rejectedRecords.push(rejectedRecordSnapshot(record, ['low_relevance'], request));
       continue;
     }
+
     const failures = companyFilterFailures(record, request);
     if (failures.length) {
       rejectedCandidates++;
@@ -789,6 +813,7 @@ async function companyMission(request) {
       rejectedRecords.push(rejectedRecordSnapshot(record, failures, request));
       continue;
     }
+
     const locationMatch = locationEvidenceDetails(record, request.location, { allowJobEvidence: Boolean(request.hiring) });
     const jobLocation = linkedinPublic.locationFromText(record.jobEvidenceText);
     record.location = locationMatch.source === 'job'
@@ -803,11 +828,15 @@ async function companyMission(request) {
     .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0))
     .slice(0, request.count);
 
+  const searchError = jobsResult?.section_errors?.search_results || null;
+
   return {
     records: merged,
     toolCalls: {
       searchJobs: jobsResult ? 1 : 0,
+      jobIdsDiscovered,
       jobDetails,
+      jobCandidatesLinked,
       searchCompanies: companySearches.length,
       deepCompanyProfiles: deepProfiles,
       total: budget.used,
@@ -815,6 +844,7 @@ async function companyMission(request) {
     },
     budgetStopped: budget.stopped,
     filters: request.filters,
+    linkedinSearchWarning: searchError,
     filterVerification: {
       hardGate: true,
       requestedLocation: request.location || null,
@@ -1235,6 +1265,7 @@ async function run(request, headers) {
     mission.budgetStopped = researched.budgetStopped || null;
     mission.filters = researched.filters || request.filters || {};
     mission.filterVerification = researched.filterVerification || null;
+    mission.linkedinSearchWarning = researched.linkedinSearchWarning || null;
     mission.rejectedRecords = Array.isArray(researched.rejectedRecords) ? researched.rejectedRecords : [];
     mission.safety = policy.status();
 
@@ -1302,7 +1333,13 @@ function formatMission(mission) {
   const hardGate = mission.filterVerification?.hardGate
     ? ` Hard-filter gate rejected ${rejectedCandidates} candidate${rejectedCandidates === 1 ? '' : 's'}${reasonText ? ` (${reasonText})` : ''}.`
     : '';
-  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”. Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${hardGate}${contact}${shortfall}${budget} ${mission.sheetUrl}`;
+  const jobTrace = mission.request?.entityMode === 'company' && mission.request?.hiring
+    ? ` Job-first verification: ${mission.toolCalls?.jobIdsDiscovered || 0} LinkedIn job IDs discovered, ${mission.toolCalls?.jobDetails || 0} job details checked, ${mission.toolCalls?.jobCandidatesLinked || 0} job-to-company candidates linked, ${mission.toolCalls?.deepCompanyProfiles || 0} company profiles checked.`
+    : '';
+  const searchWarning = mission.linkedinSearchWarning?.error_message
+    ? ` LinkedIn search warning: ${mission.linkedinSearchWarning.error_message}`
+    : '';
+  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”. Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
 }
 
 module.exports = {
