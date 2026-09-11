@@ -1,5 +1,5 @@
 const API='';
-const CHAT_TIMEOUT_MS=120000;
+const CHAT_TIMEOUT_MS=30*60*1000;
 const COMMAND_SILENCE_MS=4000;
 const WAKE_WORD='ultron';
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition||null;
