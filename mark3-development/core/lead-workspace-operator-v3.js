@@ -373,9 +373,18 @@ async function continueMission(id) {
             ? linkedinPublic.parseResult(item, { entityMode: 'company', location: mission.linkedinPlan?.location || '' })
             : leadResearch.parseLead(item, query);
           if (!lead) continue;
+          if (mission.entityMode === 'company') {
+            lead.relevanceScore = linkedinPublic.scoreRecord(lead, {
+              criteria: mission.originalMessage || mission.criteria,
+              location: mission.linkedinPlan?.location || '',
+              hiring: Boolean(mission.linkedinPlan?.hiring),
+              companyNames: (mission.sourceFusion?.jobs || []).map((job) => job.company).filter(Boolean),
+            });
+          }
           annotateLead(lead, mission);
           const sourceConfirmed = Number(lead.sourceCount || 0) > 0;
-          if (!v2.qualifiedLead(lead, mission.criteria) && !(sourceConfirmed && lead.relevanceScore >= 30)) {
+          const sourceThreshold = mission.entityMode === 'company' ? 50 : 30;
+          if (!v2.qualifiedLead(lead, mission.criteria) && !(sourceConfirmed && lead.relevanceScore >= sourceThreshold)) {
             mission.rejectedLowRelevance++;
             continue;
           }
@@ -619,13 +628,18 @@ function statusText() {
   }
   const discovered = Number(mission.leads?.length || 0);
   const providers = Object.entries(mission.searchProviders || {}).map(([name, count]) => `${name}:${count}`).join(', ') || 'none yet';
-  return `Lead mission ${mission.status}: ${mission.criteria}. ${discovered}/${mission.requested} qualifying people discovered; ${mission.added || 0} rows written. Source fusion: ${sourceSummary(mission)}. Multi-source-confirmed people: ${mission.multiSourceLeads || 0}. Public contacts: ${mission.publicEmails || 0} emails, ${mission.publicPhones || 0} phones. Average relevance ${mission.averageRelevance || 0}/100. Search providers: ${providers}. Search ${mission.queryIndex || 0}/${mission.queries?.length || 0}; deep searches ${mission.deepSearches || 0}, page fetches ${mission.deepFetches || 0}. Sheet: ${mission.sheetUrl || 'not created yet'}`;
+  const noun = mission.entityMode === 'company' ? 'companies' : 'people';
+  return `Lead mission ${mission.status}: ${mission.criteria}. ${discovered}/${mission.requested} qualifying ${noun} discovered; ${mission.added || 0} rows written. Source fusion: ${sourceSummary(mission)}. Multi-source-confirmed ${noun}: ${mission.multiSourceLeads || 0}. Public contacts: ${mission.publicEmails || 0} emails, ${mission.publicPhones || 0} phones. Average relevance ${mission.averageRelevance || 0}/100. Search providers: ${providers}. Search ${mission.queryIndex || 0}/${mission.queries?.length || 0}; deep searches ${mission.deepSearches || 0}, page fetches ${mission.deepFetches || 0}. Sheet: ${mission.sheetUrl || 'not created yet'}`;
 }
 
 function formatMission(mission) {
   const discovered = Number(mission.leads?.length || 0);
-  const shortfall = discovered < Number(mission.requested || 0) ? ` I found ${discovered}/${mission.requested} qualifying people in this pass.` : '';
-  return `Lead mission complete, Sir. Created “${mission.spreadsheetTitle}” and added ${mission.added || 0} lead${mission.added === 1 ? '' : 's'} for “${mission.criteria}”. Source fusion: ${sourceSummary(mission)}. ${mission.multiSourceLeads || 0} accepted leads matched an independent hiring or Maps company signal. Public research found ${mission.publicEmails || 0} emails and ${mission.publicPhones || 0} phones before Apollo; average relevance ${mission.averageRelevance || 0}/100. Duplicates skipped ${mission.duplicatesRemoved || 0}; low-relevance results rejected ${mission.rejectedLowRelevance || 0}.${shortfall} ${mission.sheetUrl}`;
+  const noun = mission.entityMode === 'company' ? 'companies' : 'people';
+  const shortfall = discovered < Number(mission.requested || 0) ? ` I found ${discovered}/${mission.requested} qualifying ${noun} in this pass.` : '';
+  const contactPhrase = mission.entityMode === 'company'
+    ? `Public company research found ${mission.publicEmails || 0} emails and ${mission.publicPhones || 0} phones`
+    : `Public research found ${mission.publicEmails || 0} emails and ${mission.publicPhones || 0} phones before Apollo`;
+  return `Lead mission complete, Sir. Created “${mission.spreadsheetTitle}” and added ${mission.added || 0} lead${mission.added === 1 ? '' : 's'} for “${mission.criteria}”. Source fusion: ${sourceSummary(mission)}. ${mission.multiSourceLeads || 0} accepted ${noun} had independent source evidence. ${contactPhrase}; average relevance ${mission.averageRelevance || 0}/100. Duplicates skipped ${mission.duplicatesRemoved || 0}; low-relevance results rejected ${mission.rejectedLowRelevance || 0}.${shortfall} ${mission.sheetUrl}`;
 }
 
 function status() {
