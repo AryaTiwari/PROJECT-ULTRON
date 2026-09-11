@@ -1918,7 +1918,10 @@ function formatMission(mission) {
     : mission.linkedinSearchWarning?.error_message
       ? ` LinkedIn search warning: ${mission.linkedinSearchWarning.error_message}`
       : '';
-  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”. Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
+  const destination = mission.destinationMode === 'existing-sheet'
+    ? ` Filled your existing Sheet and added ${mission.added} new row${mission.added === 1 ? '' : 's'}${mission.duplicateRowsSkipped ? `; skipped ${mission.duplicateRowsSkipped} duplicate${mission.duplicateRowsSkipped === 1 ? '' : 's'} already present` : ''}.`
+    : '';
+  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
 }
 
 module.exports = {
@@ -1931,6 +1934,7 @@ module.exports = {
   parseEmployeeRange,
   parseFilters,
   requestTopic,
+  locationScopeFromText,
   headerKey,
   ensureHeaders,
   pendingRequest,
@@ -1946,8 +1950,10 @@ module.exports = {
   passesEmployeeFilter,
   scopedCompanyEvidence,
   detectWorkType,
+  locationLabelMatchesRequested,
   locationEvidenceDetails,
   locationEvidenceMatches,
+  workTypeEvidenceDetails,
   workTypeEvidenceMatches,
   topicEvidenceMatches,
   companyFilterFailures,
@@ -1956,6 +1962,8 @@ module.exports = {
   dedupeRecords,
   sapRoleKeywordVariants,
   jobSearchPlan,
+  droppedSearchFilters,
+  searchFilterTrust,
   jobReferenceMap,
   jobIdPriority,
   prioritizedJobIds,
@@ -1966,6 +1974,9 @@ module.exports = {
   exactMission,
   contactRemark,
   rowFor,
+  destinationHeaderCandidate,
+  destinationExistingKeys,
+  recordDestinationKeys,
   websiteDomain,
   rejectedSheetHeaders,
   rejectedSheetRow,
