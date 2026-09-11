@@ -32,6 +32,8 @@ assert.equal(mapsImplicit.originalMessage, 'Find me 25 marketing agencies in Kol
 assert.equal(jobsImplicit.originalMessage, 'Find me 30 companies hiring SAP consultants on Naukri');
 assert.equal(workspace.sourceFusion.mapsSearchQuery(mapsImplicit.originalMessage), 'marketing agencies');
 assert.equal(workspace.sourceFusion.jobSearchQuery(jobsImplicit.originalMessage), 'SAP consultants');
+assert.equal(workspace.sourceFusion.jobSearchQuery('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra'), 'SAP professionals');
+assert.equal(workspace.sourceFusion.sourcePlan('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra', '').location, 'Maharashtra, India');
 
 const linkedinCompanyRequest = bootstrap.implicitWorkspaceRequest('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra');
 assert.equal(linkedinCompanyRequest.count, 50);
