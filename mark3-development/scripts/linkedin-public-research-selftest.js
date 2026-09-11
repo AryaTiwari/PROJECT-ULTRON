@@ -21,6 +21,41 @@ assert.equal(companyPlan.location, 'Maharashtra');
 assert.equal(companyPlan.hiring, true);
 assert.ok(linkedin.queryPlan('companies hiring SAP professionals Maharashtra', 50, companyPlan)
   .every((query) => /site:linkedin\.com\/company/i.test(query)));
+assert.ok(linkedin.queryPlan(
+  'companies hiring SAP professionals Maharashtra',
+  50,
+  { ...companyPlan, companyNames: ['Tata Consultancy Services', 'Infosys'] }
+).some((query) => /SAP professionals/i.test(query)));
+assert.ok(linkedin.queryPlan(
+  'companies hiring SAP professionals Maharashtra',
+  50,
+  { ...companyPlan, companyNames: ['Tata Consultancy Services', 'Infosys'] }
+).some((query) => /"Tata Consultancy Services"|"Infosys"/i.test(query)));
+
+const weakCompany = linkedin.parseResult({
+  title: 'Random Retail Group | LinkedIn',
+  snippet: 'A consumer retail company with offices across India.',
+  url: 'https://www.linkedin.com/company/random-retail-group/',
+}, { entityMode: 'company', location: 'Maharashtra' });
+
+const signaledCompany = linkedin.parseResult({
+  title: 'Tata Consultancy Services | LinkedIn',
+  snippet: 'Enterprise technology services and SAP delivery teams.',
+  url: 'https://www.linkedin.com/company/tata-consultancy-services/',
+}, { entityMode: 'company', location: 'Maharashtra' });
+
+assert.ok(linkedin.scoreRecord(signaledCompany, {
+  criteria: 'companies hiring SAP professionals Maharashtra',
+  location: 'Maharashtra',
+  hiring: true,
+  companyNames: ['Tata Consultancy Services'],
+}) > linkedin.scoreRecord(weakCompany, {
+  criteria: 'companies hiring SAP professionals Maharashtra',
+  location: 'Maharashtra',
+  hiring: true,
+  companyNames: ['Tata Consultancy Services'],
+}));
+assert.equal(linkedin.companySignalMatch(signaledCompany, ['Tata Consultancy Services']), true);
 
 const personPlan = linkedin.plan('Find me 30 SAP recruiters on LinkedIn from Pune', 'SAP recruiters Pune');
 assert.equal(personPlan.entityMode, 'person');
@@ -56,4 +91,4 @@ assert.equal(status.antiBotBypass, false);
 assert.ok(status.maxSearchCalls <= 20);
 assert.ok(status.maxResults <= 200);
 
-console.log('LinkedIn public research self-test passed. Company/person URL normalization, source planning, bounded query generation, public result parsing, login-wall rejection and no-login/no-bypass safety controls are healthy.');
+console.log('LinkedIn public research self-test passed. Company/person normalization, mixed broad+signal query planning, stronger relevance scoring, public result parsing, login-wall rejection and no-login/no-bypass controls are healthy.');
