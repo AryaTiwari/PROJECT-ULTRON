@@ -444,10 +444,20 @@ function scopedCompanyEvidence(text, company, radius = 1400) {
 }
 
 function detectWorkType(text) {
-  const value = String(text || '').toLowerCase();
-  if (/\bhybrid\b/.test(value)) return 'hybrid';
-  if (/\bremote\b|work\s+from\s+home|work\s+from\s+anywhere/.test(value)) return 'remote';
-  if (/\bon[- ]?site\b|\bin[- ]?office\b|workplace\s+type\s*[:·-]?\s*on[- ]?site/.test(value)) return 'on_site';
+  const value = String(text || '');
+  const patterns = [
+    { value: 'remote', regex: /workplace\s+type\s*[:·-]?\s*remote\b/i },
+    { value: 'hybrid', regex: /workplace\s+type\s*[:·-]?\s*hybrid\b/i },
+    { value: 'on_site', regex: /workplace\s+type\s*[:·-]?\s*on[- ]?site\b/i },
+    { value: 'remote', regex: /(?:^|\n)\s*remote\s*(?:$|\n)/im },
+    { value: 'hybrid', regex: /(?:^|\n)\s*hybrid\s*(?:$|\n)/im },
+    { value: 'on_site', regex: /(?:^|\n)\s*on[- ]?site\s*(?:$|\n)/im },
+    { value: 'remote', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+(?:fully\s+)?remote\b/i },
+    { value: 'hybrid', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+hybrid\b/i },
+    { value: 'on_site', regex: /\b(?:this|the)\s+(?:position|role|job)\s+is\s+on[- ]?site\b/i },
+    { value: 'remote', regex: /\bwork\s+from\s+(?:home|anywhere)\b/i },
+  ];
+  for (const item of patterns) if (item.regex.test(value)) return item.value;
   return '';
 }
 
@@ -461,24 +471,47 @@ function companyLocationEvidence(record) {
 
 function jobEvidence(record) {
   return [
+    record?.role,
+    record?.searchProvenance?.title,
     record?.jobEvidenceText,
     record?.hiringSignal,
   ].filter(Boolean).join('\n');
 }
 
-function locationEvidenceDetails(record, requestedLocation, { allowJobEvidence = false } = {}) {
+function locationLabelMatchesRequested(label, requestedLocation) {
+  const requested = String(requestedLocation || '').trim().toLowerCase();
+  const value = String(label || '').trim();
+  if (!requested) return true;
+  if (!value) return false;
+  const aliases = LOCATION_REGION_ALIASES[requested] || [requested];
+  return aliases.some((candidate) => containsEvidenceTerm(value, candidate));
+}
+
+function locationEvidenceDetails(record, requestedLocation, options = {}) {
   const requested = String(requestedLocation || '').trim().toLowerCase();
   if (!requested) return { matched: true, source: 'none', label: '' };
+  const allowJobEvidence = Boolean(options.allowJobEvidence);
+  const allowCompanyEvidence = options.allowCompanyEvidence == null ? !allowJobEvidence : Boolean(options.allowCompanyEvidence);
   const aliases = LOCATION_REGION_ALIASES[requested] || [requested];
-  const sources = [
-    ...(allowJobEvidence ? [{ source: 'job', text: jobEvidence(record) }] : []),
-    { source: 'company', text: companyLocationEvidence(record) },
-  ];
-  for (const item of sources) {
-    if (!item.text) continue;
-    const alias = aliases.find((candidate) => containsEvidenceTerm(item.text, candidate));
-    if (alias) return { matched: true, source: item.source, label: alias };
+
+  if (allowJobEvidence) {
+    const explicit = jobEvidence(record);
+    const alias = aliases.find((candidate) => containsEvidenceTerm(explicit, candidate));
+    if (alias) return { matched: true, source: 'job', label: alias };
+
+    const trustedLocations = Array.isArray(record?.searchProvenance?.trustedLocations)
+      ? record.searchProvenance.trustedLocations
+      : [];
+    const trusted = trustedLocations.find((value) => locationLabelMatchesRequested(value, requested));
+    if (trusted) return { matched: true, source: 'linkedin_search_filter', label: trusted };
   }
+
+  if (allowCompanyEvidence) {
+    const evidence = companyLocationEvidence(record);
+    const alias = aliases.find((candidate) => containsEvidenceTerm(evidence, candidate));
+    if (alias) return { matched: true, source: 'company', label: alias };
+  }
+
   return { matched: false, source: '', label: '' };
 }
 
@@ -486,10 +519,23 @@ function locationEvidenceMatches(record, requestedLocation, options = {}) {
   return locationEvidenceDetails(record, requestedLocation, options).matched;
 }
 
-function workTypeEvidenceMatches(record, requestedWorkType) {
+function workTypeEvidenceDetails(record, requestedWorkType) {
   const requested = String(requestedWorkType || '').trim().toLowerCase();
-  if (!requested) return true;
-  return detectWorkType(jobEvidence(record)) === requested;
+  if (!requested) return { matched: true, source: 'none', value: '' };
+
+  const explicit = detectWorkType(jobEvidence(record));
+  if (explicit) return { matched: explicit === requested, source: 'job', value: explicit };
+
+  const trusted = Array.isArray(record?.searchProvenance?.trustedWorkTypes)
+    ? record.searchProvenance.trustedWorkTypes.map((value) => String(value || '').toLowerCase())
+    : [];
+  if (trusted.includes(requested)) return { matched: true, source: 'linkedin_search_filter', value: requested };
+
+  return { matched: false, source: '', value: '' };
+}
+
+function workTypeEvidenceMatches(record, requestedWorkType) {
+  return workTypeEvidenceDetails(record, requestedWorkType).matched;
 }
 
 function topicEvidenceMatches(record, topic) {
@@ -499,17 +545,27 @@ function topicEvidenceMatches(record, topic) {
   if (!evidence) return false;
 
   if (/^sap(?:\s|$)/i.test(requested)) {
-    if (!containsEvidenceTerm(evidence, 'SAP')) return false;
-
     const rest = requested.replace(/^sap\s*/i, '').trim();
-    if (!rest) return true;
+    const literalSap = containsEvidenceTerm(evidence, 'SAP');
+
+    if (!rest) {
+      if (literalSap) return true;
+      const titleEvidence = [record?.role, record?.searchProvenance?.title].filter(Boolean).join(' ');
+      if (/\b(?:ABAP|FICO|S\/?4HANA|HANA|SuccessFactors|Ariba)\b/i.test(titleEvidence)) return true;
+      const keywords = Array.isArray(record?.searchProvenance?.keywords) ? record.searchProvenance.keywords : [];
+      if (/\bBasis\b/i.test(titleEvidence) && keywords.some((value) => /^SAP\s+Basis$/i.test(String(value)))) return true;
+      return false;
+    }
 
     const knownModule = rest.match(/^(fico|mm|sd|abap|basis|s\/?4hana|successfactors|hana|bw|bpc|ariba|ewm|tm)\b/i);
-    if (!knownModule) return true;
+    if (!knownModule) return literalSap;
 
     const module = knownModule[1];
     if (/^s\/?4hana$/i.test(module)) return /\bS\/?4HANA\b/i.test(evidence);
-    return containsEvidenceTerm(evidence, module);
+    if (containsEvidenceTerm(evidence, module)) return true;
+
+    const titleEvidence = [record?.role, record?.searchProvenance?.title].filter(Boolean).join(' ');
+    return containsEvidenceTerm(titleEvidence, module);
   }
 
   if (containsEvidenceTerm(evidence, requested)) return true;
