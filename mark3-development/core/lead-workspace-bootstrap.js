@@ -25,13 +25,18 @@ function implicitWorkspaceRequest(text) {
     && /\b(?:business(?:es)?|companies|agencies|agency|gyms?|fitness studios?|clinics?|hospitals?|dentists?|doctors?|salons?|spas?|restaurants?|cafes?|hotels?|consultanc(?:y|ies)|real estate|realtors?|shops?|stores?|coaching|institutes?|schools?|colleges?|dietitians?|nutritionists?|law firms?|accountants?|coworking|studios?|photographers?|wedding planners?)\b/i.test(value);
   const jobSource = /\b(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/i.test(value)
     && /\b(?:companies|business(?:es)?|employers?|organizations?|organisations?|recruiters?|hiring|jobs?|vacanc(?:y|ies)|roles?)\b/i.test(value);
+  const linkedinSource = /\blinkedin\b/i.test(value)
+    && /\b(?:companies|company|business(?:es)?|employers?|organizations?|organisations?|people|users?|profiles?|professionals?|recruiters?|founders?|owners?|managers?|employees?)\b/i.test(value);
 
-  if (!peopleOrLeadNoun && !mapsSource && !jobSource) return null;
-  const expanded = peopleOrLeadNoun
+  if (!peopleOrLeadNoun && !mapsSource && !jobSource && !linkedinSource) return null;
+  const linkedinCompany = linkedinSource && /\b(?:companies|company|business(?:es)?|employers?|organizations?|organisations?)\b/i.test(value);
+  const expanded = linkedinCompany
     ? `${value} and create a Google Sheet`
-    : mapsSource
-      ? `${value} and find founder owner or marketing decision maker leads and create a Google Sheet`
-      : `${value} and find recruiter or talent acquisition leads and create a Google Sheet`;
+    : peopleOrLeadNoun
+      ? `${value} and create a Google Sheet`
+      : mapsSource
+        ? `${value} and find founder owner or marketing decision maker leads and create a Google Sheet`
+        : `${value} and find recruiter or talent acquisition leads and create a Google Sheet`;
   const parsed = workspace.parseRequest(expanded);
   if (parsed) parsed.originalMessage = value;
   return parsed;
@@ -52,6 +57,7 @@ function responseShape(ok, text, extra = {}) {
 }
 
 function approvalForMission(mission) {
+  if (mission?.entityMode === 'company') return null;
   if (!mission?.sheetUrl || !mission?.wantsContactEnrichment || Number(mission.missingContacts || 0) <= 0) return null;
   return paidTools.request(
     'apollo',
@@ -99,6 +105,9 @@ function install() {
         conversation.append('user', text, { taskType: 'lead-workspace-layout', inputMode });
         emit('lead_workspace_layout_resolved', { inputMode, type: pending.type });
         result = await handlePrepared(pending);
+      } else if (workspace.isLinkedInStatusRequest?.(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-public-research-status', inputMode });
+        result = responseShape(true, workspace.linkedinStatusText(), { leadWorkspace: workspace.status() });
       } else if (workspace.isSourceStatusRequest?.(text)) {
         conversation.append('user', text, { taskType: 'lead-source-status', inputMode });
         result = responseShape(true, workspace.sourceStatusText(), { leadWorkspace: workspace.status() });
