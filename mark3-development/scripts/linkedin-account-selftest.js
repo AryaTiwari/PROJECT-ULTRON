@@ -62,7 +62,15 @@ assert.equal(operator.topicEvidenceMatches(strictPass, 'SAP'), true);
 assert.deepEqual(operator.companyFilterFailures(strictPass, filtered), []);
 assert.equal(operator.passesCompanyHardFilters(strictPass, filtered), true);
 
-const wrongState = { ...strictPass, companyEvidenceText: 'Headquarters Bengaluru, Karnataka, India.' };
+const remoteMaharashtraJobFromKarnatakaCompany = { ...strictPass, companyEvidenceText: 'Headquarters Bengaluru, Karnataka, India.' };
+assert.equal(operator.locationEvidenceMatches(remoteMaharashtraJobFromKarnatakaCompany, 'Maharashtra', { allowJobEvidence: true }), true);
+assert.equal(operator.passesCompanyHardFilters(remoteMaharashtraJobFromKarnatakaCompany, filtered), true);
+
+const wrongState = {
+  ...strictPass,
+  companyEvidenceText: 'Headquarters Bengaluru, Karnataka, India.',
+  jobEvidenceText: 'SAP FICO Consultant · Remote · Bengaluru, Karnataka · actively hiring',
+};
 assert.ok(operator.companyFilterFailures(wrongState, filtered).includes('location'));
 
 const hybridOnly = { ...strictPass, jobEvidenceText: 'SAP FICO Consultant · Hybrid · Pune, Maharashtra' };
