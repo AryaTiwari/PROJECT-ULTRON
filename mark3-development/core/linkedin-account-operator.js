@@ -1668,7 +1668,11 @@ async function prepareApolloCompanyContacts(missionId) {
 
   for (const target of targets.slice(0, max)) {
     try {
-      const result = await apollo.searchCompanyDecisionMaker({ company: target.company, domain: target.domain });
+      const result = await apollo.searchCompanyDecisionMaker({
+        company: target.company,
+        domain: target.domain,
+        priorityMode: mission.request?.hiring ? 'hiring' : 'general',
+      });
       const person = result.candidate;
       if (!person) {
         unresolved.push({ company: target.company, reason: 'No Apollo candidate matched the company and requested priority titles.' });
@@ -1874,7 +1878,10 @@ function status() {
     externalSourceFusionDisabledForExplicitLinkedIn: true,
     companyLinkType: 'linkedin-company-profile',
     apolloDecisionMakerSelection: true,
-    apolloDecisionMakerPriority: ['director/founder/owner', 'manager/head recruiter', 'HR recruiter'],
+    apolloDecisionMakerPriority: {
+      hiring: ['talent/HR head or director', 'talent/recruitment/HR manager', 'recruiter/talent acquisition', 'founder/owner fallback'],
+      general: ['director/founder/owner', 'manager/head recruiter', 'HR recruiter'],
+    },
   };
 }
 
