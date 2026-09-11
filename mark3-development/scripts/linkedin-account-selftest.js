@@ -39,7 +39,7 @@ assert.equal(exact.exactUrl, 'https://www.linkedin.com/company/acme-tech');
 assert.equal(exact.count, 1);
 
 const companyHeaders = operator.ensureHeaders(operator.COMPANY_HEADERS, company);
-assert.deepEqual(companyHeaders, ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS', 'LOCATION', 'HIRING SIGNAL']);
+assert.deepEqual(companyHeaders, ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS', 'SAP ROLE', 'JOB LINK', 'LOCATION', 'HIRING SIGNAL']);
 assert.equal(operator.headerKey(operator.INTERNAL_CONTACT_HEADER), 'contactLinkedin');
 assert.equal(operator.headerKey('NO. OF APPLICANTS'), 'applicants');
 assert.equal(operator.headerKey('REMARKS'), 'remarks');
