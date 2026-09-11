@@ -175,15 +175,15 @@ function normalizeHeader(value) {
 function headerKey(value) {
   const h = normalizeHeader(value);
   if (/ultron contact linkedin/.test(h)) return 'contactLinkedin';
-  if (/^(?:person or company name|name|person|full name)$/.test(h)) return 'name';
-  if (/^(?:company|company name|organization|organisation|employer)$/.test(h)) return 'company';
-  if (/^(?:role|title|job title|position)$/.test(h)) return 'role';
-  if (/^(?:job link|job url|linkedin job|linkedin job link|job posting link)$/.test(h)) return 'jobLink';
-  if (/linkedin|company link|company url/.test(h)) return 'linkedin';
-  if (/^(?:location|city|region|state)$/.test(h)) return 'location';
-  if (/^(?:hiring signal|job signal|hiring activity)$/.test(h)) return 'hiring';
-  if (/^(?:work type|workplace type|workplace|remote status)$/.test(h)) return 'workType';
-  if (/^(?:employees?|employee count|company size|headcount)$/.test(h)) return 'employees';
+  if (/^(?:person or company name|name|person|full name|contact name)$/.test(h)) return 'name';
+  if (/^(?:company|company name|organization|organisation|organization name|organisation name|employer|business|business name)$/.test(h)) return 'company';
+  if (/^(?:role|title|job title|job role|sap role|opening|job opening|position)$/.test(h)) return 'role';
+  if (/^(?:job link|job url|linkedin job|linkedin job link|job posting link|job opening link|opening url|posting url)$/.test(h)) return 'jobLink';
+  if (/linkedin|company link|company url|company profile/.test(h)) return 'linkedin';
+  if (/^(?:location|job location|city|region|state)$/.test(h)) return 'location';
+  if (/^(?:hiring signal|job signal|hiring activity|hiring evidence|job evidence)$/.test(h)) return 'hiring';
+  if (/^(?:work type|workplace type|workplace|remote status|work mode|working mode)$/.test(h)) return 'workType';
+  if (/^(?:employees?|employee count|company size|headcount|team size)$/.test(h)) return 'employees';
   if (/^(?:post details|details|description|profile details|linkedin details|notes)$/.test(h)) return 'details';
   if (/^(?:website|company website|site)$/.test(h)) return 'website';
   if (/phone|mobile|contact number|telephone/.test(h)) return 'phone';
@@ -251,7 +251,137 @@ function clearPending() {
   saveState(state);
 }
 
+function destinationHeaderCandidate(rows) {
+  let best = null;
+  for (let r = 0; r < Math.min(rows.length, 30); r++) {
+    const row = Array.isArray(rows[r]) ? rows[r] : [];
+    const nonEmpty = row.filter((value) => String(value ?? '').trim()).length;
+    if (!nonEmpty) continue;
+    const recognized = row.map(headerKey).filter(Boolean).length;
+    const score = recognized * 20 + Math.min(nonEmpty, 12) - r * 0.1;
+    if (!best || score > best.score) {
+      best = { rowIndex: r, rowNumber: r + 1, headers: row.map((value) => String(value ?? '').trim()), recognized, score };
+    }
+  }
+  return best;
+}
+
+async function inspectDestinationSheet(url, request) {
+  const spreadsheetId = sheets.spreadsheetId(url);
+  const meta = await sheets.metadata(spreadsheetId);
+  const requestedGid = sheets.sheetGid(url);
+  const tabs = [...(meta.sheets || [])].sort((a, b) => {
+    if (requestedGid != null) {
+      if (a?.properties?.sheetId === requestedGid) return -1;
+      if (b?.properties?.sheetId === requestedGid) return 1;
+    }
+    return Number(a?.properties?.index || 0) - Number(b?.properties?.index || 0);
+  });
+
+  let chosen = null;
+  for (const tab of tabs) {
+    const title = tab?.properties?.title;
+    if (!title) continue;
+    const preview = await sheets.values(spreadsheetId, `${sheets.quoteSheet(title)}!A1:ZZ80`);
+    const candidate = destinationHeaderCandidate(preview);
+    if (candidate && (candidate.recognized > 0 || candidate.headers.filter(Boolean).length >= 2)) {
+      chosen = { ...candidate, sheetName: title, sheetId: tab.properties.sheetId, preview };
+      break;
+    }
+    if (!chosen && preview.length === 0) {
+      chosen = { rowIndex: 0, rowNumber: 1, headers: [], recognized: 0, score: 0, sheetName: title, sheetId: tab.properties.sheetId, preview: [] };
+      if (requestedGid != null && tab.properties.sheetId === requestedGid) break;
+    }
+  }
+
+  if (!chosen) {
+    const error = new Error('The provided Google Sheet does not contain a usable header row, and ULTRON stopped rather than guessing where to write.');
+    error.code = 'LINKEDIN_DESTINATION_HEADERS_NOT_FOUND';
+    throw error;
+  }
+
+  const baseHeaders = chosen.headers.some(Boolean)
+    ? chosen.headers
+    : (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS);
+  const headers = ensureHeaders(baseHeaders, request);
+  const fullRows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(chosen.sheetName)}!A:ZZ`);
+  let lastNonEmptyRow = 0;
+  for (let i = 0; i < fullRows.length; i++) {
+    if ((fullRows[i] || []).some((value) => String(value ?? '').trim())) lastNonEmptyRow = i + 1;
+  }
+
+  return {
+    spreadsheetId,
+    spreadsheetTitle: meta?.properties?.title || 'Google Sheet',
+    sheetName: chosen.sheetName,
+    sheetId: chosen.sheetId,
+    headerRowNumber: chosen.rowNumber,
+    originalHeaders: chosen.headers,
+    headers,
+    rows: fullRows,
+    lastNonEmptyRow,
+    url,
+  };
+}
+
+async function syncDestinationHeaders(destination, headers) {
+  const changes = [];
+  for (let index = 0; index < headers.length; index++) {
+    const current = String(destination.rows?.[destination.headerRowNumber - 1]?.[index] ?? '').trim();
+    const next = String(headers[index] ?? '').trim();
+    if (current !== next) {
+      changes.push({
+        range: sheets.cellRange(destination.sheetName, destination.headerRowNumber, index),
+        value: next,
+      });
+    }
+  }
+  if (changes.length) await sheets.writeCells(destination.spreadsheetId, changes);
+  destination.headers = headers;
+  destination.rows[destination.headerRowNumber - 1] = headers.slice();
+  return changes.length;
+}
+
+function destinationExistingKeys(destination, headers) {
+  const linkedinIndex = headers.findIndex((header) => headerKey(header) === 'linkedin');
+  const jobIndex = headers.findIndex((header) => headerKey(header) === 'jobLink');
+  const companyIndex = headers.findIndex((header) => headerKey(header) === 'company');
+  const keys = new Set();
+  for (let r = destination.headerRowNumber; r < (destination.rows || []).length; r++) {
+    const row = destination.rows[r] || [];
+    const linkedin = linkedinIndex >= 0 ? String(row[linkedinIndex] || '').trim().toLowerCase() : '';
+    const job = jobIndex >= 0 ? String(row[jobIndex] || '').trim().toLowerCase() : '';
+    const company = companyIndex >= 0 ? normalizeHeader(row[companyIndex]) : '';
+    if (linkedin) keys.add(`linkedin:${linkedin}`);
+    if (job) keys.add(`job:${job}`);
+    if (company) keys.add(`company:${company}`);
+  }
+  return keys;
+}
+
+function recordDestinationKeys(record) {
+  const keys = [];
+  if (record?.linkedin) keys.push(`linkedin:${String(record.linkedin).trim().toLowerCase()}`);
+  if (record?.jobUrl) keys.push(`job:${String(record.jobUrl).trim().toLowerCase()}`);
+  if (record?.company) keys.push(`company:${normalizeHeader(record.company)}`);
+  return keys.filter((key) => !/:$/.test(key));
+}
+
 async function prepare(request) {
+  if (request.destinationSheetUrl) {
+    const destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
+    const nextRequest = {
+      ...request,
+      destinationSheet: {
+        spreadsheetId: destination.spreadsheetId,
+        spreadsheetTitle: destination.spreadsheetTitle,
+        sheetName: destination.sheetName,
+        sheetId: destination.sheetId,
+        headerRowNumber: destination.headerRowNumber,
+      },
+    };
+    return { type: 'run', request: nextRequest, headers: destination.headers };
+  }
   if (request.entityMode === 'company' && !request.explicitHeaders?.length && !request.usePrevious) {
     return { type: 'run', request, headers: ensureHeaders([...COMPANY_HEADERS], request) };
   }
@@ -271,7 +401,7 @@ async function prepare(request) {
   return {
     type: 'clarification',
     pending,
-    text: `This is a dedicated LinkedIn-only mission. I will not use Google Jobs, Maps, TinyFish or SerpApi for discovery. Apollo may enrich only a LinkedIn-verified decision-maker after one-run approval. Previous sheet headings: ${previous}. LinkedIn default: ${defaults}. Use previous format, default format, or send headers: ...`,
+    text: `This is a dedicated LinkedIn-only mission. I will not use Google Jobs, Maps, TinyFish or SerpApi for discovery. Apollo may enrich only a LinkedIn-verified decision-maker after one-run approval. Previous sheet headings: ${previous}. LinkedIn default: ${defaults}. Use previous format, default format, send headers: ..., or send a Google Sheets URL and I will fill that sheet directly.`,
   };
 }
 
@@ -282,6 +412,20 @@ async function resolvePending(text) {
   if (/\b(?:cancel|stop|never mind|nevermind)\b/i.test(value)) {
     clearPending();
     return { type: 'cancelled', text: 'LinkedIn-only mission cancelled before account scraping started.' };
+  }
+  const destinationSheetUrl = sheets.extractSheetUrl(value);
+  if (destinationSheetUrl) {
+    const request = { ...pending, destinationSheetUrl };
+    clearPending();
+    const destination = await inspectDestinationSheet(destinationSheetUrl, request);
+    request.destinationSheet = {
+      spreadsheetId: destination.spreadsheetId,
+      spreadsheetTitle: destination.spreadsheetTitle,
+      sheetName: destination.sheetName,
+      sheetId: destination.sheetId,
+      headerRowNumber: destination.headerRowNumber,
+    };
+    return { type: 'run', request, headers: destination.headers };
   }
   const custom = v2.headersFromText(value);
   if (custom) {
