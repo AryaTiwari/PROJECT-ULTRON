@@ -82,6 +82,18 @@ assert.ok(operator.companyFilterFailures(noEmployeeProof, filtered).includes('em
 const wrongTopic = { ...strictPass, jobEvidenceText: 'Oracle Cloud Consultant · Remote · Maharashtra, India' };
 assert.ok(operator.companyFilterFailures(wrongTopic, filtered).includes('topic'));
 
+const rejectedSnapshot = operator.rejectedRecordSnapshot(
+  { ...wrongTopic, linkedin: 'https://www.linkedin.com/company/acme-maharashtra' },
+  ['topic'],
+  filtered
+);
+assert.equal(rejectedSnapshot.company, 'Acme Maharashtra');
+assert.equal(rejectedSnapshot.workType, 'remote');
+assert.deepEqual(rejectedSnapshot.rejectionReasons, ['topic']);
+assert.ok(operator.rejectedSheetHeaders().includes('REJECTION REASONS'));
+assert.equal(operator.rejectedSheetRow(rejectedSnapshot)[0], 'Acme Maharashtra');
+assert.equal(operator.isRejectedSheetRequest('Make a sheet of the rejected candidates'), true);
+
 const dynamicHeaders = operator.ensureHeaders(operator.COMPANY_HEADERS, filtered);
 assert.ok(dynamicHeaders.includes('LOCATION'));
 assert.ok(dynamicHeaders.includes('WORK TYPE'));
@@ -142,4 +154,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
