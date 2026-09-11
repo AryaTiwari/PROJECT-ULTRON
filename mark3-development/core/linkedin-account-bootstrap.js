@@ -75,7 +75,9 @@ async function handlePrepared(prepared) {
         'linkedin-account-enrichment',
         { url: mission.sheetUrl, provider: 'google', ensureContactColumns: false, missionId: mission.id, entityMode: mission.request?.entityMode },
         mission.request?.entityMode === 'company'
-          ? `LinkedIn company research is complete. Apollo would search heads at these ${mission.contactCandidates} verified companies, rank Director/Founder/Owner first, Manager/Head Recruiter second, HR Recruiter last, and enrich only one highest-priority person per company.`
+          ? (mission.request?.hiring
+            ? `LinkedIn company research is complete. Apollo would search these ${mission.contactCandidates} verified hiring companies, prioritize Talent Acquisition / HR heads and directors first, recruiting/HR managers second, recruiters third, and founder/owner only as fallback. It will enrich only one highest-priority person per company.`
+            : `LinkedIn company research is complete. Apollo would search heads at these ${mission.contactCandidates} verified companies and enrich only one highest-priority person per company.`)
           : `LinkedIn people research is complete. Apollo would directly match these ${mission.contactCandidates} verified person profiles and fill missing phone/email cells.`
       );
       text += ` ${paidTools.prompt(approval)}`;
