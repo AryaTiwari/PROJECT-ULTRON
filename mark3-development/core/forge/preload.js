@@ -153,6 +153,15 @@ setImmediate(async () => {
     console.log(`[Mark 3] Lead Workspace ready; Google Sheet creation=on, public-web sourcing=on, LinkedIn public research=${leadWorkspace.status.linkedinPublicResearch?.configured ? 'ready' : 'needs SERP_API_KEY'}, remembered layouts=${leadWorkspace.status.templatesRemembered || 0}, max mission=${leadWorkspace.status.maxLeadsPerMission || 200} leads.`);
   } catch (error) { console.error(`[Mark 3] Lead Workspace bootstrap failed: ${error.message}`); }
 
+  // Explicit LinkedIn requests must win over the generic Lead Workspace. This
+  // wrapper is installed after it so "on LinkedIn" means authenticated LinkedIn-only
+  // research, never silent source fusion through Maps/Jobs/public web.
+  try {
+    const linkedinAccount = require('../linkedin-account-bootstrap').install();
+    const safety = linkedinAccount.safety || {};
+    console.log(`[Mark 3] LinkedIn Account Research ready; loopback-only MCP=on, read-only actions=on, hourly cap=${safety.hourlyMax || 12}, daily cap=${safety.dailyMax || 35}.`);
+  } catch (error) { console.error(`[Mark 3] LinkedIn Account Research bootstrap failed: ${error.message}`); }
+
   // Install local artifact retrieval last so attachment/delivery requests win over
   // every model-backed generation route, including accidentally normalized requests.
   try {
