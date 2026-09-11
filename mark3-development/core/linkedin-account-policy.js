@@ -29,19 +29,30 @@ function numberSetting(name, fallback, min, max) {
 
 function settings() {
   return {
-    minGapMs: numberSetting('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 15000, 5000, 60000),
-    jitterMs: numberSetting('ULTRON_M3_LINKEDIN_JITTER_MS', 5000, 0, 15000),
-    burstMax: numberSetting('ULTRON_M3_LINKEDIN_BURST_MAX', 8, 2, 12),
+    minGapMs: numberSetting('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 9000, 5000, 60000),
+    jitterMs: numberSetting('ULTRON_M3_LINKEDIN_JITTER_MS', 4000, 0, 15000),
+    burstMax: numberSetting('ULTRON_M3_LINKEDIN_BURST_MAX', 10, 2, 12),
     burstWindowMs: numberSetting('ULTRON_M3_LINKEDIN_BURST_WINDOW_MS', 10 * 60 * 1000, 5 * 60 * 1000, 30 * 60 * 1000),
-    hourlyMax: numberSetting('ULTRON_M3_LINKEDIN_HOURLY_MAX', 10, 2, 30),
-    dailyMax: numberSetting('ULTRON_M3_LINKEDIN_DAILY_MAX', 30, 5, 120),
-    missionToolMax: numberSetting('ULTRON_M3_LINKEDIN_MISSION_TOOL_MAX', 8, 3, 20),
-    rateLimitCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_RATE_LIMIT_COOLDOWN_MS', 60 * 60 * 1000, 5 * 60 * 1000, 6 * 60 * 60 * 1000),
-    errorBackoffCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_ERROR_BACKOFF_MS', 15 * 60 * 1000, 5 * 60 * 1000, 60 * 60 * 1000),
-    deepProfilesPerMission: numberSetting('ULTRON_M3_LINKEDIN_DEEP_PROFILE_MAX', 6, 1, 12),
+    hourlyMax: numberSetting('ULTRON_M3_LINKEDIN_HOURLY_MAX', 24, 2, 30),
+    dailyMax: numberSetting('ULTRON_M3_LINKEDIN_DAILY_MAX', 75, 5, 120),
+    missionToolMax: numberSetting('ULTRON_M3_LINKEDIN_MISSION_TOOL_MAX', 12, 3, 20),
+    rateLimitCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_RATE_LIMIT_COOLDOWN_MS', 30 * 60 * 1000, 5 * 60 * 1000, 6 * 60 * 60 * 1000),
+    errorBackoffCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_ERROR_BACKOFF_MS', 10 * 60 * 1000, 5 * 60 * 1000, 60 * 60 * 1000),
+    deepProfilesPerMission: numberSetting('ULTRON_M3_LINKEDIN_DEEP_PROFILE_MAX', 8, 1, 12),
     maxJobPages: numberSetting('ULTRON_M3_LINKEDIN_JOB_MAX_PAGES', 2, 1, 3),
     jobDetailMax: numberSetting('ULTRON_M3_LINKEDIN_JOB_DETAIL_MAX', 2, 0, 4),
   };
+}
+
+function recentRateLimitStrikes(state = loadState(), now = Date.now()) {
+  const cutoff = now - 24 * 60 * 60 * 1000;
+  return (state.events || []).filter((event) => event.errorKind === 'rate-limit' && Number(event.at || 0) >= cutoff).length;
+}
+
+function adaptiveRateLimitCooldownMs(state = loadState(), now = Date.now()) {
+  const strikes = Math.max(1, recentRateLimitStrikes(state, now));
+  const base = settings().rateLimitCooldownMs;
+  return Math.min(6 * 60 * 60 * 1000, base * (2 ** Math.min(3, strikes - 1)));
 }
 
 function defaultState() {
@@ -187,7 +198,7 @@ function recordError(tool, error) {
   state.lastCallAt = new Date(now).toISOString();
 
   if (classification.kind === 'rate-limit') {
-    state.cooldownUntil = new Date(now + settings().rateLimitCooldownMs).toISOString();
+    state.cooldownUntil = new Date(now + adaptiveRateLimitCooldownMs(state, now)).toISOString();
   } else if (classification.kind === 'manual-lock') {
     state.manualLock = { at: new Date(now).toISOString(), reason: classification.reason };
   } else if (classification.kind === 'other') {
@@ -221,6 +232,7 @@ function status() {
     burstUsed: counts.burst,
     hourlyUsed: counts.hourly,
     dailyUsed: counts.daily,
+    rateLimitStrikes24h: recentRateLimitStrikes(state),
     cooldownUntil: state.cooldownUntil,
     manualLock: state.manualLock,
     readOnlyTools: [...READ_ONLY_TOOLS],
@@ -235,6 +247,8 @@ module.exports = {
   loadState,
   saveState,
   classifyError,
+  recentRateLimitStrikes,
+  adaptiveRateLimitCooldownMs,
   usage,
   assertReadOnlyTool,
   preflight,

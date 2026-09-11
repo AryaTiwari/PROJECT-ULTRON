@@ -98,5 +98,9 @@ const lock = policy.classifyError(new Error('LinkedIn security checkpoint detect
 assert.equal(lock.kind, 'manual-lock');
 const rate = policy.classifyError(new Error('429 Too Many Requests'));
 assert.equal(rate.kind, 'rate-limit');
+const strikeNow = Date.now();
+const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at: strikeNow - 1000, errorKind: 'rate-limit' }] };
+assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
+assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
 console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, exact default Sheet schema, structured job/company filters, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');

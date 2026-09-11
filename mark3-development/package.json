@@ -55,6 +55,7 @@
     "check:linkedin-account": "node --env-file=../.env scripts/linkedin-account-selftest.js",
     "linkedin:setup": "node --env-file=../.env scripts/linkedin-account-setup.js",
     "linkedin:import-browser": "node --env-file=../.env scripts/linkedin-account-setup.js --import-browser",
+    "linkedin:safety-balanced": "node scripts/linkedin-safety-balanced.js",
     "linkedin:status": "node --env-file=../.env scripts/linkedin-account-doctor.js",
     "linkedin:joeyism:setup": "node --env-file=../.env scripts/linkedin-joeyism-setup.js"
   },
