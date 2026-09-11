@@ -1,5 +1,6 @@
 const operator = require('./linkedin-account-operator');
 const policy = require('./linkedin-account-policy');
+const paidTools = require('./paid-tool-approval');
 const config = require('./config');
 
 let installed = false;
@@ -47,7 +48,7 @@ function errorText(error) {
   if (/LINKEDIN_MANUAL_LOCK/i.test(code) || error?.linkedinSafety?.kind === 'manual-lock') {
     return `LinkedIn-only research is locked because LinkedIn presented a security checkpoint/challenge. Complete manual re-authentication with npm run linkedin:setup, then send “LinkedIn account unlock”. ULTRON will not retry around a checkpoint. Detail: ${message}`;
   }
-  if (/LINKEDIN_COOLDOWN|LINKEDIN_HOURLY_CAP|LINKEDIN_DAILY_CAP/i.test(code) || error?.linkedinSafety?.kind === 'rate-limit') {
+  if (/LINKEDIN_COOLDOWN|LINKEDIN_BURST_CAP|LINKEDIN_HOURLY_CAP|LINKEDIN_DAILY_CAP/i.test(code) || error?.linkedinSafety?.kind === 'rate-limit') {
     return `LinkedIn-only research stopped at the account-safety gate: ${message} ULTRON will not push through LinkedIn rate limits or switch to another source behind your back.`;
   }
   return `LinkedIn-only research stopped safely: ${message} No external lead source was substituted.`;
@@ -63,10 +64,22 @@ async function handlePrepared(prepared) {
   }
   if (prepared.type === 'run') {
     const mission = await operator.run(prepared.request, prepared.headers);
-    return responseShape(true, operator.formatMission(mission), {
+    let text = operator.formatMission(mission);
+    const extra = {
       linkedinMission: mission,
       spreadsheetUrl: mission.sheetUrl,
-    });
+    };
+    if (mission.contactCandidates > 0 && mission.missingContacts > 0) {
+      const approval = paidTools.request(
+        'apollo',
+        'linkedin-account-enrichment',
+        { url: mission.sheetUrl, provider: 'google', ensureContactColumns: false },
+        `LinkedIn research is complete. Apollo would now match only the ${mission.contactCandidates} LinkedIn-verified decision-maker profiles stored in the hidden helper column and fill missing phone/email cells. It will not discover or replace companies.`
+      );
+      text += ` ${paidTools.prompt(approval)}`;
+      extra.paidToolApproval = { id: approval.id, tool: approval.tool, operation: approval.operation, expiresAt: approval.expiresAt };
+    }
+    return responseShape(true, text, extra);
   }
   return null;
 }

@@ -236,7 +236,7 @@ async function handlePaidToolDecision(decision) {
     });
   }
 
-  if (decision.tool === 'apollo' && ['lead-enrichment', 'lead-research-enrichment'].includes(decision.operation)) {
+  if (decision.tool === 'apollo' && ['lead-enrichment', 'lead-research-enrichment', 'linkedin-account-enrichment'].includes(decision.operation)) {
     const ensureContactColumns = Boolean(decision.payload?.ensureContactColumns || decision.modifiers?.ensureContactColumns);
     return paidTools.withPermit(decision, () => handleEnrichment(decision.payload.url, decision.payload.provider || null, { ensureContactColumns }));
   }
