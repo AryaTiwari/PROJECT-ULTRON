@@ -37,9 +37,12 @@ assert.equal(exact.exactUrl, 'https://www.linkedin.com/company/acme-tech');
 assert.equal(exact.count, 1);
 
 const companyHeaders = operator.ensureHeaders(operator.COMPANY_HEADERS, company);
-assert.deepEqual(companyHeaders, ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL']);
+assert.deepEqual(companyHeaders, ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS']);
 assert.equal(operator.headerKey(operator.INTERNAL_CONTACT_HEADER), 'contactLinkedin');
 assert.equal(operator.headerKey('NO. OF APPLICANTS'), 'applicants');
+assert.equal(operator.headerKey('REMARKS'), 'remarks');
+assert.equal(operator.contactRemark('Ashok Singh', 'Director'), 'Ashok Singh (Director)');
+assert.equal(operator.contactRemark('Avani Gupta', 'HR Recruiter'), 'Avani Gupta (HR Recruiter)');
 assert.equal(operator.applicantCountFromText('Acme · 100+ applicants', 'Acme'), '100+');
 assert.deepEqual(operator.jobIdsFromResult({ job_ids: ['4252026496'], url: 'https://www.linkedin.com/jobs/view/sap-consultant-4252026496/' }), ['4252026496']);
 assert.equal(operator.employeeCountFromText('Company size 501-1,000 employees').max, 1000);
@@ -48,12 +51,12 @@ assert.equal(operator.passesEmployeeFilter({ employeeCount: null }, filtered.fil
 
 const storageHeaders = [...operator.COMPANY_HEADERS, operator.INTERNAL_CONTACT_HEADER];
 const storageRow = operator.rowFor({
-  name: 'Asha Singh', company: 'Acme', linkedin: 'https://www.linkedin.com/company/acme',
+  name: 'Asha Singh', role: 'Director', company: 'Acme', linkedin: 'https://www.linkedin.com/company/acme',
   applicants: '100+', phone: '', email: '', contactLinkedin: 'https://www.linkedin.com/in/asha-singh',
 }, storageHeaders);
-assert.deepEqual(storageRow.slice(0, 6), ['Asha Singh', 'Acme', 'https://www.linkedin.com/company/acme', '100+', '', '']);
+assert.deepEqual(storageRow.slice(0, 7), ['Asha Singh', 'Acme', 'https://www.linkedin.com/company/acme', '100+', '', '', 'Asha Singh (Director)']);
 const detected = sheetOperator.detectLayout([storageHeaders, storageRow]);
-assert.equal(detected.linkedinColumn, 'G');
+assert.equal(detected.linkedinColumn, 'H');
 assert.equal(detected.phoneColumn, 'E');
 assert.equal(detected.emailColumn, 'F');
 

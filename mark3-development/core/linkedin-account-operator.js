@@ -14,7 +14,7 @@ const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'linkedin-account', 'operator-state.json');
 const PENDING_TTL_MS = 45 * 60 * 1000;
 
-const COMPANY_HEADERS = ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL'];
+const COMPANY_HEADERS = ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS'];
 const PERSON_HEADERS = ['Name', 'Company', 'Role', 'LinkedIn', 'Location', 'Post Details', 'Email', 'Phone No', 'Source', 'Lead Score'];
 const INTERNAL_CONTACT_HEADER = '__ULTRON CONTACT LINKEDIN';
 
@@ -151,6 +151,7 @@ function headerKey(value) {
   if (/^(?:website|company website|site)$/.test(h)) return 'website';
   if (/phone|mobile|contact number|telephone/.test(h)) return 'phone';
   if (/email|e mail/.test(h)) return 'email';
+  if (/^(?:remarks?|contact remarks?|contact person|contact identity)$/.test(h)) return 'remarks';
   if (/applicants?/.test(h)) return 'applicants';
   if (/^(?:source|source url|linkedin source)$/.test(h)) return 'source';
   if (/^(?:lead score|score|quality|relevance)$/.test(h)) return 'score';
@@ -169,6 +170,10 @@ function ensureHeaders(headers, request) {
     needed.push(['email', 'Email'], ['phone', 'Phone No']);
   }
   for (const [key, label] of needed) if (!keys.has(key)) { out.push(label); keys.add(key); }
+  if (request.entityMode === 'company' && !keys.has('remarks')) {
+    const emailIndex = out.findIndex((header) => headerKey(header) === 'email');
+    out.splice(emailIndex >= 0 ? emailIndex + 1 : out.length, 0, 'REMARKS');
+  }
   return out.slice(0, 30);
 }
 
@@ -249,7 +254,7 @@ async function resolvePending(text) {
     return { type: 'run', request: pending, headers: ensureHeaders(defaults, pending) };
   }
   if (/\b(?:different|custom|new)\b[\s\S]{0,30}\b(?:format|headers?|columns?|layout)\b/i.test(value)) {
-    return { type: 'clarification', pending, text: 'Send the layout as: headers: NAME, COMPANY NAME, COMPANY LINK, NO. OF APPLICANTS, PHONE NUMBER, EMAIL.' };
+    return { type: 'clarification', pending, text: 'Send the layout as: headers: NAME, COMPANY NAME, COMPANY LINK, NO. OF APPLICANTS, PHONE NUMBER, EMAIL, REMARKS.' };
   }
   return null;
 }
@@ -779,6 +784,13 @@ function apolloSearchDelayMs() {
   return Math.max(300, Math.min(10000, Number.isFinite(value) ? value : 900));
 }
 
+function contactRemark(name, role) {
+  const person = String(name || '').trim();
+  const title = String(role || '').trim();
+  if (!person) return '';
+  return title ? `${person} (${title})` : person;
+}
+
 async function prepareApolloCompanyContacts(missionId) {
   const state = loadState();
   const mission = state.missions.find((item) => item.id === missionId);
@@ -793,6 +805,7 @@ async function prepareApolloCompanyContacts(missionId) {
   const selected = [];
   const unresolved = [];
   const nameIndex = mission.headers.findIndex((header) => headerKey(header) === 'name');
+  const remarksIndex = mission.headers.findIndex((header) => headerKey(header) === 'remarks');
   const helperIndex = mission.storageHeaders.findIndex((header) => headerKey(header) === 'contactLinkedin');
   const spreadsheetId = sheets.spreadsheetId(mission.sheetUrl);
 
@@ -804,9 +817,11 @@ async function prepareApolloCompanyContacts(missionId) {
         unresolved.push({ company: target.company, reason: 'No Apollo candidate matched the company and requested priority titles.' });
       } else {
         const name = String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || '').trim();
+        const remark = contactRemark(name, person.title);
         if (nameIndex >= 0) changes.push({ range: sheets.cellRange(mission.sheetName, target.rowNumber, nameIndex), value: name });
+        if (remarksIndex >= 0) changes.push({ range: sheets.cellRange(mission.sheetName, target.rowNumber, remarksIndex), value: remark });
         if (helperIndex >= 0) changes.push({ range: sheets.cellRange(mission.sheetName, target.rowNumber, helperIndex), value: person.linkedinUrl });
-        selected.push({ rowNumber: target.rowNumber, company: target.company, name, title: person.title || '', linkedin: person.linkedinUrl, priority: person.decisionPriority });
+        selected.push({ rowNumber: target.rowNumber, company: target.company, name, title: person.title || '', remark, linkedin: person.linkedinUrl, priority: person.decisionPriority });
       }
     } catch (error) {
       if (/APOLLO_(?:PEOPLE_SEARCH_ACCESS_REQUIRED|NOT_CONFIGURED)/.test(String(error.code || '')) || Number(error.status) === 429) throw error;
@@ -836,6 +851,7 @@ function rowFor(record, headers) {
     if (key === 'website') return record.website || '';
     if (key === 'phone') return record.phone || '';
     if (key === 'email') return record.email || '';
+    if (key === 'remarks') return record.remarks || contactRemark(record.name, record.role);
     if (key === 'applicants') return record.applicants || '';
     if (key === 'source') return record.source || record.linkedin || '';
     if (key === 'score') return record.relevanceScore ?? '';
@@ -989,6 +1005,7 @@ module.exports = {
   companyMission,
   personMission,
   exactMission,
+  contactRemark,
   rowFor,
   websiteDomain,
   prepareApolloCompanyContacts,
