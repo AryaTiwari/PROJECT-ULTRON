@@ -147,6 +147,8 @@ function headerKey(value) {
   if (/linkedin|company link|company url/.test(h)) return 'linkedin';
   if (/^(?:location|city|region|state)$/.test(h)) return 'location';
   if (/^(?:hiring signal|job signal|hiring activity)$/.test(h)) return 'hiring';
+  if (/^(?:work type|workplace type|workplace|remote status)$/.test(h)) return 'workType';
+  if (/^(?:employees?|employee count|company size|headcount)$/.test(h)) return 'employees';
   if (/^(?:post details|details|description|profile details|linkedin details|notes)$/.test(h)) return 'details';
   if (/^(?:website|company website|site)$/.test(h)) return 'website';
   if (/phone|mobile|contact number|telephone/.test(h)) return 'phone';
@@ -166,6 +168,12 @@ function ensureHeaders(headers, request) {
   const needed = request.entityMode === 'company'
     ? [['name', 'NAME'], ['company', 'COMPANY NAME'], ['linkedin', 'COMPANY LINK'], ['applicants', 'NO. OF APPLICANTS'], ['phone', 'PHONE NUMBER'], ['email', 'EMAIL']]
     : [['name', 'Name'], ['company', 'Company'], ['role', 'Role'], ['linkedin', 'LinkedIn'], ['location', 'Location'], ['details', 'Post Details'], ['source', 'Source'], ['score', 'Lead Score']];
+  if (request.entityMode === 'company') {
+    if (request.location) needed.push(['location', 'LOCATION']);
+    if (request.filters?.workType) needed.push(['workType', 'WORK TYPE']);
+    if (request.filters?.employeeMin != null || request.filters?.employeeMax != null) needed.push(['employees', 'EMPLOYEES']);
+    if (request.hiring) needed.push(['hiring', 'HIRING SIGNAL']);
+  }
   if (request.wantsContacts) {
     needed.push(['email', 'Email'], ['phone', 'Phone No']);
   }
@@ -209,7 +217,7 @@ function clearPending() {
 
 async function prepare(request) {
   if (request.entityMode === 'company' && !request.explicitHeaders?.length && !request.usePrevious) {
-    return { type: 'run', request, headers: [...COMPANY_HEADERS] };
+    return { type: 'run', request, headers: ensureHeaders([...COMPANY_HEADERS], request) };
   }
   if (request.exactUrl || request.explicitHeaders?.length || request.useDefault || request.usePrevious) {
     let headers = request.explicitHeaders;
@@ -384,6 +392,125 @@ function passesEmployeeFilter(record, filters = {}) {
   return true;
 }
 
+const LOCATION_REGION_ALIASES = {
+  maharashtra: [
+    'maharashtra', 'mumbai', 'navi mumbai', 'thane', 'pune', 'nagpur', 'nashik',
+    'aurangabad', 'chhatrapati sambhajinagar', 'kolhapur', 'solapur', 'amravati',
+    'satara', 'sangli', 'jalgaon', 'akola', 'latur', 'ratnagiri',
+  ],
+};
+
+function evidenceRegexEscape(value) {
+  return String(value || '').replace(/[.*+?^$(){}|[\]\\]/g, '\\function passesEmployeeFilter(record, filters = {}) {
+  if (filters.employeeMin == null && filters.employeeMax == null) return true;
+  const size = record.employeeCount;
+  if (!size) return false;
+  if (filters.employeeMin != null && Number(size.max) < filters.employeeMin) return false;
+  if (filters.employeeMax != null && Number(size.min) > filters.employeeMax) return false;
+  return true;
+}
+');
+}
+
+function containsEvidenceTerm(text, term) {
+  const needle = String(term || '').trim();
+  if (!needle) return false;
+  return new RegExp(`\\b${evidenceRegexEscape(needle).replace(/\\ /g, '\\s+')}\\b`, 'i').test(String(text || ''));
+}
+
+function mergeEvidenceText(left, right, max = 12000) {
+  const parts = [left, right].map((value) => String(value || '').trim()).filter(Boolean);
+  return [...new Set(parts)].join('\n').slice(0, max);
+}
+
+function scopedCompanyEvidence(text, company, radius = 1400) {
+  const source = String(text || '');
+  const needle = String(company || '').trim();
+  if (!source || !needle) return '';
+  const lower = source.toLowerCase();
+  const at = lower.indexOf(needle.toLowerCase());
+  if (at < 0) return '';
+  return source.slice(Math.max(0, at - radius), Math.min(source.length, at + needle.length + radius));
+}
+
+function detectWorkType(text) {
+  const value = String(text || '').toLowerCase();
+  if (/\bhybrid\b/.test(value)) return 'hybrid';
+  if (/\bremote\b|work\s+from\s+home|work\s+from\s+anywhere/.test(value)) return 'remote';
+  if (/\bon[- ]?site\b|\bin[- ]?office\b|workplace\s+type\s*[:·-]?\s*on[- ]?site/.test(value)) return 'on_site';
+  return '';
+}
+
+function companyLocationEvidence(record) {
+  return [
+    record?.companyEvidenceText,
+    record?.companySearchEvidenceText,
+    record?.companyLocation,
+  ].filter(Boolean).join('\n');
+}
+
+function jobEvidence(record) {
+  return [
+    record?.jobEvidenceText,
+    record?.hiringSignal,
+  ].filter(Boolean).join('\n');
+}
+
+function locationEvidenceMatches(record, requestedLocation) {
+  const requested = String(requestedLocation || '').trim().toLowerCase();
+  if (!requested) return true;
+  const evidence = companyLocationEvidence(record);
+  if (!evidence) return false;
+  const aliases = LOCATION_REGION_ALIASES[requested] || [requested];
+  return aliases.some((alias) => containsEvidenceTerm(evidence, alias));
+}
+
+function workTypeEvidenceMatches(record, requestedWorkType) {
+  const requested = String(requestedWorkType || '').trim().toLowerCase();
+  if (!requested) return true;
+  return detectWorkType(jobEvidence(record)) === requested;
+}
+
+function topicEvidenceMatches(record, topic) {
+  const requested = String(topic || '').trim().toLowerCase();
+  if (!requested || /^(?:companies|professionals)$/.test(requested)) return true;
+  const evidence = jobEvidence(record);
+  if (!evidence) return false;
+  if (containsEvidenceTerm(evidence, requested)) return true;
+  const stop = new Set(['role', 'roles', 'job', 'jobs', 'opening', 'openings', 'position', 'positions', 'hiring']);
+  const tokens = requested.split(/\s+/).map((token) => token.replace(/[^a-z0-9+#.-]/g, '')).filter((token) => token.length >= 2 && !stop.has(token));
+  return tokens.length > 0 && tokens.every((token) => containsEvidenceTerm(evidence, token));
+}
+
+function companyFilterFailures(record, request = {}) {
+  const failures = [];
+  if (request.hiring && !record?.hiringVerified) failures.push('hiring');
+  if (!passesEmployeeFilter(record, request.filters || {})) failures.push('employee_count');
+  if (request.location && !locationEvidenceMatches(record, request.location)) failures.push('location');
+  if (request.filters?.workType && !workTypeEvidenceMatches(record, request.filters.workType)) failures.push('work_type');
+  if (request.hiring && request.topic && !topicEvidenceMatches(record, request.topic)) failures.push('topic');
+  return [...new Set(failures)];
+}
+
+function passesCompanyHardFilters(record, request = {}) {
+  return companyFilterFailures(record, request).length === 0;
+}
+
+function mergeDuplicateRecord(target, source) {
+  if (!target || !source) return target || source;
+  for (const key of ['name', 'company', 'role', 'website', 'applicants', 'email', 'phone', 'companyLocation']) {
+    if (!target[key] && source[key]) target[key] = source[key];
+  }
+  for (const key of ['snippet', 'hiringSignal', 'jobEvidenceText', 'companySearchEvidenceText', 'companyEvidenceText']) {
+    target[key] = mergeEvidenceText(target[key], source[key], key === 'snippet' ? 5000 : 12000);
+  }
+  if (!target.employeeCount && source.employeeCount) target.employeeCount = source.employeeCount;
+  target.hiringVerified = Boolean(target.hiringVerified || source.hiringVerified);
+  target.relevanceScore = Math.max(Number(target.relevanceScore || 0), Number(source.relevanceScore || 0));
+  target.sourceEvidence = [...new Set([...(target.sourceEvidence || []), ...(source.sourceEvidence || [])])];
+  return target;
+}
+
 function isBudgetStop(error) {
   return /LINKEDIN_(?:BURST|HOURLY|DAILY)_CAP/.test(String(error?.code || ''));
 }
@@ -424,7 +551,7 @@ function referenceRecord(ref, request) {
       title: ref.text || ref.slug,
       snippet,
       url: ref.url,
-    }, { entityMode: 'company', location: request.location });
+    }, { entityMode: 'company' });
     return parsed ? { ...parsed, name: '', company: parsed.company || parsed.name || '', source: parsed.linkedin, sourceEvidence: ['linkedin-account-search'] } : null;
   }
   const parsed = linkedinPublic.parseResult({
@@ -447,17 +574,22 @@ function qualityScore(record, request, evidence = {}) {
 }
 
 function dedupeRecords(records, mode) {
-  const seen = new Set();
-  const names = new Set();
+  const byUrl = new Map();
+  const byName = new Map();
   const out = [];
   for (const record of records || []) {
     const normalized = linkedinPublic.normalizeLinkedInEntityUrl(record?.linkedin, mode);
-    if (!normalized || seen.has(normalized.url)) continue;
+    if (!normalized) continue;
     const secondary = String(record.company || record.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    if (secondary && names.has(secondary)) continue;
-    seen.add(normalized.url);
-    if (secondary) names.add(secondary);
-    out.push({ ...record, linkedin: normalized.url });
+    const existing = byUrl.get(normalized.url) || (secondary ? byName.get(secondary) : null);
+    if (existing) {
+      mergeDuplicateRecord(existing, { ...record, linkedin: normalized.url });
+      continue;
+    }
+    const next = { ...record, linkedin: normalized.url };
+    byUrl.set(normalized.url, next);
+    if (secondary) byName.set(secondary, next);
+    out.push(next);
   }
   return out;
 }
@@ -488,8 +620,9 @@ async function companyMission(request) {
     throw error;
   }
   let jobsResult = null;
+  let jobsRawText = '';
   let jobDetails = 0;
-  let companySearches = [];
+  const companySearches = [];
 
   if (request.hiring) {
     jobsResult = await budgetedCall(budget, 'search_jobs', {
@@ -503,34 +636,40 @@ async function companyMission(request) {
       easy_apply: Boolean(request.filters?.easyApply),
       sort_by: 'date',
     });
+    jobsRawText = flattenText(jobsResult);
     for (const ref of linkedInReferences(jobsResult || {}, 'company')) {
       const record = referenceRecord(ref, request);
-      if (record) {
-        record.hiringSignal = [ref.text, ref.context].filter(Boolean).join(' · ').slice(0, 700) || 'Company appeared in LinkedIn job-search evidence.';
-        record.hiringVerified = true;
-        record.applicants = applicantCountFromText(flattenText(jobsResult), record.company);
-        record.employeeCount = employeeCountFromText(record.snippet);
-        record.relevanceScore = qualityScore(record, request, { hiring: true });
-        records.push(record);
-      }
+      if (!record) continue;
+      const scoped = scopedCompanyEvidence(jobsRawText, record.company) || [ref.text, ref.context].filter(Boolean).join(' · ');
+      record.jobEvidenceText = scoped;
+      record.hiringSignal = scoped.slice(0, 700) || 'Company appeared in LinkedIn job-search evidence.';
+      record.hiringVerified = topicEvidenceMatches(record, request.topic);
+      record.workType = detectWorkType(scoped);
+      record.applicants = applicantCountFromText(jobsRawText, record.company);
+      record.employeeCount = employeeCountFromText(record.snippet);
+      record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified });
+      records.push(record);
     }
-    const needsEmployeeVerification = request.filters?.employeeMin != null || request.filters?.employeeMax != null;
-    if (!needsEmployeeVerification) {
-      for (const jobId of jobIdsFromResult(jobsResult).slice(0, policy.settings().jobDetailMax)) {
-        const detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
-        if (!detail) break;
-        jobDetails++;
-        const detailText = flattenText(detail);
-        for (const ref of linkedInReferences(detail, 'company')) {
-          const record = referenceRecord(ref, request);
-          if (!record) continue;
-          record.hiringSignal = detailText.slice(0, 700) || `Verified LinkedIn job ${jobId}.`;
-          record.hiringVerified = true;
-          record.applicants = applicantCountFromText(detailText, record.company);
-          record.employeeCount = employeeCountFromText(record.snippet);
-          record.relevanceScore = qualityScore(record, request, { hiring: true, deep: true });
-          records.push(record);
-        }
+
+    // Strict missions need per-job evidence whenever LinkedIn exposes job IDs.
+    // Search filters are candidate generators, not proof: we verify topic/workplace
+    // from the returned job text before a company may enter the Sheet.
+    for (const jobId of jobIdsFromResult(jobsResult).slice(0, policy.settings().jobDetailMax)) {
+      const detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
+      if (!detail) break;
+      jobDetails++;
+      const detailText = flattenText(detail);
+      for (const ref of linkedInReferences(detail, 'company')) {
+        const record = referenceRecord(ref, request);
+        if (!record) continue;
+        record.jobEvidenceText = detailText;
+        record.hiringSignal = detailText.slice(0, 700) || `Verified LinkedIn job ${jobId}.`;
+        record.hiringVerified = topicEvidenceMatches(record, request.topic);
+        record.workType = detectWorkType(detailText);
+        record.applicants = applicantCountFromText(detailText, record.company);
+        record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified, deep: true });
+        record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), `linkedin-job-${jobId}`])];
+        records.push(record);
       }
     }
   }
@@ -539,20 +678,20 @@ async function companyMission(request) {
     keyword,
     request.location ? `${keyword} ${request.location}` : '',
   ].filter(Boolean);
-  for (const query of [...new Set(searches)].slice(0, 1)) {
+  for (const query of [...new Set(searches)].slice(0, 2)) {
     const result = await budgetedCall(budget, 'search_companies', { keywords: query });
     if (!result) break;
     companySearches.push(result);
-    const jobsText = flattenText(jobsResult).toLowerCase();
     for (const ref of linkedInReferences(result, 'company')) {
       const record = referenceRecord(ref, request);
       if (!record) continue;
-      const companyKey = String(record.company || record.name || '').toLowerCase();
-      const hiringEvidence = Boolean(request.hiring && companyKey && jobsText.includes(companyKey));
-      record.hiringSignal = hiringEvidence ? 'Company also appears in LinkedIn Jobs results for this mission.' : record.hiringSignal || '';
-      record.hiringVerified = Boolean(record.hiringVerified || hiringEvidence);
-      record.applicants = applicantCountFromText(flattenText(jobsResult), record.company);
-      record.employeeCount = employeeCountFromText(record.snippet);
+      record.companySearchEvidenceText = [ref.text, ref.context].filter(Boolean).join(' · ');
+      record.jobEvidenceText = scopedCompanyEvidence(jobsRawText, record.company);
+      record.hiringVerified = Boolean(request.hiring && topicEvidenceMatches(record, request.topic));
+      record.hiringSignal = record.hiringVerified ? record.jobEvidenceText.slice(0, 700) : '';
+      record.workType = detectWorkType(record.jobEvidenceText);
+      record.applicants = applicantCountFromText(jobsRawText, record.company);
+      record.employeeCount = employeeCountFromText(record.companySearchEvidenceText) || employeeCountFromText(record.snippet);
       record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified });
       records.push(record);
     }
@@ -568,27 +707,27 @@ async function companyMission(request) {
     const slug = linkedinPublic.normalizeLinkedInEntityUrl(record.linkedin, 'company')?.slug;
     if (!slug) continue;
     try {
+      // Keep company-location evidence separate from job evidence. Asking for the
+      // general company profile avoids accepting a non-Maharashtra company merely
+      // because one of its jobs mentions Pune/Mumbai.
       const deep = await budgetedCall(budget, 'get_company_profile', {
         company_name: slug,
-        sections: request.hiring ? 'jobs' : undefined,
       });
       if (!deep) break;
       deepProfiles++;
       const text = flattenText(deep);
+      record.companyEvidenceText = text;
       record.snippet = [record.snippet, text.slice(0, 3500)].filter(Boolean).join('\n').slice(0, 5000);
       record.website = websiteFromText(text);
-      // Company contact fields belong to the selected person, never to a generic
-      // company/about-page address. Apollo fills them after ranking one head.
       record.email = '';
       record.phone = '';
       record.employeeCount = employeeCountFromText(text) || record.employeeCount || null;
-      record.applicants = record.applicants || applicantCountFromText(text, record.company);
-      const hiringDeep = request.hiring && /\b(?:hiring|jobs?|vacanc(?:y|ies)|openings?)\b/i.test(text)
-        && String(text).toLowerCase().includes(keyword.toLowerCase().split(/\s+/)[0] || keyword.toLowerCase());
-      if (hiringDeep) {
-        record.hiringSignal = `LinkedIn company jobs section contains current ${keyword} hiring evidence.`;
-        record.hiringVerified = true;
-      }
+      record.companyLocation = linkedinPublic.locationFromText(text)
+        || linkedinPublic.locationFromText(record.companySearchEvidenceText)
+        || '';
+      record.location = record.companyLocation;
+      record.applicants = record.applicants || applicantCountFromText(record.jobEvidenceText, record.company);
+      record.workType = detectWorkType(record.jobEvidenceText);
       record.relevanceScore = qualityScore(record, request, { hiring: Boolean(record.hiringVerified), deep: true });
       record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'linkedin-account-company-profile'])];
     } catch (error) {
@@ -597,10 +736,31 @@ async function companyMission(request) {
     }
   }
 
-  merged = merged
-    .filter((record) => Number(record.relevanceScore || 0) >= 50)
-    .filter((record) => !request.hiring || Boolean(record.hiringVerified))
-    .filter((record) => passesEmployeeFilter(record, request.filters))
+  const rejected = {
+    low_relevance: 0,
+    hiring: 0,
+    employee_count: 0,
+    location: 0,
+    work_type: 0,
+    topic: 0,
+  };
+  const accepted = [];
+  for (const record of merged) {
+    if (Number(record.relevanceScore || 0) < 50) {
+      rejected.low_relevance++;
+      continue;
+    }
+    const failures = companyFilterFailures(record, request);
+    if (failures.length) {
+      for (const reason of failures) rejected[reason] = Number(rejected[reason] || 0) + 1;
+      continue;
+    }
+    record.location = record.companyLocation || linkedinPublic.locationFromText(record.companySearchEvidenceText) || '';
+    record.workType = detectWorkType(record.jobEvidenceText);
+    accepted.push(record);
+  }
+
+  merged = accepted
     .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0))
     .slice(0, request.count);
 
@@ -616,6 +776,15 @@ async function companyMission(request) {
     },
     budgetStopped: budget.stopped,
     filters: request.filters,
+    filterVerification: {
+      hardGate: true,
+      requestedLocation: request.location || null,
+      requestedWorkType: request.filters?.workType || null,
+      employeeMin: request.filters?.employeeMin ?? null,
+      employeeMax: request.filters?.employeeMax ?? null,
+      topic: request.topic || null,
+      rejected,
+    },
   };
 }
 
@@ -845,7 +1014,9 @@ function rowFor(record, headers) {
     if (key === 'role') return record.role || '';
     if (key === 'linkedin') return record.linkedin || '';
     if (key === 'contactLinkedin') return record.contactLinkedin || '';
-    if (key === 'location') return record.location || '';
+    if (key === 'location') return record.location || record.companyLocation || '';
+    if (key === 'workType') return record.workType || detectWorkType(record.jobEvidenceText) || '';
+    if (key === 'employees') return record.employeeCount?.label || '';
     if (key === 'hiring') return record.hiringSignal || '';
     if (key === 'details') return record.snippet || '';
     if (key === 'website') return record.website || '';
@@ -919,6 +1090,7 @@ async function run(request, headers) {
     mission.internalContactColumnHidden = needsInternalContact;
     mission.budgetStopped = researched.budgetStopped || null;
     mission.filters = researched.filters || request.filters || {};
+    mission.filterVerification = researched.filterVerification || null;
     mission.safety = policy.status();
 
     const latest = loadState();
@@ -975,7 +1147,10 @@ function formatMission(mission) {
     ? ` ${mission.contactCandidates || 0} verified company rows are ready for Apollo to select one highest-priority head and enrich that person’s contact details.`
     : ` ${mission.contactCandidates || 0} LinkedIn person profiles are ready for direct Apollo matching.`;
   const budget = mission.budgetStopped ? ` Safety stop: ${mission.budgetStopped}.` : '';
-  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”. Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${contact}${shortfall}${budget} ${mission.sheetUrl}`;
+  const rejected = mission.filterVerification?.rejected || {};
+  const hardRejected = Object.values(rejected).reduce((sum, value) => sum + Number(value || 0), 0);
+  const hardGate = mission.filterVerification?.hardGate ? ` Hard-filter gate rejected ${hardRejected} candidate checks that lacked explicit requested evidence.` : '';
+  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”. Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${hardGate}${contact}${shortfall}${budget} ${mission.sheetUrl}`;
 }
 
 module.exports = {
@@ -1001,6 +1176,13 @@ module.exports = {
   applicantCountFromText,
   employeeCountFromText,
   passesEmployeeFilter,
+  scopedCompanyEvidence,
+  detectWorkType,
+  locationEvidenceMatches,
+  workTypeEvidenceMatches,
+  topicEvidenceMatches,
+  companyFilterFailures,
+  passesCompanyHardFilters,
   dedupeRecords,
   companyMission,
   personMission,
