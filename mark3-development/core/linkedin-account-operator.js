@@ -909,7 +909,7 @@ async function companyMission(request) {
 
   if (request.hiring) {
     const plan = jobSearchPlan(request);
-    const maxSearchCalls = budget.localBudgetBypass ? Math.min(plan.length, 7) : 1;
+    const maxSearchCalls = budget.localBudgetBypass ? Math.min(plan.length, 12) : 1;
 
     for (const step of plan.slice(0, maxSearchCalls)) {
       const result = await budgetedCall(budget, 'search_jobs', {
@@ -928,6 +928,7 @@ async function companyMission(request) {
       const ids = jobIdsFromResult(result);
       const refs = jobReferenceMap(result);
       const warning = result?.section_errors?.search_results || null;
+      const trust = searchFilterTrust(result, step, request);
       if (warning?.error_message) {
         searchWarnings.push({ keyword: step.keyword, location: step.location, ...warning });
       }
@@ -939,7 +940,10 @@ async function companyMission(request) {
           title: '',
           hits: 0,
           locations: [],
+          trustedLocations: [],
+          trustedWorkTypes: [],
           keywords: [],
+          searches: [],
           bestKeyword: '',
           firstRank: rank,
           firstSeen: jobMeta.size,
@@ -948,7 +952,17 @@ async function companyMission(request) {
         current.firstRank = Math.min(Number(current.firstRank ?? rank), rank);
         if (!current.title && ref.title) current.title = ref.title;
         if (step.location && !current.locations.includes(step.location)) current.locations.push(step.location);
+        if (trust.trustedLocation && !current.trustedLocations.includes(trust.trustedLocation)) current.trustedLocations.push(trust.trustedLocation);
+        if (trust.trustedWorkType && !current.trustedWorkTypes.includes(trust.trustedWorkType)) current.trustedWorkTypes.push(trust.trustedWorkType);
         if (step.keyword && !current.keywords.includes(step.keyword)) current.keywords.push(step.keyword);
+        current.searches.push({
+          keyword: step.keyword,
+          location: step.location || '',
+          requestedWorkType: request.filters?.workType || '',
+          trustedLocation: trust.trustedLocation,
+          trustedWorkType: trust.trustedWorkType,
+          dropped: trust.dropped,
+        });
         if (!current.bestKeyword || String(step.keyword).length > String(current.bestKeyword).length) current.bestKeyword = step.keyword;
         jobMeta.set(id, current);
       });
@@ -958,6 +972,9 @@ async function companyMission(request) {
         location: step.location,
         jobIds: ids.length,
         uniqueJobIds: jobMeta.size,
+        trustedLocation: trust.trustedLocation || null,
+        trustedWorkType: trust.trustedWorkType || null,
+        droppedFilters: trust.dropped,
         warning: warning?.error_type || null,
       });
     }
@@ -1002,6 +1019,9 @@ async function companyMission(request) {
         hits: Number(meta.hits || 0),
         keywords: meta.keywords || [],
         locations: meta.locations || [],
+        trustedLocations: meta.trustedLocations || [],
+        trustedWorkTypes: meta.trustedWorkTypes || [],
+        searches: meta.searches || [],
         priority: jobIdPriority(meta),
       };
       record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), `linkedin-job-${jobId}`, 'linkedin-job-detail'])];
@@ -1145,13 +1165,6 @@ async function companyMission(request) {
   }
 
   for (const record of merged) {
-    if (Number(record.relevanceScore || 0) < 50) {
-      rejected.low_relevance++;
-      rejectedCandidates++;
-      rejectedRecords.push(rejectedRecordSnapshot(record, ['low_relevance'], request));
-      continue;
-    }
-
     const failures = companyFilterFailures(record, request);
     if (failures.length) {
       rejectedCandidates++;
@@ -1160,13 +1173,18 @@ async function companyMission(request) {
       continue;
     }
 
-    const locationMatch = locationEvidenceDetails(record, request.location, { allowJobEvidence: Boolean(request.hiring) });
+    const locationMatch = locationEvidenceDetails(record, request.location, {
+      allowJobEvidence: Boolean(request.hiring),
+      allowCompanyEvidence: request.locationScope !== 'job',
+    });
     const jobLocation = linkedinPublic.locationFromText(record.jobEvidenceText);
-    record.location = locationMatch.source === 'job'
+    record.location = ['job', 'linkedin_search_filter'].includes(locationMatch.source)
       ? (jobLocation || locationMatch.label || request.location || '')
       : (record.companyLocation || linkedinPublic.locationFromText(record.companySearchEvidenceText) || locationMatch.label || '');
     record.locationEvidenceSource = locationMatch.source;
-    record.workType = detectWorkType(record.jobEvidenceText);
+    const workTypeMatch = workTypeEvidenceDetails(record, request.filters?.workType);
+    record.workType = workTypeMatch.value || detectWorkType(record.jobEvidenceText);
+    record.workTypeEvidenceSource = workTypeMatch.source;
     accepted.push(record);
   }
 
@@ -1195,6 +1213,7 @@ async function companyMission(request) {
     filterVerification: {
       hardGate: true,
       requestedLocation: request.location || null,
+      locationScope: request.locationScope || null,
       requestedWorkType: request.filters?.workType || null,
       employeeMin: request.filters?.employeeMin ?? null,
       employeeMax: request.filters?.employeeMax ?? null,
