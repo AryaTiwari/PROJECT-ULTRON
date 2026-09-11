@@ -624,7 +624,8 @@ function statusText() {
   const mission = latestMission();
   const sourceStatus = sourceFusion.status();
   if (!mission) {
-    return `Lead Workspace v3 is ready. Multi-source discovery is on: TinyFish/public web plus SerpApi search${sourceStatus.serpGoogleJobs ? ' + Google Jobs' : ''}${sourceStatus.apifyGoogleMaps ? ' + Apify Google Maps' : ''}. It can create formatted Google Sheets, remember layouts, rank and deduplicate leads, scrape identity-checked public contact evidence, checkpoint long missions, and hand only unresolved contacts to Apollo.`;
+    const linkedinReady = linkedinPublic.status().configured ? ' + LinkedIn public company/person research' : '';
+    return `Lead Workspace v3 is ready. Multi-source discovery is on: TinyFish/public web plus SerpApi search${sourceStatus.serpGoogleJobs ? ' + Google Jobs' : ''}${sourceStatus.apifyGoogleMaps ? ' + Apify Google Maps' : ''}${linkedinReady}. It can create formatted Google Sheets, remember layouts, rank and deduplicate leads, scrape identity-checked public contact evidence, checkpoint long missions, and hand only unresolved person contacts to Apollo.`;
   }
   const discovered = Number(mission.leads?.length || 0);
   const providers = Object.entries(mission.searchProviders || {}).map(([name, count]) => `${name}:${count}`).join(', ') || 'none yet';
@@ -637,7 +638,7 @@ function formatMission(mission) {
   const noun = mission.entityMode === 'company' ? 'companies' : 'people';
   const shortfall = discovered < Number(mission.requested || 0) ? ` I found ${discovered}/${mission.requested} qualifying ${noun} in this pass.` : '';
   const contactPhrase = mission.entityMode === 'company'
-    ? `Public company research found ${mission.publicEmails || 0} emails and ${mission.publicPhones || 0} phones`
+    ? `Public company research found ${mission.publicEmails || 0} emails and ${mission.publicPhones || 0} phones; Apollo People Enrichment is not used on company-profile rows`
     : `Public research found ${mission.publicEmails || 0} emails and ${mission.publicPhones || 0} phones before Apollo`;
   return `Lead mission complete, Sir. Created “${mission.spreadsheetTitle}” and added ${mission.added || 0} lead${mission.added === 1 ? '' : 's'} for “${mission.criteria}”. Source fusion: ${sourceSummary(mission)}. ${mission.multiSourceLeads || 0} accepted ${noun} had independent source evidence. ${contactPhrase}; average relevance ${mission.averageRelevance || 0}/100. Duplicates skipped ${mission.duplicatesRemoved || 0}; low-relevance results rejected ${mission.rejectedLowRelevance || 0}.${shortfall} ${mission.sheetUrl}`;
 }
