@@ -599,7 +599,10 @@ function companyFilterFailures(record, request = {}) {
   const failures = [];
   if (request.hiring && !record?.hiringVerified) failures.push('hiring');
   if (!passesEmployeeFilter(record, request.filters || {})) failures.push('employee_count');
-  if (request.location && !locationEvidenceMatches(record, request.location, { allowJobEvidence: Boolean(request.hiring) })) failures.push('location');
+  if (request.location && !locationEvidenceMatches(record, request.location, {
+    allowJobEvidence: Boolean(request.hiring),
+    allowCompanyEvidence: request.locationScope !== 'job',
+  })) failures.push('location');
   if (request.filters?.workType && !workTypeEvidenceMatches(record, request.filters.workType)) failures.push('work_type');
   if (request.hiring && request.topic && !topicEvidenceMatches(record, request.topic)) failures.push('topic');
   return [...new Set(failures)];
@@ -610,16 +613,21 @@ function passesCompanyHardFilters(record, request = {}) {
 }
 
 function rejectedRecordSnapshot(record, reasons = [], request = {}) {
-  const locationMatch = locationEvidenceDetails(record, request.location, { allowJobEvidence: Boolean(request.hiring) });
+  const locationMatch = locationEvidenceDetails(record, request.location, {
+    allowJobEvidence: Boolean(request.hiring),
+    allowCompanyEvidence: request.locationScope !== 'job',
+  });
   const jobLocation = linkedinPublic.locationFromText(record?.jobEvidenceText || '');
+  const workTypeMatch = workTypeEvidenceDetails(record, request.filters?.workType);
   return {
     company: String(record?.company || record?.name || '').trim(),
     linkedin: String(record?.linkedin || '').trim(),
     location: locationMatch.source === 'job'
       ? (jobLocation || locationMatch.label || request.location || '')
-      : (record?.companyLocation || linkedinPublic.locationFromText(record?.companySearchEvidenceText || '') || locationMatch.label || ''),
+      : (locationMatch.label || record?.companyLocation || linkedinPublic.locationFromText(record?.companySearchEvidenceText || '') || ''),
     locationEvidenceSource: locationMatch.source || '',
-    workType: record?.workType || detectWorkType(record?.jobEvidenceText || ''),
+    workType: workTypeMatch.value || record?.workType || detectWorkType(record?.jobEvidenceText || ''),
+    workTypeEvidenceSource: workTypeMatch.source || '',
     employeeCount: record?.employeeCount || null,
     applicants: record?.applicants || '',
     relevanceScore: Number(record?.relevanceScore || 0),
