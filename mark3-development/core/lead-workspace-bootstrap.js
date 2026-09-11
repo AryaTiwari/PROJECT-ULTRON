@@ -99,6 +99,9 @@ function install() {
         conversation.append('user', text, { taskType: 'lead-workspace-layout', inputMode });
         emit('lead_workspace_layout_resolved', { inputMode, type: pending.type });
         result = await handlePrepared(pending);
+      } else if (workspace.isSourceStatusRequest?.(text)) {
+        conversation.append('user', text, { taskType: 'lead-source-status', inputMode });
+        result = responseShape(true, workspace.sourceStatusText(), { leadWorkspace: workspace.status() });
       } else if (workspace.isStatusRequest(text)) {
         conversation.append('user', text, { taskType: 'lead-workspace-status', inputMode });
         result = responseShape(true, workspace.statusText(), { leadWorkspace: workspace.status() });
