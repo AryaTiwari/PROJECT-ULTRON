@@ -135,12 +135,20 @@ function queryPlan(criteria, count = 25, options = {}) {
     variants.push(site + ' ' + quotedTopic + ' ' + loc + ' professional');
     if (hiring) variants.push(site + ' ' + quotedTopic + ' ' + loc + ' recruiter OR hiring');
   }
+  const signalQueries = [];
   for (const company of (options.companyNames || []).slice(0, 12)) {
     const safe = String(company || '').replace(/"/g, '').trim();
-    if (safe) variants.unshift('site:linkedin.com/company "' + safe + '"');
+    if (safe) signalQueries.push('site:linkedin.com/company "' + safe + '"');
   }
   const desired = Math.min(status().maxSearchCalls, Math.max(3, Math.ceil(Number(count || 25) / 10) + 2));
-  return [...new Set(variants.map((q) => q.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(0, desired);
+  const broad = [...new Set(variants.map((q) => q.replace(/\s+/g, ' ').trim()).filter(Boolean))];
+  const signals = [...new Set(signalQueries)];
+  const broadBudget = Math.min(broad.length, Math.max(2, Math.ceil(desired * 0.6)));
+  return [...new Set([
+    ...broad.slice(0, broadBudget),
+    ...signals,
+    ...broad.slice(broadBudget),
+  ])].slice(0, desired);
 }
 
 async function fetchJson(url, timeoutMs = 18000) {
@@ -227,15 +235,35 @@ async function maybeFetchPublicPage(record) {
   return record;
 }
 
+function normalizeCompanyName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\b(?:private|pvt|limited|ltd|llp|inc|corp|corporation|company|co)\b\.?/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function companySignalMatch(record, companyNames = []) {
+  const candidate = normalizeCompanyName(record?.company || record?.name);
+  if (!candidate) return false;
+  return (companyNames || []).some((name) => {
+    const signal = normalizeCompanyName(name);
+    return signal && (candidate === signal || candidate.includes(signal) || signal.includes(candidate));
+  });
+}
+
 function scoreRecord(record, options = {}) {
-  let score = 45;
+  let score = 30;
   const haystack = (String(record?.name || '') + ' ' + String(record?.company || '') + ' ' + String(record?.role || '') + ' ' + String(record?.snippet || '')).toLowerCase();
   const topic = coreTopic(options.criteria || '', record.entityType).toLowerCase();
   const tokens = topic.split(/\s+/).filter((x) => x.length >= 3);
   const matched = tokens.filter((token) => haystack.includes(token)).length;
   score += Math.min(30, matched * 6);
-  if (options.location && haystack.includes(String(options.location).toLowerCase())) score += 10;
-  if (options.hiring && /\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?)\b/i.test(record?.snippet || '')) score += 10;
+  if (options.location && haystack.includes(String(options.location).toLowerCase())) score += 15;
+  if (options.hiring && /\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?)\b/i.test(record?.snippet || '')) score += 15;
+  if (companySignalMatch(record, options.companyNames || [])) score += 25;
+  if (record?.linkedin && (record?.name || record?.company)) score += 5;
   return Math.max(0, Math.min(100, score));
 }
 
@@ -261,8 +289,8 @@ async function research(criteria, count = 25, options = {}) {
         for (const item of items) {
           const record = parseResult(item, { entityMode: mode, location });
           if (!record || seen.has(record.linkedin)) continue;
-          record.relevanceScore = scoreRecord(record, { criteria, location, hiring });
-          if (record.relevanceScore < 45) continue;
+          record.relevanceScore = scoreRecord(record, { criteria, location, hiring, companyNames: options.companyNames || [] });
+          if (record.relevanceScore < 50) continue;
           seen.add(record.linkedin);
           records.push(await maybeFetchPublicPage(record));
           if (records.length >= limit) break;
@@ -282,4 +310,4 @@ function summary(result) {
   return 'LinkedIn ' + (result.entityMode || 'public') + ' research ' + (result.found || 0) + '/' + (result.requested || 0) + ' from ' + (result.searchCalls || 0) + ' bounded search calls' + (result.location ? ' · ' + result.location : '');
 }
 
-module.exports = { status, plan, locationFromText, entityModeFromText, normalizeLinkedInEntityUrl, cleanCriteria, coreTopic, queryPlan, parseResult, publicPageLooksUsable, scoreRecord, research, summary };
+module.exports = { status, plan, locationFromText, entityModeFromText, normalizeLinkedInEntityUrl, cleanCriteria, coreTopic, queryPlan, parseResult, publicPageLooksUsable, normalizeCompanyName, companySignalMatch, scoreRecord, research, summary };
