@@ -1063,7 +1063,7 @@ async function companyMission(request) {
 
   if (request.hiring) {
     const plan = jobSearchPlan(request);
-    const maxSearchCalls = budget.localBudgetBypass ? Math.min(plan.length, 12) : 1;
+    const maxSearchCalls = budget.localBudgetBypass ? Math.min(plan.length, 15) : 1;
 
     for (const step of plan.slice(0, maxSearchCalls)) {
       const result = await budgetedCall(budget, 'search_jobs', {
