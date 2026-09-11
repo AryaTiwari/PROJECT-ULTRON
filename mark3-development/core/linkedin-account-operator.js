@@ -126,24 +126,42 @@ function requestTopic(text, entityMode, location) {
   return value || (entityMode === 'company' ? 'companies' : 'professionals');
 }
 
+function locationScopeFromText(text, hiring = false) {
+  const value = String(text || '');
+  if (/\bcompanies?\s+(?:that\s+are\s+)?(?:based|headquartered|located)\b/i.test(value)
+      || /\b(?:company|employer)\s+(?:headquarters?|hq)\b/i.test(value)) {
+    return 'company';
+  }
+  return hiring ? 'job' : 'company';
+}
+
 function parseRequest(text) {
   const value = String(text || '').trim();
   if (!isRequest(value)) return null;
-  const entity = linkedinPublic.normalizeLinkedInEntityUrl(value);
-  const entityMode = entity?.type || linkedinPublic.entityModeFromText(value);
-  const location = linkedinPublic.locationFromText(value);
-  const hiring = /\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?|roles?)\b/i.test(value);
+  const destinationSheetUrl = sheets.extractSheetUrl(value);
+  const criteriaText = String(destinationSheetUrl ? value.replace(destinationSheetUrl, ' ') : value)
+    .replace(/\b(?:and\s+)?(?:put|write|add|fill|save|append)\s+(?:the\s+)?(?:results?|companies|leads?|rows?)?\s*(?:into|in|to)?\s*(?:my|this|the)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const entity = linkedinPublic.normalizeLinkedInEntityUrl(criteriaText);
+  const entityMode = entity?.type || linkedinPublic.entityModeFromText(criteriaText);
+  const location = linkedinPublic.locationFromText(criteriaText);
+  const hiring = /\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?|roles?)\b/i.test(criteriaText);
   return {
     originalMessage: value,
-    count: entity ? 1 : parseCount(value),
+    criteriaText,
+    count: entity ? 1 : parseCount(criteriaText),
     entityMode,
     exactUrl: entity?.url || null,
     exactSlug: entity?.slug || null,
     location,
+    locationScope: locationScopeFromText(criteriaText, hiring),
     hiring,
-    topic: requestTopic(value, entityMode, location),
+    topic: requestTopic(criteriaText, entityMode, location),
     wantsContacts: true,
-    filters: parseFilters(value),
+    filters: parseFilters(criteriaText),
+    destinationSheetUrl,
     explicitHeaders: v2.headersFromText(value),
     usePrevious: /\b(?:use|same as|like)\b[\s\S]{0,30}\b(?:previous|last)\b|\bprevious format\b|\bsame format\b/i.test(value),
     useDefault: /\b(?:default|standard)\s+(?:format|layout|headers?|columns?)\b/i.test(value),
