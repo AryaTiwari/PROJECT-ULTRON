@@ -36,6 +36,7 @@ function booleanSetting(name, fallback = false) {
 function settings() {
   return {
     localBudgetBypass: booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
+    testMissionToolMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_MISSION_TOOL_MAX', 40, 12, 60),
     minGapMs: numberSetting('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 9000, 5000, 60000),
     jitterMs: numberSetting('ULTRON_M3_LINKEDIN_JITTER_MS', 4000, 0, 15000),
     burstMax: numberSetting('ULTRON_M3_LINKEDIN_BURST_MAX', 10, 2, 12),
