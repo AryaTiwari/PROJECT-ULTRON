@@ -525,7 +525,7 @@ function rejectedRecordSnapshot(record, reasons = [], request = {}) {
 
 function mergeDuplicateRecord(target, source) {
   if (!target || !source) return target || source;
-  for (const key of ['name', 'company', 'role', 'website', 'applicants', 'email', 'phone', 'companyLocation']) {
+  for (const key of ['name', 'company', 'role', 'jobId', 'jobUrl', 'website', 'applicants', 'email', 'phone', 'companyLocation']) {
     if (!target[key] && source[key]) target[key] = source[key];
   }
   for (const key of ['snippet', 'hiringSignal', 'jobEvidenceText', 'companySearchEvidenceText', 'companyEvidenceText']) {
@@ -1086,6 +1086,8 @@ function rejectedSheetHeaders() {
   return [
     'COMPANY NAME',
     'COMPANY LINK',
+    'SAP ROLE',
+    'JOB LINK',
     'LOCATION',
     'LOCATION EVIDENCE',
     'WORK TYPE',
@@ -1103,6 +1105,8 @@ function rejectedSheetRow(record) {
   return [
     record?.company || '',
     record?.linkedin || '',
+    record?.role || '',
+    record?.jobUrl || '',
     record?.location || '',
     record?.locationEvidenceSource || '',
     record?.workType || '',
