@@ -808,21 +808,28 @@ async function companyMission(request) {
     }
   }
 
-  let merged = dedupeRecords(records, 'company')
+  const preProfileRejected = request.hiring
+    ? records.filter((record) => jobLevelFailures(record, request).length > 0)
+    : [];
+  const profileEligibleRaw = request.hiring
+    ? records.filter((record) => jobLevelFailures(record, request).length === 0)
+    : records;
+
+  // Dedupe only AFTER one individual job has passed SAP + location + workplace.
+  // This prevents evidence from two different jobs at the same company from
+  // combining into a false positive.
+  let merged = dedupeRecords(profileEligibleRaw, 'company')
     .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0));
 
-  const jobQualified = request.hiring
-    ? merged.filter((record) => jobLevelFailures(record, request).length === 0)
-    : merged;
-
   const remainingForProfiles = Math.max(0, budget.maximum - budget.used);
+  const testProfileTarget = Math.max(request.count, request.count + 10);
   const deepMax = budget.localBudgetBypass
-    ? Math.min(jobQualified.length, request.count, remainingForProfiles)
-    : Math.min(policy.settings().deepProfilesPerMission, jobQualified.length, request.count, remainingForProfiles);
+    ? Math.min(merged.length, testProfileTarget, remainingForProfiles)
+    : Math.min(policy.settings().deepProfilesPerMission, merged.length, request.count, remainingForProfiles);
 
   let deepProfiles = 0;
   for (let index = 0; index < deepMax; index++) {
-    const record = jobQualified[index];
+    const record = merged[index];
     const slug = linkedinPublic.normalizeLinkedInEntityUrl(record.linkedin, 'company')?.slug;
     if (!slug) continue;
     try {
@@ -848,7 +855,7 @@ async function companyMission(request) {
     }
   }
 
-  const candidateCountBeforeGate = merged.length;
+  const candidateCountBeforeGate = merged.length + preProfileRejected.length;
   const rejected = {
     low_relevance: 0,
     hiring: 0,
@@ -860,6 +867,13 @@ async function companyMission(request) {
   const accepted = [];
   const rejectedRecords = [];
   let rejectedCandidates = 0;
+
+  for (const record of preProfileRejected) {
+    const failures = jobLevelFailures(record, request);
+    rejectedCandidates++;
+    for (const reason of failures) rejected[reason] = Number(rejected[reason] || 0) + 1;
+    rejectedRecords.push(rejectedRecordSnapshot(record, failures, request));
+  }
 
   for (const record of merged) {
     if (Number(record.relevanceScore || 0) < 50) {
