@@ -1,7 +1,7 @@
 (() => {
   const nativeFetch = window.fetch.bind(window);
   const CHAT_TRANSPORT_TIMEOUT_MS = 10 * 60 * 1000;
-  const LINKEDIN_RESEARCH_TIMEOUT_MS = 30 * 60 * 1000;
+  const LINKEDIN_RESEARCH_TIMEOUT_MS = 45 * 60 * 1000;
   const MIN_REPLY_WINDOW_MS = 7000;
   const FLOW_REPLY_WINDOW_MS = 10000;
   const REPLY_OPEN_GRACE_MS = 18000;
