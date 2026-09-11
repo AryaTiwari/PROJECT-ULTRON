@@ -17,21 +17,22 @@ function normalizeMissionCriteria(value) {
 
 function implicitWorkspaceRequest(text) {
   const value = String(text || '').trim().replace(/^(?:hey\s+)?ultron\b[\s,:;.!-]*/i, '');
+  const action = /^(?:find|get|bring|research|source|collect|discover|scrape|build|generate|make)\b/i.test(value);
   const actionAndCount = /^(?:find|get|bring|research|source|collect|discover|scrape|build|generate|make)\s+(?:me\s+)?\d{1,4}\b/i.test(value);
-  if (!actionAndCount) return null;
 
   const peopleOrLeadNoun = /\b(?:leads?|prospects?|contacts?|profiles?|founders?|co[- ]?founders?|owners?|recruiters?|hiring managers?|hr managers?|talent acquisition|managers?|creators?|decision makers?)\b/i.test(value);
   const mapsSource = /\b(?:google\s*maps?|maps?)\b/i.test(value)
     && /\b(?:business(?:es)?|companies|agencies|agency|gyms?|fitness studios?|clinics?|hospitals?|dentists?|doctors?|salons?|spas?|restaurants?|cafes?|hotels?|consultanc(?:y|ies)|real estate|realtors?|shops?|stores?|coaching|institutes?|schools?|colleges?|dietitians?|nutritionists?|law firms?|accountants?|coworking|studios?|photographers?|wedding planners?)\b/i.test(value);
   const jobSource = /\b(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/i.test(value)
     && /\b(?:companies|business(?:es)?|employers?|organizations?|organisations?|recruiters?|hiring|jobs?|vacanc(?:y|ies)|roles?)\b/i.test(value);
-  const linkedinSource = /\blinkedin\b/i.test(value)
+  const linkedinSource = action && /\blinkedin\b/i.test(value)
     && /\b(?:companies|company|business(?:es)?|employers?|organizations?|organisations?|people|users?|profiles?|professionals?|recruiters?|founders?|owners?|managers?|employees?)\b/i.test(value);
 
+  if (!actionAndCount && !linkedinSource) return null;
   if (!peopleOrLeadNoun && !mapsSource && !jobSource && !linkedinSource) return null;
   const linkedinCompany = linkedinSource && /\b(?:companies|company|business(?:es)?|employers?|organizations?|organisations?)\b/i.test(value);
   const expanded = linkedinCompany
-    ? `${value} and create a Google Sheet`
+    ? `${value} as company leads and create a Google Sheet`
     : peopleOrLeadNoun
       ? `${value} and create a Google Sheet`
       : mapsSource
