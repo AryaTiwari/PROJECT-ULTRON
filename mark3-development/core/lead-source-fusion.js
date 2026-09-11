@@ -76,6 +76,8 @@ function stripLeadCommandPrefix(value) {
 
 function jobSearchQuery(criteria) {
   let value = stripLeadCommandPrefix(criteria)
+    .replace(/\b(?:on|from|using|via)\s+linkedin\b/gi, ' ')
+    .replace(/\b(?:linkedin\s+)?(?:leads?|prospects?|contacts?|profiles?)\b/gi, ' ')
     .replace(/\b(?:leads?|prospects?|contacts?|profiles?|decision makers?)\b/gi, ' ')
     .replace(/\b(?:companies|business(?:es)?|employers?|organizations?|organisations?)\s+(?:that\s+(?:are\s+)?)?(?:actively\s+)?(?:hiring|recruiting)\b/gi, ' ')
     .replace(/\b(?:on|from|using|via)\s+(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/gi, ' ')
