@@ -22,6 +22,8 @@ assert.equal(company.wantsContacts, true);
 const filtered = operator.parseRequest('Find me 20 companies on LinkedIn with SAP roles under 1000 employees, remote, located in Maharashtra');
 assert.equal(filtered.filters.employeeMax, 1000);
 assert.equal(filtered.filters.workType, 'remote');
+assert.equal(filtered.filters.datePosted, null);
+assert.equal(operator.parseRequest('Find SAP jobs on LinkedIn in Maharashtra remote past month').filters.datePosted, 'past_month');
 assert.equal(filtered.location, 'Maharashtra');
 assert.equal(filtered.topic, 'SAP');
 assert.equal(operator.parseCount('Find companies on LinkedIn under 1000 employees'), 25);
@@ -56,6 +58,14 @@ const mockJobCompanyRefs = operator.linkedInReferences(mockJobDetail, 'company')
 assert.equal(mockJobCompanyRefs.length, 1);
 assert.equal(mockJobCompanyRefs[0].url, 'https://www.linkedin.com/company/acme-systems');
 assert.equal(mockJobCompanyRefs[0].context, 'job posting');
+assert.equal(operator.jobTitleFromDetail(mockJobDetail), 'SAP FICO Consultant');
+const sapVariants = operator.sapRoleKeywordVariants('SAP');
+assert.ok(sapVariants.includes('SAP'));
+assert.ok(sapVariants.some((value) => /FICO/.test(value)));
+const sapPlan = operator.jobSearchPlan(filtered);
+assert.ok(sapPlan.some((item) => item.keyword === 'SAP' && item.location === 'Maharashtra'));
+assert.ok(sapPlan.some((item) => item.location === 'Pune'));
+assert.ok(sapPlan.some((item) => item.location === 'Mumbai'));
 assert.equal(operator.employeeCountFromText('Company size 501-1,000 employees').max, 1000);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: { min: 501, max: 1000 } }, filtered.filters), true);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: null }, filtered.filters), false);
@@ -72,6 +82,7 @@ assert.equal(operator.workTypeEvidenceMatches(strictPass, 'remote'), true);
 assert.equal(operator.topicEvidenceMatches(strictPass, 'SAP'), true);
 assert.deepEqual(operator.companyFilterFailures(strictPass, filtered), []);
 assert.equal(operator.passesCompanyHardFilters(strictPass, filtered), true);
+assert.deepEqual(operator.jobLevelFailures(strictPass, filtered), []);
 
 const remoteMaharashtraJobFromKarnatakaCompany = { ...strictPass, companyEvidenceText: 'Headquarters Bengaluru, Karnataka, India.' };
 assert.equal(operator.locationEvidenceMatches(remoteMaharashtraJobFromKarnatakaCompany, 'Maharashtra', { allowJobEvidence: true }), true);
@@ -86,6 +97,7 @@ assert.ok(operator.companyFilterFailures(wrongState, filtered).includes('locatio
 
 const hybridOnly = { ...strictPass, jobEvidenceText: 'SAP FICO Consultant · Hybrid · Pune, Maharashtra' };
 assert.ok(operator.companyFilterFailures(hybridOnly, filtered).includes('work_type'));
+assert.ok(operator.jobLevelFailures(hybridOnly, filtered).includes('work_type'));
 
 const noEmployeeProof = { ...strictPass, employeeCount: null };
 assert.ok(operator.companyFilterFailures(noEmployeeProof, filtered).includes('employee_count'));
@@ -143,7 +155,7 @@ assert.equal(typeof limits.localBudgetBypass, 'boolean');
 const previousBudgetBypass = process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = '1';
 assert.equal(policy.settings().localBudgetBypass, true);
-assert.ok(policy.settings().testMissionToolMax >= 41);
+assert.ok(policy.settings().testMissionToolMax >= 60);
 if (previousBudgetBypass == null) delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 else process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = previousBudgetBypass;
 assert.ok(limits.minGapMs >= 5000);
@@ -172,4 +184,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, job-first hiring linkage, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, adaptive SAP role/city discovery, job-first hiring linkage, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
