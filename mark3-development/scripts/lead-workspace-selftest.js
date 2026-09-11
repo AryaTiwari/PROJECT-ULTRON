@@ -17,6 +17,8 @@ assert.ok(bootstrap.implicitWorkspaceRequest('Find me 30 companies hiring SAP co
 assert.ok(bootstrap.implicitWorkspaceRequest('Get me 20 employers with Python vacancies from Indeed'));
 assert.ok(bootstrap.implicitWorkspaceRequest('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra'));
 assert.ok(bootstrap.implicitWorkspaceRequest('Find me 40 SAP recruiters on LinkedIn from Pune'));
+assert.ok(bootstrap.implicitWorkspaceRequest('Scrape companies on LinkedIn hiring SAP in Maharashtra'));
+assert.ok(bootstrap.implicitWorkspaceRequest('Find recruiter profiles on LinkedIn in Pune'));
 assert.equal(bootstrap.implicitWorkspaceRequest('How do I find leads for my business?'), null);
 assert.equal(bootstrap.implicitWorkspaceRequest('Find me 5 good movies'), null);
 
@@ -40,6 +42,10 @@ assert.equal(companyPlan.entityMode, 'company');
 assert.equal(companyPlan.location, 'Maharashtra');
 assert.equal(companyPlan.hiring, true);
 assert.ok(linkedin.queryPlan(linkedinCompanyRequest.originalMessage, 50, companyPlan).some((q) => /site:linkedin\.com\/company/i.test(q)));
+
+const noCountLinkedInCompany = bootstrap.implicitWorkspaceRequest('Scrape companies on LinkedIn hiring SAP in Maharashtra');
+assert.equal(noCountLinkedInCompany.count, 25);
+assert.ok(/company leads/i.test(noCountLinkedInCompany.originalMessage) === false);
 
 const linkedinPersonRequest = bootstrap.implicitWorkspaceRequest('Find me 40 SAP recruiters on LinkedIn from Pune');
 const personPlan = linkedin.plan(linkedinPersonRequest.originalMessage, linkedinPersonRequest.criteria);
