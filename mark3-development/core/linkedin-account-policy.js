@@ -27,8 +27,15 @@ function numberSetting(name, fallback, min, max) {
   return Math.max(min, Math.min(max, Number.isFinite(value) ? value : fallback));
 }
 
+function booleanSetting(name, fallback = false) {
+  const raw = process.env[name];
+  if (raw == null || String(raw).trim() === '') return Boolean(fallback);
+  return /^(?:1|true|yes|on)$/i.test(String(raw).trim());
+}
+
 function settings() {
   return {
+    localBudgetBypass: booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
     minGapMs: numberSetting('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 9000, 5000, 60000),
     jitterMs: numberSetting('ULTRON_M3_LINKEDIN_JITTER_MS', 4000, 0, 15000),
     burstMax: numberSetting('ULTRON_M3_LINKEDIN_BURST_MAX', 10, 2, 12),
@@ -149,20 +156,22 @@ function preflight(tool) {
   }
   const limits = settings();
   const counts = usage(state, now);
-  if (counts.burst >= limits.burstMax) {
-    const error = new Error(`LinkedIn short-window safety cap reached (${counts.burst}/${limits.burstMax}). Pause before continuing this mission.`);
-    error.code = 'LINKEDIN_BURST_CAP';
-    throw error;
-  }
-  if (counts.hourly >= limits.hourlyMax) {
-    const error = new Error(`LinkedIn hourly safety cap reached (${counts.hourly}/${limits.hourlyMax}). Wait before another account scrape.`);
-    error.code = 'LINKEDIN_HOURLY_CAP';
-    throw error;
-  }
-  if (counts.daily >= limits.dailyMax) {
-    const error = new Error(`LinkedIn daily safety cap reached (${counts.daily}/${limits.dailyMax}). Resume tomorrow rather than pushing the account harder.`);
-    error.code = 'LINKEDIN_DAILY_CAP';
-    throw error;
+  if (!limits.localBudgetBypass) {
+    if (counts.burst >= limits.burstMax) {
+      const error = new Error(`LinkedIn short-window safety cap reached (${counts.burst}/${limits.burstMax}). Pause before continuing this mission.`);
+      error.code = 'LINKEDIN_BURST_CAP';
+      throw error;
+    }
+    if (counts.hourly >= limits.hourlyMax) {
+      const error = new Error(`LinkedIn hourly safety cap reached (${counts.hourly}/${limits.hourlyMax}). Wait before another account scrape.`);
+      error.code = 'LINKEDIN_HOURLY_CAP';
+      throw error;
+    }
+    if (counts.daily >= limits.dailyMax) {
+      const error = new Error(`LinkedIn daily safety cap reached (${counts.daily}/${limits.dailyMax}). Resume tomorrow rather than pushing the account harder.`);
+      error.code = 'LINKEDIN_DAILY_CAP';
+      throw error;
+    }
   }
   return { state, limits, counts };
 }
@@ -233,6 +242,7 @@ function status() {
     hourlyUsed: counts.hourly,
     dailyUsed: counts.daily,
     rateLimitStrikes24h: recentRateLimitStrikes(state),
+    localBudgetBypass: Boolean(settings().localBudgetBypass),
     cooldownUntil: state.cooldownUntil,
     manualLock: state.manualLock,
     readOnlyTools: [...READ_ONLY_TOOLS],
@@ -244,6 +254,7 @@ module.exports = {
   READ_ONLY_TOOLS,
   WRITE_TOOLS,
   settings,
+  booleanSetting,
   loadState,
   saveState,
   classifyError,
