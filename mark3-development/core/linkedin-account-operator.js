@@ -991,12 +991,14 @@ function jobIdPriority(meta = {}) {
   let score = 0;
   const title = String(meta.title || '');
   const keyword = String(meta.bestKeyword || '');
-  const locations = Array.isArray(meta.locations) ? meta.locations : [];
+  const trustedLocations = Array.isArray(meta.trustedLocations) ? meta.trustedLocations : [];
+  const trustedWorkTypes = Array.isArray(meta.trustedWorkTypes) ? meta.trustedWorkTypes : [];
   if (/\bSAP\b/i.test(title)) score += 60;
   if (/\b(?:FICO|ABAP|S\/4HANA|S4HANA|SuccessFactors|Basis)\b/i.test(title)) score += 18;
   if (/\bSAP\b/i.test(keyword)) score += 8;
   if (/\b(?:FICO|ABAP|MM|SD|Basis|S\/4HANA|SuccessFactors)\b/i.test(keyword)) score += 10;
-  if (locations.some((value) => /^(?:Pune|Mumbai|Navi Mumbai)$/i.test(String(value)))) score += 14;
+  if (trustedLocations.some((value) => /^(?:Pune|Mumbai|Navi Mumbai|Nagpur|Thane|Nashik|Maharashtra)$/i.test(String(value)))) score += 16;
+  if (trustedWorkTypes.some((value) => /^remote$/i.test(String(value)))) score += 12;
   score += Math.max(0, Number(meta.hits || 1) - 1) * 12;
   score += Math.max(0, 12 - Number(meta.firstRank || 12));
   return score;
