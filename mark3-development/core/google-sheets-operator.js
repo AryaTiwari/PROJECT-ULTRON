@@ -17,6 +17,12 @@ function extractSheetUrl(text) {
   return String(text || '').match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9_-]+[^\s<>'"`]*/i)?.[0]?.replace(/[),.;!?]+$/, '') || null;
 }
 
+function sheetGid(input) {
+  const text = String(input || '');
+  const match = text.match(/[?#&]gid=(\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
 function columnName(index) {
   let n = Number(index) + 1;
   if (!Number.isInteger(n) || n < 1) throw new Error('Invalid column index.');
@@ -292,6 +298,9 @@ function isBlank(value) {
 module.exports = {
   spreadsheetId,
   extractSheetUrl,
+  sheetGid,
+  metadata,
+  values,
   columnName,
   quoteSheet,
   normalizeHeader,
