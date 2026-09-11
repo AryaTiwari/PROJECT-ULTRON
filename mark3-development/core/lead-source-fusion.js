@@ -103,7 +103,7 @@ function mapsSearchQuery(criteria) {
   return value || String(criteria || '').trim();
 }
 
-async function fetchJson(async function fetchJson(url, options = {}, timeoutMs = 20000) {
+async function fetchJson(url, options = {}, timeoutMs = 20000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(3000, timeoutMs));
   try {
@@ -192,7 +192,7 @@ async function googleJobs(criteria, options = {}) {
   return jobs.filter((job) => job.company).slice(0, max);
 }
 
-async function apifyGoogleMaps(async function apifyGoogleMaps(criteria, options = {}) {
+async function apifyGoogleMaps(criteria, options = {}) {
   const token = apifyApiKey();
   if (!token) return [];
   const max = Math.max(1, Math.min(status().maxMapPlaces, Number(options.limit || status().maxMapPlaces)));
