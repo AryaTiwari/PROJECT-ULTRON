@@ -61,14 +61,36 @@ const mockJobCompanyRefs = operator.linkedInReferences(mockJobDetail, 'company')
 assert.equal(mockJobCompanyRefs.length, 1);
 assert.equal(mockJobCompanyRefs[0].url, 'https://www.linkedin.com/company/acme-systems');
 assert.equal(mockJobCompanyRefs[0].context, 'job posting');
+
+const mockSearchRefs = {
+  job_ids: ['4252026496', '4252026500'],
+  references: {
+    search_results: [
+      { kind: 'job', url: '/jobs/view/4252026496/', text: 'SAP FICO Consultant', context: 'job result' },
+      { kind: 'job', url: '/jobs/view/4252026500/', text: 'Business Systems Analyst', context: 'job result' },
+    ],
+  },
+};
+const searchRefMap = operator.jobReferenceMap(mockSearchRefs);
+assert.equal(searchRefMap.get('4252026496').title, 'SAP FICO Consultant');
+const priorityMap = new Map([
+  ['4252026500', { id: '4252026500', title: 'Business Systems Analyst', hits: 1, locations: ['Maharashtra'], keywords: ['SAP'], bestKeyword: 'SAP', firstRank: 0, firstSeen: 0 }],
+  ['4252026496', { id: '4252026496', title: 'SAP FICO Consultant', hits: 1, locations: ['Pune'], keywords: ['SAP FICO'], bestKeyword: 'SAP FICO', firstRank: 1, firstSeen: 1 }],
+]);
+assert.equal(operator.prioritizedJobIds(priorityMap)[0], '4252026496');
+assert.ok(operator.jobIdPriority(priorityMap.get('4252026496')) > operator.jobIdPriority(priorityMap.get('4252026500')));
 assert.equal(operator.jobTitleFromDetail(mockJobDetail), 'SAP FICO Consultant');
 const sapVariants = operator.sapRoleKeywordVariants('SAP');
 assert.ok(sapVariants.includes('SAP'));
 assert.ok(sapVariants.some((value) => /FICO/.test(value)));
 const sapPlan = operator.jobSearchPlan(filtered);
-assert.ok(sapPlan.some((item) => item.keyword === 'SAP' && item.location === 'Maharashtra'));
-assert.ok(sapPlan.some((item) => item.location === 'Pune'));
-assert.ok(sapPlan.some((item) => item.location === 'Mumbai'));
+assert.equal(sapPlan[0].keyword, 'SAP');
+assert.equal(sapPlan[0].location, 'Maharashtra');
+assert.equal(sapPlan[1].location, 'Pune');
+assert.equal(sapPlan[2].location, 'Mumbai');
+assert.equal(sapPlan[3].location, 'Navi Mumbai');
+assert.ok(sapPlan.some((item) => item.keyword === 'SAP FICO'));
+assert.ok(sapPlan.some((item) => item.keyword === 'SAP ABAP'));
 assert.equal(operator.employeeCountFromText('Company size 501-1,000 employees').max, 1000);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: { min: 501, max: 1000 } }, filtered.filters), true);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: null }, filtered.filters), false);
@@ -191,4 +213,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, adaptive SAP role/city discovery, job-first hiring linkage, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, target-driven ranked SAP discovery, adaptive SAP role/city discovery, job-first hiring linkage, evidence columns, Apollo-first company-head preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
