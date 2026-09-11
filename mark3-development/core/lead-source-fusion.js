@@ -3,6 +3,8 @@ const APIFY_BASE = 'https://api.apify.com/v2';
 const DEFAULT_MAPS_ACTOR = 'compass~crawler-google-places';
 
 const INDIAN_LOCATIONS = [
+  'Maharashtra','Karnataka','West Bengal','Tamil Nadu','Telangana','Gujarat','Rajasthan','Uttar Pradesh','Madhya Pradesh',
+  'Kerala','Punjab','Haryana','Odisha','Bihar','Jharkhand','Assam','Uttarakhand','Andhra Pradesh',
   'Mumbai','Delhi','New Delhi','Bengaluru','Bangalore','Kolkata','Hyderabad','Chennai','Pune','Ahmedabad','Jaipur','Surat',
   'Chandigarh','Lucknow','Indore','Kochi','Gurugram','Gurgaon','Noida','Navi Mumbai','Thane','Bhubaneswar','Coimbatore',
   'Vadodara','Nagpur','Patna','Ranchi','Dehradun','Visakhapatnam','Mysuru','Mysore','Goa','India',
@@ -82,9 +84,11 @@ function jobSearchQuery(criteria) {
     .replace(/\b(?:companies|business(?:es)?|employers?|organizations?|organisations?)\s+(?:that\s+(?:are\s+)?)?(?:actively\s+)?(?:hiring|recruiting)\b/gi, ' ')
     .replace(/\b(?:on|from|using|via)\s+(?:google jobs?|naukri|indeed|apna|workindia|job platforms?|job boards?)\b/gi, ' ')
     .replace(/\b(?:and\s+)?(?:find|identify|source)\s+(?:the\s+)?(?:recruiters?|talent acquisition|hiring managers?|hr managers?)[\s\S]*$/i, ' ')
-    .replace(/\b(?:and\s+)?create\s+(?:a\s+)?(?:google\s+)?(?:sheet|spreadsheet)\b[\s\S]*$/i, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/\b(?:and\s+)?create\s+(?:a\s+)?(?:google\s+)?(?:sheet|spreadsheet)\b[\s\S]*$/i, ' ');
+  for (const location of [...INDIAN_LOCATIONS].sort((a, b) => b.length - a.length)) {
+    value = value.replace(new RegExp(`\\b(?:from|in|at|near|around)?\\s*${regexEscape(location)}\\b`, 'gi'), ' ');
+  }
+  value = value.replace(/\b(?:as\s+)?company\b\s*$/i, ' ').replace(/\s+/g, ' ').trim();
   return value || String(criteria || '').trim();
 }
 
