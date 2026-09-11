@@ -1744,38 +1744,91 @@ async function run(request, headers) {
 
     const title = `ULTRON LinkedIn - ${String(request.topic || request.entityMode).replace(/[^a-z0-9 ()&+._-]+/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 65)} - ${new Date().toISOString().slice(0, 10)}`;
     const needsInternalContact = request.entityMode === 'company' && request.wantsContacts;
-    const storageHeaders = needsInternalContact ? [...headers, INTERNAL_CONTACT_HEADER] : headers;
-    const created = await v2.createSpreadsheet(title, storageHeaders, request.count);
-    const rows = researched.records.map((record) => rowFor(record, storageHeaders));
-    const added = await appendRows(created.spreadsheetId, created.sheetName, rows);
+
+    let destination = null;
+    let outputHeaders = ensureHeaders(headers, request);
+    if (request.destinationSheetUrl) {
+      destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
+      outputHeaders = ensureHeaders(destination.headers, request);
+    }
+
+    const storageHeaders = [...outputHeaders];
+    if (needsInternalContact && !storageHeaders.some((header) => headerKey(header) === 'contactLinkedin')) {
+      storageHeaders.push(INTERNAL_CONTACT_HEADER);
+    }
+
+    let sheet;
+    let recordsToWrite = researched.records.slice();
+    let duplicateRowsSkipped = 0;
+    let firstAppendedRow = 2;
+
+    if (destination) {
+      await syncDestinationHeaders(destination, storageHeaders);
+      const existingKeys = destinationExistingKeys(destination, storageHeaders);
+      recordsToWrite = researched.records.filter((record) => {
+        const keys = recordDestinationKeys(record);
+        const duplicate = keys.some((key) => existingKeys.has(key));
+        if (!duplicate) for (const key of keys) existingKeys.add(key);
+        return !duplicate;
+      });
+      duplicateRowsSkipped = researched.records.length - recordsToWrite.length;
+      firstAppendedRow = Math.max(destination.lastNonEmptyRow + 1, destination.headerRowNumber + 1);
+      sheet = {
+        spreadsheetId: destination.spreadsheetId,
+        sheetId: destination.sheetId,
+        sheetName: destination.sheetName,
+        title: destination.spreadsheetTitle,
+        url: request.destinationSheetUrl,
+        formatted: true,
+      };
+    } else {
+      sheet = await v2.createSpreadsheet(title, storageHeaders, request.count);
+      firstAppendedRow = 2;
+    }
+
+    const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders));
+    const added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
     if (needsInternalContact) {
-      try { await hideInternalContactColumn(created.spreadsheetId, created.sheetId, storageHeaders.length - 1); } catch {}
+      const helperIndex = storageHeaders.findIndex((header) => headerKey(header) === 'contactLinkedin');
+      if (helperIndex >= 0) {
+        try { await hideInternalContactColumn(sheet.spreadsheetId, sheet.sheetId, helperIndex); } catch {}
+      }
     }
 
     mission.status = 'completed';
     mission.completedAt = nowIso();
-    mission.sheetUrl = created.url;
-    mission.sheetName = created.sheetName;
-    mission.spreadsheetTitle = created.title;
+    mission.sheetUrl = sheet.url;
+    mission.sheetName = sheet.sheetName;
+    mission.spreadsheetTitle = sheet.title;
+    mission.headers = outputHeaders;
     mission.storageHeaders = storageHeaders;
+    mission.destinationMode = destination ? 'existing-sheet' : 'created-sheet';
+    mission.destinationHeaderRow = destination?.headerRowNumber || 1;
     mission.requested = request.count;
     mission.found = researched.records.length;
     mission.added = added;
+    mission.duplicateRowsSkipped = duplicateRowsSkipped;
     mission.toolCalls = researched.toolCalls;
     mission.averageScore = researched.records.length
       ? Math.round(researched.records.reduce((sum, record) => sum + Number(record.relevanceScore || 0), 0) / researched.records.length)
       : 0;
     mission.contactsFromLinkedIn = request.entityMode === 'company' ? { emails: 0, phones: 0 } : {
-      emails: researched.records.filter((record) => record.email).length,
-      phones: researched.records.filter((record) => record.phone).length,
+      emails: recordsToWrite.filter((record) => record.email).length,
+      phones: recordsToWrite.filter((record) => record.phone).length,
     };
     mission.contactTargets = request.entityMode === 'company'
-      ? researched.records.map((record, index) => ({ rowNumber: index + 2, company: record.company, companyLinkedin: record.linkedin, website: record.website || '', domain: websiteDomain(record.website) }))
+      ? recordsToWrite.map((record, index) => ({
+        rowNumber: firstAppendedRow + index,
+        company: record.company,
+        companyLinkedin: record.linkedin,
+        website: record.website || '',
+        domain: websiteDomain(record.website),
+      }))
       : [];
     mission.contactCandidates = request.entityMode === 'company'
       ? mission.contactTargets.length
-      : researched.records.filter((record) => record.linkedin).length;
-    mission.missingContacts = researched.records.filter((record) => !record.email || !record.phone).length;
+      : recordsToWrite.filter((record) => record.linkedin).length;
+    mission.missingContacts = recordsToWrite.filter((record) => !record.email || !record.phone).length;
     mission.internalContactColumnHidden = needsInternalContact;
     mission.budgetStopped = researched.budgetStopped || null;
     mission.filters = researched.filters || request.filters || {};
@@ -1790,7 +1843,7 @@ async function run(request, headers) {
     if (target) Object.assign(target, mission);
     latest.pending = null;
     saveState(latest);
-    v2.rememberTemplate(headers, { sourceTitle: created.title, sourceUrl: created.url, provider: 'linkedin-account' });
+    v2.rememberTemplate(outputHeaders, { sourceTitle: sheet.title, sourceUrl: sheet.url, provider: 'linkedin-account' });
     return mission;
   } catch (error) {
     mission.status = 'failed';
