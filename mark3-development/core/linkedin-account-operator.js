@@ -500,8 +500,14 @@ function topicEvidenceMatches(record, topic) {
 
   if (/^sap(?:\s|$)/i.test(requested)) {
     if (!containsEvidenceTerm(evidence, 'SAP')) return false;
-    const module = requested.replace(/^sap\s*/i, '').trim();
-    if (!module) return true;
+
+    const rest = requested.replace(/^sap\s*/i, '').trim();
+    if (!rest) return true;
+
+    const knownModule = rest.match(/^(fico|mm|sd|abap|basis|s\/?4hana|successfactors|hana|bw|bpc|ariba|ewm|tm)\b/i);
+    if (!knownModule) return true;
+
+    const module = knownModule[1];
     if (/^s\/?4hana$/i.test(module)) return /\bS\/?4HANA\b/i.test(evidence);
     return containsEvidenceTerm(evidence, module);
   }
