@@ -6,10 +6,12 @@ const leadEnrichment = require('./lead-enrichment-operator');
 const apollo = require('./apollo-enrichment');
 const v2 = require('./lead-workspace-operator-v2');
 const sourceFusion = require('./lead-source-fusion');
+const linkedinPublic = require('./linkedin-public-research');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const MAX_LEADS = v2.MAX_LEADS;
 const DEFAULT_HEADERS = v2.DEFAULT_HEADERS;
+const LINKEDIN_COMPANY_HEADERS = ['Company', 'LinkedIn Company URL', 'Location', 'Hiring Signal', 'Post Details', 'Website', 'Phone No', 'Email', 'Source', 'Lead Score'];
 const PENDING_TTL_MS = 45 * 60 * 1000;
 const SEARCH_RETRY_DELAYS = [450, 1200];
 
@@ -56,6 +58,7 @@ async function appendValues(id, sheetName, rows) {
 
 function sourceKeyForHeader(value) {
   const h = v2.normalizeHeader(value);
+  if (/^(?:linkedin company|linkedin company url|company linkedin|company linkedin url)$/.test(h)) return 'linkedin';
   if (/^(?:hiring signal|job signal|hiring activity|job activity)$/.test(h)) return 'hiring';
   if (/^(?:maps signal|google maps signal|local signal|business signal)$/.test(h)) return 'maps';
   if (/^(?:source count|evidence count|sources count)$/.test(h)) return 'source_count';
@@ -76,6 +79,7 @@ function leadRow(lead, headers) {
     else if (key === 'source') row[index] = lead.publicContactSource || lead.source || '';
     else if (key === 'details') row[index] = lead.snippet || '';
     else if (key === 'website') row[index] = lead.signalWebsite || lead.publicContactSource || '';
+    else if (key === 'location') row[index] = lead.location || '';
     else if (key === 'quality') row[index] = lead.relevanceScore ?? '';
     else if (key === 'hiring') row[index] = lead.hiringSignal || '';
     else if (key === 'maps') row[index] = lead.mapSignal || '';
@@ -83,6 +87,45 @@ function leadRow(lead, headers) {
     else if (key === 'evidence') row[index] = (lead.sourceEvidence || []).join(', ');
   }
   return row;
+}
+
+function normalizeMissionLinkedIn(value, entityMode = 'person') {
+  if (entityMode === 'company') return linkedinPublic.normalizeLinkedInEntityUrl(value, 'company')?.url || null;
+  return apollo.normalizeLinkedIn(value);
+}
+
+function ensureCompanyHeaders(headers, wantsContacts = false) {
+  const source = Array.isArray(headers) && headers.length ? headers : LINKEDIN_COMPANY_HEADERS;
+  const out = source.map((value) => String(value ?? '').trim()).slice(0, 30);
+  const keys = new Set(out.map(sourceKeyForHeader).filter(Boolean));
+  if (!keys.has('company') && !keys.has('name')) out.unshift('Company');
+  if (!keys.has('linkedin')) out.push('LinkedIn Company URL');
+  if (!keys.has('location')) out.push('Location');
+  if (!keys.has('hiring')) out.push('Hiring Signal');
+  if (wantsContacts && !keys.has('phone')) out.push('Phone No');
+  if (wantsContacts && !keys.has('email')) out.push('Email');
+  if (!keys.has('source')) out.push('Source');
+  return out.slice(0, 30);
+}
+
+function dedupeMissionLeads(leads, entityMode = 'person') {
+  if (entityMode !== 'company') return v2.dedupeLeads(leads);
+  const seenUrl = new Set();
+  const seenCompany = new Set();
+  const unique = [];
+  let removed = 0;
+  for (const lead of leads || []) {
+    const linkedin = normalizeMissionLinkedIn(lead?.linkedin, 'company');
+    const company = sourceFusion.normalizeCompany(lead?.company || lead?.name);
+    if ((linkedin && seenUrl.has(linkedin)) || (company && seenCompany.has(company))) {
+      removed++;
+      continue;
+    }
+    if (linkedin) seenUrl.add(linkedin);
+    if (company) seenCompany.add(company);
+    unique.push({ ...lead, linkedin: linkedin || lead.linkedin, entityType: 'company' });
+  }
+  return { leads: unique, removed };
 }
 
 function missionById(state, id) {
@@ -131,7 +174,7 @@ async function existingLinkedIns(mission) {
   if (linkedinIndex < 0) throw new Error('The destination sheet no longer has a LinkedIn column, so ULTRON stopped before writing.');
   const set = new Set();
   for (let i = 1; i < rows.length; i++) {
-    const url = apollo.normalizeLinkedIn(rows[i]?.[linkedinIndex]);
+    const url = normalizeMissionLinkedIn(rows[i]?.[linkedinIndex], mission.entityMode || 'person');
     if (url) set.add(url);
   }
   return set;
@@ -139,12 +182,17 @@ async function existingLinkedIns(mission) {
 
 function annotateLead(lead, mission) {
   const annotation = sourceFusion.annotateLead(lead, mission.sourceFusion);
-  lead.sourceCount = annotation.sourceCount;
-  lead.sourceEvidence = annotation.evidence;
-  lead.hiringSignal = annotation.hiringSignal;
-  lead.mapSignal = annotation.mapSignal;
-  lead.signalWebsite = annotation.signalWebsite;
-  lead.relevanceScore = Math.min(100, v2.leadRelevanceScore(lead, mission.criteria) + annotation.boost);
+  const evidence = [...new Set([...(lead.sourceEvidence || []), ...(annotation.evidence || [])])];
+  lead.sourceCount = evidence.length;
+  lead.sourceEvidence = evidence;
+  lead.hiringSignal = lead.hiringSignal || annotation.hiringSignal;
+  lead.mapSignal = lead.mapSignal || annotation.mapSignal;
+  lead.signalWebsite = lead.signalWebsite || annotation.signalWebsite;
+  if (!lead.phone && annotation.signalPhone && mission.entityMode === 'company') lead.phone = annotation.signalPhone;
+  const baseScore = Number.isFinite(Number(lead.relevanceScore))
+    ? Number(lead.relevanceScore)
+    : v2.leadRelevanceScore(lead, mission.criteria);
+  lead.relevanceScore = Math.min(100, baseScore + annotation.boost);
   return lead;
 }
 
@@ -221,6 +269,52 @@ async function deepResearch(leads, mission) {
   saveMission(mission);
 }
 
+async function ensureLinkedInResearch(mission) {
+  if (!mission.linkedinPlan?.enabled) return null;
+  if (mission.linkedinResearch?.completed) return mission.linkedinResearch;
+
+  mission.phase = 'linkedin-public-research';
+  mission.status = 'linkedin-public-research';
+  mission.updatedAt = nowIso();
+  saveMission(mission);
+
+  const companyNames = mission.entityMode === 'company'
+    ? [...new Set((mission.sourceFusion?.jobs || []).map((item) => item.company).filter(Boolean))].slice(0, 12)
+    : [];
+
+  const result = await linkedinPublic.research(mission.originalMessage || mission.criteria, mission.requested, {
+    entityMode: mission.entityMode,
+    location: mission.linkedinPlan.location,
+    hiring: mission.linkedinPlan.hiring,
+    companyNames,
+  });
+
+  mission.linkedinResearch = {
+    ...result,
+    records: undefined,
+  };
+
+  const current = Array.isArray(mission.leads) ? mission.leads : [];
+  const incoming = (result.records || []).map((record) => annotateLead({ ...record }, mission));
+  const merged = dedupeMissionLeads([...current, ...incoming], mission.entityMode);
+  mission.leads = merged.leads;
+  mission.duplicatesRemoved = Number(mission.duplicatesRemoved || 0) + merged.removed;
+
+  if (mission.entityMode === 'company') {
+    mission.queries = linkedinPublic.queryPlan(mission.originalMessage || mission.criteria, mission.requested, {
+      entityMode: 'company',
+      location: mission.linkedinPlan.location,
+      hiring: mission.linkedinPlan.hiring,
+      companyNames,
+    });
+    if (mission.leads.length >= mission.requested) mission.queryIndex = mission.queries.length;
+  }
+
+  mission.updatedAt = nowIso();
+  saveMission(mission);
+  return mission.linkedinResearch;
+}
+
 async function ensureSourceFusion(mission) {
   if (mission.sourceFusion?.completed) return mission.sourceFusion;
   mission.phase = 'source-fusion';
@@ -251,16 +345,17 @@ async function continueMission(id) {
 
   try {
     await ensureSourceFusion(mission);
+    await ensureLinkedInResearch(mission);
     mission.phase = 'search';
     mission.status = 'researching';
     mission.updatedAt = nowIso();
     saveMission(mission);
 
-    const cleaned = v2.dedupeLeads(mission.leads);
+    const cleaned = dedupeMissionLeads(mission.leads, mission.entityMode || 'person');
     mission.leads = cleaned.leads;
     mission.duplicatesRemoved = Number(mission.duplicatesRemoved || 0) + cleaned.removed;
-    const seen = new Set(mission.leads.map((lead) => apollo.normalizeLinkedIn(lead.linkedin)).filter(Boolean));
-    const seenSecondary = new Set(mission.leads.map(v2.secondaryLeadKey).filter(Boolean));
+    const seen = new Set(mission.leads.map((lead) => normalizeMissionLinkedIn(lead.linkedin, mission.entityMode || 'person')).filter(Boolean));
+    const seenSecondary = new Set(mission.entityMode === 'company' ? [] : mission.leads.map(v2.secondaryLeadKey).filter(Boolean));
     const queries = mission.queries || v2.queryPlan(mission.criteria, mission.requested);
     mission.queries = queries;
     mission.rejectedLowRelevance = Number(mission.rejectedLowRelevance || 0);
@@ -272,7 +367,9 @@ async function continueMission(id) {
         const result = await searchWithFusion(query, { limit: 10 });
         mission.searchProviders[result.provider || 'unknown'] = Number(mission.searchProviders[result.provider || 'unknown'] || 0) + 1;
         for (const item of result.results || []) {
-          const lead = leadResearch.parseLead(item, query);
+          const lead = mission.entityMode === 'company'
+            ? linkedinPublic.parseResult(item, { entityMode: 'company', location: mission.linkedinPlan?.location || '' })
+            : leadResearch.parseLead(item, query);
           if (!lead) continue;
           annotateLead(lead, mission);
           const sourceConfirmed = Number(lead.sourceCount || 0) > 0;
@@ -280,8 +377,8 @@ async function continueMission(id) {
             mission.rejectedLowRelevance++;
             continue;
           }
-          const linkedin = apollo.normalizeLinkedIn(lead.linkedin);
-          const secondary = v2.secondaryLeadKey(lead);
+          const linkedin = normalizeMissionLinkedIn(lead.linkedin, mission.entityMode || 'person');
+          const secondary = mission.entityMode === 'company' ? sourceFusion.normalizeCompany(lead.company || lead.name) : v2.secondaryLeadKey(lead);
           if (!linkedin || seen.has(linkedin) || (secondary && seenSecondary.has(secondary))) {
             mission.duplicatesRemoved = Number(mission.duplicatesRemoved || 0) + 1;
             continue;
@@ -322,7 +419,7 @@ async function continueMission(id) {
     saveMission(mission);
     const existing = await existingLinkedIns(mission);
     const freshLeads = mission.leads.filter((lead) => {
-      const linkedin = apollo.normalizeLinkedIn(lead.linkedin);
+      const linkedin = normalizeMissionLinkedIn(lead.linkedin, mission.entityMode || 'person');
       return linkedin && !existing.has(linkedin);
     });
     const rows = freshLeads.map((lead) => leadRow(lead, mission.headers));
@@ -336,7 +433,7 @@ async function continueMission(id) {
     mission.averageRelevance = mission.leads.length
       ? Math.round(mission.leads.reduce((sum, lead) => sum + Number(lead.relevanceScore || 0), 0) / mission.leads.length)
       : 0;
-    mission.status = mission.wantsContactEnrichment && mission.missingContacts > 0 ? 'awaiting-apollo-approval' : 'completed';
+    mission.status = mission.entityMode !== 'company' && mission.wantsContactEnrichment && mission.missingContacts > 0 ? 'awaiting-apollo-approval' : 'completed';
     mission.phase = mission.status;
     mission.completedAt = nowIso();
     mission.updatedAt = nowIso();
@@ -360,7 +457,14 @@ async function startMission(plan, headers) {
     error.code = 'LEAD_WEB_SEARCH_NOT_CONFIGURED';
     throw error;
   }
-  const finalHeaders = v2.ensureCoreHeaders(headers, plan.wantsContactEnrichment);
+  const linkedinPlan = linkedinPublic.plan(plan.originalMessage || plan.criteria, plan.criteria);
+  const entityMode = linkedinPlan.enabled ? linkedinPlan.entityMode : 'person';
+  const defaultCompanyRequested = entityMode === 'company'
+    && JSON.stringify(headers || []) === JSON.stringify(DEFAULT_HEADERS);
+  const headerSource = defaultCompanyRequested ? LINKEDIN_COMPANY_HEADERS : headers;
+  const finalHeaders = entityMode === 'company'
+    ? ensureCompanyHeaders(headerSource, plan.wantsContactEnrichment)
+    : v2.ensureCoreHeaders(headerSource, plan.wantsContactEnrichment);
   const created = await v2.createSpreadsheet(`ULTRON Leads - ${String(plan.criteria || 'Leads').replace(/[^a-z0-9 ()&+._-]+/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 70)} - ${new Date().toISOString().slice(0, 10)}`, finalHeaders, plan.count);
   const state = v2.loadState();
   const mission = {
@@ -371,6 +475,9 @@ async function startMission(plan, headers) {
     requested: Math.max(1, Math.min(MAX_LEADS, Number(plan.count || 25))),
     criteria: plan.criteria,
     originalMessage: plan.originalMessage || plan.criteria,
+    entityMode,
+    linkedinPlan,
+    linkedinResearch: null,
     wantsContactEnrichment: Boolean(plan.wantsContactEnrichment),
     headers: finalHeaders,
     spreadsheetId: created.spreadsheetId,
@@ -431,9 +538,13 @@ async function prepareRequest(plan) {
   if (plan.usePrevious) return { type: 'run', mission: await startMission(plan, template?.headers || DEFAULT_HEADERS) };
   const pending = setPendingPlan(plan, template);
   const source = template?.sourceTitle ? ` from ${template.sourceTitle}` : '';
+  const linkedPlan = linkedinPublic.plan(plan.originalMessage || plan.criteria, plan.criteria);
+  const defaultHint = linkedPlan.enabled && linkedPlan.entityMode === 'company'
+    ? ` The LinkedIn-company default is: ${LINKEDIN_COMPANY_HEADERS.join(' | ')}.`
+    : '';
   return {
     type: 'clarification',
-    text: `I can run this as a multi-source lead mission and create the Google Sheet. Your latest reusable layout${source} is: ${v2.templatePreview(template)}. Do you want those previous headings, the default lead format, or a different layout?`,
+    text: `I can run this as a multi-source lead mission and create the Google Sheet. Your latest reusable layout${source} is: ${v2.templatePreview(template)}. Do you want those previous headings, the default lead format, or a different layout?${defaultHint}`,
     pending,
   };
 }
@@ -452,7 +563,9 @@ async function resolvePending(text) {
     return { type: 'run', mission: await startMission(pending, pending.suggestedHeaders || DEFAULT_HEADERS) };
   }
   if (/\b(?:default|standard|canonical)\b/i.test(value)) {
-    return { type: 'run', mission: await startMission(pending, DEFAULT_HEADERS) };
+    const linkedPlan = linkedinPublic.plan(pending.originalMessage || pending.criteria, pending.criteria);
+    const defaults = linkedPlan.enabled && linkedPlan.entityMode === 'company' ? LINKEDIN_COMPANY_HEADERS : DEFAULT_HEADERS;
+    return { type: 'run', mission: await startMission(pending, defaults) };
   }
   if (/\b(?:different|new|custom)\b[\s\S]{0,30}\b(?:format|layout|headers?|columns?|plan)\b/i.test(value)) {
     return { type: 'clarification', text: 'Send the headings once as: headers: Name, Company, Role, LinkedIn, Post Details, Phone, Email. Optional source-aware columns are Hiring Signal, Maps Signal, Source Count and Evidence Sources.' };
@@ -473,7 +586,18 @@ async function resumeLatestMission() {
 }
 
 function sourceSummary(mission) {
-  return sourceFusion.summary(mission?.sourceFusion);
+  const fusion = sourceFusion.summary(mission?.sourceFusion);
+  const linked = mission?.linkedinPlan?.enabled ? linkedinPublic.summary(mission?.linkedinResearch) : '';
+  return [fusion, linked].filter(Boolean).join('; ');
+}
+
+function isLinkedInStatusRequest(text) {
+  return /\b(?:linkedin)\s+(?:scraper|research|source|tool)?\s*(?:status|health|doctor)\b|\b(?:linkedin scraper|linkedin research)\b/i.test(String(text || ''));
+}
+
+function linkedinStatusText() {
+  const s = linkedinPublic.status();
+  return `LinkedIn Public Research: ${s.configured ? 'ready' : 'SERP_API_KEY missing'}. Supports public-indexed person and company profiles, up to ${s.maxResults} results with a ${s.maxSearchCalls}-search-call safety cap. Direct LinkedIn login/session-cookie scraping and anti-bot bypass are disabled. Optional direct public-page fetch is ${s.directPublicFetch ? 'on' : 'off'} and never signs in.`;
 }
 
 function isSourceStatusRequest(text) {
@@ -517,6 +641,7 @@ function status() {
     apifyGoogleMapsSignals: fusion.apifyGoogleMaps,
     multiSourceRanking: true,
     sourceAwareColumns: true,
+    linkedinPublicResearch: linkedinPublic.status(),
   };
 }
 
@@ -524,7 +649,11 @@ module.exports = {
   ...v2,
   MAX_LEADS,
   DEFAULT_HEADERS,
+  LINKEDIN_COMPANY_HEADERS,
   sourceKeyForHeader,
+  normalizeMissionLinkedIn,
+  ensureCompanyHeaders,
+  dedupeMissionLeads,
   leadRow,
   searchWithFusion,
   annotateLead,
@@ -538,7 +667,10 @@ module.exports = {
   statusText,
   isSourceStatusRequest,
   sourceStatusText,
+  isLinkedInStatusRequest,
+  linkedinStatusText,
   formatMission,
   status,
   sourceFusion,
+  linkedinPublic,
 };
