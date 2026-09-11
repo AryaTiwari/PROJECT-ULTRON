@@ -226,7 +226,9 @@ async function deepResearch(leads, mission) {
     }
 
     const company = lead.company ? `"${String(lead.company).replace(/"/g, '')}"` : mission.criteria;
-    const queries = [`"${lead.name}" ${company} email phone contact`, `"${lead.name}" ${company} contact`];
+    const queries = mission.entityMode === 'company'
+      ? [`${company} official website contact email phone`, `${company} contact careers`]
+      : [`"${lead.name}" ${company} email phone contact`, `"${lead.name}" ${company} contact`];
     for (const query of queries) {
       if ((lead.email && lead.phone) || searches >= budgets.maxSearches) break;
       try {
@@ -592,7 +594,7 @@ function sourceSummary(mission) {
 }
 
 function isLinkedInStatusRequest(text) {
-  return /\b(?:linkedin)\s+(?:scraper|research|source|tool)?\s*(?:status|health|doctor)\b|\b(?:linkedin scraper|linkedin research)\b/i.test(String(text || ''));
+  return /\blinkedin(?:\s+public)?\s+(?:scraper|research|source|tool)?\s*(?:status|health|doctor)\b|\b(?:status|health|doctor)\s+(?:of\s+)?linkedin(?:\s+(?:scraper|research|source|tool))?\b/i.test(String(text || ''));
 }
 
 function linkedinStatusText() {
