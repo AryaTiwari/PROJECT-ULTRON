@@ -476,6 +476,15 @@ function sourceSummary(mission) {
   return sourceFusion.summary(mission?.sourceFusion);
 }
 
+function isSourceStatusRequest(text) {
+  return /\b(?:lead|leads?)\s+(?:source|sources|research source|source fusion)\s+(?:status|health|doctor)\b|\b(?:serpapi|apify)\s+(?:status|health)\b/i.test(String(text || ''));
+}
+
+function sourceStatusText() {
+  const s = sourceFusion.status();
+  return `Lead Source Fusion: SerpApi ${s.serpApiConfigured ? 'ready' : 'not configured'}; Google Jobs ${s.serpGoogleJobs ? 'ready' : 'unavailable'}; Apify ${s.apifyConfigured ? 'ready' : 'not configured'}; Google Maps actor ${s.apifyGoogleMaps ? s.apifyActor : 'unavailable'}. Per-mission safety caps: up to ${s.maxJobSignals} job signals and ${s.maxMapPlaces} Maps places. Apify paid add-ons for contact enrichment/social enrichment/competitor analysis are disabled; Apollo remains a separate explicit-approval stage.`;
+}
+
 function statusText() {
   const mission = latestMission();
   const sourceStatus = sourceFusion.status();
@@ -527,6 +536,8 @@ module.exports = {
   latestMission,
   resumeLatestMission,
   statusText,
+  isSourceStatusRequest,
+  sourceStatusText,
   formatMission,
   status,
   sourceFusion,
