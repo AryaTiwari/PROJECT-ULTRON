@@ -401,15 +401,7 @@ const LOCATION_REGION_ALIASES = {
 };
 
 function evidenceRegexEscape(value) {
-  return String(value || '').replace(/[.*+?^$(){}|[\]\\]/g, '\\function passesEmployeeFilter(record, filters = {}) {
-  if (filters.employeeMin == null && filters.employeeMax == null) return true;
-  const size = record.employeeCount;
-  if (!size) return false;
-  if (filters.employeeMin != null && Number(size.max) < filters.employeeMin) return false;
-  if (filters.employeeMax != null && Number(size.min) > filters.employeeMax) return false;
-  return true;
-}
-');
+  return String(value || '').replace(/[.*+?^$(){}|[\]\\]/g, '\\$&');
 }
 
 function containsEvidenceTerm(text, term) {
