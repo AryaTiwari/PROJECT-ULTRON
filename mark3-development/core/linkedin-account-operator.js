@@ -1086,6 +1086,38 @@ async function callPrimaryWithExactFallback(tool, args, fallback = null) {
   }
 }
 
+function criteriaSignature(request = {}) {
+  const filters = request.filters || {};
+  return JSON.stringify({
+    entityMode: request.entityMode || '',
+    topic: String(request.topic || '').trim().toLowerCase(),
+    location: String(request.location || '').trim().toLowerCase(),
+    locationScope: request.locationScope || '',
+    hiring: Boolean(request.hiring),
+    employeeMin: filters.employeeMin ?? null,
+    employeeMax: filters.employeeMax ?? null,
+    workType: filters.workType || null,
+    jobType: filters.jobType || null,
+    experienceLevel: filters.experienceLevel || null,
+    datePosted: filters.datePosted || null,
+    easyApply: Boolean(filters.easyApply),
+  });
+}
+
+function previousCheckedJobIds(request = {}) {
+  const signature = criteriaSignature(request);
+  const ids = new Set();
+  for (const mission of loadState().missions || []) {
+    if (mission?.status !== 'completed') continue;
+    if (criteriaSignature(mission.request || {}) !== signature) continue;
+    for (const id of mission?.toolCalls?.checkedJobIds || []) {
+      const value = String(id || '').trim();
+      if (value) ids.add(value);
+    }
+  }
+  return ids;
+}
+
 async function companyMission(request) {
   const records = [];
   const budget = missionCallBudget();
@@ -1105,6 +1137,8 @@ async function companyMission(request) {
   const searchWarnings = [];
   const jobMeta = new Map();
   const profileCheckedCompanies = new Map();
+  const checkedJobIds = [];
+  const previouslyChecked = request.continueFromPrevious ? previousCheckedJobIds(request) : new Set();
 
   if (request.hiring) {
     const plan = jobSearchPlan(request);
@@ -1181,10 +1215,8 @@ async function companyMission(request) {
     }
 
     jobIdsDiscovered = jobMeta.size;
-    const previouslyChecked = request.continueFromPrevious ? previousCheckedJobIds(request) : new Set();
     const orderedJobIds = prioritizedJobIds(jobMeta).filter((jobId) => !previouslyChecked.has(String(jobId)));
     const acceptedCompanies = new Set();
-    const checkedJobIds = [];
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
@@ -1410,7 +1442,7 @@ async function companyMission(request) {
       verifiedDuringRun,
       total: budget.used,
       maximum: budget.maximum,
-      checkedJobIds: request.hiring ? (typeof checkedJobIds !== 'undefined' ? checkedJobIds : []) : [],
+      checkedJobIds: request.hiring ? checkedJobIds : [],
       skippedPreviouslyChecked: request.hiring && request.continueFromPrevious ? previouslyChecked.size : 0,
     },
     budgetStopped: budget.stopped,
