@@ -2784,13 +2784,13 @@ async function buildFinalMaster(text = '') {
 async function run(request, headers) {
   if (request?.entityMode === 'company') {
     request.allowPreviouslySeenCompanies = Boolean(request.allowPreviouslySeenCompanies || finalMaster.allowRepeatFromText(request.originalMessage));
+    if ((request.useFinalMaster || request.targetMode === 'master_total') && !finalMaster.masterSheetUrl()) {
+      await buildFinalMaster('build final master');
+    }
     if (request.targetMode === 'master_total' && request.targetTotal) {
       const target = finalMaster.remainingForTarget(request.targetTotal);
       request.count = target.remaining;
       request.masterTarget = target;
-    }
-    if ((request.useFinalMaster || request.targetMode === 'master_total') && !finalMaster.masterSheetUrl()) {
-      await buildFinalMaster('build final master');
     }
     if (request.useFinalMaster || request.targetMode === 'master_total') {
       request.destinationSheetUrl = finalMaster.masterSheetUrl() || request.destinationSheetUrl;
