@@ -1655,41 +1655,101 @@ async function companyMission(request) {
   };
 }
 
-async function personMission(request) {
-  const keyword = searchKeyword(request);
-  const results = [];
-  const queries = [keyword];
-  if (request.hiring && !/recruit|talent|hr/i.test(keyword)) queries.push(`${keyword} recruiter`);
+function personSearchPlan(request) {
+  const topic = searchKeyword(request);
+  const criteria = String(request.criteriaText || request.originalMessage || '');
+  const roleVariants = [];
+  const addRole = (value) => {
+    const clean = String(value || '').replace(/\s+/g, ' ').trim();
+    if (clean && !roleVariants.some((item) => item.toLowerCase() === clean.toLowerCase())) roleVariants.push(clean);
+  };
 
-  for (const query of [...new Set(queries)].slice(0, 2)) {
-    const search = await mcp.callTool('search_people', {
-      keywords: query,
-      location: request.location || undefined,
+  if (/\b(?:recruiters?|talent\s+acquisition|hr|human\s+resources?)\b/i.test(criteria)) {
+    addRole(`${topic} recruiter`);
+    addRole(`${topic} talent acquisition`);
+    addRole(`${topic} HR recruiter`);
+    addRole(`technical recruiter ${topic}`);
+  } else {
+    addRole(topic);
+    addRole(`${topic} professional`);
+    addRole(`${topic} specialist`);
+  }
+
+  const locations = /^maharashtra$/i.test(String(request.location || ''))
+    ? ['Maharashtra', 'Pune', 'Mumbai', 'Navi Mumbai', 'Thane']
+    : [request.location || null];
+
+  const plan = [];
+  for (const location of locations) {
+    for (const keyword of roleVariants) {
+      const key = `${keyword.toLowerCase()}|${String(location || '').toLowerCase()}`;
+      if (!plan.some((item) => item.key === key)) plan.push({ key, keyword, location });
+      if (plan.length >= 12) break;
+    }
+    if (plan.length >= 12) break;
+  }
+  return plan.map(({ key, ...item }) => item);
+}
+
+async function personMission(request) {
+  const budget = missionCallBudget();
+  if (budget.maximum < 1) {
+    const error = new Error('No LinkedIn account calls remain in the current safety budget.');
+    error.code = 'LINKEDIN_BURST_CAP';
+    throw error;
+  }
+
+  const results = [];
+  const searches = [];
+  const plan = personSearchPlan(request);
+  const maxSearches = budget.localBudgetBypass ? Math.min(plan.length, 12) : Math.min(plan.length, 2);
+
+  for (const step of plan.slice(0, maxSearches)) {
+    const search = await budgetedCall(budget, 'search_people', {
+      keywords: step.keyword,
+      location: step.location || undefined,
     });
+    if (!search) break;
+    searches.push({ keyword: step.keyword, location: step.location || null });
+
     for (const ref of linkedInReferences(search, 'person')) {
       const record = referenceRecord(ref, request);
       if (!record) continue;
+      record.searchProvenance = {
+        keywords: [step.keyword],
+        locations: step.location ? [step.location] : [],
+      };
       record.relevanceScore = qualityScore(record, request);
       results.push(record);
     }
+
+    const unique = dedupeRecords(results, 'person').length;
+    if (unique >= Math.max(request.count * 2, request.count + 10)) break;
   }
 
   let merged = dedupeRecords(results, 'person')
     .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0));
 
-  const deepMax = Math.min(policy.settings().deepProfilesPerMission, merged.length, request.count);
+  const remaining = Math.max(0, budget.maximum - budget.used);
+  const deepMax = budget.localBudgetBypass
+    ? Math.min(merged.length, request.count, remaining)
+    : Math.min(policy.settings().deepProfilesPerMission, merged.length, request.count, remaining);
+
+  let deepProfiles = 0;
   for (let index = 0; index < deepMax; index++) {
     const record = merged[index];
     const slug = linkedinPublic.normalizeLinkedInEntityUrl(record.linkedin, 'person')?.slug;
     if (!slug) continue;
     try {
-      const deep = await mcp.callTool('get_person_profile', {
+      const deep = await budgetedCall(budget, 'get_person_profile', {
         linkedin_username: slug,
         sections: request.wantsContacts ? 'experience,contact_info' : 'experience',
         max_scrolls: 5,
       });
+      if (!deep) break;
+      deepProfiles++;
       const text = flattenText(deep);
-      record.snippet = [record.snippet, text.slice(0, 3500)].filter(Boolean).join('\n').slice(0, 5000);
+      record.snippet = [record.snippet, text.slice(0, 5000)].filter(Boolean).join('\n').slice(0, 6500);
       if (request.wantsContacts) {
         record.email = emailFromText(text);
         record.phone = phoneFromText(text);
@@ -1709,7 +1769,14 @@ async function personMission(request) {
 
   return {
     records: merged,
-    toolCalls: { searchPeople: Math.min(2, queries.length), deepPersonProfiles: deepMax },
+    toolCalls: {
+      searchPeople: searches.length,
+      searchPlan: searches,
+      deepPersonProfiles: deepProfiles,
+      total: budget.used,
+      maximum: budget.maximum,
+    },
+    budgetStopped: budget.stopped,
   };
 }
 
@@ -2630,6 +2697,7 @@ module.exports = {
   criteriaSignature,
   previousCheckedJobIds,
   companyMission,
+  personSearchPlan,
   personMission,
   exactMission,
   contactRemark,
