@@ -22,6 +22,7 @@ function pythonCommand() {
 function equivalentTool(action) {
   if (action === 'person') return 'get_person_profile';
   if (action === 'company') return 'get_company_profile';
+  if (action === 'job') return 'get_job_details';
   if (action === 'jobs') return 'search_jobs';
   throw new Error(`Unsupported LinkedIn fallback action: ${action}`);
 }
@@ -114,7 +115,7 @@ function status() {
     worker: WORKER,
     credentialsInEnv: false,
     manualSessionOnly: true,
-    role: 'optional-exact-profile/company fallback',
+    role: 'optional structured person/company/job-detail fallback',
   };
 }
 
