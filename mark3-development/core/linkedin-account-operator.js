@@ -1357,16 +1357,29 @@ async function companyMission(request) {
         break;
       }
 
-      const detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
+      let detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
       if (!detail) break;
       jobDetails++;
       checkedJobIds.push(String(jobId));
 
-      const detailText = flattenText(detail);
-      const companyRefs = linkedInReferences(detail, 'company');
-      const preferred = companyRefs.find((ref) => /job posting|job/i.test(String(ref.context || '')))
+      let detailText = flattenText(detail);
+      let companyRefs = linkedInReferences(detail, 'company');
+      let preferred = companyRefs.find((ref) => /job posting|job/i.test(String(ref.context || '')))
         || companyRefs.find((ref) => String(ref.kind || '').toLowerCase() === 'company')
         || companyRefs[0];
+      let structuredFallbackUsed = false;
+
+      if (!preferred && joeyism.enabled()) {
+        const fallbackDetail = await optionalStructuredJobFallback(budget, jobId);
+        if (fallbackDetail) {
+          structuredFallbackUsed = true;
+          detail = fallbackDetail;
+          detailText = flattenText(detail);
+          companyRefs = linkedInReferences(detail, 'company');
+          preferred = companyRefs.find((ref) => /job posting|job/i.test(String(ref.context || '')))
+            || companyRefs[0];
+        }
+      }
       if (!preferred) continue;
 
       const record = referenceRecord(preferred, request);
@@ -1395,7 +1408,30 @@ async function companyMission(request) {
       record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), `linkedin-job-${jobId}`, 'linkedin-job-detail'])];
       jobCandidatesLinked++;
 
-      const jobFailures = jobLevelFailures(record, request);
+      let jobFailures = jobLevelFailures(record, request);
+      if (jobFailures.length && joeyism.enabled() && !structuredFallbackUsed && budget.used < budget.maximum) {
+        const fallbackDetail = await optionalStructuredJobFallback(budget, jobId);
+        if (fallbackDetail) {
+          structuredFallbackUsed = true;
+          const fallbackText = flattenText(fallbackDetail);
+          const fallbackRefs = linkedInReferences(fallbackDetail, 'company');
+          const fallbackCompany = fallbackRefs.find((ref) => /job posting|job/i.test(String(ref.context || ''))) || fallbackRefs[0];
+          record.jobEvidenceText = mergeEvidenceText(record.jobEvidenceText, fallbackText, 16000);
+          record.hiringSignal = mergeEvidenceText(record.hiringSignal, fallbackText.slice(0, 1200), 2200);
+          record.role = jobTitleFromDetail(fallbackDetail, record.role || meta.title || '');
+          record.workType = detectWorkType(record.jobEvidenceText);
+          record.applicants = record.applicants || applicantCountFromText(fallbackText, fallbackCompany?.text || record.company);
+          record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'joeyism-structured-job-fallback'])];
+
+          if (fallbackCompany) {
+            const fallbackRecord = referenceRecord(fallbackCompany, request);
+            if (fallbackRecord?.linkedin && !record.linkedin) record.linkedin = fallbackRecord.linkedin;
+            if (fallbackRecord?.company && !record.company) record.company = fallbackRecord.company;
+          }
+          jobFailures = jobLevelFailures(record, request);
+        }
+      }
+
       if (jobFailures.length) {
         record.preProfileFailures = jobFailures;
         records.push(record);
@@ -1445,6 +1481,21 @@ async function companyMission(request) {
         record.applicants = record.applicants || applicantCountFromText(record.jobEvidenceText, record.company);
         record.relevanceScore = qualityScore(record, request, { hiring: true, deep: true });
         record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'linkedin-account-company-profile'])];
+
+        const needsCompanySize = request.filters?.employeeMin != null || request.filters?.employeeMax != null;
+        if (needsCompanySize && !record.employeeCount && joeyism.enabled() && budget.used < budget.maximum) {
+          const fallbackCompany = await optionalStructuredCompanyFallback(budget, record.linkedin);
+          if (fallbackCompany) {
+            const fallbackText = joeyismCompanyText(fallbackCompany);
+            record.companyEvidenceText = mergeEvidenceText(record.companyEvidenceText, fallbackText, 16000);
+            record.employeeCount = employeeCountFromText(String(fallbackCompany.company_size || ''))
+              || employeeCountFromText(fallbackText)
+              || record.employeeCount;
+            record.companyLocation = record.companyLocation || String(fallbackCompany.headquarters || '').trim();
+            record.website = record.website || String(fallbackCompany.website || '').trim();
+            record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'joeyism-structured-company-fallback'])];
+          }
+        }
       } catch (error) {
         if (error.code === 'LINKEDIN_COOLDOWN_ACTIVE' || error.code === 'LINKEDIN_MANUAL_LOCK') throw error;
         record.deepError = error.message;
