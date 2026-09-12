@@ -73,6 +73,202 @@ function genericTopicFromText(text, request = {}, location = '') {
   return value || request.topic || (request.entityMode === 'company' ? 'companies' : 'professionals');
 }
 
+
+function employeeRangeFromText(text) {
+  const value = String(text || '');
+  const range = value.match(/\b(\d[\d,]*)\s*(?:-|to)\s*(\d[\d,]*)\s+employees?\b/i);
+  if (range) return { min: Number(range[1].replace(/,/g, '')), max: Number(range[2].replace(/,/g, '')), explicit: true };
+  const max = value.match(/\b(?:under|below|fewer\s+than|less\s+than|up\s+to|maximum|max)\s*(\d[\d,]*)\s*(?:employees?)?\b/i);
+  const min = value.match(/\b(?:over|above|more\s+than|at\s+least|minimum|min)\s*(\d[\d,]*)\s*(?:employees?)?\b/i);
+  return { min: min ? Number(min[1].replace(/,/g, '')) : null, max: max ? Number(max[1].replace(/,/g, '')) : null, explicit: Boolean(min || max) };
+}
+
+function explicitRefinementLocation(text) {
+  const value = String(text || '').trim();
+  if (/\b(?:all\s+india|pan[- ]?india|india[- ]?wide|across\s+india|anywhere\s+in\s+india|nationwide(?:\s+in\s+india)?)\b/i.test(value)) return 'India';
+  const generic = genericLocationFromText(value, '');
+  if (generic) return generic;
+  const directed = value.match(/\b(?:location|area|region|state|city)\s*(?:to|=|as)\s*["']?([A-Za-z][A-Za-z .-]*(?:,\s*[A-Za-z][A-Za-z .-]*)?)["']?/i)
+    || value.match(/\b(?:expand|broaden|switch|change|move)\s+(?:the\s+)?(?:search|location|area|region)?\s*(?:to|into|across)\s+["']?([A-Za-z][A-Za-z .-]*(?:,\s*[A-Za-z][A-Za-z .-]*)?)["']?/i);
+  if (directed && directed[1]) {
+    return directed[1].replace(/\s+(?:and|but)\b[\s\S]*$/i, '').replace(/[.,;:]+$/, '').trim();
+  }
+  const only = value.match(/^\s*([A-Z][A-Za-z .-]{1,45}(?:,\s*[A-Za-z][A-Za-z .-]*)?)\s+only\s*$/);
+  if (only && only[1] && !/^(?:remote|hybrid|onsite|on-site|full time|part time)$/i.test(only[1].trim())) return only[1].trim();
+  return '';
+}
+
+function explicitTopicRefinement(text) {
+  const value = String(text || '').trim();
+  const match = value.match(/\b(?:role|roles|topic|keyword|job\s+title)\s*(?:to|=|as)\s*["']?(.+?)["']?(?=\s+(?:in|within|for|under|with|and|but)\b|$)/i)
+    || value.match(/\b(?:same\s+search|same|previous\s+search)\s+(?:but|except)\s+(?:for\s+)?(.+?)\s+(?:roles?|jobs?|openings?)\b/i)
+    || value.match(/\binstead\s+(?:find|search\s+for|look\s+for)?\s*["']?(.+?)["']?\s+(?:roles?|jobs?|openings?)\b/i);
+  if (!match || !match[1]) return '';
+  return match[1].replace(/\b(?:remote|hybrid|on[- ]?site|under|below|over|above)\b[\s\S]*$/i, '').replace(/[.,;:]+$/, '').trim();
+}
+
+function refinementCount(text, mission = {}) {
+  const value = String(text || '');
+  const more = value.match(/\b(?:add|find|get|bring|append|search\s+for)\s+(?:me\s+)?(\d{1,3})\s+(?:more\s+)?(?:companies|company|people|profiles?|results?|leads?)\b/i)
+    || value.match(/\b(\d{1,3})\s+more\s+(?:companies|company|people|profiles?|results?|leads?)\b/i);
+  if (more) return { count: Math.max(1, Math.min(100, Number(more[1]))), mode: 'additional' };
+  const total = value.match(/\b(?:make|bring|get|take|increase|raise)\s+(?:it|the\s+(?:total|count))?\s*(?:to)?\s*(\d{1,3})\s*(?:total)?\b/i)
+    || value.match(/\btotal\s+(?:of\s+)?(\d{1,3})\b/i);
+  if (total) {
+    const desired = Math.max(1, Math.min(100, Number(total[1])));
+    const already = Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
+    return { count: Math.max(0, desired - already), mode: 'total', desired, already };
+  }
+  if (/\b(?:fulfil|fulfill|complete|finish|reach)\b[\s\S]{0,35}\b(?:required|requested|original|target|remaining)\b|\bfill\s+(?:the\s+)?remaining\b|\bremaining\s+(?:amount|count|companies|results)\b/i.test(value)) {
+    const desired = Math.max(1, Number(mission.requested != null ? mission.requested : ((mission.request && mission.request.count) || 25)));
+    const already = Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
+    return { count: Math.max(0, desired - already), mode: 'remaining', desired, already };
+  }
+  return null;
+}
+
+function isMissionRefinementRequest(text, mission = null) {
+  if (!mission || !mission.request || mission.status !== 'completed') return false;
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (requestedContactEnrichment(value) && !/\b(?:same|previous|last|more|continue|filter|location|remote|hybrid|employee|company\s+size)\b/i.test(value)) return false;
+  const referencesPrevious = /\b(?:same|previous|last|continue|resume|more|remaining|again|instead|change|switch|expand|broaden|relax|remove|drop|ignore|without|keep|only|fulfil|fulfill|complete|finish|reach|filter)\b/i.test(value);
+  const hasConstraint = Boolean(
+    explicitRefinementLocation(value)
+    || explicitTopicRefinement(value)
+    || refinementCount(value, mission)
+    || /\b(?:remote|hybrid|on[- ]?site|work\s*type|workplace|employees?|employee\s+count|company\s+size|headcount|easy\s+apply|full[- ]?time|part[- ]?time|contract|internship|experience|past\s+(?:24\s+hours?|week|month)|hiring|location|city|state|region|india)\b/i.test(value)
+  );
+  return referencesPrevious && hasConstraint;
+}
+
+function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
+  if (!mission || !mission.request) return null;
+  const value = String(text || '').trim();
+  const request = {
+    ...mission.request,
+    filters: { ...(mission.request.filters || {}) },
+    originalMessage: value,
+    destinationSheetUrl: sheets.extractSheetUrl(value) || workspaceSheetUrl || mission.sheetUrl || mission.request.destinationSheetUrl || null,
+    destinationSheet: undefined,
+    continueFromPrevious: true,
+    usePrevious: false,
+    useDefault: true,
+    explicitHeaders: undefined,
+    wantsContacts: requestedContactEnrichment(value),
+  };
+  const changes = [];
+
+  const countChange = refinementCount(value, mission);
+  if (countChange) {
+    request.count = countChange.count;
+    changes.push('count:' + countChange.mode + ':' + countChange.count);
+  }
+
+  const removeLocation = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:location|city|state|region)(?:\s+filter)?\b|\b(?:any|anywhere)\s+location\b|\blocation\s+(?:doesn['’]?t|does\s+not)\s+matter\b/i.test(value);
+  const location = removeLocation ? '' : explicitRefinementLocation(value);
+  if (removeLocation) {
+    request.location = '';
+    changes.push('location:removed');
+  } else if (location) {
+    request.location = location;
+    request.locationScope = request.hiring ? 'job' : request.locationScope;
+    changes.push('location:' + location);
+  }
+
+  const removeWorkType = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:remote|hybrid|on[- ]?site|work\s*type|workplace)(?:\s+filter)?\b|\b(?:any|either)\s+(?:work\s*type|workplace|remote\/hybrid\/on[- ]?site)\b|\b(?:remote|work\s*type|workplace)\s+(?:doesn['’]?t|does\s+not)\s+matter\b|\b(?:doesn['’]?t|does\s+not)\s+(?:have|need)\s+to\s+be\s+remote\b|\bnot\s+necessarily\s+remote\b/i.test(value);
+  if (removeWorkType) {
+    request.filters.workType = null;
+    changes.push('workType:removed');
+  } else if (/\bremote\b/i.test(value)) {
+    request.filters.workType = 'remote';
+    changes.push('workType:remote');
+  } else if (/\bhybrid\b/i.test(value)) {
+    request.filters.workType = 'hybrid';
+    changes.push('workType:hybrid');
+  } else if (/\b(?:on[- ]?site|in[- ]?office)\b/i.test(value)) {
+    request.filters.workType = 'on_site';
+    changes.push('workType:on_site');
+  }
+
+  const removeEmployees = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:employee|employees|employee\s+count|company\s+size|headcount)(?:\s+filter)?\b|\b(?:any|all)\s+company\s+size\b|\bno\s+(?:employee|headcount|company\s+size)\s+limit\b|\b(?:employee\s+count|company\s+size|headcount)\s+(?:doesn['’]?t|does\s+not)\s+matter\b/i.test(value);
+  const employee = employeeRangeFromText(value);
+  if (removeEmployees) {
+    request.filters.employeeMin = null;
+    request.filters.employeeMax = null;
+    changes.push('employees:removed');
+  } else if (employee.explicit) {
+    request.filters.employeeMin = employee.min;
+    request.filters.employeeMax = employee.max;
+    changes.push('employees:' + (employee.min == null ? '' : employee.min) + '-' + (employee.max == null ? '' : employee.max));
+  }
+
+  const removeJobType = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?job\s*type(?:\s+filter)?\b|\bany\s+job\s*type\b/i.test(value);
+  if (removeJobType) {
+    request.filters.jobType = null;
+    changes.push('jobType:removed');
+  } else if (/\bpart[- ]?time\b/i.test(value)) {
+    request.filters.jobType = 'part_time';
+    changes.push('jobType:part_time');
+  } else if (/\bfull[- ]?time\b/i.test(value)) {
+    request.filters.jobType = 'full_time';
+    changes.push('jobType:full_time');
+  } else if (/\bcontract\b/i.test(value)) {
+    request.filters.jobType = 'contract';
+    changes.push('jobType:contract');
+  } else if (/\bintern(?:ship)?\b/i.test(value)) {
+    request.filters.jobType = 'internship';
+    changes.push('jobType:internship');
+  }
+
+  const removeDate = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:date|posted|recency)(?:\s+filter)?\b|\bany\s+(?:date|posting\s+date)\b/i.test(value);
+  if (removeDate) {
+    request.filters.datePosted = null;
+    changes.push('datePosted:removed');
+  } else if (/\b(?:past|last)\s+24\s+hours?\b/i.test(value)) {
+    request.filters.datePosted = 'past_24_hours';
+    changes.push('datePosted:past_24_hours');
+  } else if (/\b(?:past|last)\s+week\b/i.test(value)) {
+    request.filters.datePosted = 'past_week';
+    changes.push('datePosted:past_week');
+  } else if (/\b(?:past|last)\s+month\b/i.test(value)) {
+    request.filters.datePosted = 'past_month';
+    changes.push('datePosted:past_month');
+  }
+
+  if (/\b(?:remove|drop|ignore|clear)\s+(?:the\s+)?easy\s+apply(?:\s+filter)?\b|\bany\s+application\s+type\b/i.test(value)) {
+    request.filters.easyApply = false;
+    changes.push('easyApply:removed');
+  } else if (/\beasy\s+apply\b/i.test(value)) {
+    request.filters.easyApply = true;
+    changes.push('easyApply:true');
+  }
+
+  if (/\b(?:remove|drop|ignore|relax)\s+(?:the\s+)?(?:hiring|job\s+opening|openings?|vacanc(?:y|ies))(?:\s+filter)?\b|\bcompanies\s+(?:do\s+not|don['’]?t)\s+need\s+to\s+be\s+hiring\b/i.test(value)) {
+    request.hiring = false;
+    request.locationScope = 'company';
+    changes.push('hiring:false');
+  } else if (/\b(?:must\s+be\s+)?(?:hiring|recruiting|with\s+openings?|with\s+vacanc(?:y|ies))\b/i.test(value)) {
+    request.hiring = true;
+    request.locationScope = 'job';
+    changes.push('hiring:true');
+  }
+
+  const topic = explicitTopicRefinement(value);
+  if (topic) {
+    request.topic = topic;
+    changes.push('topic:' + topic);
+  }
+
+  const wantsNewSheet = /\b(?:new|separate|fresh)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(value);
+  if (wantsNewSheet) {
+    request.destinationSheetUrl = null;
+    changes.push('destination:new');
+  }
+
+  return { request, changes, satisfied: Number(request.count) === 0, countChange };
+}
+
 function wantsMasterSheet(text) {
   return /\b(?:current|same|existing|last|latest|master|consolidated)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(String(text || ''));
 }
@@ -259,6 +455,12 @@ module.exports = {
   requestedContactEnrichment,
   genericLocationFromText,
   genericTopicFromText,
+  employeeRangeFromText,
+  explicitRefinementLocation,
+  explicitTopicRefinement,
+  refinementCount,
+  isMissionRefinementRequest,
+  buildMissionRefinement,
   wantsMasterSheet,
   enhanceRequest,
   sheetUrlFromText,
