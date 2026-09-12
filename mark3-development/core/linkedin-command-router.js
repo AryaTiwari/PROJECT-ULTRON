@@ -126,7 +126,7 @@ function refinementCount(text, mission = {}) {
     || value.match(/\btotal\s+(?:of\s+)?(\d{1,3})\b/i);
   if (total) {
     const desired = Math.max(1, Math.min(100, Number(total[1])));
-    const masterBased = mission.request?.entityMode === 'company' && finalMaster.masterSheetUrl();
+    const masterBased = mission.request?.entityMode === 'company';
     const already = masterBased
       ? finalMaster.masterCount()
       : Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
@@ -134,10 +134,10 @@ function refinementCount(text, mission = {}) {
   }
   if (/\b(?:fulfil|fulfill|complete|finish|reach)\b[\s\S]{0,35}\b(?:required|requested|original|target|remaining)\b|\bfill\s+(?:the\s+)?remaining\b|\bremaining\s+(?:amount|count|companies|results)\b/i.test(value)) {
     const desired = Math.max(1, Number(mission.requested != null ? mission.requested : ((mission.request && mission.request.count) || 25)));
-    const already = mission.request?.entityMode === 'company' && finalMaster.masterSheetUrl()
+    const already = mission.request?.entityMode === 'company'
       ? finalMaster.masterCount()
       : Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
-    return { count: Math.max(0, desired - already), mode: mission.request?.entityMode === 'company' && finalMaster.masterSheetUrl() ? 'master_total' : 'remaining', desired, already };
+    return { count: Math.max(0, desired - already), mode: mission.request?.entityMode === 'company' ? 'master_total' : 'remaining', desired, already };
   }
   return null;
 }
