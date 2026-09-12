@@ -232,7 +232,7 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
     changes.push('workType:on_site');
   }
 
-  const removeEmployees = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:employee|employees|employee\s+count|company\s+size|headcount)(?:\s+filter)?\b|\b(?:any|all)\s+company\s+size\b|\bno\s+(?:employee|headcount|company\s+size)\s+limit\b|\b(?:employee\s+count|company\s+size|headcount)\s+(?:doesn['’]?t|does\s+not)\s+matter\b/i.test(value);
+  const removeEmployees = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:employee|employees|employee\s+count|company\s+size|headcount)(?:\s+(?:filter|limit|restriction))?\b|\b(?:any|all)\s+company\s+size\b|\bno\s+(?:employee|headcount|company\s+size)\s+limit\b|\b(?:employee\s+count|company\s+size|headcount)\s+(?:doesn['’]?t|does\s+not)\s+matter\b/i.test(value);
   const employee = employeeRangeFromText(value);
   if (removeEmployees && (!autoRelax || autoRelax.key !== 'employee_count')) {
     request.filters.employeeMin = null;
