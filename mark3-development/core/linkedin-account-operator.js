@@ -475,18 +475,34 @@ function recordDestinationKeys(record) {
 
 async function prepare(request) {
   if (request.destinationSheetUrl) {
-    const destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
-    const nextRequest = {
-      ...request,
-      destinationSheet: {
-        spreadsheetId: destination.spreadsheetId,
-        spreadsheetTitle: destination.spreadsheetTitle,
-        sheetName: destination.sheetName,
-        sheetId: destination.sheetId,
-        headerRowNumber: destination.headerRowNumber,
-      },
-    };
-    return { type: 'run', request: nextRequest, headers: destination.headers };
+    try {
+      const destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
+      const nextRequest = {
+        ...request,
+        destinationSheet: {
+          spreadsheetId: destination.spreadsheetId,
+          spreadsheetTitle: destination.spreadsheetTitle,
+          sheetName: destination.sheetName,
+          sheetId: destination.sheetId,
+          headerRowNumber: destination.headerRowNumber,
+        },
+      };
+      return { type: 'run', request: nextRequest, headers: destination.headers };
+    } catch (error) {
+      if (!isGoogleSheetsError(error)) throw error;
+      const fallbackHeaders = ensureHeaders(
+        request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS,
+        request,
+      );
+      return {
+        type: 'run',
+        request: {
+          ...request,
+          destinationPreflightError: sheetErrorSnapshot(error),
+        },
+        headers: fallbackHeaders,
+      };
+    }
   }
   if (request.entityMode === 'company' && !request.explicitHeaders?.length && !request.usePrevious) {
     return { type: 'run', request, headers: ensureHeaders([...COMPANY_HEADERS], request) };
