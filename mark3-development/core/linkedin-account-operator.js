@@ -201,9 +201,11 @@ function parseRequest(text) {
     .trim();
 
   const entity = linkedinPublic.normalizeLinkedInEntityUrl(criteriaText);
-  const entityMode = entity?.type || linkedinPublic.entityModeFromText(criteriaText);
   const location = linkedinPublic.locationFromText(criteriaText);
   const hiring = /\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?|roles?)\b/i.test(criteriaText);
+  const explicitlyPeople = /\b(?:people|persons?|professionals?|recruiters?|founders?|employees?|candidates?|profiles?)\b/i.test(criteriaText);
+  const inferredMode = linkedinPublic.entityModeFromText(criteriaText);
+  const entityMode = entity?.type || (hiring && !explicitlyPeople ? 'company' : inferredMode);
   return {
     originalMessage: value,
     criteriaText,
@@ -1039,6 +1041,12 @@ function jobSearchPlan(request) {
     ]) {
       add(keyword, 'Maharashtra');
     }
+  } else if (/^maharashtra$/i.test(location)) {
+    const base = keywords[0];
+    for (const place of ['Maharashtra', 'Pune', 'Mumbai', 'Navi Mumbai', 'Thane', 'Nagpur', 'Nashik']) {
+      add(base, place);
+    }
+    for (const keyword of keywords.slice(1)) add(keyword, 'Maharashtra');
   } else {
     add(keywords[0], location || null);
     for (const keyword of keywords.slice(1)) add(keyword, location || null);
