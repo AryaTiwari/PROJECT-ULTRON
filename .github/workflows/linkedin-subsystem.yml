@@ -1,0 +1,32 @@
+name: LinkedIn Subsystem Regression
+
+on:
+  push:
+    branches: [mark3-development]
+    paths:
+      - 'mark3-development/core/linkedin-*.js'
+      - 'mark3-development/scripts/linkedin-*.js'
+      - 'mark3-development/scripts/linkedin-*.py'
+      - 'mark3-development/.env.example'
+      - '.github/workflows/linkedin-subsystem.yml'
+  pull_request:
+    paths:
+      - 'mark3-development/core/linkedin-*.js'
+      - 'mark3-development/scripts/linkedin-*.js'
+      - 'mark3-development/scripts/linkedin-*.py'
+      - 'mark3-development/.env.example'
+      - '.github/workflows/linkedin-subsystem.yml'
+
+jobs:
+  linkedin-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Create non-secret test environment
+        run: cp .env.example .env
+      - name: Run LinkedIn account subsystem regression
+        working-directory: mark3-development
+        run: npm run check:linkedin-account
