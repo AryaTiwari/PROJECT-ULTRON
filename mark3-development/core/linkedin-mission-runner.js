@@ -46,7 +46,7 @@ function start(fn) {
 function enqueue(prepared) {
   if (queue.length >= 20) throw new Error('LINKEDIN_QUEUE_FULL');
   const m = { id: randomUUID(), createdAt: new Date().toISOString(), status: 'created',
-    prepared, calls: 0, cacheHits: 0, responses: {}, research: null };
+    prepared, calls: 0, cacheHits: 0, responses: {}, research: null, followups: [] };
   save(m);
   queue.push(m.id);
   setImmediate(pump);
@@ -62,6 +62,21 @@ async function pump() {
     const result = await context.run(m, () => executor(m.prepared));
     m.result = result;
     const mission = result?.linkedinMission;
+    const apolloFollowup = (m.followups || []).find((item) => item?.type === 'apollo-enrichment' && item.status !== 'resolved');
+    if (apolloFollowup && mission?.contactCandidates > 0) {
+      const paidTools = require('./paid-tool-approval');
+      const approval = paidTools.request(
+        'apollo',
+        'linkedin-account-enrichment',
+        { url: mission.sheetUrl, provider: 'google', ensureContactColumns: false, missionId: mission.id, entityMode: mission.request?.entityMode },
+        `LinkedIn research is now stable. Apollo would enrich ${mission.contactCandidates} verified company lead${mission.contactCandidates === 1 ? '' : 's'} from this mission with one highest-priority verified decision-maker each.`
+      );
+      result.text = `${result.text} ${paidTools.prompt(approval)}`;
+      result.response = result.text;
+      result.paidToolApproval = { id: approval.id, tool: approval.tool, operation: approval.operation, expiresAt: approval.expiresAt };
+      apolloFollowup.status = 'approval_requested';
+      apolloFollowup.approvalId = approval.id;
+    }
     m.status = /COOLDOWN|CAP|RATE_LIMIT/.test(m.stopCode || '') ? 'paused_rate_limit'
       : mission && (mission.budgetStopped || mission.found < mission.requested) ? 'partial' : 'completed';
     save(m);
@@ -114,4 +129,20 @@ function control(id, action) {
   }
   return summary(m);
 }
-module.exports = { start, enqueue, get, list, summary, control, call, persistResearch };
+function defer(id, followup) {
+  const m = get(id);
+  m.followups = Array.isArray(m.followups) ? m.followups : [];
+  const type = String(followup?.type || '').trim();
+  if (!type) throw new Error('Invalid LinkedIn mission follow-up');
+  const existing = m.followups.find((item) => item.type === type && !['resolved', 'cancelled'].includes(item.status));
+  if (existing) return summary(m);
+  m.followups.push({ ...followup, type, status: 'queued', requestedAt: new Date().toISOString() });
+  save(m);
+  return summary(m);
+}
+
+function active() {
+  return list().find((m) => ['created', 'searching', 'writing_sheet'].includes(m.status)) || null;
+}
+
+module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, defer, active };
