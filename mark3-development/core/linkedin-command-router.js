@@ -106,7 +106,7 @@ function isSetWorkspaceRequest(text) {
 
 function parseColumnList(value) {
   return String(value || '')
-    .replace(/\b(?:to|in|into|on)\s+(?:the\s+)?(?:current|same|existing|master|linkedin)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b[\s\S]*$/i, '')
+    .replace(/\b(?:to|in|into|on|from)\s+(?:the\s+)?(?:current|same|existing|master|linkedin)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b[\s\S]*$/i, '')
     .split(/\s*,\s*|\s+and\s+/i)
     .map((item) => item.replace(/^["'`]+|["'`.]+$/g, '').trim())
     .filter(Boolean)
