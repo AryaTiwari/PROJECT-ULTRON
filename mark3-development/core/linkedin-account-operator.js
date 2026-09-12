@@ -2304,6 +2304,7 @@ async function run(request, headers) {
 
     mission.status = 'completed';
     mission.completedAt = nowIso();
+    mission.criteriaSignature = criteriaSignature(request);
     mission.sheetUrl = sheet.url;
     mission.sheetName = sheet.sheetName;
     mission.spreadsheetTitle = sheet.title;
@@ -2350,6 +2351,11 @@ async function run(request, headers) {
     const target = latest.missions.find((item) => item.id === mission.id);
     if (target) Object.assign(target, mission);
     latest.pending = null;
+    rememberWorkspaceSheet(sheet.url, {
+      sheetName: sheet.sheetName,
+      spreadsheetTitle: sheet.title,
+      entityMode: request.entityMode,
+    }, latest);
     saveState(latest);
     v2.rememberTemplate(outputHeaders, { sourceTitle: sheet.title, sourceUrl: sheet.url, provider: 'linkedin-account' });
     return mission;
