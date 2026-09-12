@@ -189,6 +189,7 @@ function hiringIntentFromText(text, filters = {}) {
   // Explicit company-attribute language should stay a company search even
   // when words such as "remote" appear.
   const explicitCompanyAttribute = /\b(?:companies?|employers?)\b[\s\S]{0,55}\b(?:based|headquartered|hq|located|remote[- ]?first|distributed|fully\s+remote\s+company|uses?|using|implements?|runs?|partners?\s+with)\b/i.test(value)
+    || /\b(?:remote[- ]?first|distributed|fully\s+remote)\b[\s\S]{0,55}\b(?:companies?|employers?|firms?|organizations?|organisations?)\b/i.test(value)
     || /\b(?:headquarters?|hq|company\s+location|company\s+headcount)\b/i.test(value);
   if (explicitCompanyAttribute) return false;
 
