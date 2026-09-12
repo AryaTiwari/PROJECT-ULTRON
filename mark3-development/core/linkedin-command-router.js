@@ -56,7 +56,7 @@ function genericTopicFromText(text, request = {}, location = '') {
     .replace(/\b(?:under|below|fewer\s+than|less\s+than|up\s+to|maximum|max|over|above|more\s+than|at\s+least|minimum|min)\s*\d[\d,]*\s*(?:employees?)?/gi, ' ')
     .replace(/\b(?:remote|hybrid|on[- ]?site|in[- ]?office|easy\s+apply|full[- ]?time|part[- ]?time|contract|internship)\b/gi, ' ')
     .replace(/\b(?:located|based|headquartered)\s+in\b/gi, ' ')
-    .replace(/\b(?:from|near|around|with|and)\b/gi, ' ');
+    .replace(/\b(?:from|in|at|near|around|with|and)\b/gi, ' ');
   if (location) {
     const escaped = String(location).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     value = value.replace(new RegExp(escaped, 'gi'), ' ');
