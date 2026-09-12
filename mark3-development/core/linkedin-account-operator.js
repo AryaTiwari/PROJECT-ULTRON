@@ -1021,6 +1021,9 @@ function rejectedRecordSnapshot(record, reasons = [], request = {}) {
   return {
     company: String(record?.company || record?.name || '').trim(),
     linkedin: String(record?.linkedin || '').trim(),
+    role: String(record?.role || '').trim(),
+    jobId: String(record?.jobId || '').trim(),
+    jobUrl: String(record?.jobUrl || '').trim(),
     location: locationMatch.source === 'job'
       ? (jobLocation || locationMatch.label || request.location || '')
       : (locationMatch.label || record?.companyLocation || linkedinPublic.locationFromText(record?.companySearchEvidenceText || '') || ''),
@@ -1398,8 +1401,49 @@ function previousCheckedJobIds(request = {}) {
   return ids;
 }
 
+function reconsiderRejectedCandidates(request = {}) {
+  if (!request.continueFromPrevious) return [];
+  const topic = String(request.topic || '').trim().toLowerCase();
+  const state = loadState();
+  const byKey = new Map();
+  for (const mission of state.missions || []) {
+    if (mission?.status !== 'completed' || mission?.request?.entityMode !== 'company') continue;
+    if (String(mission.request?.topic || '').trim().toLowerCase() !== topic) continue;
+    for (const rejected of mission.rejectedRecords || []) {
+      if (!rejected?.jobUrl || !rejected?.linkedin) continue;
+      const record = {
+        entityType: 'company',
+        company: rejected.company || '',
+        linkedin: rejected.linkedin || '',
+        role: rejected.role || '',
+        jobId: rejected.jobId || '',
+        jobUrl: rejected.jobUrl || '',
+        location: rejected.location || '',
+        locationEvidenceSource: rejected.locationEvidenceSource || '',
+        workType: rejected.workType || '',
+        workTypeEvidenceSource: rejected.workTypeEvidenceSource || '',
+        employeeCount: rejected.employeeCount || null,
+        applicants: rejected.applicants || '',
+        relevanceScore: Number(rejected.relevanceScore || 0),
+        hiringSignal: rejected.hiringSignal || '',
+        jobEvidenceText: rejected.jobEvidenceText || '',
+        companyEvidenceText: rejected.companyEvidenceText || '',
+        sourceEvidence: [...new Set([...(rejected.sourceEvidence || []), 'cross-mission-reconsidered'])],
+      };
+      if (!request.allowPreviouslySeenCompanies && finalMaster.seen(record)) continue;
+      if (companyFilterFailures(record, request).length) continue;
+      const key = finalMaster.companyKey(record);
+      if (!key) continue;
+      const previous = byKey.get(key);
+      if (!previous || record.relevanceScore > previous.relevanceScore) byKey.set(key, record);
+    }
+  }
+  return [...byKey.values()];
+}
+
 async function companyMission(request) {
-  const records = [];
+  const reconsidered = reconsiderRejectedCandidates(request);
+  const records = reconsidered.slice();
   const budget = missionCallBudget();
   if (budget.maximum < 1) {
     const error = new Error('No LinkedIn account calls remain in the current short-window/hourly/daily safety budget. Wait for the displayed safety window before starting another mission.');
@@ -1419,12 +1463,16 @@ async function companyMission(request) {
   const profileCheckedCompanies = new Map();
   const checkedJobIds = [];
   const previouslyChecked = request.continueFromPrevious ? previousCheckedJobIds(request) : new Set();
+  const acceptedCompanies = new Set(
+    reconsidered.map((record) => finalMaster.companyKey(record)).filter(Boolean)
+  );
+  verifiedDuringRun = acceptedCompanies.size;
 
   if (request.hiring) {
     const plan = jobSearchPlan(request);
-    const maxSearchCalls = budget.localBudgetBypass
+    const maxSearchCalls = acceptedCompanies.size >= request.count ? 0 : (budget.localBudgetBypass
       ? Math.min(plan.length, Number(policy.settings().testJobSearchMax || 20))
-      : 1;
+      : 1);
 
     for (const step of plan.slice(0, maxSearchCalls)) {
       const result = await budgetedCall(budget, 'search_jobs', {
@@ -1496,7 +1544,6 @@ async function companyMission(request) {
 
     jobIdsDiscovered = jobMeta.size;
     const orderedJobIds = prioritizedJobIds(jobMeta).filter((jobId) => !previouslyChecked.has(String(jobId)));
-    const acceptedCompanies = new Set();
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
@@ -1786,6 +1833,7 @@ async function companyMission(request) {
       checkedJobIds: request.hiring ? checkedJobIds : [],
       skippedPreviouslyChecked: request.hiring && request.continueFromPrevious ? previouslyChecked.size : 0,
       globallySeenSkipped: records.filter((record) => record.globalSeen).length,
+      cachedReconsidered: reconsidered.length,
     },
     budgetStopped: budget.stopped,
     filters: request.filters,
@@ -3134,6 +3182,7 @@ module.exports = {
   joeyismCompanyText,
   criteriaSignature,
   previousCheckedJobIds,
+  reconsiderRejectedCandidates,
   companyMission,
   personSearchPlan,
   personMission,
