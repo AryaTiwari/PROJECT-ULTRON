@@ -2084,6 +2084,11 @@ async function fillLatestMissionIntoSheet(sheetUrl = null) {
       domain: websiteDomain(record.website),
     }));
   }
+  rememberWorkspaceSheet(resolvedSheetUrl, {
+    sheetName: destination.sheetName,
+    spreadsheetTitle: destination.spreadsheetTitle,
+    entityMode: request.entityMode,
+  }, state);
   saveState(state);
 
   return {
@@ -2511,9 +2516,11 @@ function latestMission() {
 }
 
 function status() {
+  const state = loadState();
   return {
     readyForRouting: true,
     stateFile: STATE_FILE,
+    workspace: state.workspace || null,
     mcp: mcp.status(),
     joeyism: joeyism.status(),
     safety: policy.status(),
@@ -2618,6 +2625,8 @@ module.exports = {
   prioritizedJobIds,
   jobLevelFailures,
   jobTitleFromDetail,
+  joeyismJobToDetail,
+  joeyismCompanyText,
   criteriaSignature,
   previousCheckedJobIds,
   companyMission,
