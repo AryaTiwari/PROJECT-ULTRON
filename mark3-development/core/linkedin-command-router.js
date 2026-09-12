@@ -132,7 +132,7 @@ function isMissionRefinementRequest(text, mission = null) {
   const value = String(text || '').trim();
   if (!value) return false;
   if (requestedContactEnrichment(value) && !/\b(?:same|previous|last|more|continue|filter|location|remote|hybrid|employee|company\s+size)\b/i.test(value)) return false;
-  const referencesPrevious = /\b(?:same|previous|last|continue|resume|more|remaining|again|instead|change|switch|expand|broaden|relax|remove|drop|ignore|without|keep|only|fulfil|fulfill|complete|finish|reach|filter)\b/i.test(value);
+  const referencesPrevious = /\b(?:same|previous|last|continue|resume|more|remaining|again|instead|change|switch|expand|broaden|relax|remove|drop|ignore|without|keep|only|all|across|nationwide|anywhere|fulfil|fulfill|complete|finish|reach|filter)\b/i.test(value);
   const hasConstraint = Boolean(
     explicitRefinementLocation(value)
     || explicitTopicRefinement(value)
