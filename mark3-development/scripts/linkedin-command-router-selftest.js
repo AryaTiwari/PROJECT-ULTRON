@@ -60,6 +60,9 @@ if (run('refinement')) {
     requested: 20,
     added: 7,
     sheetUrl: 'https://docs.google.com/spreadsheets/d/master123/edit',
+    filterVerification: {
+      rejected: { work_type: 11, employee_count: 7, location: 4 },
+    },
     request: {
       count: 20,
       entityMode: 'company',
@@ -109,6 +112,14 @@ if (run('refinement')) {
   assert.equal(noLocation.request.location, '');
   assert.equal(noLocation.request.count, 10);
 
+  const naturalPune = router.buildMissionRefinement(
+    'same but Pune only',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(naturalPune.request.location, 'Pune');
+  assert.equal(naturalPune.request.count, 13);
+
   const pune = router.buildMissionRefinement(
     'same search but location to Pune',
     mission,
@@ -123,6 +134,17 @@ if (run('refinement')) {
     'https://docs.google.com/spreadsheets/d/master123/edit'
   );
   assert.equal(total.request.count, 13);
+
+  assert.equal(router.autoRelaxCandidate(mission).key, 'work_type');
+  const autoRelaxed = router.buildMissionRefinement(
+    'remove the biggest blocking filter and fill the remaining companies',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(autoRelaxed.request.filters.workType, null);
+  assert.equal(autoRelaxed.request.filters.employeeMax, 1000);
+  assert.equal(autoRelaxed.request.location, 'Maharashtra');
+  assert.equal(autoRelaxed.request.count, 13);
 
   const relaxed = router.buildMissionRefinement(
     'remove the employee limit, remove remote, expand to India and fill the remaining companies',
