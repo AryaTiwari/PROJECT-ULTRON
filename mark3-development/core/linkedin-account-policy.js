@@ -36,7 +36,8 @@ function booleanSetting(name, fallback = false) {
 function settings() {
   return {
     localBudgetBypass: booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
-    testMissionToolMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_MISSION_TOOL_MAX', 100, 12, 120),
+    testMissionToolMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_MISSION_TOOL_MAX', 120, 12, 120),
+    testJobSearchMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_JOB_SEARCH_MAX', 20, 4, 25),
     minGapMs: numberSetting('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 9000, 5000, 60000),
     jitterMs: numberSetting('ULTRON_M3_LINKEDIN_JITTER_MS', 4000, 0, 15000),
     burstMax: numberSetting('ULTRON_M3_LINKEDIN_BURST_MAX', 10, 2, 12),
@@ -47,7 +48,7 @@ function settings() {
     rateLimitCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_RATE_LIMIT_COOLDOWN_MS', 30 * 60 * 1000, 5 * 60 * 1000, 6 * 60 * 60 * 1000),
     errorBackoffCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_ERROR_BACKOFF_MS', 10 * 60 * 1000, 5 * 60 * 1000, 60 * 60 * 1000),
     deepProfilesPerMission: numberSetting('ULTRON_M3_LINKEDIN_DEEP_PROFILE_MAX', 8, 1, 12),
-    maxJobPages: numberSetting('ULTRON_M3_LINKEDIN_JOB_MAX_PAGES', 2, 1, 3),
+    maxJobPages: numberSetting('ULTRON_M3_LINKEDIN_JOB_MAX_PAGES', 3, 1, 5),
     jobDetailMax: numberSetting('ULTRON_M3_LINKEDIN_JOB_DETAIL_MAX', 2, 0, 4),
   };
 }
