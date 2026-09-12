@@ -146,7 +146,10 @@ function qualifies(record = {}, requirements = {}) {
 }
 
 function allowRepeatFromText(text) {
-  return /\b(?:include|show|use|allow|repeat|return)\b[\s\S]{0,35}\b(?:previously\s+seen|already\s+seen|old|previous|existing|duplicate)\s+(?:companies|leads|results)\b|\binclude\s+duplicates\b/i.test(String(text || ''));
+  const value = String(text || '');
+  return /\b(?:include|show|use|allow|repeat|return)\b[\s\S]{0,45}\b(?:previously\s+seen|already\s+seen|old|previous|existing|duplicate)\s+(?:companies|leads|results)\b|\binclude\s+duplicates\b/i.test(value)
+    || /\b(?:include|show|use|allow|repeat|return)\b[\s\S]{0,25}\b(?:companies|leads|results)\b[\s\S]{0,30}\b(?:already|previously)\s+(?:been\s+)?seen\b/i.test(value)
+    || /\b(?:companies|leads|results)\s+(?:we|you|ultron)\s+(?:have\s+)?(?:already|previously)\s+(?:found|seen|used)\b/i.test(value);
 }
 
 function seen(record, state = loadState()) {
