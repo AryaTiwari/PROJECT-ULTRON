@@ -30,6 +30,23 @@ jobs:
       - name: Run LinkedIn account subsystem regression
         working-directory: mark3-development
         run: npm run check:linkedin-account
-      - name: Run LinkedIn command router regression
+      - name: Test explicit contact intent
         working-directory: mark3-development
+        env:
+          ULTRON_LINKEDIN_COMMAND_TEST_GROUP: intent
+        run: node --env-file=../.env scripts/linkedin-command-router-selftest.js
+      - name: Test generic locations and topics
+        working-directory: mark3-development
+        env:
+          ULTRON_LINKEDIN_COMMAND_TEST_GROUP: location
+        run: node --env-file=../.env scripts/linkedin-command-router-selftest.js
+      - name: Test LinkedIn workspace routing
+        working-directory: mark3-development
+        env:
+          ULTRON_LINKEDIN_COMMAND_TEST_GROUP: workspace
+        run: node --env-file=../.env scripts/linkedin-command-router-selftest.js
+      - name: Test LinkedIn Sheet commands
+        working-directory: mark3-development
+        env:
+          ULTRON_LINKEDIN_COMMAND_TEST_GROUP: sheet
         run: node --env-file=../.env scripts/linkedin-command-router-selftest.js
