@@ -10,6 +10,7 @@ const policy = require('./linkedin-account-policy');
 const apollo = require('./apollo-enrichment');
 const config = require('./config');
 const missionRunner = require('./linkedin-mission-runner');
+const finalMaster = require('./linkedin-final-master');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'linkedin-account', 'operator-state.json');
@@ -235,7 +236,10 @@ function parseRequest(text) {
   if (!isRequest(value)) return null;
   const explicitSheetUrl = sheets.extractSheetUrl(value);
   const wantsWorkspaceSheet = /\b(?:current|same|existing|last|latest|master|consolidated)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(value);
-  const destinationSheetUrl = explicitSheetUrl || (wantsWorkspaceSheet ? workspaceSheetUrl() : null);
+  const wantsFinalMaster = /\b(?:master|final\s+master|final\s+(?:lead\s+)?database)\b/i.test(value);
+  const destinationSheetUrl = explicitSheetUrl || (wantsFinalMaster
+    ? (finalMaster.masterSheetUrl() || workspaceSheetUrl())
+    : (wantsWorkspaceSheet ? workspaceSheetUrl() : null));
   const criteriaText = String(explicitSheetUrl ? value.replace(explicitSheetUrl, ' ') : value)
     .replace(/\b(?:and\s+)?(?:put|write|add|fill|save|append|send|keep)\s+(?:(?:them|it|these|those)\s+)?(?:the\s+)?(?:results?|companies|leads?|rows?)?\s*(?:into|in|to)?\s*(?:my|this|the)?\s*(?:current|same|existing|last|latest|master|consolidated)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
     .replace(/\b(?:in|into|to|on)\s+(?:the\s+)?(?:current|same|existing|last|latest|master|consolidated)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
@@ -270,6 +274,8 @@ function parseRequest(text) {
     wantsContacts: true,
     filters,
     destinationSheetUrl,
+    useFinalMaster: wantsFinalMaster,
+    allowPreviouslySeenCompanies: finalMaster.allowRepeatFromText(value),
     explicitHeaders: v2.headersFromText(value),
     usePrevious: /\b(?:use|same as|like)\b[\s\S]{0,30}\b(?:previous|last)\b|\bprevious format\b|\bsame format\b/i.test(value),
     useDefault: /\b(?:default|standard)\s+(?:format|layout|headers?|columns?)\b/i.test(value),
@@ -1647,8 +1653,13 @@ async function companyMission(request) {
       records.push(record);
 
       if (companyFilterFailures(record, request).length === 0) {
-        acceptedCompanies.add(companyKey);
-        verifiedDuringRun = acceptedCompanies.size;
+        const globallySeen = !request.allowPreviouslySeenCompanies && finalMaster.seen(record);
+        if (!globallySeen) {
+          acceptedCompanies.add(companyKey);
+          verifiedDuringRun = acceptedCompanies.size;
+        } else {
+          record.globalSeen = true;
+        }
       }
     }
   } else {
@@ -1734,6 +1745,11 @@ async function companyMission(request) {
       continue;
     }
 
+    if (!request.allowPreviouslySeenCompanies && finalMaster.seen(record)) {
+      record.globalSeen = true;
+      continue;
+    }
+
     const locationMatch = locationEvidenceDetails(record, request.location, {
       allowJobEvidence: Boolean(request.hiring),
       allowCompanyEvidence: request.locationScope !== 'job',
@@ -1769,6 +1785,7 @@ async function companyMission(request) {
       maximum: budget.maximum,
       checkedJobIds: request.hiring ? checkedJobIds : [],
       skippedPreviouslyChecked: request.hiring && request.continueFromPrevious ? previouslyChecked.size : 0,
+      globallySeenSkipped: records.filter((record) => record.globalSeen).length,
     },
     budgetStopped: budget.stopped,
     filters: request.filters,
@@ -2595,7 +2612,94 @@ function rowFor(record, headers) {
   });
 }
 
+function isBuildFinalMasterRequest(text) {
+  return /\b(?:build|create|make|rebuild|migrate|generate)\b[\s\S]{0,40}\b(?:final\s+master|final\s+(?:lead\s+)?database|clean\s+master)\b/i.test(String(text || ''));
+}
+
+function historicalVerifiedCompanyRecords(options = {}) {
+  const state = loadState();
+  const topic = String(options.topic || 'SAP');
+  const workType = options.workType === undefined ? 'remote' : options.workType;
+  const employeeMax = options.employeeMax === undefined ? 1000 : options.employeeMax;
+  const records = [];
+  for (const mission of state.missions || []) {
+    if (mission?.status !== 'completed' || mission?.request?.entityMode !== 'company') continue;
+    if (topic && !String(mission.request?.topic || '').toLowerCase().startsWith(topic.toLowerCase())) continue;
+    for (const record of mission.verifiedRecords || []) {
+      if (!finalMaster.qualifies(record, { topic, workType, employeeMax })) continue;
+      records.push({ ...record, sourceMissionId: mission.id, sourceMissionCreatedAt: mission.createdAt });
+    }
+  }
+  const byKey = new Map();
+  for (const record of records) {
+    const key = finalMaster.companyKey(record);
+    if (!key) continue;
+    const previous = byKey.get(key);
+    if (!previous || Number(record.relevanceScore || 0) > Number(previous.relevanceScore || 0)) byKey.set(key, record);
+  }
+  return [...byKey.values()];
+}
+
+async function buildFinalMaster(text = '') {
+  const existingUrl = finalMaster.masterSheetUrl();
+  if (existingUrl && !/\b(?:rebuild|replace|new)\b/i.test(String(text || ''))) {
+    return {
+      ok: true,
+      sheetUrl: existingUrl,
+      spreadsheetTitle: finalMaster.loadState().spreadsheetTitle,
+      sheetName: finalMaster.loadState().sheetName,
+      added: 0,
+      uniqueRecords: finalMaster.masterCount(),
+      alreadyExists: true,
+    };
+  }
+
+  const records = historicalVerifiedCompanyRecords({ topic: 'SAP', workType: 'remote', employeeMax: 1000 });
+  const sheet = await v2.createSpreadsheet('ULTRON LinkedIn Final Lead Master', finalMaster.FINAL_MASTER_HEADERS, Math.max(100, records.length + 20));
+  await sheets.ensureGridSize(sheet.spreadsheetId, sheet.sheetId, {
+    minColumns: finalMaster.FINAL_MASTER_HEADERS.length,
+    minRows: Math.max(200, records.length + 10),
+  });
+  const rows = records.map((record) => finalMaster.rowFor(record, { missionId: record.sourceMissionId, firstSeenAt: record.sourceMissionCreatedAt }));
+  const added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
+  finalMaster.setMasterSheet(sheet);
+  finalMaster.registerRecords(records, { missionId: 'historical-migration' });
+
+  const state = loadState();
+  rememberWorkspaceSheet(sheet.url, {
+    sheetName: sheet.sheetName,
+    spreadsheetTitle: sheet.title,
+    entityMode: 'company',
+  }, state);
+  saveState(state);
+
+  return {
+    ok: true,
+    sheetUrl: sheet.url,
+    spreadsheetTitle: sheet.title,
+    sheetName: sheet.sheetName,
+    added,
+    uniqueRecords: records.length,
+    alreadyExists: false,
+  };
+}
+
 async function run(request, headers) {
+  if (request?.entityMode === 'company') {
+    request.allowPreviouslySeenCompanies = Boolean(request.allowPreviouslySeenCompanies || finalMaster.allowRepeatFromText(request.originalMessage));
+    if (request.targetMode === 'master_total' && request.targetTotal) {
+      const target = finalMaster.remainingForTarget(request.targetTotal);
+      request.count = target.remaining;
+      request.masterTarget = target;
+    }
+    if ((request.useFinalMaster || request.targetMode === 'master_total') && !finalMaster.masterSheetUrl()) {
+      await buildFinalMaster('build final master');
+    }
+    if (request.useFinalMaster || request.targetMode === 'master_total') {
+      request.destinationSheetUrl = finalMaster.masterSheetUrl() || request.destinationSheetUrl;
+    }
+  }
+
   const mission = {
     id: `linkedin-account-${Date.now()}`,
     createdAt: nowIso(),
@@ -2763,6 +2867,20 @@ async function run(request, headers) {
     mission.rejectedRecords = Array.isArray(researched.rejectedRecords) ? researched.rejectedRecords : [];
     mission.verifiedRecords = researched.records.map(verifiedRecordSnapshot);
     mission.safety = policy.status();
+    mission.globalSeenSkipped = Number(researched.toolCalls?.globallySeenSkipped || 0);
+    mission.masterTarget = request.masterTarget || null;
+
+    if (request.entityMode === 'company' && recordsToWrite.length) {
+      finalMaster.registerRecords(recordsToWrite, { missionId: mission.id });
+      if (request.useFinalMaster || request.targetMode === 'master_total') {
+        finalMaster.setMasterSheet({
+          url: sheet.url,
+          spreadsheetId: sheet.spreadsheetId,
+          sheetName: sheet.sheetName,
+          title: sheet.title,
+        });
+      }
+    }
 
     const latest = loadState();
     const target = latest.missions.find((item) => item.id === mission.id);
@@ -2826,6 +2944,12 @@ function statusText() {
 }
 
 function formatMission(mission) {
+  const masterTargetText = mission.masterTarget
+    ? ` Master target: ${mission.masterTarget.desired} unique companies total; ${mission.masterTarget.current} already existed before this run; ${mission.masterTarget.remaining} additional unique companies were required.`
+    : '';
+  const globalSkipText = mission.globalSeenSkipped
+    ? ` Global dedupe skipped ${mission.globalSeenSkipped} previously seen compan${mission.globalSeenSkipped === 1 ? 'y' : 'ies'}.`
+    : '';
   const shortfall = mission.found < mission.requested ? ` I found ${mission.found}/${mission.requested} high-confidence LinkedIn records within the account-safety budget.` : '';
   const contact = mission.request?.entityMode === 'company'
     ? ` ${mission.contactCandidates || 0} verified company rows are ready for Apollo to select one highest-priority head and enrich that person’s contact details.`
@@ -2854,7 +2978,7 @@ function formatMission(mission) {
     : mission.destinationMode === 'recovery-sheet'
       ? ` The requested master Sheet could not be written (${mission.destinationWriteError?.code || 'GOOGLE_SHEETS_API_ERROR'}: ${mission.destinationWriteError?.message || 'unknown Sheets error'}). I preserved the verified results in this recovery Sheet instead; your remembered master Sheet was not changed.`
       : '';
-  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
+  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination}${masterTargetText}${globalSkipText} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
 }
 
 module.exports = {
@@ -2939,6 +3063,9 @@ module.exports = {
   isRejectedSheetRequest,
   createRejectedCandidatesSheet,
   prepareApolloCompanyContacts,
+  isBuildFinalMasterRequest,
+  historicalVerifiedCompanyRecords,
+  buildFinalMaster,
   run,
   latestMission,
   status,
