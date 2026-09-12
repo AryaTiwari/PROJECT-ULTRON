@@ -48,6 +48,10 @@ const person = operator.parseRequest('Find me 30 SAP recruiters on LinkedIn from
 assert.equal(person.entityMode, 'person');
 assert.equal(person.location, 'Pune');
 assert.equal(person.wantsContacts, true);
+const personPlan = operator.personSearchPlan(person);
+assert.ok(personPlan.some((item) => /SAP recruiter/i.test(item.keyword)));
+assert.ok(personPlan.some((item) => /talent acquisition/i.test(item.keyword)));
+assert.ok(personPlan.length >= 3);
 
 const exact = operator.parseRequest('Scrape https://www.linkedin.com/company/acme-tech/ on LinkedIn');
 assert.equal(exact.entityMode, 'company');
@@ -362,4 +366,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, consolidation/dedupe/reuse, structured joeyism job/company recovery, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
