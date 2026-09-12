@@ -1,5 +1,6 @@
 const googleAuth = require('./google-sheets-auth');
 const sheets = require('./google-sheets-operator');
+const finalMaster = require('./linkedin-final-master');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
@@ -13,7 +14,13 @@ function normalize(value) {
 }
 
 function requestedContactEnrichment(text) {
-  return /\b(?:email|e-?mail|phone|mobile|contact\s+(?:info|information|details?|number)|decision[- ]?maker|head(?:s)?|recruiter(?:s)?|talent\s+acquisition|hr\s+contact)\b/i.test(String(text || ''));
+  return /\b(?:enrich|enrichment|apollo|email|e-?mail|phone|mobile|contact\s+(?:info|information|details?|number)|decision[- ]?maker|head(?:s)?|recruiter(?:s)?|talent\s+acquisition|hr\s+contact)\b/i.test(String(text || ''));
+}
+
+function isApolloEnrichmentRequest(text) {
+  const value = String(text || '');
+  return /\b(?:apollo|enrich|enrichment)\b/i.test(value)
+    && /\b(?:lead|leads|companies|company|them|those|these|email|phone|number|contacts?)\b/i.test(value);
 }
 
 function genericLocationFromText(text, existing = '') {
@@ -85,7 +92,7 @@ function employeeRangeFromText(text) {
 
 function explicitRefinementLocation(text) {
   const value = String(text || '').trim();
-  if (/\b(?:all\s+india|pan[- ]?india|india[- ]?wide|across\s+india|anywhere\s+in\s+india|nationwide(?:\s+in\s+india)?)\b/i.test(value)) return 'India';
+  if (/\b(?:all\s+india|pan[- ]?india|india[- ]?wide|across\s+india|within\s+india|anywhere\s+in\s+india|nationwide(?:\s+in\s+india)?)\b/i.test(value)) return 'India';
   const generic = genericLocationFromText(value, '');
   if (generic) return generic;
   const directed = value.match(/\b(?:location|area|region|state|city)\s*(?:to|=|as)\s*["']?([A-Za-z][A-Za-z .-]*(?:,\s*[A-Za-z][A-Za-z .-]*)?)["']?/i)
@@ -114,17 +121,23 @@ function refinementCount(text, mission = {}) {
   const more = value.match(/\b(?:add|find|get|bring|append|search\s+for)\s+(?:me\s+)?(\d{1,3})\s+(?:more\s+)?(?:companies|company|people|profiles?|results?|leads?)\b/i)
     || value.match(/\b(\d{1,3})\s+more\s+(?:companies|company|people|profiles?|results?|leads?)\b/i);
   if (more) return { count: Math.max(1, Math.min(100, Number(more[1]))), mode: 'additional' };
-  const total = value.match(/\b(?:make|bring|get|take|increase|raise)\s+(?:it|the\s+(?:total|count))?\s*(?:to)?\s*(\d{1,3})\s*(?:total)?\b/i)
+  const total = value.match(/\b(?:make|bring|get|take|increase|raise)\s+(?:(?:the\s+)?(?:list|master|sheet|database|total|count)|it)?\s*(?:go|reach|to)?\s*(\d{1,3})\s*(?:total)?\b/i)
+    || value.match(/\b(?:get|take|bring)\s+(?:the\s+)?(?:list|master|sheet|database)\s+to\s+(\d{1,3})\b/i)
     || value.match(/\btotal\s+(?:of\s+)?(\d{1,3})\b/i);
   if (total) {
     const desired = Math.max(1, Math.min(100, Number(total[1])));
-    const already = Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
-    return { count: Math.max(0, desired - already), mode: 'total', desired, already };
+    const masterBased = mission.request?.entityMode === 'company' && finalMaster.masterSheetUrl();
+    const already = masterBased
+      ? finalMaster.masterCount()
+      : Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
+    return { count: Math.max(0, desired - already), mode: masterBased ? 'master_total' : 'total', desired, already };
   }
   if (/\b(?:fulfil|fulfill|complete|finish|reach)\b[\s\S]{0,35}\b(?:required|requested|original|target|remaining)\b|\bfill\s+(?:the\s+)?remaining\b|\bremaining\s+(?:amount|count|companies|results)\b/i.test(value)) {
     const desired = Math.max(1, Number(mission.requested != null ? mission.requested : ((mission.request && mission.request.count) || 25)));
-    const already = Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
-    return { count: Math.max(0, desired - already), mode: 'remaining', desired, already };
+    const already = mission.request?.entityMode === 'company' && finalMaster.masterSheetUrl()
+      ? finalMaster.masterCount()
+      : Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
+    return { count: Math.max(0, desired - already), mode: mission.request?.entityMode === 'company' && finalMaster.masterSheetUrl() ? 'master_total' : 'remaining', desired, already };
   }
   return null;
 }
@@ -182,6 +195,11 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
   const countChange = refinementCount(value, mission);
   if (countChange) {
     request.count = countChange.count;
+    if (countChange.mode === 'master_total') {
+      request.targetMode = 'master_total';
+      request.targetTotal = countChange.desired;
+      request.destinationSheetUrl = finalMaster.masterSheetUrl() || request.destinationSheetUrl;
+    }
     changes.push('count:' + countChange.mode + ':' + countChange.count);
   } else {
     const desired = Math.max(1, Number(mission.requested != null ? mission.requested : ((mission.request && mission.request.count) || 25)));
@@ -214,6 +232,9 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
   } else if (location) {
     request.location = location;
     request.locationScope = request.hiring ? 'job' : request.locationScope;
+    if (/^india$/i.test(location)) {
+      request.locationPolicy = { scope: 'India', preferredLocations: ['Maharashtra'], allowOtherIndia: true };
+    }
     changes.push('location:' + location);
   }
 
@@ -494,6 +515,7 @@ async function executeSheetEdit(text, workspaceSheetUrl = null) {
 module.exports = {
   normalize,
   requestedContactEnrichment,
+  isApolloEnrichmentRequest,
   genericLocationFromText,
   genericTopicFromText,
   employeeRangeFromText,
