@@ -799,9 +799,9 @@ function topicEvidenceMatches(record, topic) {
     if (!rest) {
       if (literalSap) return true;
       const titleEvidence = [record?.role, record?.searchProvenance?.title].filter(Boolean).join(' ');
-      if (/\b(?:ABAP|FICO|S\/?4HANA|HANA|SuccessFactors|Ariba)\b/i.test(titleEvidence)) return true;
+      if (/\b(?:ABAP|FICO|S\/?4HANA|HANA|SuccessFactors|Ariba|BTP|CPI|EWM|TM|BW|BPC)\b/i.test(titleEvidence)) return true;
       const keywords = Array.isArray(record?.searchProvenance?.keywords) ? record.searchProvenance.keywords : [];
-      const queryBackedModules = ['Basis', 'MM', 'SD', 'EWM', 'TM', 'BW', 'BPC'];
+      const queryBackedModules = ['Basis', 'MM', 'SD', 'EWM', 'TM', 'BW', 'BPC', 'BTP', 'CPI', 'Security'];
       for (const module of queryBackedModules) {
         const queryRegex = new RegExp('^SAP\\s+' + evidenceRegexEscape(module) + '$', 'i');
         if (containsEvidenceTerm(titleEvidence, module)
@@ -810,7 +810,7 @@ function topicEvidenceMatches(record, topic) {
       return false;
     }
 
-    const knownModule = rest.match(/^(fico|mm|sd|abap|basis|s\/?4hana|successfactors|hana|bw|bpc|ariba|ewm|tm)\b/i);
+    const knownModule = rest.match(/^(fico|mm|sd|abap|basis|s\/?4hana|successfactors|hana|bw|bpc|ariba|ewm|tm|btp|cpi|security)\b/i);
     if (!knownModule) return literalSap;
 
     const module = knownModule[1];
