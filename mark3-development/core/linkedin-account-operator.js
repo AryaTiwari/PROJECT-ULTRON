@@ -1943,6 +1943,21 @@ async function exactMission(request) {
   };
 }
 
+function isGoogleSheetsError(error) {
+  const code = String(error?.code || '');
+  return /^GOOGLE_SHEETS_/.test(code) || Number(error?.status || 0) >= 400;
+}
+
+function sheetErrorSnapshot(error) {
+  return {
+    code: String(error?.code || 'GOOGLE_SHEETS_API_ERROR'),
+    message: String(error?.message || 'Google Sheets API error'),
+    status: Number(error?.status || 0) || null,
+    googleStatus: error?.googleStatus || null,
+    googleCode: error?.googleCode || null,
+  };
+}
+
 async function apiRequest(url, options = {}) {
   const token = await googleAuth.accessToken();
   const response = await fetch(url, {
@@ -2583,13 +2598,9 @@ async function run(request, headers) {
     const needsInternalContact = request.entityMode === 'company' && request.wantsContacts;
 
     let destination = null;
+    let destinationWriteError = null;
     let outputHeaders = ensureHeaders(headers, request);
-    if (request.destinationSheetUrl) {
-      destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
-      outputHeaders = ensureHeaders(destination.headers, request);
-    }
-
-    const storageHeaders = [...outputHeaders];
+    let storageHeaders = [...outputHeaders];
     if (needsInternalContact && !storageHeaders.some((header) => headerKey(header) === 'contactLinkedin')) {
       storageHeaders.push(INTERNAL_CONTACT_HEADER);
     }
@@ -2598,33 +2609,74 @@ async function run(request, headers) {
     let recordsToWrite = researched.records.slice();
     let duplicateRowsSkipped = 0;
     let firstAppendedRow = 2;
+    let added = 0;
 
-    if (destination) {
-      await syncDestinationHeaders(destination, storageHeaders);
-      const existingKeys = destinationExistingKeys(destination, storageHeaders);
-      recordsToWrite = researched.records.filter((record) => {
-        const keys = recordDestinationKeys(record);
-        const duplicate = keys.some((key) => existingKeys.has(key));
-        if (!duplicate) for (const key of keys) existingKeys.add(key);
-        return !duplicate;
+    try {
+      if (request.destinationSheetUrl) {
+        destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
+        outputHeaders = ensureHeaders(destination.headers, request);
+        storageHeaders = [...outputHeaders];
+        if (needsInternalContact && !storageHeaders.some((header) => headerKey(header) === 'contactLinkedin')) {
+          storageHeaders.push(INTERNAL_CONTACT_HEADER);
+        }
+
+        await syncDestinationHeaders(destination, storageHeaders);
+        const existingKeys = destinationExistingKeys(destination, storageHeaders);
+        recordsToWrite = researched.records.filter((record) => {
+          const keys = recordDestinationKeys(record);
+          const duplicate = keys.some((key) => existingKeys.has(key));
+          if (!duplicate) for (const key of keys) existingKeys.add(key);
+          return !duplicate;
+        });
+        duplicateRowsSkipped = researched.records.length - recordsToWrite.length;
+        firstAppendedRow = Math.max(destination.lastNonEmptyRow + 1, destination.headerRowNumber + 1);
+        sheet = {
+          spreadsheetId: destination.spreadsheetId,
+          sheetId: destination.sheetId,
+          sheetName: destination.sheetName,
+          title: destination.spreadsheetTitle,
+          url: request.destinationSheetUrl,
+          formatted: true,
+        };
+      } else {
+        sheet = await v2.createSpreadsheet(title, storageHeaders, request.count);
+      }
+
+      await sheets.ensureGridSize(sheet.spreadsheetId, sheet.sheetId, {
+        minColumns: Math.max(1, storageHeaders.length),
+        minRows: Math.max(200, firstAppendedRow + recordsToWrite.length + 5),
       });
-      duplicateRowsSkipped = researched.records.length - recordsToWrite.length;
-      firstAppendedRow = Math.max(destination.lastNonEmptyRow + 1, destination.headerRowNumber + 1);
-      sheet = {
-        spreadsheetId: destination.spreadsheetId,
-        sheetId: destination.sheetId,
-        sheetName: destination.sheetName,
-        title: destination.spreadsheetTitle,
-        url: request.destinationSheetUrl,
-        formatted: true,
-      };
-    } else {
-      sheet = await v2.createSpreadsheet(title, storageHeaders, request.count);
-      firstAppendedRow = 2;
+      const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders));
+      added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
+    } catch (error) {
+      if (!request.destinationSheetUrl || !isGoogleSheetsError(error)) throw error;
+
+      destinationWriteError = sheetErrorSnapshot(error);
+      destination = null;
+      duplicateRowsSkipped = 0;
+      recordsToWrite = researched.records.slice();
+      outputHeaders = ensureHeaders(headers, request);
+      storageHeaders = [...outputHeaders];
+      if (needsInternalContact && !storageHeaders.some((header) => headerKey(header) === 'contactLinkedin')) {
+        storageHeaders.push(INTERNAL_CONTACT_HEADER);
+      }
+
+      const recoveryTitle = `${title} - Recovery`;
+      try {
+        sheet = await v2.createSpreadsheet(recoveryTitle, storageHeaders, request.count);
+        firstAppendedRow = 2;
+        const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders));
+        added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
+      } catch (fallbackError) {
+        const combined = new Error(
+          `Master Sheet failed: ${destinationWriteError.message}. Recovery Sheet also failed: ${fallbackError.message}`
+        );
+        combined.code = fallbackError.code || error.code || 'GOOGLE_SHEETS_API_ERROR';
+        combined.status = fallbackError.status || error.status || null;
+        throw combined;
+      }
     }
 
-    const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders));
-    const added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
     if (needsInternalContact) {
       const helperIndex = storageHeaders.findIndex((header) => headerKey(header) === 'contactLinkedin');
       if (helperIndex >= 0) {
@@ -2640,7 +2692,13 @@ async function run(request, headers) {
     mission.spreadsheetTitle = sheet.title;
     mission.headers = outputHeaders;
     mission.storageHeaders = storageHeaders;
-    mission.destinationMode = destination ? 'existing-sheet' : 'created-sheet';
+    mission.destinationMode = destination
+      ? 'existing-sheet'
+      : destinationWriteError
+        ? 'recovery-sheet'
+        : 'created-sheet';
+    mission.requestedDestinationSheetUrl = request.destinationSheetUrl || null;
+    mission.destinationWriteError = destinationWriteError;
     mission.destinationHeaderRow = destination?.headerRowNumber || 1;
     mission.requested = request.count;
     mission.found = researched.records.length;
@@ -2681,11 +2739,13 @@ async function run(request, headers) {
     const target = latest.missions.find((item) => item.id === mission.id);
     if (target) Object.assign(target, mission);
     latest.pending = null;
-    rememberWorkspaceSheet(sheet.url, {
-      sheetName: sheet.sheetName,
-      spreadsheetTitle: sheet.title,
-      entityMode: request.entityMode,
-    }, latest);
+    if (!destinationWriteError) {
+      rememberWorkspaceSheet(sheet.url, {
+        sheetName: sheet.sheetName,
+        spreadsheetTitle: sheet.title,
+        entityMode: request.entityMode,
+      }, latest);
+    }
     saveState(latest);
     v2.rememberTemplate(outputHeaders, { sourceTitle: sheet.title, sourceUrl: sheet.url, provider: 'linkedin-account' });
     return mission;
@@ -2762,7 +2822,9 @@ function formatMission(mission) {
       : '';
   const destination = mission.destinationMode === 'existing-sheet'
     ? ` Filled your existing Sheet and added ${mission.added} new row${mission.added === 1 ? '' : 's'}${mission.duplicateRowsSkipped ? `; skipped ${mission.duplicateRowsSkipped} duplicate${mission.duplicateRowsSkipped === 1 ? '' : 's'} already present` : ''}.`
-    : '';
+    : mission.destinationMode === 'recovery-sheet'
+      ? ` The requested master Sheet could not be written (${mission.destinationWriteError?.code || 'GOOGLE_SHEETS_API_ERROR'}: ${mission.destinationWriteError?.message || 'unknown Sheets error'}). I preserved the verified results in this recovery Sheet instead; your remembered master Sheet was not changed.`
+      : '';
   return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
 }
 
@@ -2784,6 +2846,8 @@ module.exports = {
   pendingRequest,
   latestCompletedMission,
   workspaceSheetUrl,
+  isGoogleSheetsError,
+  sheetErrorSnapshot,
   rememberWorkspaceSheet,
   prepare,
   resolvePending,
