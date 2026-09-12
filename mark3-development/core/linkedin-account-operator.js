@@ -555,20 +555,38 @@ function applicantCountFromText(text, company = '') {
 function employeeCountFromText(text) {
   const source = String(text || '');
   const range = source.match(/\b(\d[\d,]*)\s*(?:-|–|to)\s*(\d[\d,]*)\s+employees?\b/i);
-  if (range) return { min: compactNumber(range[1]), max: compactNumber(range[2]), label: `${range[1]}-${range[2]}` };
-  const exact = source.match(/\b(?:company size|employees?)\s*[:·-]?\s*(\d[\d,]*)\+?\b/i)
-    || source.match(/\b(\d[\d,]*)\+?\s+employees?\b/i);
+  if (range) {
+    return {
+      min: compactNumber(range[1]),
+      max: compactNumber(range[2]),
+      label: `${range[1]}-${range[2]}`,
+      openEnded: false,
+    };
+  }
+
+  const plus = source.match(/\b(?:company size\s*[:·-]?\s*)?(\d[\d,]*)\+\s*employees?\b/i);
+  if (plus) {
+    const count = compactNumber(plus[1]);
+    return count == null ? null : { min: count, max: Number.POSITIVE_INFINITY, label: `${plus[1]}+`, openEnded: true };
+  }
+
+  const exact = source.match(/\b(?:company size|employees?)\s*[:·-]?\s*(\d[\d,]*)\b/i)
+    || source.match(/\b(\d[\d,]*)\s+employees?\b/i);
   if (!exact) return null;
   const count = compactNumber(exact[1]);
-  return count == null ? null : { min: count, max: count, label: exact[1] };
+  return count == null ? null : { min: count, max: count, label: exact[1], openEnded: false };
 }
 
 function passesEmployeeFilter(record, filters = {}) {
   if (filters.employeeMin == null && filters.employeeMax == null) return true;
   const size = record.employeeCount;
-  if (!size) return false;
-  if (filters.employeeMin != null && Number(size.max) < filters.employeeMin) return false;
-  if (filters.employeeMax != null && Number(size.min) > filters.employeeMax) return false;
+  if (!size || !Number.isFinite(Number(size.min))) return false;
+
+  // Hard filters use the whole LinkedIn company-size interval. A company in
+  // "1,000-5,000" cannot be claimed as under 1,000 merely because the lower
+  // bound touches the requested ceiling.
+  if (filters.employeeMin != null && Number(size.min) < filters.employeeMin) return false;
+  if (filters.employeeMax != null && (!Number.isFinite(Number(size.max)) || Number(size.max) > filters.employeeMax)) return false;
   return true;
 }
 
@@ -663,6 +681,13 @@ function locationEvidenceDetails(record, requestedLocation, options = {}) {
     const explicit = jobEvidence(record);
     const alias = aliases.find((candidate) => containsEvidenceTerm(explicit, candidate));
     if (alias) return { matched: true, source: 'job', label: alias };
+
+    // If LinkedIn's actual job page names a recognised location outside the
+    // requested region, do not let a retained search facet overrule it.
+    const observedJobLocation = linkedinPublic.locationFromText(explicit);
+    if (observedJobLocation && !locationLabelMatchesRequested(observedJobLocation, requested)) {
+      return { matched: false, source: 'job_conflict', label: observedJobLocation };
+    }
 
     const trustedLocations = Array.isArray(record?.searchProvenance?.trustedLocations)
       ? record.searchProvenance.trustedLocations
@@ -902,6 +927,9 @@ function sapRoleKeywordVariants(topic) {
   return [
     'SAP',
     'SAP Consultant',
+    'SAP Developer',
+    'SAP Functional Consultant',
+    'SAP Technical Consultant',
     'SAP FICO',
     'SAP ABAP',
     'SAP MM',
@@ -909,6 +937,14 @@ function sapRoleKeywordVariants(topic) {
     'SAP Basis',
     'SAP S/4HANA',
     'SAP SuccessFactors',
+    'SAP BTP',
+    'SAP CPI',
+    'SAP EWM',
+    'SAP TM',
+    'SAP BW',
+    'SAP HANA',
+    'SAP Ariba',
+    'SAP Security',
   ];
 }
 
@@ -923,21 +959,30 @@ function jobSearchPlan(request) {
   };
 
   if (/^maharashtra$/i.test(location) && /^sap$/i.test(String(request.topic || ''))) {
-    add('SAP', 'Maharashtra');
-    add('SAP', 'Pune');
-    add('SAP', 'Mumbai');
-    add('SAP', 'Navi Mumbai');
-    add('SAP', 'Nagpur');
-    add('SAP', 'Thane');
-    add('SAP', 'Nashik');
-    add('SAP Consultant', 'Maharashtra');
-    add('SAP FICO', 'Maharashtra');
-    add('SAP ABAP', 'Maharashtra');
-    add('SAP S/4HANA', 'Maharashtra');
-    add('SAP SuccessFactors', 'Maharashtra');
-    add('SAP MM', 'Maharashtra');
-    add('SAP SD', 'Maharashtra');
-    add('SAP Basis', 'Maharashtra');
+    // Broad state search + major Maharashtra hiring hubs first.
+    for (const city of ['Maharashtra', 'Pune', 'Mumbai', 'Navi Mumbai', 'Thane', 'Nagpur', 'Nashik']) {
+      add('SAP', city);
+    }
+
+    // Then role families/modules that LinkedIn frequently titles without a
+    // literal generic "SAP Consultant" label.
+    for (const keyword of [
+      'SAP Consultant',
+      'SAP Developer',
+      'SAP Functional Consultant',
+      'SAP Technical Consultant',
+      'SAP FICO',
+      'SAP ABAP',
+      'SAP MM',
+      'SAP SD',
+      'SAP Basis',
+      'SAP S/4HANA',
+      'SAP SuccessFactors',
+      'SAP BTP',
+      'SAP CPI',
+    ]) {
+      add(keyword, 'Maharashtra');
+    }
   } else {
     add(keywords[0], location || null);
     for (const keyword of keywords.slice(1)) add(keyword, location || null);
@@ -1063,7 +1108,9 @@ async function companyMission(request) {
 
   if (request.hiring) {
     const plan = jobSearchPlan(request);
-    const maxSearchCalls = budget.localBudgetBypass ? Math.min(plan.length, 15) : 1;
+    const maxSearchCalls = budget.localBudgetBypass
+      ? Math.min(plan.length, Number(policy.settings().testJobSearchMax || 20))
+      : 1;
 
     for (const step of plan.slice(0, maxSearchCalls)) {
       const result = await budgetedCall(budget, 'search_jobs', {
@@ -1134,8 +1181,10 @@ async function companyMission(request) {
     }
 
     jobIdsDiscovered = jobMeta.size;
-    const orderedJobIds = prioritizedJobIds(jobMeta);
+    const previouslyChecked = request.continueFromPrevious ? previousCheckedJobIds(request) : new Set();
+    const orderedJobIds = prioritizedJobIds(jobMeta).filter((jobId) => !previouslyChecked.has(String(jobId)));
     const acceptedCompanies = new Set();
+    const checkedJobIds = [];
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
@@ -1147,6 +1196,7 @@ async function companyMission(request) {
       const detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
       if (!detail) break;
       jobDetails++;
+      checkedJobIds.push(String(jobId));
 
       const detailText = flattenText(detail);
       const companyRefs = linkedInReferences(detail, 'company');
@@ -1360,6 +1410,8 @@ async function companyMission(request) {
       verifiedDuringRun,
       total: budget.used,
       maximum: budget.maximum,
+      checkedJobIds: request.hiring ? (typeof checkedJobIds !== 'undefined' ? checkedJobIds : []) : [],
+      skippedPreviouslyChecked: request.hiring && request.continueFromPrevious ? previouslyChecked.size : 0,
     },
     budgetStopped: budget.stopped,
     filters: request.filters,
