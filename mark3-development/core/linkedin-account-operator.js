@@ -649,11 +649,69 @@ function passesEmployeeFilter(record, filters = {}) {
 }
 
 const LOCATION_REGION_ALIASES = {
+  india: [
+    'india', 'bengaluru', 'bangalore', 'hyderabad', 'pune', 'mumbai', 'navi mumbai',
+    'chennai', 'delhi', 'new delhi', 'gurugram', 'gurgaon', 'noida', 'kolkata',
+    'ahmedabad', 'vadodara', 'surat', 'kochi', 'cochin', 'thiruvananthapuram',
+    'jaipur', 'indore', 'bhopal', 'bhubaneswar', 'chandigarh', 'mohali',
+    'visakhapatnam', 'vijayawada', 'lucknow', 'nagpur', 'nashik', 'coimbatore',
+  ],
   maharashtra: [
     'maharashtra', 'mumbai', 'navi mumbai', 'thane', 'pune', 'nagpur', 'nashik',
     'aurangabad', 'chhatrapati sambhajinagar', 'kolhapur', 'solapur', 'amravati',
     'satara', 'sangli', 'jalgaon', 'akola', 'latur', 'ratnagiri',
   ],
+  karnataka: ['karnataka', 'bengaluru', 'bangalore', 'mysuru', 'mysore', 'mangaluru', 'mangalore', 'hubballi', 'dharwad'],
+  telangana: ['telangana', 'hyderabad', 'secunderabad', 'warangal'],
+  'tamil nadu': ['tamil nadu', 'chennai', 'coimbatore', 'madurai', 'tiruchirappalli', 'trichy', 'hosur'],
+  'west bengal': ['west bengal', 'kolkata', 'calcutta', 'howrah', 'durgapur', 'siliguri'],
+  gujarat: ['gujarat', 'ahmedabad', 'gandhinagar', 'vadodara', 'baroda', 'surat', 'rajkot'],
+  haryana: ['haryana', 'gurugram', 'gurgaon', 'faridabad', 'panipat'],
+  'uttar pradesh': ['uttar pradesh', 'noida', 'greater noida', 'ghaziabad', 'lucknow', 'kanpur', 'prayagraj', 'agra'],
+  rajasthan: ['rajasthan', 'jaipur', 'jodhpur', 'udaipur', 'kota'],
+  kerala: ['kerala', 'kochi', 'cochin', 'thiruvananthapuram', 'trivandrum', 'kozhikode', 'calicut'],
+  'madhya pradesh': ['madhya pradesh', 'indore', 'bhopal', 'jabalpur', 'gwalior'],
+  odisha: ['odisha', 'orissa', 'bhubaneswar', 'cuttack', 'rourkela'],
+  punjab: ['punjab', 'mohali', 'sahibzada ajit singh nagar', 'ludhiana', 'amritsar', 'jalandhar', 'chandigarh'],
+  'andhra pradesh': ['andhra pradesh', 'visakhapatnam', 'vizag', 'vijayawada', 'tirupati', 'guntur'],
+  bihar: ['bihar', 'patna'],
+  jharkhand: ['jharkhand', 'ranchi', 'jamshedpur'],
+  chhattisgarh: ['chhattisgarh', 'raipur', 'bilaspur'],
+  assam: ['assam', 'guwahati'],
+  uttarakhand: ['uttarakhand', 'dehradun', 'haridwar'],
+  goa: ['goa', 'panaji', 'margao'],
+  'himachal pradesh': ['himachal pradesh', 'shimla'],
+  'jammu and kashmir': ['jammu and kashmir', 'jammu', 'srinagar'],
+  delhi: ['delhi', 'new delhi', 'delhi ncr', 'ncr'],
+  'delhi ncr': ['delhi ncr', 'delhi', 'new delhi', 'gurugram', 'gurgaon', 'noida', 'greater noida', 'faridabad', 'ghaziabad'],
+};
+
+const LOCATION_SEARCH_HUBS = {
+  india: ['India', 'Bengaluru', 'Hyderabad', 'Pune', 'Mumbai', 'Chennai', 'Delhi NCR', 'Gurugram', 'Noida', 'Kolkata', 'Ahmedabad'],
+  maharashtra: ['Maharashtra', 'Pune', 'Mumbai', 'Navi Mumbai', 'Thane', 'Nagpur', 'Nashik'],
+  karnataka: ['Karnataka', 'Bengaluru', 'Mysuru', 'Mangaluru', 'Hubballi'],
+  telangana: ['Telangana', 'Hyderabad', 'Secunderabad'],
+  'tamil nadu': ['Tamil Nadu', 'Chennai', 'Coimbatore', 'Hosur', 'Madurai'],
+  'west bengal': ['West Bengal', 'Kolkata', 'Howrah', 'Durgapur'],
+  gujarat: ['Gujarat', 'Ahmedabad', 'Gandhinagar', 'Vadodara', 'Surat'],
+  haryana: ['Haryana', 'Gurugram', 'Faridabad'],
+  'uttar pradesh': ['Uttar Pradesh', 'Noida', 'Greater Noida', 'Ghaziabad', 'Lucknow'],
+  rajasthan: ['Rajasthan', 'Jaipur', 'Jodhpur', 'Udaipur'],
+  kerala: ['Kerala', 'Kochi', 'Thiruvananthapuram', 'Kozhikode'],
+  'madhya pradesh': ['Madhya Pradesh', 'Indore', 'Bhopal'],
+  odisha: ['Odisha', 'Bhubaneswar', 'Cuttack'],
+  punjab: ['Punjab', 'Mohali', 'Ludhiana', 'Amritsar', 'Chandigarh'],
+  'andhra pradesh': ['Andhra Pradesh', 'Visakhapatnam', 'Vijayawada', 'Tirupati'],
+  bihar: ['Bihar', 'Patna'],
+  jharkhand: ['Jharkhand', 'Ranchi', 'Jamshedpur'],
+  chhattisgarh: ['Chhattisgarh', 'Raipur'],
+  assam: ['Assam', 'Guwahati'],
+  uttarakhand: ['Uttarakhand', 'Dehradun'],
+  goa: ['Goa', 'Panaji'],
+  'himachal pradesh': ['Himachal Pradesh', 'Shimla'],
+  'jammu and kashmir': ['Jammu and Kashmir', 'Jammu', 'Srinagar'],
+  delhi: ['Delhi', 'New Delhi', 'Delhi NCR'],
+  'delhi ncr': ['Delhi NCR', 'Delhi', 'New Delhi', 'Gurugram', 'Noida', 'Faridabad', 'Ghaziabad'],
 };
 
 function evidenceRegexEscape(value) {
@@ -1009,48 +1067,24 @@ function sapRoleKeywordVariants(topic) {
 function jobSearchPlan(request) {
   const keywords = sapRoleKeywordVariants(searchKeyword(request));
   const location = String(request.location || '').trim();
+  const normalizedLocation = location.toLowerCase();
+  const hubs = LOCATION_SEARCH_HUBS[normalizedLocation] || (location ? [location] : ['']);
   const plan = [];
   const add = (keyword, loc) => {
-    const key = `${String(keyword || '').trim().toLowerCase()}|${String(loc || '').trim().toLowerCase()}`;
+    const key = (String(keyword || '').trim().toLowerCase() + '|' + String(loc || '').trim().toLowerCase());
     if (!keyword || plan.some((item) => item.key === key)) return;
     plan.push({ key, keyword: String(keyword).trim(), location: String(loc || '').trim() || null });
   };
 
-  if (/^maharashtra$/i.test(location) && /^sap$/i.test(String(request.topic || ''))) {
-    // Broad state search + major Maharashtra hiring hubs first.
-    for (const city of ['Maharashtra', 'Pune', 'Mumbai', 'Navi Mumbai', 'Thane', 'Nagpur', 'Nashik']) {
-      add('SAP', city);
-    }
+  // Geographic breadth comes first. A state/country request should not be
+  // reduced to one literal LinkedIn query when hiring is concentrated in hubs.
+  for (const place of hubs) add(keywords[0], place || null);
 
-    // Then role families/modules that LinkedIn frequently titles without a
-    // literal generic "SAP Consultant" label.
-    for (const keyword of [
-      'SAP Consultant',
-      'SAP Developer',
-      'SAP Functional Consultant',
-      'SAP Technical Consultant',
-      'SAP FICO',
-      'SAP ABAP',
-      'SAP MM',
-      'SAP SD',
-      'SAP Basis',
-      'SAP S/4HANA',
-      'SAP SuccessFactors',
-      'SAP BTP',
-      'SAP CPI',
-    ]) {
-      add(keyword, 'Maharashtra');
-    }
-  } else if (/^maharashtra$/i.test(location)) {
-    const base = keywords[0];
-    for (const place of ['Maharashtra', 'Pune', 'Mumbai', 'Navi Mumbai', 'Thane', 'Nagpur', 'Nashik']) {
-      add(base, place);
-    }
-    for (const keyword of keywords.slice(1)) add(keyword, 'Maharashtra');
-  } else {
-    add(keywords[0], location || null);
-    for (const keyword of keywords.slice(1)) add(keyword, location || null);
-  }
+  // Then spend remaining search diversity on role/module variants at the
+  // broad requested geography. This keeps the planner generic while making
+  // SAP-style title fragmentation much less likely to hide valid companies.
+  const broadLocation = location || null;
+  for (const keyword of keywords.slice(1)) add(keyword, broadLocation);
 
   return plan.map(({ key, ...item }) => item);
 }
