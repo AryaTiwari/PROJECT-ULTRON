@@ -144,6 +144,15 @@ function install() {
         conversation.append('user', text, { taskType: 'linkedin-account-unlock', inputMode });
         const safety = policy.clearManualLock('user explicitly confirmed LinkedIn account unlock after manual verification');
         result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} today. Normal rate limits still apply.`, { linkedinSafety: safety });
+      } else if (operator.isBuildFinalMasterRequest(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-final-master-build', inputMode });
+        const built = await operator.buildFinalMaster(text);
+        result = responseShape(true,
+          built.alreadyExists
+            ? `The canonical LinkedIn Final Master already exists with ${built.uniqueRecords} verified unique companies. ${built.sheetUrl}`
+            : `Built the canonical LinkedIn Final Master from historical verified company missions. Added ${built.added} clean unique company rows and excluded person-profile contamination/unverified rows. Future company research will use global company dedupe by default. ${built.sheetUrl}`,
+          { linkedinFinalMaster: built, spreadsheetUrl: built.sheetUrl }
+        );
       } else if (commandRouter.isSetWorkspaceRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-workspace-sheet', inputMode });
         const sheetUrl = commandRouter.sheetUrlFromText(text);
