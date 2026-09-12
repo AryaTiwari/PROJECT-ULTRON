@@ -30,3 +30,6 @@ jobs:
       - name: Run LinkedIn account subsystem regression
         working-directory: mark3-development
         run: npm run check:linkedin-account
+      - name: Run LinkedIn command router regression
+        working-directory: mark3-development
+        run: node --env-file=../.env scripts/linkedin-command-router-selftest.js
