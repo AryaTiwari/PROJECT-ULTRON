@@ -176,15 +176,68 @@ async function request(url, options = {}) {
     const message = data?.error?.message || `Google Sheets API failed (${response.status}).`;
     const error = new Error(message);
     error.status = response.status;
-    error.code = response.status === 403 ? 'GOOGLE_SHEETS_FORBIDDEN' : 'GOOGLE_SHEETS_API_ERROR';
+    error.googleStatus = data?.error?.status || null;
+    error.googleCode = data?.error?.code || response.status;
+    error.googleDetails = Array.isArray(data?.error?.details) ? data.error.details : [];
+    error.endpoint = String(url || '').replace(/([?&]key=)[^&]+/gi, '$1<redacted>');
+    error.code = response.status === 403
+      ? 'GOOGLE_SHEETS_FORBIDDEN'
+      : response.status === 404
+        ? 'GOOGLE_SHEETS_NOT_FOUND'
+        : 'GOOGLE_SHEETS_API_ERROR';
     throw error;
   }
   return data;
 }
 
 async function metadata(id) {
-  const fields = encodeURIComponent('properties.title,sheets.properties(sheetId,title,index)');
+  const fields = encodeURIComponent('properties.title,sheets.properties(sheetId,title,index,gridProperties(rowCount,columnCount))');
   return request(`${API}/${encodeURIComponent(id)}?includeGridData=false&fields=${fields}`);
+}
+
+async function ensureGridSize(id, sheetId, options = {}) {
+  const minColumns = Math.max(1, Number(options.minColumns || 1));
+  const minRows = Math.max(1, Number(options.minRows || 1));
+  const meta = options.metadata || await metadata(id);
+  const sheet = (meta.sheets || []).find((item) => Number(item?.properties?.sheetId) === Number(sheetId));
+  if (!sheet) {
+    const error = new Error('The target Google Sheet tab no longer exists.');
+    error.code = 'GOOGLE_SHEETS_TAB_NOT_FOUND';
+    throw error;
+  }
+
+  const currentColumns = Math.max(1, Number(sheet?.properties?.gridProperties?.columnCount || 1));
+  const currentRows = Math.max(1, Number(sheet?.properties?.gridProperties?.rowCount || 1));
+  const nextColumns = Math.max(currentColumns, minColumns);
+  const nextRows = Math.max(currentRows, minRows);
+  if (nextColumns === currentColumns && nextRows === currentRows) {
+    return { expanded: false, columnCount: currentColumns, rowCount: currentRows };
+  }
+
+  const gridProperties = {};
+  const fields = [];
+  if (nextColumns > currentColumns) {
+    gridProperties.columnCount = nextColumns;
+    fields.push('gridProperties.columnCount');
+  }
+  if (nextRows > currentRows) {
+    gridProperties.rowCount = nextRows;
+    fields.push('gridProperties.rowCount');
+  }
+
+  await request(`${API}/${encodeURIComponent(id)}:batchUpdate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      requests: [{
+        updateSheetProperties: {
+          properties: { sheetId: Number(sheetId), gridProperties },
+          fields: fields.join(','),
+        },
+      }],
+    }),
+  });
+
+  return { expanded: true, columnCount: nextColumns, rowCount: nextRows };
 }
 
 async function values(id, range) {
@@ -300,6 +353,7 @@ module.exports = {
   extractSheetUrl,
   sheetGid,
   metadata,
+  ensureGridSize,
   values,
   columnName,
   quoteSheet,
