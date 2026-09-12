@@ -52,6 +52,15 @@ function errorText(error) {
   if (/LINKEDIN_COOLDOWN|LINKEDIN_BURST_CAP|LINKEDIN_HOURLY_CAP|LINKEDIN_DAILY_CAP/i.test(code) || error?.linkedinSafety?.kind === 'rate-limit') {
     return `LinkedIn-only research stopped at the account-safety gate: ${message} ULTRON will not push through LinkedIn rate limits or switch to another source behind your back.`;
   }
+  if (/GOOGLE_SHEETS_FORBIDDEN/i.test(code)) {
+    return `LinkedIn research reached the Google Sheets destination but Google denied access to the master Sheet. Detail: ${message}. Share the Sheet with the Google account/service identity configured in ULTRON or set a different master Sheet; LinkedIn discovery itself is not the cause.`;
+  }
+  if (/GOOGLE_SHEETS_NOT_FOUND|GOOGLE_SHEETS_TAB_NOT_FOUND/i.test(code)) {
+    return `The remembered master Sheet or tab no longer exists or is not visible to ULTRON. Detail: ${message}. Set a valid current/master Sheet and rerun; LinkedIn discovery itself is not the cause.`;
+  }
+  if (/GOOGLE_SHEETS_API_ERROR/i.test(code)) {
+    return `Google Sheets rejected the destination operation: ${message}. ULTRON now expands narrow Sheet grids automatically and preserves verified LinkedIn results in a recovery Sheet when a master-Sheet write fails.`;
+  }
   return `LinkedIn-only research stopped safely: ${message} No external lead source was substituted.`;
 }
 
