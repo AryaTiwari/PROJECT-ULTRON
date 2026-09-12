@@ -156,7 +156,7 @@ function isMissionRefinementRequest(text, mission = null) {
     explicitRefinementLocation(value)
     || explicitTopicRefinement(value)
     || refinementCount(value, mission)
-    || /\b(?:remove|drop|relax)\s+(?:one|a|the)?\s*(?:biggest|main|most\s+restrictive|blocking)?\s*filter\b/i.test(value)
+    || /\b(?:remove|drop|relax)\s+(?:one|a|the)?\s*(?:(?:biggest|main|blocking|most\s+restrictive)(?:\s+(?:biggest|main|blocking|most\s+restrictive))*)?\s*filter\b/i.test(value)
     || /\b(?:remote|hybrid|on[- ]?site|work\s*type|workplace|employees?|employee\s+count|company\s+size|headcount|easy\s+apply|full[- ]?time|part[- ]?time|contract|internship|experience|past\s+(?:24\s+hours?|week|month)|hiring|location|city|state|region|india)\b/i.test(value)
   );
   return referencesPrevious && hasConstraint;
@@ -190,7 +190,7 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
     changes.push('count:auto:' + request.count);
   }
 
-  const wantsAutoRelax = /\b(?:remove|drop|relax)\s+(?:one|a|the)?\s*(?:biggest|main|most\s+restrictive|blocking)?\s*filter\b|\brelax\s+(?:whatever|whichever)\s+filter\b/i.test(value);
+  const wantsAutoRelax = /\b(?:remove|drop|relax)\s+(?:one|a|the)?\s*(?:(?:biggest|main|blocking|most\s+restrictive)(?:\s+(?:biggest|main|blocking|most\s+restrictive))*)?\s*filter\b|\brelax\s+(?:whatever|whichever)\s+filter\b/i.test(value);
   const autoRelax = wantsAutoRelax ? autoRelaxCandidate(mission) : null;
   if (autoRelax) {
     if (autoRelax.key === 'work_type') {
