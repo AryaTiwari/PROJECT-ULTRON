@@ -179,6 +179,46 @@ function requestTopic(text, entityMode, location) {
   return value || (entityMode === 'company' ? 'companies' : 'professionals');
 }
 
+
+function hiringIntentFromText(text, filters = {}) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+
+  if (/\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?|roles?|positions?|careers?)\b/i.test(value)) return true;
+
+  // Explicit company-attribute language should stay a company search even
+  // when words such as "remote" appear.
+  const explicitCompanyAttribute = /\b(?:companies?|employers?)\b[\s\S]{0,55}\b(?:based|headquartered|hq|located|remote[- ]?first|distributed|fully\s+remote\s+company|uses?|using|implements?|runs?|partners?\s+with)\b/i.test(value)
+    || /\b(?:headquarters?|hq|company\s+location|company\s+headcount)\b/i.test(value);
+  if (explicitCompanyAttribute) return false;
+
+  const companyTarget = /\b(?:companies?|company|employers?|firms?|organizations?|organisations?)\b/i.test(value);
+  if (!companyTarget) return false;
+
+  // These are job-level filters in LinkedIn. If a user applies them to
+  // companies plus a non-empty skill/topic, they almost certainly mean
+  // companies with matching openings, even if they omit "jobs".
+  const jobLevelConstraint = Boolean(
+    filters.workType
+    || filters.jobType
+    || filters.experienceLevel
+    || filters.datePosted
+    || filters.easyApply
+  );
+  if (!jobLevelConstraint) return false;
+
+  const stripped = value
+    .replace(/\b(?:find|get|bring|research|source|collect|search|list|show|extract)\b/gi, ' ')
+    .replace(/\b\d{1,3}\b/g, ' ')
+    .replace(/\b(?:companies?|company|employers?|firms?|organizations?|organisations?|linkedin|remote|hybrid|on[- ]?site|in[- ]?office|full[- ]?time|part[- ]?time|contract|internship|entry[- ]?level|associate|mid[- ]?senior|executive|easy\s+apply|under|below|over|above|employees?|employee|in|from|at|near|around|and|the|my|master|sheet|spreadsheet)\b/gi, ' ')
+    .replace(/\d[\d,]*/g, ' ')
+    .replace(/[.,;:!?()[\]{}]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return stripped.length >= 2;
+}
+
 function locationScopeFromText(text, hiring = false) {
   const value = String(text || '');
   if (/\bcompanies?\b[\s\S]{0,45}\b(?:that\s+are\s+)?(?:based|headquartered|located)\b/i.test(value)
@@ -202,7 +242,8 @@ function parseRequest(text) {
 
   const entity = linkedinPublic.normalizeLinkedInEntityUrl(criteriaText);
   const location = linkedinPublic.locationFromText(criteriaText);
-  const hiring = /\b(?:hiring|recruiting|jobs?|vacanc(?:y|ies)|openings?|roles?)\b/i.test(criteriaText);
+  const filters = parseFilters(criteriaText);
+  const hiring = hiringIntentFromText(criteriaText, filters);
   const explicitlyPeople = /\b(?:people|persons?|professionals?|recruiters?|founders?|employees?|candidates?|profiles?)\b/i.test(criteriaText);
   const inferredMode = linkedinPublic.entityModeFromText(criteriaText);
   const entityMode = entity?.type || (hiring && !explicitlyPeople ? 'company' : inferredMode);
@@ -218,7 +259,7 @@ function parseRequest(text) {
     hiring,
     topic: requestTopic(criteriaText, entityMode, location),
     wantsContacts: true,
-    filters: parseFilters(criteriaText),
+    filters,
     destinationSheetUrl,
     explicitHeaders: v2.headersFromText(value),
     usePrevious: /\b(?:use|same as|like)\b[\s\S]{0,30}\b(?:previous|last)\b|\bprevious format\b|\bsame format\b/i.test(value),
@@ -2687,6 +2728,7 @@ module.exports = {
   parseRequest,
   parseEmployeeRange,
   parseFilters,
+  hiringIntentFromText,
   requestTopic,
   locationScopeFromText,
   headerKey,
