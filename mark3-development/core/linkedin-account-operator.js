@@ -1127,7 +1127,7 @@ function jobSearchPlan(request) {
   const broadLocation = location || null;
   for (const keyword of keywords.slice(1)) add(keyword, broadLocation);
 
-  return plan.map(({ key, ...item }) => item);
+  return plan.slice(0, 20).map(({ key, ...item }) => item);
 }
 
 function droppedSearchFilters(result) {
