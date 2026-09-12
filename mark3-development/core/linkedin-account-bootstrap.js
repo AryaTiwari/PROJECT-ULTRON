@@ -116,9 +116,27 @@ function install() {
         conversation.append('user', text, { taskType: 'linkedin-account-unlock', inputMode });
         const safety = policy.clearManualLock('user explicitly confirmed LinkedIn account unlock after manual verification');
         result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} today. Normal rate limits still apply.`, { linkedinSafety: safety });
+      } else if (operator.isConsolidateRequest(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-account-consolidate', inputMode });
+        const consolidated = await operator.consolidateVerifiedMissions(text);
+        result = responseShape(true, `Consolidated ${consolidated.uniqueRecords} unique verified LinkedIn ${consolidated.entityMode === 'company' ? 'companies' : 'people'} from ${consolidated.missions} mission${consolidated.missions === 1 ? '' : 's'}. Added ${consolidated.added} row${consolidated.added === 1 ? '' : 's'}${consolidated.skippedDuplicates ? ` and skipped ${consolidated.skippedDuplicates} duplicate${consolidated.skippedDuplicates === 1 ? '' : 's'} already present` : ''}. ${consolidated.sheetUrl}`, {
+          linkedinConsolidation: consolidated,
+          spreadsheetUrl: consolidated.sheetUrl,
+        });
+      } else if (operator.isDedupeSheetRequest(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-account-sheet-dedupe', inputMode });
+        const cleaned = await operator.dedupeWorkspaceSheet(text);
+        result = responseShape(true, `Cleaned “${cleaned.spreadsheetTitle}” / ${cleaned.sheetName}: removed ${cleaned.removed} duplicate row${cleaned.removed === 1 ? '' : 's'}. ${cleaned.sheetUrl}`, {
+          linkedinSheetDedupe: cleaned,
+          spreadsheetUrl: cleaned.sheetUrl,
+        });
+      } else if (operator.isContinueSearchRequest(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-account-continuation', inputMode });
+        const prepared = await operator.prepareContinuation(text);
+        result = await handlePrepared(prepared);
       } else if (operator.isExistingSheetFillRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-existing-sheet-fill', inputMode });
-        const sheetUrl = require('./google-sheets-operator').extractSheetUrl(text);
+        const sheetUrl = require('./google-sheets-operator').extractSheetUrl(text) || operator.workspaceSheetUrl();
         const filled = await operator.fillLatestMissionIntoSheet(sheetUrl);
         result = responseShape(true, `Filled “${filled.spreadsheetTitle}” / ${filled.sheetName} with ${filled.added} verified LinkedIn row${filled.added === 1 ? '' : 's'}${filled.skippedDuplicates ? ` and skipped ${filled.skippedDuplicates} duplicate${filled.skippedDuplicates === 1 ? '' : 's'} already present` : ''}. ${filled.sheetUrl}`, {
           linkedinExistingSheetFill: filled,
