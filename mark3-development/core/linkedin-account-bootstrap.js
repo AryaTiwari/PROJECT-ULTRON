@@ -1,6 +1,7 @@
 const operator = require('./linkedin-account-operator');
 const policy = require('./linkedin-account-policy');
 const paidTools = require('./paid-tool-approval');
+const commandRouter = require('./linkedin-command-router');
 const config = require('./config');
 
 let installed = false;
@@ -69,7 +70,8 @@ async function handlePrepared(prepared) {
       linkedinMission: mission,
       spreadsheetUrl: mission.sheetUrl,
     };
-    if (mission.contactCandidates > 0 && mission.missingContacts > 0) {
+    const explicitlyRequestedContacts = commandRouter.requestedContactEnrichment(mission.request?.originalMessage || '');
+    if (explicitlyRequestedContacts && mission.contactCandidates > 0 && mission.missingContacts > 0) {
       const approval = paidTools.request(
         'apollo',
         'linkedin-account-enrichment',
@@ -116,6 +118,31 @@ function install() {
         conversation.append('user', text, { taskType: 'linkedin-account-unlock', inputMode });
         const safety = policy.clearManualLock('user explicitly confirmed LinkedIn account unlock after manual verification');
         result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} today. Normal rate limits still apply.`, { linkedinSafety: safety });
+      } else if (commandRouter.isSetWorkspaceRequest(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-account-workspace-sheet', inputMode });
+        const sheetUrl = commandRouter.sheetUrlFromText(text);
+        const sheet = await commandRouter.inspectSheet(sheetUrl);
+        operator.rememberWorkspaceSheet(sheetUrl, {
+          sheetName: sheet.sheetName,
+          spreadsheetTitle: sheet.spreadsheetTitle,
+          entityMode: operator.status()?.workspace?.entityMode || null,
+        });
+        result = responseShape(true, `Set “${sheet.spreadsheetTitle}” / ${sheet.sheetName} as the current LinkedIn workspace Sheet. Future commands can say “current Sheet”, “master Sheet” or “consolidated Sheet”. ${sheetUrl}`, {
+          linkedinWorkspaceSheet: sheet,
+          spreadsheetUrl: sheetUrl,
+        });
+      } else if (commandRouter.isSheetEditRequest(text, operator.workspaceSheetUrl())) {
+        conversation.append('user', text, { taskType: 'linkedin-account-sheet-edit', inputMode });
+        const edited = await commandRouter.executeSheetEdit(text, operator.workspaceSheetUrl());
+        operator.rememberWorkspaceSheet(edited.sheetUrl, {
+          sheetName: edited.sheetName,
+          spreadsheetTitle: edited.spreadsheetTitle,
+          entityMode: operator.status()?.workspace?.entityMode || null,
+        });
+        result = responseShape(true, `Updated “${edited.spreadsheetTitle}” / ${edited.sheetName}: ${edited.operation} ${edited.changed.join(', ')}. ${edited.sheetUrl}`, {
+          linkedinSheetEdit: edited,
+          spreadsheetUrl: edited.sheetUrl,
+        });
       } else if (operator.isConsolidateRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-consolidate', inputMode });
         const consolidated = await operator.consolidateVerifiedMissions(text);
@@ -133,6 +160,9 @@ function install() {
       } else if (operator.isContinueSearchRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-continuation', inputMode });
         const prepared = await operator.prepareContinuation(text);
+        if (prepared?.request) {
+          prepared.request.wantsContacts = commandRouter.requestedContactEnrichment(text);
+        }
         result = await handlePrepared(prepared);
       } else if (operator.isExistingSheetFillRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-existing-sheet-fill', inputMode });
@@ -156,7 +186,8 @@ function install() {
           });
         }
       } else {
-        const request = operator.parseRequest(text);
+        const parsed = operator.parseRequest(text);
+        const request = commandRouter.enhanceRequest(parsed, text, operator.workspaceSheetUrl());
         if (request) {
           conversation.append('user', text, {
             taskType: 'linkedin-account-research',
