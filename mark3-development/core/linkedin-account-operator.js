@@ -22,13 +22,34 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function defaultState() {
+  return {
+    version: 2,
+    pending: null,
+    missions: [],
+    workspace: {
+      sheetUrl: null,
+      sheetName: null,
+      spreadsheetTitle: null,
+      entityMode: null,
+      updatedAt: null,
+    },
+  };
+}
+
 function loadState() {
   try {
-    if (!fs.existsSync(STATE_FILE)) return { version: 1, pending: null, missions: [] };
+    if (!fs.existsSync(STATE_FILE)) return defaultState();
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    return { version: 1, pending: null, missions: [], ...parsed, missions: Array.isArray(parsed.missions) ? parsed.missions : [] };
+    const base = defaultState();
+    return {
+      ...base,
+      ...parsed,
+      missions: Array.isArray(parsed.missions) ? parsed.missions : [],
+      workspace: { ...base.workspace, ...(parsed.workspace || {}) },
+    };
   } catch {
-    return { version: 1, pending: null, missions: [] };
+    return defaultState();
   }
 }
 
@@ -36,6 +57,30 @@ function saveState(state) {
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
   try { fs.chmodSync(STATE_FILE, 0o600); } catch {}
+}
+
+function latestCompletedMission(state = loadState()) {
+  return [...(state.missions || [])].reverse().find((mission) => mission?.status === 'completed') || null;
+}
+
+function workspaceSheetUrl(state = loadState()) {
+  const direct = String(state?.workspace?.sheetUrl || '').trim();
+  if (direct) return direct;
+  return String(latestCompletedMission(state)?.sheetUrl || '').trim() || null;
+}
+
+function rememberWorkspaceSheet(sheetUrl, metadata = {}, state = null) {
+  const target = state || loadState();
+  if (!sheetUrl) return target.workspace || null;
+  target.workspace = {
+    sheetUrl: String(sheetUrl),
+    sheetName: metadata.sheetName || target.workspace?.sheetName || null,
+    spreadsheetTitle: metadata.spreadsheetTitle || target.workspace?.spreadsheetTitle || null,
+    entityMode: metadata.entityMode || target.workspace?.entityMode || null,
+    updatedAt: nowIso(),
+  };
+  if (!state) saveState(target);
+  return target.workspace;
 }
 
 function isRequest(text) {
@@ -51,6 +96,14 @@ function parseCount(text) {
   const match = value.match(/\b(?:find|get|bring|research|source|collect|search|list|show|extract)\s+(?:me\s+)?(\d{1,3})\b/i)
     || value.match(/\b(\d{1,3})\s+(?:companies|company|people|profiles?|professionals?|recruiters?|founders?|leads?)\b/i);
   return Math.max(1, Math.min(100, match ? Number(match[1]) : 25));
+}
+
+function parseExplicitCount(text) {
+  const value = String(text || '');
+  const match = value.match(/\b(?:find|get|bring|research|source|collect|search|list|show|extract|continue|add|append)\s+(?:me\s+)?(\d{1,3})\b/i)
+    || value.match(/\b(\d{1,3})\s+(?:more\s+)?(?:companies|company|people|profiles?|professionals?|recruiters?|founders?|leads?|results?)\b/i)
+    || value.match(/\b(?:until|to)\s+(\d{1,3})\b/i);
+  return match ? Math.max(1, Math.min(100, Number(match[1]))) : null;
 }
 
 function wantsContacts(text) {
@@ -138,9 +191,12 @@ function locationScopeFromText(text, hiring = false) {
 function parseRequest(text) {
   const value = String(text || '').trim();
   if (!isRequest(value)) return null;
-  const destinationSheetUrl = sheets.extractSheetUrl(value);
-  const criteriaText = String(destinationSheetUrl ? value.replace(destinationSheetUrl, ' ') : value)
-    .replace(/\b(?:and\s+)?(?:put|write|add|fill|save|append)\s+(?:the\s+)?(?:results?|companies|leads?|rows?)?\s*(?:into|in|to)?\s*(?:my|this|the)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
+  const explicitSheetUrl = sheets.extractSheetUrl(value);
+  const wantsWorkspaceSheet = /\b(?:current|same|existing|last|latest)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(value);
+  const destinationSheetUrl = explicitSheetUrl || (wantsWorkspaceSheet ? workspaceSheetUrl() : null);
+  const criteriaText = String(explicitSheetUrl ? value.replace(explicitSheetUrl, ' ') : value)
+    .replace(/\b(?:and\s+)?(?:put|write|add|fill|save|append|send|keep)\s+(?:the\s+)?(?:results?|companies|leads?|rows?)?\s*(?:into|in|to)?\s*(?:my|this|the)?\s*(?:current|same|existing|last|latest)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
+    .replace(/\b(?:in|into|to|on)\s+(?:the\s+)?(?:current|same|existing|last|latest)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
