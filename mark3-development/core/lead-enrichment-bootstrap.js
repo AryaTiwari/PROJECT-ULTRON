@@ -5,6 +5,8 @@ const fileVault = require('./file-vault');
 const leadEnrichment = require('./lead-enrichment-operator');
 const leadResearch = require('./lead-research-operator');
 const paidTools = require('./paid-tool-approval');
+const finalMaster = require('./linkedin-final-master');
+const linkedinMissionRunner = require('./linkedin-mission-runner');
 
 let installed = false;
 let originalHandle = null;
@@ -259,6 +261,20 @@ async function handlePaidToolDecision(decision) {
     });
   }
 
+  if (decision.tool === 'apollo' && decision.operation === 'linkedin-final-master-enrichment') {
+    return paidTools.withPermit(decision, async () => {
+      try {
+        const stats = await require('./linkedin-account-operator').enrichFinalMasterContacts();
+        return responseShape(true,
+          `Apollo Final Master enrichment complete. Selected ${stats.selected} verified company contact${stats.selected === 1 ? '' : 's'}, enriched ${stats.enriched}, skipped ${stats.skippedComplete} already-complete compan${stats.skippedComplete === 1 ? 'y' : 'ies'}, and left ${stats.unresolved} unresolved. ${stats.sheetUrl}`,
+          { apolloFinalMaster: stats, spreadsheetUrl: stats.sheetUrl }
+        );
+      } catch (error) {
+        return responseShape(false, `Apollo Final Master enrichment stopped safely: ${error.message}`, { error: error.code || error.message, apolloCalled: !/NOT_CONFIGURED|APPROVAL/.test(String(error.code || '')) });
+      }
+    });
+  }
+
   if (decision.tool === 'apollo' && ['lead-enrichment', 'lead-research-enrichment'].includes(decision.operation)) {
     const ensureContactColumns = Boolean(decision.payload?.ensureContactColumns || decision.modifiers?.ensureContactColumns);
     return paidTools.withPermit(decision, () => handleEnrichment(decision.payload.url, decision.payload.provider || null, { ensureContactColumns }));
@@ -306,7 +322,34 @@ function install() {
           { model: 'apollo-approval-gate', provider: 'local-approval-gate', taskType: 'paid-tool-approval', error: 'AMBIGUOUS_APOLLO_APPROVAL', apolloCalled: false }
         );
       } else {
-        const researchRequest = leadResearch.parseRequest(text);
+        const implicitLinkedInApollo = /\b(?:apollo|enrich|enrichment)\b/i.test(text)
+          && /\b(?:those|these|current|latest|master|final|the)\s+(?:leads|companies|results)|\b(?:leads|companies)\b[\s\S]{0,30}\b(?:email|phone|number|contact)\b/i.test(text)
+          && !spreadsheetSource(text, { attachments: options.attachments });
+
+        if (implicitLinkedInApollo) {
+          conversation.append('user', text, { taskType: 'linkedin-apollo-followup', inputMode });
+          const activeMission = linkedinMissionRunner.active();
+          if (activeMission) {
+            linkedinMissionRunner.defer(activeMission.id, { type: 'apollo-enrichment' });
+            result = responseShape(true,
+              `LinkedIn mission ${activeMission.id} is still running, so I queued Apollo enrichment behind it instead of enriching an unstable partial list. When the verified company set is ready, ULTRON will request Apollo approval for that run.`,
+              { linkedinBackgroundMission: linkedinMissionRunner.summary(activeMission), apolloDeferred: true, apolloCalled: false }
+            );
+          } else if (finalMaster.masterSheetUrl()) {
+            const approval = paidTools.request(
+              'apollo',
+              'linkedin-final-master-enrichment',
+              { url: finalMaster.masterSheetUrl(), provider: 'google', entityMode: 'company' },
+              `The canonical Final Master currently contains ${finalMaster.masterCount()} verified unique compan${finalMaster.masterCount() === 1 ? 'y' : 'ies'}. Apollo will skip rows that already have both email and phone, select one verified priority contact per remaining company, and enrich only missing contact fields.`
+            );
+            result = approvalResponse(approval, {
+              spreadsheetUrl: finalMaster.masterSheetUrl(),
+              linkedinFinalMaster: { count: finalMaster.masterCount(), sheetUrl: finalMaster.masterSheetUrl() },
+            });
+          }
+        }
+
+        const researchRequest = result ? null : leadResearch.parseRequest(text);
         if (researchRequest) {
           conversation.append('user', text, { taskType: 'lead-research', inputMode });
           if (researchRequest.invalidUrl) {
