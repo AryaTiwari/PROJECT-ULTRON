@@ -1131,6 +1131,82 @@ function jobTitleFromDetail(detail, fallback = '') {
   return title || String(fallback || '').trim();
 }
 
+function joeyismJobToDetail(job, jobId = '') {
+  if (!job || typeof job !== 'object') return null;
+  const companyUrl = String(job.company_linkedin_url || '').trim();
+  const lines = [
+    job.job_title,
+    job.company,
+    job.location,
+    job.posted_date,
+    job.applicant_count,
+    job.job_description,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const result = {
+    url: String(job.linkedin_url || (jobId ? `https://www.linkedin.com/jobs/view/${jobId}` : '')).trim(),
+    sections: { job_posting: lines.join('\n') },
+    references: {},
+    structuredFallback: true,
+  };
+  if (companyUrl) {
+    result.references.job_posting = [{
+      kind: 'company',
+      url: companyUrl,
+      text: String(job.company || '').trim(),
+      context: 'job posting',
+    }];
+  }
+  return result;
+}
+
+function joeyismCompanyText(company) {
+  if (!company || typeof company !== 'object') return '';
+  return [
+    company.name,
+    company.about_us,
+    company.company_size ? `Company size: ${company.company_size}` : '',
+    company.headquarters ? `Headquarters: ${company.headquarters}` : '',
+    company.industry ? `Industry: ${company.industry}` : '',
+    company.website ? `Website: ${company.website}` : '',
+    company.phone ? `Phone: ${company.phone}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function shouldPropagateFallbackError(error) {
+  const code = String(error?.code || '');
+  const kind = String(error?.linkedinSafety?.kind || '');
+  return /LINKEDIN_(?:COOLDOWN_ACTIVE|MANUAL_LOCK|BURST_CAP|HOURLY_CAP|DAILY_CAP)/.test(code)
+    || /^(?:rate-limit|manual-lock)$/.test(kind);
+}
+
+async function optionalStructuredJobFallback(budget, jobId) {
+  if (!joeyism.enabled() || budget.used >= budget.maximum) return null;
+  try {
+    const job = await joeyism.call('job', {
+      job_id: String(jobId),
+      url: `https://www.linkedin.com/jobs/view/${jobId}`,
+    });
+    budget.used++;
+    return joeyismJobToDetail(job, jobId);
+  } catch (error) {
+    if (shouldPropagateFallbackError(error)) throw error;
+    return null;
+  }
+}
+
+async function optionalStructuredCompanyFallback(budget, linkedinUrl) {
+  if (!joeyism.enabled() || budget.used >= budget.maximum || !linkedinUrl) return null;
+  try {
+    const company = await joeyism.call('company', { url: linkedinUrl });
+    budget.used++;
+    return company;
+  } catch (error) {
+    if (shouldPropagateFallbackError(error)) throw error;
+    return null;
+  }
+}
+
 async function callPrimaryWithExactFallback(tool, args, fallback = null) {
   try {
     return await mcp.callTool(tool, args);
