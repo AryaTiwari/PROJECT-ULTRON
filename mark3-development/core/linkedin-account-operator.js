@@ -245,7 +245,14 @@ function parseRequest(text) {
   const location = linkedinPublic.locationFromText(criteriaText);
   const filters = parseFilters(criteriaText);
   const hiring = hiringIntentFromText(criteriaText, filters);
-  const explicitlyPeople = /\b(?:people|persons?|professionals?|recruiters?|founders?|employees?|candidates?|profiles?)\b/i.test(criteriaText);
+
+  // Employee-count constraints describe company size, not a request for
+  // LinkedIn people. Strip those phrases before inferring person intent.
+  const peopleIntentText = criteriaText
+    .replace(/\b(?:under|below|fewer\s+than|less\s+than|up\s+to|maximum|max|over|above|more\s+than|at\s+least|minimum|min)\s*\d[\d,]*\s+employees?\b/gi, ' ')
+    .replace(/\b\d[\d,]*\s*(?:-|to)\s*\d[\d,]*\s+employees?\b/gi, ' ')
+    .replace(/\b(?:employee\s+count|company\s+size|headcount)\b/gi, ' ');
+  const explicitlyPeople = /\b(?:people|persons?|professionals?|recruiters?|founders?|employees?|candidates?|profiles?)\b/i.test(peopleIntentText);
   const inferredMode = linkedinPublic.entityModeFromText(criteriaText);
   const entityMode = entity?.type || (hiring && !explicitlyPeople ? 'company' : inferredMode);
   return {
