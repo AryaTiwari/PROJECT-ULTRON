@@ -625,7 +625,7 @@ function employeeCountFromText(text) {
   const plus = source.match(/\b(?:company size\s*[:·-]?\s*)?(\d[\d,]*)\+\s*employees?\b/i);
   if (plus) {
     const count = compactNumber(plus[1]);
-    return count == null ? null : { min: count, max: Number.POSITIVE_INFINITY, label: `${plus[1]}+`, openEnded: true };
+    return count == null ? null : { min: count, max: null, label: `${plus[1]}+`, openEnded: true };
   }
 
   const exact = source.match(/\b(?:company size|employees?)\s*[:·-]?\s*(\d[\d,]*)\b/i)
@@ -644,7 +644,7 @@ function passesEmployeeFilter(record, filters = {}) {
   // "1,000-5,000" cannot be claimed as under 1,000 merely because the lower
   // bound touches the requested ceiling.
   if (filters.employeeMin != null && Number(size.min) < filters.employeeMin) return false;
-  if (filters.employeeMax != null && (!Number.isFinite(Number(size.max)) || Number(size.max) > filters.employeeMax)) return false;
+  if (filters.employeeMax != null && (size.openEnded || !Number.isFinite(Number(size.max)) || Number(size.max) > filters.employeeMax)) return false;
   return true;
 }
 
