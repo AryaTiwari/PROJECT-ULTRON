@@ -8,6 +8,8 @@ const run = (name) => group === 'all' || group === name;
 if (run('intent')) {
   assert.equal(router.requestedContactEnrichment('Find 20 SAP companies on LinkedIn in Maharashtra'), false);
   assert.equal(router.requestedContactEnrichment('Find 20 SAP companies on LinkedIn and get HR contact emails'), true);
+  assert.equal(router.requestedContactEnrichment('now enrich those leads with email and number using Apollo'), true);
+  assert.equal(router.isApolloEnrichmentRequest('now enrich those leads with email and number using Apollo'), true);
 }
 
 if (run('location')) {
@@ -135,6 +137,20 @@ if (run('refinement')) {
   );
   assert.equal(total.request.count, 13);
 
+  const indiaThirty = router.buildMissionRefinement(
+    'add more for remote SAP roles and make the list go 30. search roles within India',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(indiaThirty.request.location, 'India');
+  assert.equal(indiaThirty.request.filters.workType, 'remote');
+  assert.equal(indiaThirty.request.filters.employeeMax, 1000);
+  assert.equal(indiaThirty.request.targetMode, 'master_total');
+  assert.equal(indiaThirty.request.targetTotal, 30);
+  assert.equal(indiaThirty.request.count, 23);
+  assert.equal(indiaThirty.request.locationPolicy.scope, 'India');
+  assert.equal(indiaThirty.request.locationPolicy.allowOtherIndia, true);
+
   assert.equal(router.autoRelaxCandidate(mission).key, 'work_type');
   const autoRelaxed = router.buildMissionRefinement(
     'remove the biggest blocking filter and fill the remaining companies',
@@ -178,4 +194,4 @@ if (run('sheet')) {
   assert.equal(router.isSheetEditRequest('tell me about spreadsheets', null), false);
 }
 
-console.log(`LinkedIn command router self-test passed (${group}): global locations, generic role cleanup, explicit contact intent, mission refinements, master-sheet routing and safe column edits are healthy.`);
+console.log(`LinkedIn command router self-test passed (${group}): global locations, generic role cleanup, explicit Apollo/contact intent, master-total mission refinements, master-sheet routing and safe column edits are healthy.`);
