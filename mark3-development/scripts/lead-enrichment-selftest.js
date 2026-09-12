@@ -33,7 +33,7 @@ assert.equal(apollo.decisionPriority('Head Recruiter'), 2);
 assert.equal(apollo.decisionPriority('HR Recruiter'), 3);
 const rankedHeads = apollo.rankedDecisionMakers([
   { name: 'Recruiter', title: 'HR Recruiter', linkedin_url: 'https://www.linkedin.com/in/recruiter', organization: { name: 'Acme', primary_domain: 'acme.com' } },
-  { name: 'Manager', title: 'Hiring Manager', linkedin_url: 'https://www.linkedin.com/in/manager', organization: { name: 'Acme', primary_domain: 'acme.com' } },
+  { name: 'Manager', title: 'General Manager', linkedin_url: 'https://www.linkedin.com/in/manager', organization: { name: 'Acme', primary_domain: 'acme.com' } },
   { name: 'Founder', title: 'Co-Founder', linkedin_url: 'https://www.linkedin.com/in/founder', organization: { name: 'Acme', primary_domain: 'acme.com' } },
   { name: 'Wrong Company', title: 'Director', linkedin_url: 'https://www.linkedin.com/in/wrong', organization: { name: 'Beta', primary_domain: 'beta.com' } },
 ], 'Acme', 'acme.com');

@@ -412,10 +412,11 @@ assert.equal(joeyism.equivalentTool('person'), 'get_person_profile');
 assert.equal(joeyism.equivalentTool('company'), 'get_company_profile');
 assert.equal(joeyism.equivalentTool('job'), 'get_job_details');
 assert.equal(joeyism.equivalentTool('jobs'), 'search_jobs');
-assert.equal(apollo.decisionPriority('Head of Talent Acquisition', 'hiring'), 1);
-assert.equal(apollo.decisionPriority('Talent Acquisition Manager', 'hiring'), 2);
+assert.equal(apollo.decisionPriority('Director', 'hiring'), 1);
+assert.equal(apollo.decisionPriority('General Manager', 'hiring'), 2);
 assert.equal(apollo.decisionPriority('Technical Recruiter', 'hiring'), 3);
-assert.ok(apollo.decisionPriority('Founder', 'hiring') > apollo.decisionPriority('Head of Talent Acquisition', 'hiring'));
+assert.ok(apollo.decisionPriority('Founder', 'hiring') < apollo.decisionPriority('Lead Recruiter', 'hiring'));
+assert.equal(apollo.rankedDecisionMakers([{ id: 'search-only-id', title: 'Founder', organization: { name: 'Acme' } }], 'Acme').length, 1);
 
 const parsed = mcp.parsePayload('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n');
 assert.equal(parsed.result.ok, true);

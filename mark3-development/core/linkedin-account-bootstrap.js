@@ -3,6 +3,7 @@ const policy = require('./linkedin-account-policy');
 const paidTools = require('./paid-tool-approval');
 const commandRouter = require('./linkedin-command-router');
 const config = require('./config');
+const missionRunner = require('./linkedin-mission-runner');
 
 let installed = false;
 let originalHandle = null;
@@ -64,7 +65,7 @@ function errorText(error) {
   return `LinkedIn-only research stopped safely: ${message} No external lead source was substituted.`;
 }
 
-async function handlePrepared(prepared) {
+async function handlePrepared(prepared, background = false) {
   if (!prepared) return null;
   if (prepared.type === 'clarification') {
     return responseShape(true, prepared.text, { linkedinPending: true });
@@ -73,6 +74,10 @@ async function handlePrepared(prepared) {
     return responseShape(true, prepared.text, { linkedinCancelled: true });
   }
   if (prepared.type === 'run') {
+    if (!background) {
+      const job = missionRunner.enqueue(prepared);
+      return responseShape(true, `LinkedIn mission queued: ${job.id}. Research runs in the background. Ask “LinkedIn mission progress” for status.`, { linkedinBackgroundMission: job });
+    }
     const mission = await operator.run(prepared.request, prepared.headers);
     let text = operator.formatMission(mission);
     const extra = {
@@ -87,7 +92,7 @@ async function handlePrepared(prepared) {
         { url: mission.sheetUrl, provider: 'google', ensureContactColumns: false, missionId: mission.id, entityMode: mission.request?.entityMode },
         mission.request?.entityMode === 'company'
           ? (mission.request?.hiring
-            ? `LinkedIn company research is complete. Apollo would search these ${mission.contactCandidates} verified hiring companies, prioritize Talent Acquisition / HR heads and directors first, recruiting/HR managers second, recruiters third, and founder/owner only as fallback. It will enrich only one highest-priority person per company.`
+            ? `LinkedIn company research is complete. Apollo would search these ${mission.contactCandidates} verified hiring companies, prioritize Director/Founder first, Lead Recruiter/General Manager second, HR Recruiter third. It will enrich only one highest-priority person per company.`
             : `LinkedIn company research is complete. Apollo would search heads at these ${mission.contactCandidates} verified companies and enrich only one highest-priority person per company.`)
           : `LinkedIn people research is complete. Apollo would directly match these ${mission.contactCandidates} verified person profiles and fill missing phone/email cells.`
       );
@@ -106,6 +111,11 @@ function install() {
   const voice = require('./voice-orchestrator');
   const { emit } = require('./events');
   originalHandle = assistant.handle;
+  missionRunner.start(async prepared => {
+    const result = await handlePrepared(prepared, true);
+    conversation.append('assistant', result.text, { taskType: 'linkedin-account-research', model: result.model, ok: result.ok });
+    return result;
+  });
 
   assistant.handle = async (message, options = {}) => {
     const text = String(message || '').trim();
@@ -113,6 +123,13 @@ function install() {
     let result = null;
 
     try {
+      if (/\blinkedin mission (?:progress|pause|cancel|resume)\b/i.test(text)) {
+        const latest = missionRunner.list()[0];
+        if (!latest) return responseShape(true, 'No background LinkedIn mission exists yet.');
+        const action = text.match(/\blinkedin mission (progress|pause|cancel|resume)\b/i)[1].toLowerCase();
+        const job = action === 'progress' ? missionRunner.summary(latest) : missionRunner.control(latest.id, action);
+        return responseShape(true, job.result?.text || `LinkedIn mission ${job.id}: ${job.status}. Calls: ${job.calls}; cached results reused: ${job.cacheHits}.${job.error ? ` ${job.error.message}` : ''}`, { linkedinBackgroundMission: job });
+      }
       const pending = await operator.resolvePending(text);
       if (pending) {
         conversation.append('user', text, { taskType: 'linkedin-account-layout', inputMode });
@@ -231,7 +248,7 @@ function install() {
           });
           const prepared = await operator.prepare(request);
           result = await handlePrepared(prepared);
-          emit(prepared.type === 'run' ? 'linkedin_account_research_completed' : 'linkedin_account_layout_requested', {
+          emit(prepared.type === 'run' ? 'linkedin_account_research_queued' : 'linkedin_account_layout_requested', {
             entityMode: request.entityMode,
             count: request.count,
             spreadsheetUrl: result?.spreadsheetUrl || null,

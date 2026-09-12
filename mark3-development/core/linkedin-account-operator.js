@@ -9,6 +9,7 @@ const joeyism = require('./linkedin-joeyism-bridge');
 const policy = require('./linkedin-account-policy');
 const apollo = require('./apollo-enrichment');
 const config = require('./config');
+const missionRunner = require('./linkedin-mission-runner');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'linkedin-account', 'operator-state.json');
@@ -1069,7 +1070,7 @@ async function budgetedCall(budget, tool, args) {
     return null;
   }
   try {
-    const result = await mcp.callTool(tool, args);
+    const result = await missionRunner.call(tool, args, () => mcp.callTool(tool, args));
     budget.used++;
     return result;
   } catch (error) {
@@ -1350,7 +1351,7 @@ async function optionalStructuredCompanyFallback(budget, linkedinUrl) {
 
 async function callPrimaryWithExactFallback(tool, args, fallback = null) {
   try {
-    return await mcp.callTool(tool, args);
+    return await missionRunner.call(tool, args, () => mcp.callTool(tool, args));
   } catch (error) {
     const eligible = fallback && joeyism.enabled()
       && /LINKEDIN_MCP_|auth|session|browser|profile/i.test(`${error.code || ''} ${error.message || ''}`);
@@ -2186,7 +2187,7 @@ async function prepareApolloCompanyContacts(missionId) {
         domain: target.domain,
         priorityMode: mission.request?.hiring ? 'hiring' : 'general',
       });
-      const person = result.candidate;
+      const person = result.candidate ? await apollo.resolveDecisionMaker(result.candidate, target.company, target.domain) : null;
       if (!person) {
         unresolved.push({ company: target.company, reason: 'No Apollo candidate matched the company and requested priority titles.' });
       } else {
@@ -2617,6 +2618,11 @@ async function run(request, headers) {
         ? await companyMission(request)
         : await personMission(request);
 
+    missionRunner.persistResearch(researched);
+    const persisted = loadState();
+    const checkpointMission = persisted.missions.find(item => item.id === mission.id);
+    if (checkpointMission) Object.assign(checkpointMission, { verifiedRecords: researched.records, status: 'writing_sheet' });
+    saveState(persisted);
     const title = `ULTRON LinkedIn - ${String(request.topic || request.entityMode).replace(/[^a-z0-9 ()&+._-]+/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 65)} - ${new Date().toISOString().slice(0, 10)}`;
     const needsInternalContact = request.entityMode === 'company' && request.wantsContacts;
 
@@ -2804,8 +2810,8 @@ function status() {
     companyLinkType: 'linkedin-company-profile',
     apolloDecisionMakerSelection: true,
     apolloDecisionMakerPriority: {
-      hiring: ['talent/HR head or director', 'talent/recruitment/HR manager', 'recruiter/talent acquisition', 'founder/owner fallback'],
-      general: ['director/founder/owner', 'manager/head recruiter', 'HR recruiter'],
+      hiring: ['director/founder/owner', 'lead recruiter/general manager', 'HR recruiter'],
+      general: ['director/founder/owner', 'lead recruiter/general manager', 'HR recruiter'],
     },
   };
 }

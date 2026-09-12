@@ -151,6 +151,11 @@ function artifactResponse(kind, result) {
 const server = http.createServer(async (req,res) => {
   try {
     if (req.method === 'OPTIONS') return send(res,204,'');
+    if (req.method === 'GET' && /^\/api\/linkedin\/missions\/[a-z0-9-]+$/i.test(req.url)) {
+      const runner = require('./core/linkedin-mission-runner');
+      try { return send(res, 200, { ok: true, mission: runner.summary(runner.get(req.url.split('/').pop())) }); }
+      catch { return send(res, 404, { ok: false, error: 'LINKEDIN_MISSION_NOT_FOUND' }); }
+    }
     if (req.method === 'GET' && req.url === '/api/health') {
       const [router, brain, multimodalStatus] = await Promise.all([integrations.health(), codingBrain.health(), multimodal.status()]);
       return send(res, router.ok ? 200 : 503, {

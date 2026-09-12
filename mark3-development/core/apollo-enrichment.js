@@ -168,19 +168,13 @@ function hostname(value) {
 
 function decisionPriority(title, mode = 'general') {
   const value = normalizedWords(title);
-  if (mode === 'hiring') {
-    if (/\b(?:head|director|vp|vice president)\b.*\b(?:talent acquisition|recruitment|human resources|hr|people)\b/.test(value)
-        || /\b(?:talent acquisition|recruitment|human resources|hr|people)\b.*\b(?:head|director|vp|vice president)\b/.test(value)) return 1;
-    if (/\b(?:talent acquisition manager|recruitment manager|recruiting manager|hiring manager|hr manager|human resources manager|people operations manager|people ops manager)\b/.test(value)) return 2;
-    if (/\b(?:senior recruiter|technical recruiter|hr recruiter|human resources recruiter|recruiter|talent acquisition|recruitment lead|talent lead|hr business partner|hrbp)\b/.test(value)) return 3;
-    if (/\b(?:founder|co founder|owner|chief executive officer|ceo|managing director|director)\b/.test(value)) return 4;
-    return 99;
-  }
-  if (/\b(?:founder|co founder|owner|director|managing director)\b/.test(value)) return 1;
-  if (/\b(?:manager|head|talent acquisition lead|recruitment lead)\b/.test(value)) return 2;
-  if (/\b(?:hr recruiter|human resources recruiter|recruiter|talent acquisition)\b/.test(value)) return 3;
+  // User preference applies to hiring and general company research alike.
+  if (/\b(?:director|founder|co founder|owner)\b/.test(value)) return 1;
+  if (/\b(?:lead recruiter|head recruiter|recruitment lead|recruiting lead|general manager)\b/.test(value)) return 2;
+  if (/\b(?:hr recruiter|human resources recruiter|recruiter)\b/.test(value)) return 3;
   return 99;
 }
+
 
 function sameOrganization(person, company, domain = '') {
   const expectedDomain = hostname(domain);
@@ -200,7 +194,7 @@ function rankedDecisionMakers(people, company, domain = '', priorityMode = 'gene
       decisionPriority: decisionPriority(person.title || person.headline || '', priorityMode),
       linkedinUrl: normalizeLinkedIn(person.linkedin_url || person.linkedin || ''),
     }))
-    .filter((person) => person.decisionPriority < 99 && person.linkedinUrl)
+    .filter((person) => person.decisionPriority < 99 && (person.id || person.linkedinUrl))
     .sort((a, b) => a.decisionPriority - b.decisionPriority || String(a.name || '').localeCompare(String(b.name || '')));
 }
 
@@ -229,7 +223,8 @@ async function searchCompanyDecisionMaker({ company, domain = '', location = '',
     ? ['head', 'director', 'vp', 'manager', 'owner', 'founder']
     : ['owner', 'founder', 'head', 'director', 'manager'];
   for (const title of titles) url.searchParams.append('person_titles[]', title);
-  for (const seniority of seniorities) url.searchParams.append('person_seniorities[]', seniority);
+  // Seniority filters exclude individual-contributor HR recruiters.
+  for (const title of ['director', 'founder', 'lead recruiter', 'head recruiter', 'general manager', 'HR recruiter']) url.searchParams.append('person_titles[]', title);
   const cleanDomain = hostname(domain);
   if (cleanDomain) url.searchParams.append('q_organization_domains_list[]', cleanDomain);
   else url.searchParams.set('q_keywords', String(company || '').trim());
@@ -284,7 +279,8 @@ async function apiCall(linkedinUrl, { needPhone }) {
     throw error;
   }
   const url = new URL(APOLLO_MATCH);
-  url.searchParams.set('linkedin_url', linkedinUrl);
+  if (linkedinUrl && typeof linkedinUrl === 'object') url.searchParams.set('id', String(linkedinUrl.id));
+  else url.searchParams.set('linkedin_url', linkedinUrl);
   // Credit-saver defaults: do not run personal-email or waterfall enrichment here.
   // The office Sheet/post itself is checked first by the lead operator.
   url.searchParams.set('reveal_personal_emails', 'false');
@@ -324,6 +320,27 @@ async function apiCall(linkedinUrl, { needPhone }) {
     if (attempt < 3) await sleep(retryDelay(response, attempt));
   }
   throw lastError || new Error('Apollo enrichment failed.');
+}
+
+async function resolveDecisionMaker(candidate, company, domain) {
+  if (!candidate.id) return candidate;
+  const cache = readCache();
+  const cached = Object.entries(cache.people).find(([, p]) => p.apolloPersonId === String(candidate.id) && p.name && satisfies(p, { needEmail: true, needPhone: true }));
+  if (cached && sameOrganization(cached[1], company, domain)) return { ...candidate, ...cached[1], linkedinUrl: cached[0] };
+  const data = await apiCall({ id: candidate.id }, { needPhone: true });
+  const person = data.person;
+  const linkedinUrl = normalizeLinkedIn(person?.linkedin_url);
+  if (!person || String(person.id) !== String(candidate.id) || !linkedinUrl || !sameOrganization(person, company, domain)) {
+    throw new Error('APOLLO_IDENTITY_OR_COMPANY_MISMATCH');
+  }
+  const record = { name: person.name || [person.first_name, person.last_name].filter(Boolean).join(' '),
+    title: person.title || candidate.title, organization: person.organization,
+    apolloPersonId: String(person.id), noMatch: false, ambiguous: false,
+    emailKnown: true, email: validEmail(person.email), phone: null, phoneStatus: 'pending',
+    returnedLinkedIn: linkedinUrl, checkedAt: new Date().toISOString(), phoneRequestedAt: new Date().toISOString() };
+  cache.people[linkedinUrl] = record;
+  saveCache(cache);
+  return { ...candidate, ...record, linkedinUrl };
 }
 
 async function enrich(input, options = {}) {
@@ -454,6 +471,7 @@ module.exports = {
   sameOrganization,
   rankedDecisionMakers,
   searchCompanyDecisionMaker,
+  resolveDecisionMaker,
   readCache,
   saveCache,
   cacheDays,

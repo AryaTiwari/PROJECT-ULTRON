@@ -281,6 +281,16 @@ function sendTyped(){const text=els.input.value.trim();if(!text)return;els.input
 
 function connectEvents(){
   const es=new EventSource(`${API}/api/events`);
+  es.addEventListener('linkedin:progress', e => { try {
+    const ev=JSON.parse(e.data);
+    state.events.push({ ...ev, type:'linkedin:progress', message:`LinkedIn ${ev.status}: ${ev.calls} calls, ${ev.cacheHits} cache hits` });
+    if(state.events.length>120)state.events.shift();
+    renderEvents();
+  } catch {} });
+  es.addEventListener('linkedin:complete', e => { try {
+    const ev=JSON.parse(e.data);
+    if(ev.result?.text)addMessage('assistant',ev.result.text,'LINKEDIN RESEARCH');
+  } catch {} });
   const types=['task_started','context_ready','plan_created','model_selection','model_started','model_candidate_started','model_candidate_failed','model_candidate_succeeded','model_failed','model_delta','model_stream_fallback','model_stream_reset','model_backup_selected','model_league_started','model_league_trial_started','model_league_trial_completed','model_league_trial_failed','model_league_completed','model_league_promoted','model_league_error','tool_started','tool_completed','tool_failed','verification_complete','response_ready','task_completed','proactive_alert','model_catalog_unavailable','voice_started','voice_ready','voice_prefetch_next','voice_completed','voice_error','voice_state_changed'];
   types.forEach(type=>es.addEventListener(type,e=>{try{
     const ev=JSON.parse(e.data);
