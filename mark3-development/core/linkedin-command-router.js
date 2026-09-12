@@ -163,6 +163,11 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
   if (countChange) {
     request.count = countChange.count;
     changes.push('count:' + countChange.mode + ':' + countChange.count);
+  } else {
+    const desired = Math.max(1, Number(mission.requested != null ? mission.requested : ((mission.request && mission.request.count) || 25)));
+    const already = Math.max(0, Number(mission.added != null ? mission.added : (mission.records ? mission.records.length : (mission.verifiedRecords ? mission.verifiedRecords.length : 0))));
+    request.count = already < desired ? (desired - already) : desired;
+    changes.push('count:auto:' + request.count);
   }
 
   const removeLocation = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:location|city|state|region)(?:\s+filter)?\b|\b(?:any|anywhere)\s+location\b|\blocation\s+(?:doesn['’]?t|does\s+not)\s+matter\b/i.test(value);
