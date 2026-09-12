@@ -232,11 +232,11 @@ function parseRequest(text) {
   const value = String(text || '').trim();
   if (!isRequest(value)) return null;
   const explicitSheetUrl = sheets.extractSheetUrl(value);
-  const wantsWorkspaceSheet = /\b(?:current|same|existing|last|latest)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(value);
+  const wantsWorkspaceSheet = /\b(?:current|same|existing|last|latest|master|consolidated)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(value);
   const destinationSheetUrl = explicitSheetUrl || (wantsWorkspaceSheet ? workspaceSheetUrl() : null);
   const criteriaText = String(explicitSheetUrl ? value.replace(explicitSheetUrl, ' ') : value)
-    .replace(/\b(?:and\s+)?(?:put|write|add|fill|save|append|send|keep)\s+(?:the\s+)?(?:results?|companies|leads?|rows?)?\s*(?:into|in|to)?\s*(?:my|this|the)?\s*(?:current|same|existing|last|latest)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
-    .replace(/\b(?:in|into|to|on)\s+(?:the\s+)?(?:current|same|existing|last|latest)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
+    .replace(/\b(?:and\s+)?(?:put|write|add|fill|save|append|send|keep)\s+(?:(?:them|it|these|those)\s+)?(?:the\s+)?(?:results?|companies|leads?|rows?)?\s*(?:into|in|to)?\s*(?:my|this|the)?\s*(?:current|same|existing|last|latest|master|consolidated)?\s*(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
+    .replace(/\b(?:in|into|to|on)\s+(?:the\s+)?(?:current|same|existing|last|latest|master|consolidated)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
