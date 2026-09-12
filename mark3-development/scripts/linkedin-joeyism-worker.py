@@ -24,7 +24,7 @@ def serializable(value):
 
 async def run(payload):
     try:
-        from linkedin_scraper import BrowserManager, PersonScraper, CompanyScraper, JobSearchScraper
+        from linkedin_scraper import BrowserManager, PersonScraper, CompanyScraper, JobScraper, JobSearchScraper
     except Exception as exc:
         return {"ok": False, "error_kind": "dependency", "error": f"linkedin_scraper is not installed: {exc}"}
 
@@ -46,6 +46,14 @@ async def run(payload):
                 if not url:
                     raise ValueError("company action requires url")
                 result = await CompanyScraper(browser.page).scrape(url)
+            elif action == "job":
+                url = str(payload.get("url") or "").strip()
+                if not url:
+                    job_id = str(payload.get("job_id") or "").strip()
+                    if not job_id:
+                        raise ValueError("job action requires url or job_id")
+                    url = f"https://www.linkedin.com/jobs/view/{job_id}"
+                result = await JobScraper(browser.page).scrape(url)
             elif action == "jobs":
                 keywords = str(payload.get("keywords") or "").strip() or None
                 location = str(payload.get("location") or "").strip() or None
