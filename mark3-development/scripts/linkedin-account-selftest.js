@@ -44,6 +44,16 @@ assert.equal(naturalJobRequest.entityMode, 'company');
 assert.equal(naturalJobRequest.hiring, true);
 assert.equal(naturalJobRequest.topic, 'SAP');
 
+const implicitHiringRequest = operator.parseRequest('Find 20 remote SAP companies in Maharashtra on LinkedIn under 1000 employees and add them to the master sheet.');
+assert.equal(implicitHiringRequest.entityMode, 'company');
+assert.equal(implicitHiringRequest.hiring, true);
+assert.equal(implicitHiringRequest.topic, 'SAP');
+assert.equal(implicitHiringRequest.location, 'Maharashtra');
+assert.equal(implicitHiringRequest.filters.workType, 'remote');
+assert.equal(implicitHiringRequest.filters.employeeMax, 1000);
+assert.equal(implicitHiringRequest.criteriaText.includes('master sheet'), false);
+assert.equal(operator.hiringIntentFromText('Find remote-first SAP consulting companies on LinkedIn in India', { workType: 'remote' }), false);
+
 const person = operator.parseRequest('Find me 30 SAP recruiters on LinkedIn from Pune with email and phone');
 assert.equal(person.entityMode, 'person');
 assert.equal(person.location, 'Pune');
@@ -147,6 +157,16 @@ assert.ok(sapPlan.some((item) => item.keyword === 'SAP Developer'));
 assert.ok(sapPlan.some((item) => item.keyword === 'SAP Functional Consultant'));
 assert.ok(sapPlan.some((item) => item.keyword === 'SAP BTP'));
 assert.ok(sapPlan.some((item) => item.keyword === 'SAP CPI'));
+const indiaPlan = operator.jobSearchPlan({ ...filtered, location: 'India' });
+assert.equal(indiaPlan.length, 20);
+assert.equal(indiaPlan[0].location, 'India');
+assert.ok(indiaPlan.some((item) => item.location === 'Bengaluru'));
+assert.ok(indiaPlan.some((item) => item.location === 'Hyderabad'));
+assert.ok(indiaPlan.some((item) => item.location === 'Pune'));
+assert.ok(indiaPlan.some((item) => item.location === 'Kolkata'));
+const karnatakaPlan = operator.jobSearchPlan({ ...filtered, location: 'Karnataka' });
+assert.equal(karnatakaPlan[0].location, 'Karnataka');
+assert.ok(karnatakaPlan.some((item) => item.location === 'Bengaluru'));
 assert.equal(operator.employeeCountFromText('Company size 501-1,000 employees').max, 1000);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: { min: 501, max: 1000, openEnded: false } }, filtered.filters), true);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: { min: 1000, max: 5000, openEnded: false } }, filtered.filters), false);
@@ -379,4 +399,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, implicit hiring-intent routing, India/state hub expansion, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
