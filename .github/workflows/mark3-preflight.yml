@@ -36,6 +36,9 @@ jobs:
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight
+      - name: Run LinkedIn account subsystem regression
+        working-directory: mark3-development
+        run: npm run check:linkedin-account
       - name: Render full 30-second Elevate visual acceptance Reel
         working-directory: mark3-development
         run: node --env-file=../.env scripts/reel-visual-acceptance.js
