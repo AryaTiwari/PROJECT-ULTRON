@@ -54,6 +54,88 @@ if (run('workspace')) {
   );
 }
 
+if (run('refinement')) {
+  const mission = {
+    status: 'completed',
+    requested: 20,
+    added: 7,
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/master123/edit',
+    request: {
+      count: 20,
+      entityMode: 'company',
+      hiring: true,
+      topic: 'SAP',
+      location: 'Maharashtra',
+      locationScope: 'job',
+      filters: {
+        workType: 'remote',
+        employeeMin: null,
+        employeeMax: 1000,
+        jobType: null,
+        experienceLevel: null,
+        datePosted: null,
+        easyApply: false,
+      },
+    },
+  };
+
+  assert.equal(router.isMissionRefinementRequest('remove the remote filter and expand to all India', mission), true);
+  const expanded = router.buildMissionRefinement(
+    'remove the remote filter and expand to all India',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(expanded.request.location, 'India');
+  assert.equal(expanded.request.filters.workType, null);
+  assert.equal(expanded.request.filters.employeeMax, 1000);
+  assert.equal(expanded.request.count, 13);
+  assert.equal(expanded.request.destinationSheetUrl, 'https://docs.google.com/spreadsheets/d/master123/edit');
+
+  const bigger = router.buildMissionRefinement(
+    'keep the same search but allow up to 2000 employees and add 5 more companies',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(bigger.request.filters.employeeMax, 2000);
+  assert.equal(bigger.request.count, 5);
+  assert.equal(bigger.request.location, 'Maharashtra');
+  assert.equal(bigger.request.filters.workType, 'remote');
+
+  const noLocation = router.buildMissionRefinement(
+    'remove location filter and add 10 more companies',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(noLocation.request.location, '');
+  assert.equal(noLocation.request.count, 10);
+
+  const pune = router.buildMissionRefinement(
+    'same search but location to Pune',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(pune.request.location, 'Pune');
+  assert.equal(pune.request.count, 13);
+
+  const total = router.buildMissionRefinement(
+    'make the total 20 companies',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(total.request.count, 13);
+
+  const relaxed = router.buildMissionRefinement(
+    'remove the employee limit, remove remote, expand to India and fill the remaining companies',
+    mission,
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(relaxed.request.filters.employeeMin, null);
+  assert.equal(relaxed.request.filters.employeeMax, null);
+  assert.equal(relaxed.request.filters.workType, null);
+  assert.equal(relaxed.request.location, 'India');
+  assert.equal(relaxed.request.count, 13);
+}
+
 if (run('sheet')) {
   assert.deepEqual(
     router.parseSheetEdit('add columns WEBSITE, NOTES and PRIORITY to the current sheet'),
@@ -74,4 +156,4 @@ if (run('sheet')) {
   assert.equal(router.isSheetEditRequest('tell me about spreadsheets', null), false);
 }
 
-console.log(`LinkedIn command router self-test passed (${group}): global locations, generic role cleanup, explicit contact intent, master-sheet routing and safe column edits are healthy.`);
+console.log(`LinkedIn command router self-test passed (${group}): global locations, generic role cleanup, explicit contact intent, mission refinements, master-sheet routing and safe column edits are healthy.`);
