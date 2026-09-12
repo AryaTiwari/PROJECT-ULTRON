@@ -45,6 +45,11 @@ jobs:
         env:
           ULTRON_LINKEDIN_COMMAND_TEST_GROUP: workspace
         run: node --env-file=../.env scripts/linkedin-command-router-selftest.js
+      - name: Test LinkedIn mission refinements
+        working-directory: mark3-development
+        env:
+          ULTRON_LINKEDIN_COMMAND_TEST_GROUP: refinement
+        run: node --env-file=../.env scripts/linkedin-command-router-selftest.js
       - name: Test LinkedIn Sheet commands
         working-directory: mark3-development
         env:
