@@ -415,6 +415,8 @@ async function inspectDestinationSheet(url, request) {
     spreadsheetTitle: meta?.properties?.title || 'Google Sheet',
     sheetName: chosen.sheetName,
     sheetId: chosen.sheetId,
+    gridColumnCount: Number(tabs.find((tab) => tab?.properties?.sheetId === chosen.sheetId)?.properties?.gridProperties?.columnCount || 0),
+    gridRowCount: Number(tabs.find((tab) => tab?.properties?.sheetId === chosen.sheetId)?.properties?.gridProperties?.rowCount || 0),
     headerRowNumber: chosen.rowNumber,
     originalHeaders: chosen.headers,
     headers,
@@ -425,6 +427,10 @@ async function inspectDestinationSheet(url, request) {
 }
 
 async function syncDestinationHeaders(destination, headers) {
+  await sheets.ensureGridSize(destination.spreadsheetId, destination.sheetId, {
+    minColumns: Math.max(1, headers.length),
+    minRows: Math.max(2, destination.lastNonEmptyRow + 2),
+  });
   const changes = [];
   for (let index = 0; index < headers.length; index++) {
     const current = String(destination.rows?.[destination.headerRowNumber - 1]?.[index] ?? '').trim();
@@ -1951,13 +1957,26 @@ async function apiRequest(url, options = {}) {
   const raw = await response.text();
   let data = {};
   try { data = raw ? JSON.parse(raw) : {}; } catch {}
-  if (!response.ok) throw new Error(data?.error?.message || `Google Sheets API failed (${response.status}).`);
+  if (!response.ok) {
+    const error = new Error(data?.error?.message || `Google Sheets API failed (${response.status}).`);
+    error.status = response.status;
+    error.googleStatus = data?.error?.status || null;
+    error.googleCode = data?.error?.code || response.status;
+    error.googleDetails = Array.isArray(data?.error?.details) ? data.error.details : [];
+    error.code = response.status === 403
+      ? 'GOOGLE_SHEETS_FORBIDDEN'
+      : response.status === 404
+        ? 'GOOGLE_SHEETS_NOT_FOUND'
+        : 'GOOGLE_SHEETS_API_ERROR';
+    throw error;
+  }
   return data;
 }
 
 async function appendRows(spreadsheetId, sheetName, rows) {
   if (!rows.length) return 0;
-  const full = `${sheets.quoteSheet(sheetName)}!A:ZZ`;
+  const width = Math.max(1, ...rows.map((row) => Array.isArray(row) ? row.length : 0));
+  const full = `${sheets.quoteSheet(sheetName)}!A:${sheets.columnName(width - 1)}`;
   const result = await apiRequest(`${API}/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(full)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
     method: 'POST',
     body: JSON.stringify({ majorDimension: 'ROWS', values: rows }),
