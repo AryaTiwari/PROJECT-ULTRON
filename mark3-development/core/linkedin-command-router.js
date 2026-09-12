@@ -24,7 +24,7 @@ function genericLocationFromText(text, existing = '') {
     .replace(/\s+/g, ' ')
     .trim();
 
-  const stop = '(?=\\s*(?:,?\\s+(?:remote|hybrid|on[- ]?site|under|below|less\\s+than|fewer\\s+than|over|above|more\\s+than|at\\s+least|with|having|past\\s+(?:24\\s+hours?|week|month)|full[- ]?time|part[- ]?time|contract|internship|easy\\s+apply|and\\s+(?:under|remote|hybrid|with|past)|in\\s+(?:the\\s+)?(?:current|same|existing|master|consolidated)\\s+(?:google\\s+)?(?:sheet|spreadsheet)))|$)';
+  const stop = '(?=\\s*(?:,?\\s+(?:remote|hybrid|on[- ]?site|under|below|less\\s+than|fewer\\s+than|over|above|more\\s+than|at\\s+least|with|having|past\\s+(?:24\\s+hours?|week|month)|full[- ]?time|part[- ]?time|contract|internship|easy\\s+apply|and\\s+(?:under|remote|hybrid|with|past|add|put|write|append|save|fill|send|keep)|(?:add|put|write|append|save|fill|send|keep)\\s+.+\\s+(?:sheet|spreadsheet)|in\\s+(?:the\\s+)?(?:current|same|existing|master|consolidated)\\s+(?:google\\s+)?(?:sheet|spreadsheet)|to\\s+(?:the\\s+)?(?:current|same|existing|master|consolidated)\\s+(?:google\\s+)?(?:sheet|spreadsheet)))|$)';
   const patterns = [
     new RegExp('\\b(?:located|based|headquartered)\\s+in\\s+([A-Za-z][A-Za-z .-]*(?:,\\s*[A-Za-z][A-Za-z .-]*)?)' + stop, 'i'),
     new RegExp('\\b(?:jobs?|roles?|openings?|vacancies)\\s+in\\s+([A-Za-z][A-Za-z .-]*(?:,\\s*[A-Za-z][A-Za-z .-]*)?)' + stop, 'i'),
@@ -35,6 +35,8 @@ function genericLocationFromText(text, existing = '') {
     const match = value.match(pattern);
     if (!match?.[1]) continue;
     const location = match[1]
+      .replace(/\s+and\s+(?:add|put|write|append|save|fill|send|keep)\b[\s\S]*$/i, '')
+      .replace(/\s+(?:to|in)\s+(?:the\s+)?(?:current|same|existing|master|consolidated)\s+(?:google\s+)?(?:sheet|spreadsheet)\b[\s\S]*$/i, '')
       .replace(/\b(?:companies?|people|professionals?|recruiters?|jobs?|roles?|openings?)\b.*$/i, '')
       .replace(/[.,;:]+$/, '')
       .replace(/\s+/g, ' ')
@@ -56,7 +58,9 @@ function genericTopicFromText(text, request = {}, location = '') {
     .replace(/\b(?:under|below|fewer\s+than|less\s+than|up\s+to|maximum|max|over|above|more\s+than|at\s+least|minimum|min)\s*\d[\d,]*\s*(?:employees?)?/gi, ' ')
     .replace(/\b(?:remote|hybrid|on[- ]?site|in[- ]?office|easy\s+apply|full[- ]?time|part[- ]?time|contract|internship)\b/gi, ' ')
     .replace(/\b(?:located|based|headquartered)\s+in\b/gi, ' ')
-    .replace(/\b(?:from|in|at|near|around|with|and)\b/gi, ' ');
+    .replace(/\b(?:and\s+)?(?:add|put|write|append|save|fill|send|keep)\b[\s\S]*?\b(?:sheet|spreadsheet)\b/gi, ' ')
+    .replace(/\b(?:current|same|existing|last|latest|master|consolidated)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/gi, ' ')
+    .replace(/\b(?:from|in|at|near|around|with|and|to)\b/gi, ' ');
   if (location) {
     const escaped = String(location).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     value = value.replace(new RegExp(escaped, 'gi'), ' ');
@@ -94,8 +98,10 @@ function sheetUrlFromText(text, workspaceSheetUrl = null) {
 
 function isSetWorkspaceRequest(text) {
   const value = String(text || '');
-  return /\b(?:use|set|make|remember)\b[\s\S]{0,45}\b(?:sheet|spreadsheet)\b[\s\S]{0,40}\b(?:current|master|default|linkedin)\b/i.test(value)
-    && Boolean(sheets.extractSheetUrl(value));
+  if (!sheets.extractSheetUrl(value)) return false;
+  return /\b(?:use|set|make|remember)\b/i.test(value)
+    && /\b(?:current|master|default|linkedin)\b/i.test(value)
+    && /\b(?:sheet|spreadsheet)\b/i.test(value);
 }
 
 function parseColumnList(value) {
