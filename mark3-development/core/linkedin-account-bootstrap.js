@@ -157,6 +157,24 @@ function install() {
           linkedinSheetDedupe: cleaned,
           spreadsheetUrl: cleaned.sheetUrl,
         });
+      } else if (commandRouter.isMissionRefinementRequest(text, operator.latestCompletedMission())) {
+        conversation.append('user', text, { taskType: 'linkedin-account-refinement', inputMode });
+        const sourceMission = operator.latestCompletedMission();
+        const refinement = commandRouter.buildMissionRefinement(text, sourceMission, operator.workspaceSheetUrl());
+        if (!refinement || !refinement.request) {
+          result = responseShape(false, 'LinkedIn refinement could not be parsed safely, so the previous mission was left unchanged.');
+        } else if (refinement.satisfied) {
+          result = responseShape(true, 'The requested LinkedIn target is already satisfied in the latest mission; no additional search was started.', {
+            linkedinRefinement: refinement,
+            spreadsheetUrl: sourceMission.sheetUrl || operator.workspaceSheetUrl(),
+          });
+        } else {
+          const prepared = await operator.prepare(refinement.request);
+          result = await handlePrepared(prepared);
+          if (result) {
+            result.linkedinRefinement = refinement;
+          }
+        }
       } else if (operator.isContinueSearchRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-continuation', inputMode });
         const prepared = await operator.prepareContinuation(text);
