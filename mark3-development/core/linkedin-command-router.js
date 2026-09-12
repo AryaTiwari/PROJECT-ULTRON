@@ -93,7 +93,9 @@ function explicitRefinementLocation(text) {
   if (directed && directed[1]) {
     return directed[1].replace(/\s+(?:and|but)\b[\s\S]*$/i, '').replace(/[.,;:]+$/, '').trim();
   }
-  const only = value.match(/^\s*([A-Z][A-Za-z .-]{1,45}(?:,\s*[A-Za-z][A-Za-z .-]*)?)\s+only\s*$/);
+  const only = value.match(/^\s*([A-Z][A-Za-z .-]{1,45}(?:,\s*[A-Za-z][A-Za-z .-]*)?)\s+only\s*$/)
+    || value.match(/\b(?:same|previous|last)(?:\s+search)?\s*(?:but|except)?\s*(?:make\s+it\s+)?([A-Z][A-Za-z .-]{1,45}(?:,\s*[A-Za-z][A-Za-z .-]*)?)\s+only\b/i)
+    || value.match(/\b(?:make|change|switch)\s+(?:the\s+)?(?:location\s+)?(?:to\s+)?([A-Z][A-Za-z .-]{1,45}(?:,\s*[A-Za-z][A-Za-z .-]*)?)\s+only\b/i);
   if (only && only[1] && !/^(?:remote|hybrid|onsite|on-site|full time|part time)$/i.test(only[1].trim())) return only[1].trim();
   return '';
 }
