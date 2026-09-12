@@ -1177,7 +1177,14 @@ function jobSearchPlan(request) {
   const keywords = sapRoleKeywordVariants(searchKeyword(request));
   const location = String(request.location || '').trim();
   const normalizedLocation = location.toLowerCase();
-  const hubs = LOCATION_SEARCH_HUBS[normalizedLocation] || (location ? [location] : ['']);
+  let hubs = LOCATION_SEARCH_HUBS[normalizedLocation] || (location ? [location] : ['']);
+  if (normalizedLocation === 'india' && request.locationPolicy?.allowOtherIndia
+      && (request.locationPolicy?.preferredLocations || []).some((value) => /^maharashtra$/i.test(String(value)))) {
+    const preferred = ['Maharashtra', 'Pune', 'Mumbai', 'Navi Mumbai', 'Thane', 'Nagpur', 'Nashik'];
+    hubs = [...preferred, ...hubs].filter((value, index, list) =>
+      list.findIndex((item) => String(item).toLowerCase() === String(value).toLowerCase()) === index
+    );
+  }
   const plan = [];
   const add = (keyword, loc) => {
     const key = (String(keyword || '').trim().toLowerCase() + '|' + String(loc || '').trim().toLowerCase());
