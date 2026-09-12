@@ -1850,6 +1850,7 @@ async function prepareApolloCompanyContacts(missionId) {
 
 function verifiedRecordSnapshot(record) {
   return {
+    entityType: record?.entityType || (record?.jobUrl ? 'company' : ''),
     name: record?.name || '',
     company: record?.company || '',
     role: record?.role || '',
@@ -1873,18 +1874,20 @@ function verifiedRecordSnapshot(record) {
 
 function isExistingSheetFillRequest(text) {
   const value = String(text || '').trim();
-  const url = sheets.extractSheetUrl(value);
-  if (!url) return false;
   if (isRequest(value)) return false;
-  const mission = [...loadState().missions].reverse().find((item) =>
+  const state = loadState();
+  const mission = [...state.missions].reverse().find((item) =>
     item?.status === 'completed' && Array.isArray(item?.verifiedRecords) && item.verifiedRecords.length
   );
   if (!mission) return false;
+  const url = sheets.extractSheetUrl(value);
+  const currentSheet = /\b(?:current|same|existing|last|latest)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(value);
+  if (!url && !(currentSheet && workspaceSheetUrl(state))) return false;
   return /\b(?:fill|put|write|copy|add|append|use|move|send)\b/i.test(value)
     || /^https:\/\/docs\.google\.com\/spreadsheets\//i.test(value);
 }
 
-async function fillLatestMissionIntoSheet(sheetUrl) {
+async function fillLatestMissionIntoSheet(sheetUrl = null) {
   const state = loadState();
   const mission = [...state.missions].reverse().find((item) =>
     item?.status === 'completed' && Array.isArray(item?.verifiedRecords) && item.verifiedRecords.length
@@ -1895,8 +1898,15 @@ async function fillLatestMissionIntoSheet(sheetUrl) {
     throw error;
   }
 
-  const request = { ...mission.request, destinationSheetUrl: sheetUrl };
-  const destination = await inspectDestinationSheet(sheetUrl, request);
+  const resolvedSheetUrl = sheetUrl || workspaceSheetUrl(state) || mission.sheetUrl;
+  if (!resolvedSheetUrl) {
+    const error = new Error('There is no current LinkedIn Sheet to update. Provide a Google Sheets URL once, then ULTRON can reuse it.');
+    error.code = 'LINKEDIN_WORKSPACE_SHEET_NOT_FOUND';
+    throw error;
+  }
+
+  const request = { ...mission.request, destinationSheetUrl: resolvedSheetUrl };
+  const destination = await inspectDestinationSheet(resolvedSheetUrl, request);
   const outputHeaders = ensureHeaders(destination.headers, request);
   const storageHeaders = [...outputHeaders];
   const needsInternalContact = request.entityMode === 'company' && request.wantsContacts;
@@ -1924,7 +1934,7 @@ async function fillLatestMissionIntoSheet(sheetUrl) {
   }
 
   mission.copiedToSheet = {
-    url: sheetUrl,
+    url: resolvedSheetUrl,
     sheetName: destination.sheetName,
     added,
     skippedDuplicates: mission.verifiedRecords.length - records.length,
@@ -1943,7 +1953,7 @@ async function fillLatestMissionIntoSheet(sheetUrl) {
 
   return {
     ok: true,
-    sheetUrl,
+    sheetUrl: resolvedSheetUrl,
     spreadsheetTitle: destination.spreadsheetTitle,
     sheetName: destination.sheetName,
     added,
@@ -1951,6 +1961,245 @@ async function fillLatestMissionIntoSheet(sheetUrl) {
     sourceMissionId: mission.id,
   };
 }
+
+function isContinueSearchRequest(text) {
+  const value = String(text || '').trim();
+  if (!/\b(?:continue|resume|keep\s+searching|search\s+more|find\s+more|more\s+results?|another\s+batch)\b/i.test(value)) return false;
+  return Boolean(latestCompletedMission());
+}
+
+async function prepareContinuation(text) {
+  const state = loadState();
+  const mission = [...(state.missions || [])].reverse().find((item) =>
+    item?.status === 'completed' && item?.request && !item?.request?.exactUrl
+  );
+  if (!mission) {
+    const error = new Error('There is no completed LinkedIn research mission to continue.');
+    error.code = 'LINKEDIN_CONTINUATION_NOT_FOUND';
+    throw error;
+  }
+
+  const explicitCount = parseExplicitCount(text);
+  const explicitSheetUrl = sheets.extractSheetUrl(text);
+  const wantsNewSheet = /\b(?:new|separate|fresh)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(String(text || ''));
+  const destinationSheetUrl = explicitSheetUrl || (!wantsNewSheet ? (workspaceSheetUrl(state) || mission.sheetUrl) : null);
+
+  const request = {
+    ...mission.request,
+    originalMessage: String(text || '').trim(),
+    count: explicitCount || Number(mission.requested || mission.request?.count || 25),
+    destinationSheetUrl,
+    destinationSheet: undefined,
+    continueFromPrevious: true,
+    usePrevious: false,
+    useDefault: true,
+    explicitHeaders: undefined,
+  };
+  return prepare(request);
+}
+
+function isConsolidateRequest(text) {
+  const value = String(text || '').trim();
+  return /\b(?:consolidate|merge|combine|collect)\b[\s\S]{0,80}\b(?:linkedin|results?|missions?|leads?|companies|profiles?)\b/i.test(value)
+    || /\b(?:all|every)\s+(?:linkedin\s+)?(?:results?|missions?|leads?)\b[\s\S]{0,60}\b(?:one|single|same|consolidated)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(value);
+}
+
+function consolidatedRecordKey(record) {
+  const linkedin = String(record?.linkedin || '').trim().toLowerCase();
+  const company = normalizeHeader(record?.company || '');
+  const name = normalizeHeader(record?.name || '');
+  if (linkedin) return `linkedin:${linkedin}`;
+  if (company) return `company:${company}`;
+  if (name) return `person:${name}`;
+  return '';
+}
+
+async function consolidateVerifiedMissions(text = '') {
+  const state = loadState();
+  const explicitSheetUrl = sheets.extractSheetUrl(text);
+  const wantsCurrent = /\b(?:current|same|existing|last|latest)\s+(?:google\s+)?(?:sheet|spreadsheet)\b/i.test(String(text || ''));
+  const latest = latestCompletedMission(state);
+  const requestedEntity = /\b(?:people|persons?|profiles?|recruiters?|professionals?)\b/i.test(String(text || ''))
+    ? 'person'
+    : /\b(?:companies|company|employers?|businesses?)\b/i.test(String(text || ''))
+      ? 'company'
+      : (state.workspace?.entityMode || latest?.request?.entityMode || 'company');
+
+  const missions = (state.missions || []).filter((mission) =>
+    mission?.status === 'completed'
+    && mission?.request?.entityMode === requestedEntity
+    && Array.isArray(mission?.verifiedRecords)
+    && mission.verifiedRecords.length
+  );
+  if (!missions.length) {
+    const error = new Error(`No completed LinkedIn ${requestedEntity} missions with verified records are available to consolidate.`);
+    error.code = 'LINKEDIN_CONSOLIDATION_EMPTY';
+    throw error;
+  }
+
+  const byKey = new Map();
+  for (const mission of missions) {
+    for (const source of mission.verifiedRecords) {
+      const record = { ...source, entityType: requestedEntity, sourceMissionId: mission.id };
+      const key = consolidatedRecordKey(record);
+      if (!key) continue;
+      const existing = byKey.get(key);
+      if (!existing || Number(record.relevanceScore || 0) > Number(existing.relevanceScore || 0)) {
+        byKey.set(key, record);
+      }
+    }
+  }
+  const records = [...byKey.values()];
+  const templateMission = [...missions].reverse()[0];
+  const request = {
+    ...templateMission.request,
+    entityMode: requestedEntity,
+    destinationSheetUrl: null,
+    wantsContacts: true,
+  };
+
+  const destinationUrl = explicitSheetUrl || (wantsCurrent ? workspaceSheetUrl(state) : null);
+  let destination = null;
+  let outputHeaders = ensureHeaders(
+    requestedEntity === 'company'
+      ? [...COMPANY_HEADERS, 'ROLE', 'JOB LINK', 'LOCATION', 'WORK TYPE', 'EMPLOYEES', 'WEBSITE', 'LEAD SCORE']
+      : [...PERSON_HEADERS],
+    request,
+  );
+  let sheet;
+  let firstAppendedRow = 2;
+
+  if (destinationUrl) {
+    destination = await inspectDestinationSheet(destinationUrl, request);
+    outputHeaders = ensureHeaders(destination.headers, request);
+    await syncDestinationHeaders(destination, outputHeaders);
+    sheet = {
+      spreadsheetId: destination.spreadsheetId,
+      sheetId: destination.sheetId,
+      sheetName: destination.sheetName,
+      title: destination.spreadsheetTitle,
+      url: destinationUrl,
+    };
+    firstAppendedRow = Math.max(destination.lastNonEmptyRow + 1, destination.headerRowNumber + 1);
+  } else {
+    const title = `ULTRON LinkedIn Consolidated - ${requestedEntity === 'company' ? 'Companies' : 'People'} - ${new Date().toISOString().slice(0, 10)}`;
+    sheet = await v2.createSpreadsheet(title, outputHeaders, records.length);
+  }
+
+  const existingKeys = destination ? destinationExistingKeys(destination, outputHeaders) : new Set();
+  const writeRecords = records.filter((record) => {
+    const keys = recordDestinationKeys(record);
+    const duplicate = keys.some((key) => existingKeys.has(key));
+    if (!duplicate) for (const key of keys) existingKeys.add(key);
+    return !duplicate;
+  });
+  const added = await appendRows(sheet.spreadsheetId, sheet.sheetName, writeRecords.map((record) => rowFor(record, outputHeaders)));
+
+  rememberWorkspaceSheet(sheet.url, {
+    sheetName: sheet.sheetName,
+    spreadsheetTitle: sheet.title,
+    entityMode: requestedEntity,
+  }, state);
+  state.consolidated = {
+    sheetUrl: sheet.url,
+    sheetName: sheet.sheetName,
+    entityMode: requestedEntity,
+    missions: missions.length,
+    uniqueRecords: records.length,
+    added,
+    updatedAt: nowIso(),
+  };
+  saveState(state);
+
+  return {
+    ok: true,
+    sheetUrl: sheet.url,
+    spreadsheetTitle: sheet.title,
+    sheetName: sheet.sheetName,
+    entityMode: requestedEntity,
+    missions: missions.length,
+    uniqueRecords: records.length,
+    added,
+    skippedDuplicates: records.length - writeRecords.length,
+    firstAppendedRow,
+  };
+}
+
+function isDedupeSheetRequest(text) {
+  const value = String(text || '').trim();
+  return /\b(?:dedupe|de-duplicate|remove\s+duplicates?|clean\s+duplicates?)\b/i.test(value)
+    && /\b(?:sheet|spreadsheet|linkedin\s+results?)\b/i.test(value);
+}
+
+async function dedupeWorkspaceSheet(text = '') {
+  const state = loadState();
+  const sheetUrl = sheets.extractSheetUrl(text) || workspaceSheetUrl(state);
+  if (!sheetUrl) {
+    const error = new Error('There is no current LinkedIn Sheet to dedupe. Provide a Google Sheets URL.');
+    error.code = 'LINKEDIN_WORKSPACE_SHEET_NOT_FOUND';
+    throw error;
+  }
+
+  const latest = latestCompletedMission(state);
+  const request = latest?.request || { entityMode: state.workspace?.entityMode || 'company', wantsContacts: true, filters: {} };
+  const destination = await inspectDestinationSheet(sheetUrl, request);
+  const headers = destination.headers;
+  const linkedinIndex = headers.findIndex((header) => headerKey(header) === 'linkedin');
+  const jobIndex = headers.findIndex((header) => headerKey(header) === 'jobLink');
+  const companyIndex = headers.findIndex((header) => headerKey(header) === 'company');
+  const nameIndex = headers.findIndex((header) => headerKey(header) === 'name');
+
+  const seen = new Set();
+  const duplicateRows = [];
+  for (let index = destination.headerRowNumber; index < destination.rows.length; index++) {
+    const row = destination.rows[index] || [];
+    const keys = [];
+    if (linkedinIndex >= 0 && row[linkedinIndex]) keys.push(`linkedin:${String(row[linkedinIndex]).trim().toLowerCase()}`);
+    if (jobIndex >= 0 && row[jobIndex]) keys.push(`job:${String(row[jobIndex]).trim().toLowerCase()}`);
+    if (companyIndex >= 0 && row[companyIndex]) keys.push(`company:${normalizeHeader(row[companyIndex])}`);
+    if (!keys.length && nameIndex >= 0 && row[nameIndex]) keys.push(`name:${normalizeHeader(row[nameIndex])}`);
+    if (!keys.length) continue;
+    if (keys.some((key) => seen.has(key))) {
+      duplicateRows.push(index);
+      continue;
+    }
+    for (const key of keys) seen.add(key);
+  }
+
+  if (duplicateRows.length) {
+    const requests = duplicateRows
+      .sort((a, b) => b - a)
+      .map((rowIndex) => ({
+        deleteDimension: {
+          range: {
+            sheetId: destination.sheetId,
+            dimension: 'ROWS',
+            startIndex: rowIndex,
+            endIndex: rowIndex + 1,
+          },
+        },
+      }));
+    await apiRequest(`${API}/${encodeURIComponent(destination.spreadsheetId)}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({ requests }),
+    });
+  }
+
+  rememberWorkspaceSheet(sheetUrl, {
+    sheetName: destination.sheetName,
+    spreadsheetTitle: destination.spreadsheetTitle,
+    entityMode: request.entityMode,
+  }, state);
+  saveState(state);
+  return {
+    ok: true,
+    sheetUrl,
+    spreadsheetTitle: destination.spreadsheetTitle,
+    sheetName: destination.sheetName,
+    removed: duplicateRows.length,
+  };
+}
+
 
 function rowFor(record, headers) {
   return headers.map((header) => {
