@@ -37,6 +37,22 @@ const sheetRequest = operator.parseRequest('Find me 20 companies on LinkedIn wit
 assert.equal(sheetRequest.destinationSheetUrl, 'https://docs.google.com/spreadsheets/d/testSheet123/edit#gid=987');
 assert.equal(sheetRequest.topic, 'SAP');
 assert.equal(sheetOperator.sheetGid(sheetRequest.destinationSheetUrl), 987);
+assert.equal(typeof sheetOperator.ensureGridSize, 'function');
+const sheetsApiError = new Error('Range exceeds grid limits');
+sheetsApiError.code = 'GOOGLE_SHEETS_API_ERROR';
+sheetsApiError.status = 400;
+assert.equal(operator.isGoogleSheetsError(sheetsApiError), true);
+assert.deepEqual(operator.sheetErrorSnapshot(sheetsApiError), {
+  code: 'GOOGLE_SHEETS_API_ERROR',
+  message: 'Range exceeds grid limits',
+  status: 400,
+  googleStatus: null,
+  googleCode: null,
+});
+assert.ok(/Google Sheets rejected/i.test(bootstrap.errorText(sheetsApiError)));
+const forbiddenSheetError = new Error('The caller does not have permission');
+forbiddenSheetError.code = 'GOOGLE_SHEETS_FORBIDDEN';
+assert.ok(/denied access/i.test(bootstrap.errorText(forbiddenSheetError)));
 assert.equal(operator.parseCount('Find companies on LinkedIn under 1000 employees'), 25);
 assert.equal(operator.parseExplicitCount('Continue and add 20 more companies'), 20);
 const naturalJobRequest = operator.parseRequest('Find remote SAP jobs on LinkedIn in Pune');
@@ -52,6 +68,13 @@ assert.equal(implicitHiringRequest.location, 'Maharashtra');
 assert.equal(implicitHiringRequest.filters.workType, 'remote');
 assert.equal(implicitHiringRequest.filters.employeeMax, 1000);
 assert.equal(implicitHiringRequest.criteriaText.includes('master sheet'), false);
+const exactMasterJobRequest = operator.parseRequest('Find 20 remote SAP job roles in Maharashtra on LinkedIn under 1000 employees and add them to the master sheet.');
+assert.equal(exactMasterJobRequest.hiring, true);
+assert.equal(exactMasterJobRequest.topic, 'SAP');
+assert.equal(exactMasterJobRequest.location, 'Maharashtra');
+assert.equal(exactMasterJobRequest.filters.workType, 'remote');
+assert.equal(exactMasterJobRequest.filters.employeeMax, 1000);
+assert.equal(exactMasterJobRequest.criteriaText.includes('master sheet'), false);
 assert.equal(operator.hiringIntentFromText('Find remote-first SAP consulting companies on LinkedIn in India', { workType: 'remote' }), false);
 
 const person = operator.parseRequest('Find me 30 SAP recruiters on LinkedIn from Pune with email and phone');
@@ -404,4 +427,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, implicit hiring-intent routing, India/state hub expansion, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, implicit hiring-intent routing, India/state hub expansion, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, auto-expanding master Sheet grids, recoverable destination writes, actionable Sheets diagnostics, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
