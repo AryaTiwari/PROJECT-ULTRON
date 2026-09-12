@@ -129,6 +129,23 @@ function refinementCount(text, mission = {}) {
   return null;
 }
 
+
+function autoRelaxCandidate(mission = {}) {
+  const rejected = mission && mission.filterVerification && mission.filterVerification.rejected
+    ? mission.filterVerification.rejected
+    : {};
+  const request = mission.request || {};
+  const filters = request.filters || {};
+  const candidates = [
+    { key: 'work_type', count: Number(rejected.work_type || 0), active: Boolean(filters.workType), priority: 3 },
+    { key: 'employee_count', count: Number(rejected.employee_count || 0), active: filters.employeeMin != null || filters.employeeMax != null, priority: 2 },
+    { key: 'location', count: Number(rejected.location || 0), active: Boolean(request.location), priority: 1 },
+  ].filter((item) => item.active);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.count - a.count || b.priority - a.priority);
+  return candidates[0];
+}
+
 function isMissionRefinementRequest(text, mission = null) {
   if (!mission || !mission.request || mission.status !== 'completed') return false;
   const value = String(text || '').trim();
@@ -139,6 +156,7 @@ function isMissionRefinementRequest(text, mission = null) {
     explicitRefinementLocation(value)
     || explicitTopicRefinement(value)
     || refinementCount(value, mission)
+    || /\b(?:remove|drop|relax)\s+(?:one|a|the)?\s*(?:biggest|main|most\s+restrictive|blocking)?\s*filter\b/i.test(value)
     || /\b(?:remote|hybrid|on[- ]?site|work\s*type|workplace|employees?|employee\s+count|company\s+size|headcount|easy\s+apply|full[- ]?time|part[- ]?time|contract|internship|experience|past\s+(?:24\s+hours?|week|month)|hiring|location|city|state|region|india)\b/i.test(value)
   );
   return referencesPrevious && hasConstraint;
@@ -172,9 +190,25 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
     changes.push('count:auto:' + request.count);
   }
 
+  const wantsAutoRelax = /\b(?:remove|drop|relax)\s+(?:one|a|the)?\s*(?:biggest|main|most\s+restrictive|blocking)?\s*filter\b|\brelax\s+(?:whatever|whichever)\s+filter\b/i.test(value);
+  const autoRelax = wantsAutoRelax ? autoRelaxCandidate(mission) : null;
+  if (autoRelax) {
+    if (autoRelax.key === 'work_type') {
+      request.filters.workType = null;
+      changes.push('workType:auto-removed');
+    } else if (autoRelax.key === 'employee_count') {
+      request.filters.employeeMin = null;
+      request.filters.employeeMax = null;
+      changes.push('employees:auto-removed');
+    } else if (autoRelax.key === 'location') {
+      request.location = '';
+      changes.push('location:auto-removed');
+    }
+  }
+
   const removeLocation = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:location|city|state|region)(?:\s+filter)?\b|\b(?:any|anywhere)\s+location\b|\blocation\s+(?:doesn['’]?t|does\s+not)\s+matter\b/i.test(value);
   const location = removeLocation ? '' : explicitRefinementLocation(value);
-  if (removeLocation) {
+  if (removeLocation && (!autoRelax || autoRelax.key !== 'location')) {
     request.location = '';
     changes.push('location:removed');
   } else if (location) {
@@ -184,10 +218,10 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
   }
 
   const removeWorkType = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:remote|hybrid|on[- ]?site|work\s*type|workplace)(?:\s+filter)?\b|\b(?:any|either)\s+(?:work\s*type|workplace|remote\/hybrid\/on[- ]?site)\b|\b(?:remote|work\s*type|workplace)\s+(?:doesn['’]?t|does\s+not)\s+matter\b|\b(?:doesn['’]?t|does\s+not)\s+(?:have|need)\s+to\s+be\s+remote\b|\bnot\s+necessarily\s+remote\b/i.test(value);
-  if (removeWorkType) {
+  if (removeWorkType && (!autoRelax || autoRelax.key !== 'work_type')) {
     request.filters.workType = null;
     changes.push('workType:removed');
-  } else if (/\bremote\b/i.test(value)) {
+  } else if (!autoRelax && /\bremote\b/i.test(value)) {
     request.filters.workType = 'remote';
     changes.push('workType:remote');
   } else if (/\bhybrid\b/i.test(value)) {
@@ -200,11 +234,11 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
 
   const removeEmployees = /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:employee|employees|employee\s+count|company\s+size|headcount)(?:\s+filter)?\b|\b(?:any|all)\s+company\s+size\b|\bno\s+(?:employee|headcount|company\s+size)\s+limit\b|\b(?:employee\s+count|company\s+size|headcount)\s+(?:doesn['’]?t|does\s+not)\s+matter\b/i.test(value);
   const employee = employeeRangeFromText(value);
-  if (removeEmployees) {
+  if (removeEmployees && (!autoRelax || autoRelax.key !== 'employee_count')) {
     request.filters.employeeMin = null;
     request.filters.employeeMax = null;
     changes.push('employees:removed');
-  } else if (employee.explicit) {
+  } else if (!autoRelax && employee.explicit) {
     request.filters.employeeMin = employee.min;
     request.filters.employeeMax = employee.max;
     changes.push('employees:' + (employee.min == null ? '' : employee.min) + '-' + (employee.max == null ? '' : employee.max));
@@ -466,6 +500,7 @@ module.exports = {
   explicitRefinementLocation,
   explicitTopicRefinement,
   refinementCount,
+  autoRelaxCandidate,
   isMissionRefinementRequest,
   buildMissionRefinement,
   wantsMasterSheet,
