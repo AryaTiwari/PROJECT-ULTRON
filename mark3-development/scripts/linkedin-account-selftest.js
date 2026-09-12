@@ -201,6 +201,19 @@ const trustedMmOnly = {
   },
 };
 assert.equal(operator.topicEvidenceMatches(trustedMmOnly, 'SAP'), true);
+const trustedBtpOnly = {
+  ...trustedSearchOnly,
+  role: 'BTP Developer',
+  jobEvidenceText: 'BTP Developer\nIntegration platform implementation',
+  searchProvenance: {
+    title: 'BTP Developer',
+    keywords: ['SAP BTP'],
+    trustedLocations: ['Pune'],
+    trustedWorkTypes: ['remote'],
+  },
+};
+assert.equal(operator.topicEvidenceMatches(trustedBtpOnly, 'SAP'), true);
+assert.equal(operator.topicEvidenceMatches(trustedBtpOnly, 'SAP BTP'), true);
 assert.equal(operator.locationEvidenceMatches(trustedSearchOnly, 'Maharashtra', { allowJobEvidence: true, allowCompanyEvidence: false }), true);
 const conflictingTrustedSearch = {
   ...trustedSearchOnly,
