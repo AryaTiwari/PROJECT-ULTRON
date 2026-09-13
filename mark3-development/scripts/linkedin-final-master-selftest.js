@@ -72,6 +72,23 @@ assert.equal(master.filterUnseen([duplicatePresentation]).records.length, 0);
 assert.equal(master.filterUnseen([duplicatePresentation]).skipped.length, 1);
 assert.equal(master.filterUnseen([duplicatePresentation], { allowPreviouslySeen: true }).records.length, 1);
 assert.deepEqual(master.remainingForTarget(30), { desired: 30, current: 1, remaining: 29 });
+
+const filler = {
+  company: 'Seen But Not In Master',
+  linkedin: 'https://www.linkedin.com/company/seen-but-not-master',
+  role: 'SAP MM Consultant',
+  jobUrl: 'https://www.linkedin.com/jobs/view/9',
+  workType: 'hybrid',
+  employeeCount: { min: 51, max: 200, label: '51-200' },
+  hiringSignal: 'SAP MM Consultant · Bengaluru, India',
+};
+master.registerRecords([filler], { missionId: 'seen-history', master: false });
+assert.equal(master.seen(filler), true);
+assert.equal(master.masterCount(), 1);
+master.replaceMasterRecords([tech], { missionId: 'rebuild' });
+assert.equal(master.seen(filler), true);
+assert.equal(master.masterCount(), 1);
+assert.deepEqual(master.remainingForTarget(30), { desired: 30, current: 1, remaining: 29 });
 assert.deepEqual(master.rowFor(tech), [
   'TechVerito 12,345 followers',
   'https://www.linkedin.com/company/techverito',
@@ -114,4 +131,4 @@ master.setMasterSheet({
 assert.equal(master.masterSheetUrl(), 'https://docs.google.com/spreadsheets/d/final-master/edit');
 assert.equal(master.schemaCurrent(), true);
 
-console.log('LinkedIn Final Master tests passed: compact eight-column schema, contact remarks, canonical company identity, global never-repeat, total-target accounting and persistent master routing are healthy.');
+console.log('LinkedIn Final Master tests passed: compact schema, global seen history is separate from canonical master membership, and master-total accounting survives rebuilds.');
