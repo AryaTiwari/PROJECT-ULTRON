@@ -129,6 +129,11 @@ function updateProgress(patch = {}) {
   save(m);
   return m.progress;
 }
+
+function currentUsage() {
+  const m = context.getStore();
+  return m ? { calls: Number(m.calls || 0), cacheHits: Number(m.cacheHits || 0) } : null;
+}
 function control(id, action) {
   const m = get(id);
   if (action === 'resume') {
@@ -156,4 +161,4 @@ function active() {
   return list().find((m) => ['created', 'searching', 'writing_sheet'].includes(m.status)) || null;
 }
 
-module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, updateProgress, defer, active };
+module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, updateProgress, currentUsage, defer, active };
