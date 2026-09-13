@@ -1468,13 +1468,17 @@ function previousCheckedJobIds(request = {}) {
 }
 
 function reconsiderRejectedCandidates(request = {}) {
-  if (!request.continueFromPrevious) return [];
+  if (request.reuseCachedEvidence === false) return [];
   const topic = String(request.topic || '').trim().toLowerCase();
   const state = loadState();
   const byKey = new Map();
+  const now = Date.now();
+  const freshnessMs = 7 * 24 * 60 * 60 * 1000;
   for (const mission of state.missions || []) {
     if (mission?.status !== 'completed' || mission?.request?.entityMode !== 'company') continue;
     if (String(mission.request?.topic || '').trim().toLowerCase() !== topic) continue;
+    const completedAt = Date.parse(mission.completedAt || mission.createdAt || '');
+    if (!request.continueFromPrevious && Number.isFinite(completedAt) && now - completedAt > freshnessMs) continue;
     for (const rejected of mission.rejectedRecords || []) {
       if (!rejected?.jobUrl || !rejected?.linkedin) continue;
       const record = {
