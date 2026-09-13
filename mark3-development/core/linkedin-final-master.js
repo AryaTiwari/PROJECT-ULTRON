@@ -239,8 +239,8 @@ function rowFor(record = {}) {
     record.jobUrl || previous.primaryJobUrl || '',
     record.location || previous.location || '',
     record.applicants || previous.applicants || '',
-    previous.phone || record.phone || '',
-    previous.email || record.email || '',
+    previous.phone || '',
+    previous.email || '',
     remark,
   ];
 }
