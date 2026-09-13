@@ -63,6 +63,8 @@ assert.equal(master.masterCount(), 0);
 assert.deepEqual(master.remainingForTarget(30), { desired: 30, current: 0, remaining: 30 });
 
 tech.applicants = '11';
+tech.phone = '11';
+tech.email = '11';
 master.registerRecords([tech], { missionId: 'mission-1' });
 assert.equal(master.masterCount(), 1);
 assert.equal(master.seen(duplicatePresentation), true);
