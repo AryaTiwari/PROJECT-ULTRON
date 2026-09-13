@@ -68,11 +68,24 @@ function target(text, legacy = {}) {
 }
 
 function compile(text, legacy = {}, options = {}) {
-  const locations = extractLocations(text, legacy.location, options.knownLocations || []);
-  const preferredLocations = locations.slice();
   const value = String(text || '').toLowerCase();
+  const explicitLocations = extractLocations(text, '', options.knownLocations || []);
+  const legacyLocations = uniq(
+    (legacy.allowedLocations && legacy.allowedLocations.length ? legacy.allowedLocations : null)
+    || legacy.missionContract?.hard?.locations
+    || (legacy.location ? [legacy.location] : [])
+  );
+  const locations = explicitLocations.length ? explicitLocations : legacyLocations;
+  const preferredLocations = explicitLocations.length
+    ? locations.slice()
+    : uniq(
+      (legacy.preferredLocations && legacy.preferredLocations.length ? legacy.preferredLocations : null)
+      || legacy.missionContract?.preferences?.locations
+      || locations
+    );
+
   const priorityAt = value.search(/prioriti[sz]e|prefer|focus on/);
-  if (priorityAt >= 0) {
+  if (priorityAt >= 0 && explicitLocations.length) {
     preferredLocations.sort((a,b) => {
       const aAt = value.indexOf(String(a).toLowerCase(), priorityAt);
       const bAt = value.indexOf(String(b).toLowerCase(), priorityAt);
@@ -81,7 +94,19 @@ function compile(text, legacy = {}, options = {}) {
       return av - bv;
     });
   }
-  const wt = workType(text, legacy.filters || {});
+
+  const mentionsWorkType = /\b(?:remote|hybrid|on[- ]?site|onsite|in[- ]?office|work\s*type|workplace)\b/i.test(String(text || ''));
+  let wt;
+  if (mentionsWorkType) {
+    wt = workType(text, { workType: legacy.filters?.workType || legacy.preferredWorkType || legacy.missionContract?.preferences?.workType || null });
+  } else {
+    const preferred = legacy.preferredWorkType || legacy.missionContract?.preferences?.workType || null;
+    const hard = legacy.filters?.workType || legacy.missionContract?.hard?.workType || null;
+    wt = preferred ? { value: preferred, strictness: 'preference' }
+      : hard ? { value: hard, strictness: 'hard' }
+        : { value: null, strictness: 'none' };
+  }
+
   const targetSpec = target(text, legacy);
   return {
     version: 1,
