@@ -938,8 +938,12 @@ function locationEvidenceMatches(record, requestedLocation, options = {}) {
 
 function requestedLocations(request = {}) {
   const allowed = Array.isArray(request.allowedLocations) ? request.allowedLocations.filter(Boolean) : [];
+  const explicit = String(request.location || '').trim();
+  if (explicit && allowed.length && !allowed.some((item) => String(item).toLowerCase() === explicit.toLowerCase())) {
+    return [explicit];
+  }
   if (allowed.length) return allowed;
-  return request.location ? [request.location] : [];
+  return explicit ? [explicit] : [];
 }
 
 function locationEvidenceDetailsForRequest(record, request = {}, options = {}) {
