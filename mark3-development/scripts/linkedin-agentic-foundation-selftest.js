@@ -44,6 +44,19 @@ assert.equal(applied.targetMode, 'master_total');
 assert.equal(applied.targetTotal, 30);
 assert.equal(applied.useFinalMaster, true);
 
+const resumed = contract.apply(
+  contract.compile('Resume LinkedIn mission c27d9556-fe03-44f4-8a79-d3ba31e42516', applied, {
+    knownLocations: ['Maharashtra','Bengaluru','Bangalore'],
+  }),
+  applied
+);
+assert.deepEqual(resumed.allowedLocations, ['Maharashtra','Bengaluru']);
+assert.deepEqual(resumed.preferredLocations, ['Maharashtra','Bengaluru']);
+assert.equal(resumed.preferredWorkType, 'remote');
+assert.equal(resumed.filters.workType, null);
+assert.equal(resumed.targetMode, 'master_total');
+assert.equal(resumed.targetTotal, 30);
+
 const strict = contract.compile('Find SAP companies in Pune, remote only, under 500 employees', {
   ...legacy,
   location: 'Pune',
