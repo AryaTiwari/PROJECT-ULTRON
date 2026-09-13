@@ -72,4 +72,17 @@ const second = strategist.selectNext(plan, {
 assert.equal(second.location, 'Bengaluru');
 assert.equal(strategist.searchAllowance({ maximum: 12 }, 23), 2);
 
-console.log('LinkedIn agentic foundation tests passed: mission contracts separate hard constraints/preferences, preserve multi-location intent, and adaptive query scoring reacts to observed yield.');
+const preferencePlan = [
+  { keyword: 'SAP', location: 'India', workType: 'remote' },
+  { keyword: 'SAP', location: 'India', workType: null },
+  { keyword: 'SAP', location: 'Bengaluru', workType: 'remote' },
+];
+const relaxedPreference = strategist.selectNext(preferencePlan, {
+  preferredLocations: ['India'],
+  topic: 'SAP',
+  history: [{ keyword: 'SAP', location: 'India', workType: 'remote', uniqueJobIdsAdded: 0 }],
+});
+assert.equal(relaxedPreference.location, 'India');
+assert.equal(relaxedPreference.workType, null);
+
+console.log('LinkedIn agentic foundation tests passed: mission contracts separate hard constraints/preferences, preserve multi-location intent, and adaptive queries can relax weak preferences without changing hard constraints.');
