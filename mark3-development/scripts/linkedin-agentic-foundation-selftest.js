@@ -1,1 +1,75 @@
-#!/usr/bin/env node\nconst assert = require('assert');\nconst contract = require('../core/linkedin-mission-contract');\nconst strategist = require('../core/linkedin-query-strategist');\n\nconst legacy = {\n  count: 25,\n  entityMode: 'company',\n  location: 'Maharashtra',\n  hiring: true,\n  topic: 'SAP',\n  filters: { employeeMin: null, employeeMax: 1000, workType: 'remote', jobType: null, experienceLevel: null, datePosted: null, easyApply: false },\n  useFinalMaster: true,\n  allowPreviouslySeenCompanies: false,\n};\n\nconst text = `LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total.\nLocations: Maharashtra and Bengaluru/Bangalore.\nPrioritize Maharashtra first, then use Bengaluru to fill the remaining target.\nRemote roles preferred.\nMaximum 1000 employees.`;\n\nconst compiled = contract.compile(text, legacy, {\n  knownLocations: ['Maharashtra','Pune','Mumbai','Bengaluru','Karnataka'],\n});\nassert.equal(compiled.target.mode, 'master_total');\nassert.equal(compiled.target.value, 30);\nassert.deepEqual(compiled.hard.locations, ['Maharashtra','Bengaluru']);\nassert.equal(compiled.hard.employeeMax, 1000);\nassert.equal(compiled.hard.workType, null);\nassert.equal(compiled.preferences.workType, 'remote');\nassert.equal(compiled.preferences.locations[0], 'Maharashtra');\nassert.equal(compiled.dedupe.allowPreviouslySeen, false);\nassert.equal(compiled.relaxation.hardConstraintsLocked, true);\n\nconst applied = contract.apply(compiled, legacy);\nassert.deepEqual(applied.allowedLocations, ['Maharashtra','Bengaluru']);\nassert.equal(applied.filters.workType, null);\nassert.equal(applied.preferredWorkType, 'remote');\nassert.equal(applied.targetMode, 'master_total');\nassert.equal(applied.targetTotal, 30);\n\nconst strict = contract.compile('Find SAP companies in Pune, remote only, under 500 employees', {\n  ...legacy,\n  location: 'Pune',\n  filters: { ...legacy.filters, employeeMax: 500 },\n}, { knownLocations: ['Pune'] });\nassert.equal(strict.hard.workType, 'remote');\nassert.equal(strict.preferences.workType, null);\nassert.equal(strict.hard.employeeMax, 500);\n\nconst addMore = contract.compile('add 10 more new companies', legacy, { knownLocations: [] });\nassert.equal(addMore.target.mode, 'additional');\nassert.equal(addMore.target.value, 10);\n\nconst plan = [\n  { keyword: 'SAP', location: 'Maharashtra' },\n  { keyword: 'SAP', location: 'Bengaluru' },\n  { keyword: 'SAP FICO', location: 'Maharashtra' },\n];\nconst first = strategist.selectNext(plan, { preferredLocations: ['Maharashtra','Bengaluru'], topic: 'SAP', history: [] });\nassert.equal(first.location, 'Maharashtra');\nassert.equal(first.keyword, 'SAP');\nconst second = strategist.selectNext(plan, {\n  preferredLocations: ['Maharashtra','Bengaluru'],\n  topic: 'SAP',\n  history: [{ keyword: 'SAP', location: 'Maharashtra', uniqueJobIdsAdded: 0 }],\n});\nassert.equal(second.location, 'Bengaluru');\nassert.equal(strategist.searchAllowance({ maximum: 12 }, 23), 2);\n\nconsole.log('LinkedIn agentic foundation tests passed: mission contracts separate hard constraints/preferences, preserve multi-location intent, and adaptive query scoring reacts to observed yield.');\n
+#!/usr/bin/env node
+const assert = require('assert');
+const contract = require('../core/linkedin-mission-contract');
+const strategist = require('../core/linkedin-query-strategist');
+
+const legacy = {
+  count: 25,
+  entityMode: 'company',
+  location: 'Maharashtra',
+  hiring: true,
+  topic: 'SAP',
+  filters: { employeeMin: null, employeeMax: 1000, workType: 'remote', jobType: null, experienceLevel: null, datePosted: null, easyApply: false },
+  useFinalMaster: true,
+  allowPreviouslySeenCompanies: false,
+};
+
+const text = [
+  'LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total.',
+  'Locations: Maharashtra and Bengaluru/Bangalore.',
+  'Prioritize Maharashtra first, then use Bengaluru to fill the remaining target.',
+  'Remote roles preferred.',
+  'Maximum 1000 employees.',
+].join('\n');
+
+const compiled = contract.compile(text, legacy, {
+  knownLocations: ['Maharashtra','Pune','Mumbai','Bengaluru','Karnataka'],
+});
+assert.equal(compiled.target.mode, 'master_total');
+assert.equal(compiled.target.value, 30);
+assert.deepEqual(compiled.hard.locations, ['Maharashtra','Bengaluru']);
+assert.equal(compiled.hard.employeeMax, 1000);
+assert.equal(compiled.hard.workType, null);
+assert.equal(compiled.preferences.workType, 'remote');
+assert.equal(compiled.preferences.locations[0], 'Maharashtra');
+assert.equal(compiled.dedupe.allowPreviouslySeen, false);
+assert.equal(compiled.relaxation.hardConstraintsLocked, true);
+
+const applied = contract.apply(compiled, legacy);
+assert.deepEqual(applied.allowedLocations, ['Maharashtra','Bengaluru']);
+assert.equal(applied.filters.workType, null);
+assert.equal(applied.preferredWorkType, 'remote');
+assert.equal(applied.targetMode, 'master_total');
+assert.equal(applied.targetTotal, 30);
+assert.equal(applied.useFinalMaster, true);
+
+const strict = contract.compile('Find SAP companies in Pune, remote only, under 500 employees', {
+  ...legacy,
+  location: 'Pune',
+  filters: { ...legacy.filters, employeeMax: 500 },
+}, { knownLocations: ['Pune'] });
+assert.equal(strict.hard.workType, 'remote');
+assert.equal(strict.preferences.workType, null);
+assert.equal(strict.hard.employeeMax, 500);
+
+const addMore = contract.compile('add 10 more new companies', legacy, { knownLocations: [] });
+assert.equal(addMore.target.mode, 'additional');
+assert.equal(addMore.target.value, 10);
+
+const plan = [
+  { keyword: 'SAP', location: 'Maharashtra' },
+  { keyword: 'SAP', location: 'Bengaluru' },
+  { keyword: 'SAP FICO', location: 'Maharashtra' },
+];
+const first = strategist.selectNext(plan, { preferredLocations: ['Maharashtra','Bengaluru'], topic: 'SAP', history: [] });
+assert.equal(first.location, 'Maharashtra');
+assert.equal(first.keyword, 'SAP');
+const second = strategist.selectNext(plan, {
+  preferredLocations: ['Maharashtra','Bengaluru'],
+  topic: 'SAP',
+  history: [{ keyword: 'SAP', location: 'Maharashtra', uniqueJobIdsAdded: 0 }],
+});
+assert.equal(second.location, 'Bengaluru');
+assert.equal(strategist.searchAllowance({ maximum: 12 }, 23), 2);
+
+console.log('LinkedIn agentic foundation tests passed: mission contracts separate hard constraints/preferences, preserve multi-location intent, and adaptive query scoring reacts to observed yield.');
