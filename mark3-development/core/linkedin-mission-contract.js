@@ -33,8 +33,22 @@ function workType(text, legacy = {}) {
       : (value.includes('on-site') || value.includes('onsite') || value.includes('in-office')) ? 'on_site'
         : legacy.workType || null;
   if (!selected) return { value: null, strictness: 'none' };
-  const preferred = ['prefer','preferred','ideally','priority'].some(word => value.includes(word));
-  const hard = ['must','required','mandatory','strictly',' only'].some(word => value.includes(word));
+  const labels = selected === 'on_site' ? ['on-site','onsite','in-office'] : [selected];
+  const preferred = labels.some(label =>
+    value.includes(label + ' preferred')
+    || value.includes(label + ' ideally')
+    || value.includes('prefer ' + label)
+    || value.includes('preferably ' + label)
+  );
+  const hard = labels.some(label =>
+    value.includes(label + ' only')
+    || value.includes('only ' + label)
+    || value.includes(label + ' required')
+    || value.includes(label + ' mandatory')
+    || value.includes('must be ' + label)
+    || value.includes('must stay ' + label)
+    || value.includes('strictly ' + label)
+  );
   return { value: selected, strictness: hard ? 'hard' : preferred ? 'preference' : 'hard' };
 }
 
