@@ -1215,9 +1215,12 @@ function sapRoleKeywordVariants(topic) {
 function jobSearchPlan(request) {
   const keywords = sapRoleKeywordVariants(searchKeyword(request));
   const allowed = requestedLocations(request);
-  const preferred = Array.isArray(request.preferredLocations) && request.preferredLocations.length
+  const preferredSource = Array.isArray(request.preferredLocations) && request.preferredLocations.length
     ? request.preferredLocations
     : allowed;
+  const preferred = preferredSource.filter((item) =>
+    allowed.some((allowedItem) => String(allowedItem).toLowerCase() === String(item).toLowerCase())
+  );
   const roots = [...preferred, ...allowed].filter((value, index, list) =>
     list.findIndex((item) => String(item).toLowerCase() === String(value).toLowerCase()) === index
   );
