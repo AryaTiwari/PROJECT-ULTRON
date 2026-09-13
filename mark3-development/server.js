@@ -324,6 +324,11 @@ const server = http.createServer(async (req,res) => {
   }
 });
 server.listen(config.port,config.host,()=>{
+  if (!/^(0|false|off)$/i.test(process.env.ULTRON_M3_LINKEDIN_AUTOSTART || '1')) {
+    void require('./core/linkedin-mcp-client').ensureServer()
+      .then(() => console.log('[LinkedIn] Local MCP server ready.'))
+      .catch(error => console.error(`[LinkedIn] Startup unavailable: ${error.code || 'START_FAILED'}. Run npm run linkedin:status for diagnostics.`));
+  }
   console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`);
   console.log('[Mark 3] Native-audio conversation flow active: browser speech is wake/timing support; server transcription is authoritative when available.');
   console.log(`[Mark 3] Conversational reply window: ${Math.round(REPLY_WINDOW_MS / 1000)} seconds minimum; voice sessions extend this automatically.`);

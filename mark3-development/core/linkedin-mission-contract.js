@@ -51,14 +51,14 @@ function workType(text, legacy = {}) {
         || /\bonly\b|mandatory|must\s+be|strictly/.test(after)) hard = true;
   }
 
-  if (/rather\s+than\s+required|not\s+required|preference\s+only/.test(value)) hard = false;
+  if (/rather\s+than\s+required|not\s+(?:required|mandatory)|preference\s+only/.test(value)) { hard = false; preferred = true; }
   return { value: selected, strictness: hard ? 'hard' : preferred ? 'preference' : 'hard' };
 }
 
 function target(text, legacy = {}) {
   const value = String(text || '');
   const total = value.match(/(?:reach|make|bring|get|take|grow|increase)[^\d]{0,50}(\d{1,3})[^\n]{0,30}(?:total|verified companies?|companies? total)/i)
-    || value.match(/(\d{1,3})\s+(?:verified\s+)?companies?\s+total/i);
+    || value.match(/(\d{1,3})\s+(?:unique\s+)?(?:verified\s+)?companies?\s+total/i);
   if (total) return { mode: 'master_total', value: Number(total[1]) };
   const additional = value.match(/(?:add|find|get|bring|source|collect)\s+(\d{1,3})\s+(?:more|additional|new)/i)
     || value.match(/(\d{1,3})\s+(?:more|additional|new)\s+companies?/i);

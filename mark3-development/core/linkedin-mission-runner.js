@@ -61,6 +61,7 @@ async function pump() {
   try {
     if (m.status !== 'created') return;
     m.status = 'searching'; save(m);
+    m.discoveryReplayed = false;
     const result = await context.run(m, () => executor(m.prepared));
     m.result = result;
     const mission = result?.linkedinMission;
@@ -105,8 +106,18 @@ async function call(tool, args, invoke) {
   const m = context.getStore();
   if (!m) return invoke();
   check();
+  if (m.prepared?.request?.resumeExistingPool && /^search_/.test(tool)) {
+    if (m.discoveryReplayed) return { results: [] };
+    const values = Object.entries(m.responses || {}).filter(([key]) => {
+      try { return JSON.parse(key)[0] === tool; } catch { return false; }
+    }).map(([, cached]) => cached.value);
+    if (!values.length) throw Object.assign(new Error('No saved discovery response exists for this mission; fresh discovery was not started.'), { code: 'LINKEDIN_SAVED_POOL_MISSING' });
+    m.discoveryReplayed = true; m.cacheHits += values.length; save(m);
+    return { results: values };
+  }
   const key = JSON.stringify([tool, args]);
-  if (m.responses[key] && Date.now() - m.responses[key].at < 60 * 60 * 1000) {
+  const cacheTtl = m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  if (m.responses[key] && Date.now() - m.responses[key].at < cacheTtl) {
     m.cacheHits++; save(m); return m.responses[key].value;
   }
   let value;
@@ -139,7 +150,7 @@ function control(id, action) {
   if (action === 'resume') {
     if (!['paused', 'paused_restart', 'paused_checkpoint', 'paused_rate_limit', 'failed', 'partial'].includes(m.status)) throw new Error('Mission is not resumable');
     if (m.research) throw new Error('Research is preserved; inspect the existing Sheet before retrying output to avoid duplicate writes.');
-    m.control = null; m.status = 'created'; save(m, false); queue.push(id); setImmediate(pump);
+    m.control = null; m.stopCode = null; m.error = null; m.status = 'created'; save(m, false); queue.push(id); setImmediate(pump);
   } else {
     m.control = action === 'cancel' ? 'cancel' : 'pause'; save(m, false);
   }
@@ -161,4 +172,20 @@ function active() {
   return list().find((m) => ['created', 'searching', 'writing_sheet'].includes(m.status)) || null;
 }
 
-module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, updateProgress, currentUsage, defer, active };
+function resumeSaved(text) {
+  const explicit = String(text).match(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i)?.[0];
+  const candidates = list().filter(m => !explicit || m.id === explicit).filter(m => Object.keys(m.responses || {}).some(k => k.includes('search_jobs')));
+  const m = candidates.sort((a,b) => Object.keys(b.responses || {}).length - Object.keys(a.responses || {}).length)[0];
+  if (!m) throw new Error('No saved LinkedIn job discovery mission was found. No new mission was created.');
+  if (['created','searching','writing_sheet'].includes(m.status)) return { ...summary(m), alreadyActive: true };
+  if (m.research) throw new Error('Verified research already exists; recover its Sheet output before restarting verification.');
+  const compiler = require('./linkedin-mission-contract');
+  const previous = m.prepared.request;
+  const limit = String(text).match(/(?:maximum|max|under|up to)\s*([\d,]+)\s+employees/i)?.[1];
+  const base = { ...previous, originalMessage: text, resumeExistingPool: true, wantsContacts: false,
+    filters: { ...previous.filters, ...(limit ? { employeeMax: Number(limit.replace(/,/g,'')) } : {}) } };
+  m.prepared.request = compiler.apply(compiler.compile(text, base, { knownLocations: ['India','Maharashtra','Bengaluru','Bangalore'] }), base);
+  save(m);
+  return control(m.id, 'resume');
+}
+module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, updateProgress, currentUsage, defer, active, resumeSaved };

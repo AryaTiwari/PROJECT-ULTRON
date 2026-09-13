@@ -1534,6 +1534,10 @@ async function companyMission(request) {
   const reconsidered = reconsiderRejectedCandidates(request);
   const records = reconsidered.slice();
   const budget = missionCallBudget();
+  if (request.resumeExistingPool) {
+    budget.maximum = Math.min(budget.maximum, 8);
+    budget.localBudgetBypass = false;
+  }
   if (budget.maximum < 1) {
     const error = new Error('No LinkedIn account calls remain in the current short-window/hourly/daily safety budget. Wait for the displayed safety window before starting another mission.');
     error.code = 'LINKEDIN_BURST_CAP';
