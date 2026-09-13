@@ -2293,23 +2293,21 @@ async function enrichFinalMasterContacts() {
   }
 
   const spreadsheetId = sheets.spreadsheetId(master.sheetUrl);
-  const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(master.sheetName || 'Leads')}!A:W`);
+  const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(master.sheetName || 'Leads')}!A:H`);
   if (!rows.length) {
     return { selected: 0, enriched: 0, unresolved: 0, skippedComplete: 0, sheetUrl: master.sheetUrl };
   }
+
   const headers = rows[0].map((value) => String(value || '').trim().toUpperCase());
   const indexOf = (name) => headers.indexOf(name);
   const companyIndex = indexOf('COMPANY NAME');
-  const linkedinIndex = indexOf('COMPANY LINKEDIN');
-  const websiteIndex = indexOf('WEBSITE');
-  const contactNameIndex = indexOf('CONTACT NAME');
-  const contactTitleIndex = indexOf('CONTACT TITLE');
-  const contactLinkedinIndex = indexOf('CONTACT LINKEDIN');
-  const emailIndex = indexOf('EMAIL');
+  const linkedinIndex = indexOf('COMPANY LINK');
   const phoneIndex = indexOf('PHONE');
-  const statusIndex = indexOf('ENRICHMENT STATUS');
-  if ([companyIndex, linkedinIndex, contactNameIndex, contactTitleIndex, contactLinkedinIndex, emailIndex, phoneIndex, statusIndex].some((index) => index < 0)) {
-    const error = new Error('Final Master contact columns are missing or renamed.');
+  const emailIndex = indexOf('EMAIL');
+  const remarksIndex = indexOf('REMARKS');
+
+  if ([companyIndex, linkedinIndex, phoneIndex, emailIndex, remarksIndex].some((index) => index < 0)) {
+    const error = new Error('Final Master columns do not match the current lead schema.');
     error.code = 'LINKEDIN_FINAL_MASTER_CONTACT_COLUMNS_MISSING';
     throw error;
   }
@@ -2326,46 +2324,57 @@ async function enrichFinalMasterContacts() {
     const company = String(row[companyIndex] || '').trim();
     const companyLinkedin = String(row[linkedinIndex] || '').trim();
     if (!company || !companyLinkedin) continue;
+
     const existingEmail = String(row[emailIndex] || '').trim();
     const existingPhone = String(row[phoneIndex] || '').trim();
-    if (existingEmail && existingPhone) {
+    const existingRemark = String(row[remarksIndex] || '').trim();
+
+    if (existingEmail && existingPhone && existingRemark) {
       skippedComplete++;
       continue;
     }
 
-    const domain = finalMaster.hostname(row[websiteIndex] || '');
+    const key = finalMaster.companyKey({ company, linkedin: companyLinkedin });
+    const companyState = master.companies?.[key] || {};
+    const domain = finalMaster.hostname(companyState.website || '');
+
     try {
       const result = await apollo.searchCompanyDecisionMaker({ company, domain, priorityMode: 'hiring' });
       const person = result.candidate ? await apollo.resolveDecisionMaker(result.candidate, company, domain) : null;
       if (!person?.linkedinUrl) {
         unresolved.push({ company, reason: 'No verified priority decision-maker matched the company.' });
-        if (statusIndex >= 0) changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, statusIndex), value: 'NO_MATCH' });
         continue;
       }
 
       const contact = await apollo.enrich(person.linkedinUrl, { needEmail: !existingEmail, needPhone: !existingPhone });
       const email = existingEmail || String(contact.email || '').trim();
       const phone = existingPhone || String(contact.phone || '').trim();
-      const status = email && phone ? 'ENRICHED' : email ? 'EMAIL_ONLY' : phone ? 'PHONE_ONLY' : contact.ambiguous ? 'AMBIGUOUS' : 'NO_MATCH';
       const name = String(person.name || '').trim();
       const title = String(person.title || '').trim();
+      const remarks = existingRemark || finalMaster.contactRemark(name, title);
+      const status = email && phone ? 'ENRICHED' : email ? 'EMAIL_ONLY' : phone ? 'PHONE_ONLY' : contact.ambiguous ? 'AMBIGUOUS' : 'NO_MATCH';
 
-      changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, contactNameIndex), value: name });
-      changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, contactTitleIndex), value: title });
-      changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, contactLinkedinIndex), value: person.linkedinUrl });
-      if (email) changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, emailIndex), value: email });
       if (phone) changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, phoneIndex), value: phone });
-      changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, statusIndex), value: status });
+      if (email) changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, emailIndex), value: email });
+      if (remarks) changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, remarksIndex), value: remarks });
 
-      const key = finalMaster.companyKey({ company, linkedin: companyLinkedin, website: row[websiteIndex] || '' });
-      finalMaster.contactUpdate(key, { name, title, linkedin: person.linkedinUrl, email, phone, status });
-      selected.push({ company, name, title, linkedin: person.linkedinUrl, status });
+      finalMaster.contactUpdate(key, {
+        name,
+        title,
+        linkedin: person.linkedinUrl,
+        email,
+        phone,
+        status,
+        remarks,
+      });
+
+      selected.push({ company, name, title, linkedin: person.linkedinUrl, email, phone, remarks, status });
       if (email || phone) enriched++;
     } catch (error) {
       if (/APOLLO_(?:PEOPLE_SEARCH_ACCESS_REQUIRED|NOT_CONFIGURED)/.test(String(error.code || '')) || Number(error.status) === 429) throw error;
       unresolved.push({ company, reason: error.message });
-      changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, statusIndex), value: 'FAILED' });
     }
+
     await new Promise((resolve) => setTimeout(resolve, apolloSearchDelayMs()));
   }
 
@@ -2794,7 +2803,7 @@ function historicalVerifiedCompanyRecords(options = {}) {
 
 async function buildFinalMaster(text = '') {
   const existingUrl = finalMaster.masterSheetUrl();
-  if (existingUrl && !/\b(?:rebuild|replace|new)\b/i.test(String(text || ''))) {
+  if (existingUrl && finalMaster.schemaCurrent() && !/\b(?:rebuild|replace|new)\b/i.test(String(text || ''))) {
     return {
       ok: true,
       sheetUrl: existingUrl,
@@ -2839,8 +2848,9 @@ async function buildFinalMaster(text = '') {
 async function run(request, headers) {
   if (request?.entityMode === 'company') {
     request.allowPreviouslySeenCompanies = Boolean(request.allowPreviouslySeenCompanies || finalMaster.allowRepeatFromText(request.originalMessage));
-    if ((request.useFinalMaster || request.targetMode === 'master_total') && !finalMaster.masterSheetUrl()) {
-      await buildFinalMaster('build final master');
+    if ((request.useFinalMaster || request.targetMode === 'master_total')
+        && (!finalMaster.masterSheetUrl() || !finalMaster.schemaCurrent())) {
+      await buildFinalMaster(finalMaster.masterSheetUrl() ? 'rebuild final master' : 'build final master');
     }
     if (request.targetMode === 'master_total' && request.targetTotal) {
       const target = finalMaster.remainingForTarget(request.targetTotal);
