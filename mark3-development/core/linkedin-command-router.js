@@ -1,6 +1,7 @@
 const googleAuth = require('./google-sheets-auth');
 const sheets = require('./google-sheets-operator');
 const finalMaster = require('./linkedin-final-master');
+const missionContract = require('./linkedin-mission-contract');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
@@ -165,6 +166,14 @@ function isMissionRefinementRequest(text, mission = null) {
   if (!mission || !mission.request || mission.status !== 'completed') return false;
   const value = String(text || '').trim();
   if (!value) return false;
+
+  // A complete standalone LinkedIn brief should compile as a new mission,
+  // even when it contains words like "reach", "master", or "total".
+  const standaloneResearch = /\blinkedin\b/i.test(value)
+    && /\b(?:find|search|research|source|collect)\b/i.test(value)
+    && /\b(?:companies?|jobs?|roles?|leads?)\b/i.test(value)
+    && !/^\s*(?:continue|resume|same|previous|last|again|instead|change|switch|expand|broaden|relax|remove|drop|ignore|without|keep)\b/i.test(value);
+  if (standaloneResearch) return false;
   if (requestedContactEnrichment(value) && !/\b(?:same|previous|last|more|continue|filter|location|remote|hybrid|employee|company\s+size)\b/i.test(value)) return false;
   const referencesPrevious = /\b(?:same|previous|last|continue|resume|more|remaining|again|instead|change|switch|expand|broaden|relax|remove|drop|ignore|without|keep|only|all|across|nationwide|anywhere|fulfil|fulfill|complete|finish|reach|filter)\b/i.test(value);
   const hasConstraint = Boolean(
@@ -330,7 +339,21 @@ function buildMissionRefinement(text, mission = {}, workspaceSheetUrl = null) {
     changes.push('destination:new');
   }
 
-  return { request, changes, satisfied: Number(request.count) === 0, countChange };
+  const compiled = missionContract.compile(value, request, {
+    knownLocations: [
+      'India', 'Maharashtra', 'Karnataka', 'Bengaluru', 'Bangalore', 'Pune', 'Mumbai',
+      'Navi Mumbai', 'Thane', 'Nagpur', 'Nashik', 'Hyderabad', 'Chennai', 'Delhi NCR',
+      'Gurugram', 'Noida', 'Kolkata', 'Ahmedabad',
+    ],
+  });
+  const compiledRequest = missionContract.apply(compiled, request);
+  return {
+    request: compiledRequest,
+    changes,
+    satisfied: Number(compiledRequest.count) === 0,
+    countChange,
+    missionContract: compiled,
+  };
 }
 
 function wantsMasterSheet(text) {
