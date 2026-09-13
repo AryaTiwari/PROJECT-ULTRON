@@ -1602,6 +1602,16 @@ async function companyMission(request) {
         droppedFilters: trust.dropped,
         warning: warning?.error_type || null,
       });
+      missionRunner.updateProgress({
+        phase: 'searching',
+        searchesCompleted: searchCalls.length,
+        uniqueJobIds: jobMeta.size,
+        cachedReconsidered: reconsidered.length,
+        verifiedCompanies: acceptedCompanies.size,
+        remaining: Math.max(0, request.count - acceptedCompanies.size),
+        budgetUsed: budget.used,
+        budgetMaximum: budget.maximum,
+      });
     }
 
     jobIdsDiscovered = jobMeta.size;
