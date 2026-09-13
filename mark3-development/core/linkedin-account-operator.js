@@ -3068,6 +3068,43 @@ async function buildFinalMaster(text = '') {
   };
 }
 
+async function reconcileFinalMasterRegistry() {
+  const masterUrl = finalMaster.masterSheetUrl();
+  if (!masterUrl) return { count: 0, records: [] };
+
+  const state = finalMaster.loadState();
+  const spreadsheetId = sheets.spreadsheetId(masterUrl);
+  const sheetName = state.sheetName || 'Leads';
+  const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(sheetName)}!A2:H`);
+  const records = [];
+
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index] || [];
+    const company = String(row[0] || '').trim();
+    const linkedin = String(row[1] || '').trim();
+    if (!company || !linkedin) continue;
+    records.push({
+      company,
+      linkedin,
+      jobUrl: String(row[2] || '').trim(),
+      location: String(row[3] || '').trim(),
+      applicants: String(row[4] || '').trim(),
+      phone: String(row[5] || '').trim(),
+      email: String(row[6] || '').trim(),
+      remarks: String(row[7] || '').trim(),
+    });
+  }
+
+  finalMaster.registerRecords(records, {
+    missionId: 'sheet-reconciliation',
+    verifiedAt: nowIso(),
+    master: true,
+  });
+
+  const unique = new Set(records.map((record) => finalMaster.companyKey(record)).filter(Boolean));
+  return { count: unique.size, records };
+}
+
 async function run(request, headers) {
   if (request?.entityMode === 'company') {
     request.allowPreviouslySeenCompanies = Boolean(request.allowPreviouslySeenCompanies || finalMaster.allowRepeatFromText(request.originalMessage));
@@ -3079,7 +3116,13 @@ async function run(request, headers) {
       }
     }
     if (request.targetMode === 'master_total' && request.targetTotal) {
-      const target = finalMaster.remainingForTarget(request.targetTotal);
+      const reconciled = await reconcileFinalMasterRegistry();
+      const desired = Math.max(0, Number(request.targetTotal || 0));
+      const target = {
+        desired,
+        current: reconciled.count,
+        remaining: Math.max(0, desired - reconciled.count),
+      };
       request.count = target.remaining;
       request.masterTarget = target;
     }
@@ -3465,6 +3508,7 @@ module.exports = {
   finalMasterSheetSchemaCurrent,
   historicalVerifiedCompanyRecords,
   buildFinalMaster,
+  reconcileFinalMasterRegistry,
   run,
   latestMission,
   status,
