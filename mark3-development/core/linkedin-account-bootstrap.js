@@ -104,6 +104,27 @@ async function handlePrepared(prepared, background = false) {
   return null;
 }
 
+function missionProgressText(job) {
+  const p = job?.progress || {};
+  const parts = [
+    `LinkedIn mission ${job.id}: ${job.status}`,
+    `Calls: ${job.calls}`,
+    `cached results reused: ${job.cacheHits}`,
+  ];
+  if (p.phase) parts.push(`phase: ${p.phase}`);
+  if (Number.isFinite(Number(p.uniqueJobIds))) parts.push(`unique jobs: ${p.uniqueJobIds}`);
+  if (Number.isFinite(Number(p.jobDetailsChecked))) parts.push(`job details: ${p.jobDetailsChecked}`);
+  if (Number.isFinite(Number(p.companyProfilesChecked))) parts.push(`company profiles: ${p.companyProfilesChecked}`);
+  if (Number.isFinite(Number(p.verifiedCompanies))) parts.push(`verified companies: ${p.verifiedCompanies}`);
+  if (Number.isFinite(Number(p.remaining))) parts.push(`remaining this run: ${p.remaining}`);
+  if (Number.isFinite(Number(p.budgetUsed)) && Number.isFinite(Number(p.budgetMaximum))) {
+    parts.push(`safe-call budget: ${p.budgetUsed}/${p.budgetMaximum}`);
+  }
+  if (Number.isFinite(Number(p.cachedReconsidered))) parts.push(`cached candidates reconsidered: ${p.cachedReconsidered}`);
+  if (job.error?.message) parts.push(job.error.message);
+  return parts.join('. ') + '.';
+}
+
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true, ...operator.status() };
   const assistant = require('./assistant');
@@ -128,7 +149,7 @@ function install() {
         if (!latest) return responseShape(true, 'No background LinkedIn mission exists yet.');
         const action = text.match(/\blinkedin mission (progress|pause|cancel|resume)\b/i)[1].toLowerCase();
         const job = action === 'progress' ? missionRunner.summary(latest) : missionRunner.control(latest.id, action);
-        return responseShape(true, job.result?.text || `LinkedIn mission ${job.id}: ${job.status}. Calls: ${job.calls}; cached results reused: ${job.cacheHits}.${job.error ? ` ${job.error.message}` : ''}`, { linkedinBackgroundMission: job });
+        return responseShape(true, job.result?.text || missionProgressText(job), { linkedinBackgroundMission: job });
       }
       const pending = await operator.resolvePending(text);
       if (pending) {
