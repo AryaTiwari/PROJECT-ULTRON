@@ -282,10 +282,7 @@ function parseRequest(text) {
     usePrevious: /\b(?:use|same as|like)\b[\s\S]{0,30}\b(?:previous|last)\b|\bprevious format\b|\bsame format\b/i.test(value),
     useDefault: /\b(?:default|standard)\s+(?:format|layout|headers?|columns?)\b/i.test(value),
   };
-  const knownLocations = [
-    ...Object.keys(LOCATION_SEARCH_HUBS),
-    ...Object.values(LOCATION_SEARCH_HUBS).flat(),
-  ];
+  const knownLocations = Object.values(LOCATION_SEARCH_HUBS).flat();
   const contract = missionContract.compile(value, baseRequest, { knownLocations });
   return missionContract.apply(contract, baseRequest);
 }
