@@ -34,21 +34,17 @@ function workType(text, legacy = {}) {
         : legacy.workType || null;
   if (!selected) return { value: null, strictness: 'none' };
   const labels = selected === 'on_site' ? ['on-site','onsite','in-office'] : [selected];
-  const preferred = labels.some(label =>
-    value.includes(label + ' preferred')
-    || value.includes(label + ' ideally')
-    || value.includes('prefer ' + label)
-    || value.includes('preferably ' + label)
-  );
-  const hard = labels.some(label =>
-    value.includes(label + ' only')
-    || value.includes('only ' + label)
-    || value.includes(label + ' required')
-    || value.includes(label + ' mandatory')
-    || value.includes('must be ' + label)
-    || value.includes('must stay ' + label)
-    || value.includes('strictly ' + label)
-  );
+  let preferred = false;
+  let hard = false;
+  for (const label of labels) {
+    const at = value.indexOf(label);
+    if (at < 0) continue;
+    const before = value.slice(Math.max(0, at - 30), at);
+    const after = value.slice(at, at + 45);
+    if (/prefer|preferred|preferably|ideally/.test(before) || /prefer|preferred|ideally/.test(after)) preferred = true;
+    if (/must|required|mandatory|strictly|only\s*$/.test(before)
+        || /\bonly\b|required|mandatory|must\s+be|strictly/.test(after)) hard = true;
+  }
   return { value: selected, strictness: hard ? 'hard' : preferred ? 'preference' : 'hard' };
 }
 
