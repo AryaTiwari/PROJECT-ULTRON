@@ -85,6 +85,14 @@ if (run('refinement')) {
   };
 
   assert.equal(router.isMissionRefinementRequest('remove the remote filter and expand to all India', mission), true);
+
+  assert.equal(
+    router.isMissionRefinementRequest(
+      'LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total. Locations: Maharashtra and Bengaluru. Remote roles preferred. Maximum 1000 employees.',
+      mission
+    ),
+    false
+  );
   const expanded = router.buildMissionRefinement(
     'remove the remote filter and expand to all India',
     mission,
@@ -96,6 +104,9 @@ if (run('refinement')) {
   assert.equal(expanded.request.count, 13);
   assert.equal(expanded.request.destinationSheetUrl, 'https://docs.google.com/spreadsheets/d/master123/edit');
 
+  assert.equal(expanded.request.missionContract.hard.locations[0], 'India');
+  assert.equal(expanded.request.missionContract.hard.workType, null);
+
   const bigger = router.buildMissionRefinement(
     'keep the same search but allow up to 2000 employees and add 5 more companies',
     mission,
@@ -105,6 +116,15 @@ if (run('refinement')) {
   assert.equal(bigger.request.count, 5);
   assert.equal(bigger.request.location, 'Maharashtra');
   assert.equal(bigger.request.filters.workType, 'remote');
+
+  const preferredRemote = router.buildMissionRefinement(
+    'keep SAP and India, but remote roles are preferred rather than required',
+    { ...mission, request: { ...mission.request, location: 'India' } },
+    'https://docs.google.com/spreadsheets/d/master123/edit'
+  );
+  assert.equal(preferredRemote.request.filters.workType, null);
+  assert.equal(preferredRemote.request.preferredWorkType, 'remote');
+  assert.equal(preferredRemote.request.missionContract.preferences.workType, 'remote');
 
   const noLocation = router.buildMissionRefinement(
     'remove location filter and add 10 more companies',
