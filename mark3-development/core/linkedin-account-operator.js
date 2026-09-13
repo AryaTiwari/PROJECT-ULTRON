@@ -1891,23 +1891,31 @@ async function companyMission(request) {
       continue;
     }
 
-    const locationMatch = locationEvidenceDetails(record, request.location, {
+    const locationMatch = locationEvidenceDetailsForRequest(record, request, {
       allowJobEvidence: Boolean(request.hiring),
       allowCompanyEvidence: request.locationScope !== 'job',
     });
     const jobLocation = linkedinPublic.locationFromText(record.jobEvidenceText);
     record.location = ['job', 'linkedin_search_filter'].includes(locationMatch.source)
-      ? (jobLocation || locationMatch.label || request.location || '')
-      : (record.companyLocation || linkedinPublic.locationFromText(record.companySearchEvidenceText) || locationMatch.label || '');
+      ? (jobLocation || locationMatch.label || locationMatch.requestedLocation || request.location || '')
+      : (record.companyLocation || linkedinPublic.locationFromText(record.companySearchEvidenceText) || locationMatch.label || locationMatch.requestedLocation || '');
     record.locationEvidenceSource = locationMatch.source;
-    const workTypeMatch = workTypeEvidenceDetails(record, request.filters?.workType);
+    const desiredWorkType = request.filters?.workType || request.preferredWorkType || null;
+    const workTypeMatch = workTypeEvidenceDetails(record, desiredWorkType);
     record.workType = workTypeMatch.value || detectWorkType(record.jobEvidenceText);
     record.workTypeEvidenceSource = workTypeMatch.source;
+    record.preferenceScore = 0;
+    if (request.preferredWorkType && record.workType === request.preferredWorkType) record.preferenceScore += 10;
+    const preferredLocationIndex = (request.preferredLocations || []).findIndex((item) =>
+      String(item).toLowerCase() === String(locationMatch.requestedLocation || '').toLowerCase()
+    );
+    if (preferredLocationIndex >= 0) record.preferenceScore += Math.max(0, 8 - preferredLocationIndex * 2);
     accepted.push(record);
   }
 
   merged = accepted
-    .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0))
+    .sort((a, b) => (Number(b.relevanceScore || 0) + Number(b.preferenceScore || 0))
+      - (Number(a.relevanceScore || 0) + Number(a.preferenceScore || 0)))
     .slice(0, request.count);
 
   return {
