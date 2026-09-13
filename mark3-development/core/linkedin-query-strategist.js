@@ -1,1 +1,59 @@
-function key(query = {}) {\n  return String(query.keyword || '').trim().toLowerCase() + '|' + String(query.location || '').trim().toLowerCase();\n}\n\nfunction uniqueQueries(plan = []) {\n  const seen = new Set();\n  return plan.filter(query => {\n    const id = key(query);\n    if (!query.keyword || seen.has(id)) return false;\n    seen.add(id); return true;\n  });\n}\n\nfunction score(query, context = {}) {\n  const history = Array.isArray(context.history) ? context.history : [];\n  if (history.some(item => key(item) === key(query))) return Number.NEGATIVE_INFINITY;\n  let value = 100;\n  const preferred = Array.isArray(context.preferredLocations) ? context.preferredLocations : [];\n  const locationIndex = preferred.findIndex(item => String(item).toLowerCase() === String(query.location || '').toLowerCase());\n  if (locationIndex >= 0) value += Math.max(0, 40 - locationIndex * 8);\n  const topic = String(context.topic || '').toLowerCase();\n  const keyword = String(query.keyword || '').toLowerCase();\n  if (topic && keyword === topic) value += 20;\n  else if (topic && keyword.startsWith(topic)) value += 10;\n\n  for (const item of history.slice(-3)) {\n    const yieldValue = Number(item.uniqueJobIdsAdded ?? item.jobIds ?? 0);\n    if (String(item.location || '').toLowerCase() === String(query.location || '').toLowerCase()) value += yieldValue > 0 ? Math.min(18, yieldValue) : -18;\n    if (String(item.keyword || '').toLowerCase() === keyword) value += yieldValue > 0 ? 5 : -12;\n  }\n  return value;\n}\n\nfunction selectNext(plan = [], context = {}) {\n  return uniqueQueries(plan)\n    .map((query, index) => ({ query, index, score: score(query, context) }))\n    .filter(entry => Number.isFinite(entry.score))\n    .sort((a,b) => b.score - a.score || a.index - b.index)[0]?.query || null;\n}\n\nfunction searchAllowance(budget = {}, targetRemaining = 1) {\n  const maximum = Math.max(0, Number(budget.maximum || 0));\n  if (!maximum) return 0;\n  const budgetBound = maximum >= 16 ? 3 : maximum >= 8 ? 2 : 1;\n  const targetBound = targetRemaining >= 15 ? 3 : targetRemaining >= 5 ? 2 : 1;\n  return Math.max(1, Math.min(3, budgetBound, targetBound));\n}\n\nfunction summarize(history = []) {\n  return history.map(item => ({\n    keyword: item.keyword,\n    location: item.location || null,\n    jobIds: Number(item.jobIds || 0),\n    uniqueJobIds: Number(item.uniqueJobIds || 0),\n    uniqueJobIdsAdded: Number(item.uniqueJobIdsAdded || 0),\n    warning: item.warning || null,\n  }));\n}\n\nmodule.exports = { key, uniqueQueries, score, selectNext, searchAllowance, summarize };\n
+function key(query = {}) {
+  return String(query.keyword || '').trim().toLowerCase() + '|' + String(query.location || '').trim().toLowerCase();
+}
+
+function uniqueQueries(plan = []) {
+  const seen = new Set();
+  return plan.filter(query => {
+    const id = key(query);
+    if (!query.keyword || seen.has(id)) return false;
+    seen.add(id); return true;
+  });
+}
+
+function score(query, context = {}) {
+  const history = Array.isArray(context.history) ? context.history : [];
+  if (history.some(item => key(item) === key(query))) return Number.NEGATIVE_INFINITY;
+  let value = 100;
+  const preferred = Array.isArray(context.preferredLocations) ? context.preferredLocations : [];
+  const locationIndex = preferred.findIndex(item => String(item).toLowerCase() === String(query.location || '').toLowerCase());
+  if (locationIndex >= 0) value += Math.max(0, 40 - locationIndex * 8);
+  const topic = String(context.topic || '').toLowerCase();
+  const keyword = String(query.keyword || '').toLowerCase();
+  if (topic && keyword === topic) value += 20;
+  else if (topic && keyword.startsWith(topic)) value += 10;
+  for (const item of history.slice(-3)) {
+    const yieldValue = Number(item.uniqueJobIdsAdded ?? item.jobIds ?? 0);
+    if (String(item.location || '').toLowerCase() === String(query.location || '').toLowerCase()) value += yieldValue > 0 ? Math.min(18, yieldValue) : -18;
+    if (String(item.keyword || '').toLowerCase() === keyword) value += yieldValue > 0 ? 5 : -12;
+  }
+  return value;
+}
+
+function selectNext(plan = [], context = {}) {
+  return uniqueQueries(plan)
+    .map((query, index) => ({ query, index, score: score(query, context) }))
+    .filter(entry => Number.isFinite(entry.score))
+    .sort((a,b) => b.score - a.score || a.index - b.index)[0]?.query || null;
+}
+
+function searchAllowance(budget = {}, targetRemaining = 1) {
+  const maximum = Math.max(0, Number(budget.maximum || 0));
+  if (!maximum) return 0;
+  const budgetBound = maximum >= 16 ? 3 : maximum >= 8 ? 2 : 1;
+  const targetBound = targetRemaining >= 15 ? 3 : targetRemaining >= 5 ? 2 : 1;
+  return Math.max(1, Math.min(3, budgetBound, targetBound));
+}
+
+function summarize(history = []) {
+  return history.map(item => ({
+    keyword: item.keyword,
+    location: item.location || null,
+    jobIds: Number(item.jobIds || 0),
+    uniqueJobIds: Number(item.uniqueJobIds || 0),
+    uniqueJobIdsAdded: Number(item.uniqueJobIdsAdded || 0),
+    warning: item.warning || null,
+  }));
+}
+
+module.exports = { key, uniqueQueries, score, selectNext, searchAllowance, summarize };
