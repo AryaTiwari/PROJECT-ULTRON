@@ -1538,9 +1538,16 @@ async function companyMission(request) {
     const plan = jobSearchPlan(request);
     const maxSearchCalls = acceptedCompanies.size >= request.count ? 0 : (budget.localBudgetBypass
       ? Math.min(plan.length, Number(policy.settings().testJobSearchMax || 20))
-      : 1);
+      : Math.min(plan.length, queryStrategist.searchAllowance(budget, Math.max(0, request.count - acceptedCompanies.size))));
 
-    for (const step of plan.slice(0, maxSearchCalls)) {
+    for (let searchIndex = 0; searchIndex < maxSearchCalls; searchIndex++) {
+      const step = queryStrategist.selectNext(plan, {
+        history: searchCalls,
+        preferredLocations: request.preferredLocations || requestedLocations(request),
+        topic: request.topic,
+      });
+      if (!step) break;
+      const uniqueBefore = jobMeta.size;
       const result = await budgetedCall(budget, 'search_jobs', {
         keywords: step.keyword,
         location: step.location || undefined,
@@ -1548,7 +1555,7 @@ async function companyMission(request) {
         date_posted: request.filters?.datePosted || undefined,
         job_type: request.filters?.jobType || undefined,
         experience_level: request.filters?.experienceLevel || undefined,
-        work_type: request.filters?.workType || undefined,
+        work_type: step.workType || request.filters?.workType || request.preferredWorkType || undefined,
         easy_apply: Boolean(request.filters?.easyApply),
         sort_by: 'relevance',
       });
@@ -1587,7 +1594,7 @@ async function companyMission(request) {
         current.searches.push({
           keyword: step.keyword,
           location: step.location || '',
-          requestedWorkType: request.filters?.workType || '',
+          requestedWorkType: step.workType || request.filters?.workType || request.preferredWorkType || '',
           trustedLocation: trust.trustedLocation,
           trustedWorkType: trust.trustedWorkType,
           dropped: trust.dropped,
@@ -1601,6 +1608,7 @@ async function companyMission(request) {
         location: step.location,
         jobIds: ids.length,
         uniqueJobIds: jobMeta.size,
+        uniqueJobIdsAdded: Math.max(0, jobMeta.size - uniqueBefore),
         trustedLocation: trust.trustedLocation || null,
         trustedWorkType: trust.trustedWorkType || null,
         droppedFilters: trust.dropped,
