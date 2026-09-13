@@ -1568,17 +1568,36 @@ async function companyMission(request) {
       });
       if (!step) break;
       const uniqueBefore = jobMeta.size;
-      const result = await budgetedCall(budget, 'search_jobs', {
-        keywords: step.keyword,
-        location: step.location || undefined,
-        max_pages: budget.localBudgetBypass ? Math.max(2, Math.min(3, policy.settings().maxJobPages + 1)) : policy.settings().maxJobPages,
-        date_posted: request.filters?.datePosted || undefined,
-        job_type: request.filters?.jobType || undefined,
-        experience_level: request.filters?.experienceLevel || undefined,
-        work_type: step.workType || request.filters?.workType || request.preferredWorkType || undefined,
-        easy_apply: Boolean(request.filters?.easyApply),
-        sort_by: 'relevance',
-      });
+      let result;
+      try {
+        result = await budgetedCall(budget, 'search_jobs', {
+          keywords: step.keyword,
+          location: step.location || undefined,
+          max_pages: budget.localBudgetBypass ? Math.max(2, Math.min(3, policy.settings().maxJobPages + 1)) : policy.settings().maxJobPages,
+          date_posted: request.filters?.datePosted || undefined,
+          job_type: request.filters?.jobType || undefined,
+          experience_level: request.filters?.experienceLevel || undefined,
+          work_type: step.workType || request.filters?.workType || request.preferredWorkType || undefined,
+          easy_apply: Boolean(request.filters?.easyApply),
+          sort_by: 'relevance',
+        });
+      } catch (error) {
+        if (!isTransientMcpFailure(error)) throw error;
+        searchWarnings.push({
+          keyword: step.keyword,
+          location: step.location,
+          error_type: 'transient_timeout',
+          error_message: error.message,
+        });
+        missionRunner.updateProgress({
+          phase: 'searching',
+          transientFailures: Number(missionRunner.active()?.progress?.transientFailures || 0) + 1,
+          lastTransientFailure: 'search_jobs',
+          budgetUsed: budget.used,
+          budgetMaximum: budget.maximum,
+        });
+        continue;
+      }
       if (!result) break;
 
       const ids = jobIdsFromResult(result);
