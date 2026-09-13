@@ -28,6 +28,7 @@ function defaultState() {
     spreadsheetTitle: 'ULTRON LinkedIn Final Lead Master',
     updatedAt: null,
     companies: {},
+    masterKeys: [],
   };
 }
 
@@ -35,7 +36,12 @@ function loadState() {
   try {
     if (!fs.existsSync(STATE_FILE)) return defaultState();
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    return { ...defaultState(), ...parsed, companies: parsed.companies || {} };
+    return {
+      ...defaultState(),
+      ...parsed,
+      companies: parsed.companies || {},
+      masterKeys: Array.isArray(parsed.masterKeys) ? parsed.masterKeys : [],
+    };
   } catch {
     return defaultState();
   }
@@ -164,6 +170,8 @@ function filterUnseen(records = [], options = {}) {
 
 function registerRecords(records = [], metadata = {}) {
   const state = loadState();
+  const master = metadata.master !== false;
+  const masterKeys = new Set(state.masterKeys || []);
   for (const record of records) {
     const key = companyKey(record);
     if (!key) continue;
@@ -192,8 +200,17 @@ function registerRecords(records = [], metadata = {}) {
       employeeCount: record.employeeCount || previous.employeeCount || null,
       jobs,
     };
+    if (master) masterKeys.add(key);
   }
+  state.masterKeys = [...masterKeys];
   return saveState(state);
+}
+
+function replaceMasterRecords(records = [], metadata = {}) {
+  const state = loadState();
+  state.masterKeys = [];
+  saveState(state);
+  return registerRecords(records, { ...metadata, master: true });
 }
 
 function setMasterSheet(sheet = {}) {
@@ -209,7 +226,10 @@ function setMasterSheet(sheet = {}) {
 
 function masterSheetUrl() { return loadState().sheetUrl || null; }
 function schemaCurrent() { return Number(loadState().schemaVersion || 0) === 2; }
-function masterCount() { return Object.values(loadState().companies || {}).filter((item) => item.status === 'verified').length; }
+function masterCount() {
+  const state = loadState();
+  return (state.masterKeys || []).filter((key) => Boolean(state.companies?.[key]?.status === 'verified')).length;
+}
 
 function remainingForTarget(total) {
   const desired = Math.max(0, Number(total || 0));
@@ -278,6 +298,7 @@ module.exports = {
   seen,
   filterUnseen,
   registerRecords,
+  replaceMasterRecords,
   setMasterSheet,
   masterSheetUrl,
   schemaCurrent,
