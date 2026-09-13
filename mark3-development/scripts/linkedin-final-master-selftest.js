@@ -45,6 +45,16 @@ const unrelated = {
   hiringSignal: 'Product Manager Intern',
 };
 
+assert.deepEqual(master.FINAL_MASTER_HEADERS, [
+  'COMPANY NAME',
+  'COMPANY LINK',
+  'JOB LINK',
+  'LOCATION',
+  'NO. OF APPLICANTS',
+  'PHONE',
+  'EMAIL',
+  'REMARKS',
+]);
 assert.equal(master.normalizeLinkedIn(tech.linkedin), 'https://www.linkedin.com/company/techverito');
 assert.equal(master.companyKey(tech), master.companyKey(duplicatePresentation));
 assert.equal(master.qualifies(tech, { topic: 'SAP', workType: 'remote', employeeMax: 1000 }), true);
@@ -52,6 +62,7 @@ assert.equal(master.qualifies(unrelated, { topic: 'SAP', workType: 'remote', emp
 assert.equal(master.masterCount(), 0);
 assert.deepEqual(master.remainingForTarget(30), { desired: 30, current: 0, remaining: 30 });
 
+tech.applicants = '11';
 master.registerRecords([tech], { missionId: 'mission-1' });
 assert.equal(master.masterCount(), 1);
 assert.equal(master.seen(duplicatePresentation), true);
@@ -59,6 +70,35 @@ assert.equal(master.filterUnseen([duplicatePresentation]).records.length, 0);
 assert.equal(master.filterUnseen([duplicatePresentation]).skipped.length, 1);
 assert.equal(master.filterUnseen([duplicatePresentation], { allowPreviouslySeen: true }).records.length, 1);
 assert.deepEqual(master.remainingForTarget(30), { desired: 30, current: 1, remaining: 29 });
+assert.deepEqual(master.rowFor(tech), [
+  'TechVerito 12,345 followers',
+  'https://www.linkedin.com/company/techverito',
+  'https://www.linkedin.com/jobs/view/1',
+  '',
+  '11',
+  '',
+  '',
+  '',
+]);
+assert.equal(master.contactRemark('Test Contact', 'Founder'), 'Test Contact (Founder)');
+const techKey = master.companyKey(tech);
+master.contactUpdate(techKey, {
+  name: 'Test Contact',
+  title: 'Founder',
+  email: 'test@example.invalid',
+  phone: '+10000000000',
+  status: 'ENRICHED',
+});
+assert.deepEqual(master.rowFor(tech), [
+  'TechVerito 12,345 followers',
+  'https://www.linkedin.com/company/techverito',
+  'https://www.linkedin.com/jobs/view/1',
+  '',
+  '11',
+  '+10000000000',
+  'test@example.invalid',
+  'Test Contact (Founder)',
+]);
 
 assert.equal(master.allowRepeatFromText('include companies we have already seen'), true);
 assert.equal(master.allowRepeatFromText('find more new companies'), false);
@@ -70,5 +110,6 @@ master.setMasterSheet({
   title: 'ULTRON LinkedIn Final Lead Master',
 });
 assert.equal(master.masterSheetUrl(), 'https://docs.google.com/spreadsheets/d/final-master/edit');
+assert.equal(master.schemaCurrent(), true);
 
-console.log('LinkedIn Final Master tests passed: canonical company identity, SAP qualification, global never-repeat, explicit repeat override, total-target accounting and persistent master routing are healthy.');
+console.log('LinkedIn Final Master tests passed: compact eight-column schema, contact remarks, canonical company identity, global never-repeat, total-target accounting and persistent master routing are healthy.');
