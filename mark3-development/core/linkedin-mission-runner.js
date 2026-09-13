@@ -65,7 +65,8 @@ async function pump() {
     const result = await context.run(m, () => executor(m.prepared));
     m.result = result;
     const mission = result?.linkedinMission;
-    const apolloFollowup = (m.followups || []).find((item) => item?.type === 'apollo-enrichment' && item.status !== 'resolved');
+    const noApollo = /\b(?:no\s+apollo|without\s+apollo|do\s+not\s+use\s+apollo)\b/i.test(m.prepared?.request?.originalMessage || '');
+    const apolloFollowup = !noApollo && (m.followups || []).find((item) => item?.type === 'apollo-enrichment' && item.status === 'queued');
     if (apolloFollowup && mission?.contactCandidates > 0) {
       const paidTools = require('./paid-tool-approval');
       const approval = paidTools.request(

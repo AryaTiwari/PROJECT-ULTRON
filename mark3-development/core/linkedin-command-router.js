@@ -15,11 +15,13 @@ function normalize(value) {
 }
 
 function requestedContactEnrichment(text) {
+  if (/\b(?:no\s+apollo|without\s+apollo|(?:do\s+not|don['’]t)\s+(?:use\s+)?apollo)\b/i.test(String(text || ''))) return false;
   return /\b(?:enrich|enrichment|apollo|email|e-?mail|phone|mobile|contact\s+(?:info|information|details?|number)|decision[- ]?maker|head(?:s)?|recruiter(?:s)?|talent\s+acquisition|hr\s+contact)\b/i.test(String(text || ''));
 }
 
 function isApolloEnrichmentRequest(text) {
   const value = String(text || '');
+  if (!requestedContactEnrichment(value)) return false;
   return /\b(?:apollo|enrich|enrichment)\b/i.test(value)
     && /\b(?:lead|leads|companies|company|them|those|these|email|phone|number|contacts?)\b/i.test(value);
 }

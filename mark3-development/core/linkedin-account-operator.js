@@ -2266,7 +2266,7 @@ async function apiRequest(url, options = {}) {
   return data;
 }
 
-async function appendRows(spreadsheetId, sheetName, rows) {
+async function appendRows(spreadsheetId, sheetName, rows, receipt = {}) {
   if (!rows.length) return 0;
   const width = Math.max(1, ...rows.map((row) => Array.isArray(row) ? row.length : 0));
   const full = `${sheets.quoteSheet(sheetName)}!A:${sheets.columnName(width - 1)}`;
@@ -2274,7 +2274,18 @@ async function appendRows(spreadsheetId, sheetName, rows) {
     method: 'POST',
     body: JSON.stringify({ majorDimension: 'ROWS', values: rows }),
   });
-  return Number(result?.updates?.updatedRows || rows.length);
+  Object.assign(receipt, await verifyAppend(result, rows, range => sheets.values(spreadsheetId, range)));
+  return receipt.rows;
+}
+
+async function verifyAppend(result, rows, read) {
+  const range = result?.updates?.updatedRange;
+  const count = Number(result?.updates?.updatedRows);
+  if (!range || count !== rows.length) throw Object.assign(new Error('Google Sheets did not confirm the expected appended rows. Research remains saved; do not repeat discovery.'), { code: 'LINKEDIN_SHEET_WRITE_UNVERIFIED' });
+  const actual = await read(range);
+  const verified = actual.length === rows.length && rows.every((row, i) => row.every((cell, j) => String(cell ?? '') === String(actual[i]?.[j] ?? '')));
+  if (!verified) throw Object.assign(new Error(`Appended range ${range} could not be verified by readback. Check this range before retrying the write.`), { code: 'LINKEDIN_SHEET_WRITE_UNVERIFIED' });
+  return { range, rows: count, verified: true };
 }
 
 async function hideInternalContactColumn(spreadsheetId, sheetId, columnIndex) {
@@ -3116,6 +3127,7 @@ async function run(request, headers) {
     let duplicateRowsSkipped = 0;
     let firstAppendedRow = 2;
     let added = 0;
+    const writeReceipt = {};
 
     try {
       if (request.destinationSheetUrl) {
@@ -3153,7 +3165,7 @@ async function run(request, headers) {
         minRows: Math.max(200, firstAppendedRow + recordsToWrite.length + 5),
       });
       const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders));
-      added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
+      added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows, writeReceipt);
     } catch (error) {
       if (!request.destinationSheetUrl || !isGoogleSheetsError(error)) throw error;
 
@@ -3191,6 +3203,12 @@ async function run(request, headers) {
     }
 
     mission.status = 'completed';
+    mission.writeReceipt = writeReceipt;
+    if (writeReceipt.range) {
+      const link = new URL(sheet.url);
+      link.hash = `gid=${sheet.sheetId}&range=${encodeURIComponent(writeReceipt.range.split('!').pop())}`;
+      sheet.url = link.toString();
+    }
     mission.completedAt = nowIso();
     mission.criteriaSignature = criteriaSignature(request);
     mission.sheetUrl = sheet.url;
@@ -3355,6 +3373,7 @@ function formatMission(mission) {
 }
 
 module.exports = {
+  verifyAppend,
   COMPANY_HEADERS,
   PERSON_HEADERS,
   INTERNAL_CONTACT_HEADER,
