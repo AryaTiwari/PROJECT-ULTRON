@@ -113,7 +113,9 @@ async function call(tool, args, invoke) {
     }).map(([, cached]) => cached.value);
     if (!values.length) throw Object.assign(new Error('No saved discovery response exists for this mission; fresh discovery was not started.'), { code: 'LINKEDIN_SAVED_POOL_MISSING' });
     m.discoveryReplayed = true; m.cacheHits += values.length; save(m);
-    return { results: values };
+    const jobIds = require('./linkedin-account-operator').jobIdsFromResult({ results: values });
+    if (tool === 'search_jobs' && !jobIds.length) throw Object.assign(new Error('Saved discovery could not be decoded into job IDs. No fresh searches or Sheet writes were attempted.'), { code: 'LINKEDIN_SAVED_POOL_UNREADABLE' });
+    return { job_ids: jobIds, results: values };
   }
   const key = JSON.stringify([tool, args]);
   const cacheTtl = m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
@@ -178,7 +180,8 @@ function resumeSaved(text) {
   const m = candidates.sort((a,b) => Object.keys(b.responses || {}).length - Object.keys(a.responses || {}).length)[0];
   if (!m) throw new Error('No saved LinkedIn job discovery mission was found. No new mission was created.');
   if (['created','searching','writing_sheet'].includes(m.status)) return { ...summary(m), alreadyActive: true };
-  if (m.research) throw new Error('Verified research already exists; recover its Sheet output before restarting verification.');
+  if (m.research?.records?.length) throw new Error('Verified research already exists; recover its Sheet output before restarting verification.');
+  if (m.research && Array.isArray(m.research.records) && m.research.records.length === 0) m.research = null;
   const compiler = require('./linkedin-mission-contract');
   const previous = m.prepared.request;
   const limit = String(text).match(/(?:maximum|max|under|up to)\s*([\d,]+)\s+employees/i)?.[1];

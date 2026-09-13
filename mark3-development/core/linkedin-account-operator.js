@@ -653,7 +653,16 @@ function linkedInReferences(result, entityMode = null) {
 }
 
 function jobIdsFromResult(result) {
-  const direct = Array.isArray(result?.job_ids) ? result.job_ids : [];
+  const direct = [];
+  const visit = (value, depth = 0) => {
+    if (!value || typeof value !== 'object' || depth > 12) return;
+    if (Array.isArray(value.job_ids)) direct.push(...value.job_ids);
+    if (value.job_id != null) direct.push(value.job_id);
+    for (const [key, child] of Object.entries(value)) {
+      if (!/cookie|token|password|session/i.test(key)) visit(child, depth + 1);
+    }
+  };
+  visit(result);
   const text = flattenText(result);
   const fromUrls = [...text.matchAll(/linkedin\.com\/jobs\/view\/(?:[^\d\s/]*-)?(\d{6,})/gi)].map((match) => match[1]);
   return [...new Set([...direct, ...fromUrls].map((value) => String(value || '').match(/\d{6,}/)?.[0]).filter(Boolean))];
