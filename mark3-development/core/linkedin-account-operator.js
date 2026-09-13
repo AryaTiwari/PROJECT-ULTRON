@@ -1628,6 +1628,16 @@ async function companyMission(request) {
       if (!detail) break;
       jobDetails++;
       checkedJobIds.push(String(jobId));
+      missionRunner.updateProgress({
+        phase: 'verifying_jobs',
+        uniqueJobIds: jobMeta.size,
+        jobDetailsChecked: jobDetails,
+        companiesLinked: jobCandidatesLinked,
+        verifiedCompanies: acceptedCompanies.size,
+        remaining: Math.max(0, request.count - acceptedCompanies.size),
+        budgetUsed: budget.used,
+        budgetMaximum: budget.maximum,
+      });
 
       let detailText = flattenText(detail);
       let companyRefs = linkedInReferences(detail, 'company');
@@ -1776,6 +1786,18 @@ async function companyMission(request) {
         if (!globallySeen) {
           acceptedCompanies.add(companyKey);
           verifiedDuringRun = acceptedCompanies.size;
+          missionRunner.updateProgress({
+            phase: 'verifying_companies',
+            uniqueJobIds: jobMeta.size,
+            jobDetailsChecked: jobDetails,
+            companiesLinked: jobCandidatesLinked,
+            jobCandidatesPassed,
+            companyProfilesChecked: deepProfiles,
+            verifiedCompanies: verifiedDuringRun,
+            remaining: Math.max(0, request.count - verifiedDuringRun),
+            budgetUsed: budget.used,
+            budgetMaximum: budget.maximum,
+          });
         } else {
           record.globalSeen = true;
         }
