@@ -3477,6 +3477,7 @@ module.exports = {
   criteriaSignature,
   previousCheckedJobIds,
   reconsiderRejectedCandidates,
+  isTransientMcpFailure,
   companyMission,
   personSearchPlan,
   personMission,
