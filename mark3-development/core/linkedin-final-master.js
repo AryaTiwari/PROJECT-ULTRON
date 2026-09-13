@@ -20,7 +20,8 @@ function nowIso() { return new Date().toISOString(); }
 
 function defaultState() {
   return {
-    version: 1,
+    version: 2,
+    schemaVersion: 2,
     sheetUrl: null,
     spreadsheetId: null,
     sheetName: 'Leads',
@@ -197,6 +198,8 @@ function registerRecords(records = [], metadata = {}) {
 
 function setMasterSheet(sheet = {}) {
   const state = loadState();
+  state.version = 2;
+  state.schemaVersion = 2;
   state.sheetUrl = sheet.url || sheet.sheetUrl || state.sheetUrl;
   state.spreadsheetId = sheet.spreadsheetId || state.spreadsheetId;
   state.sheetName = sheet.sheetName || state.sheetName || 'Leads';
@@ -205,6 +208,7 @@ function setMasterSheet(sheet = {}) {
 }
 
 function masterSheetUrl() { return loadState().sheetUrl || null; }
+function schemaCurrent() { return Number(loadState().schemaVersion || 0) === 2; }
 function masterCount() { return Object.values(loadState().companies || {}).filter((item) => item.status === 'verified').length; }
 
 function remainingForTarget(total) {
@@ -276,6 +280,7 @@ module.exports = {
   registerRecords,
   setMasterSheet,
   masterSheetUrl,
+  schemaCurrent,
   masterCount,
   remainingForTarget,
   contactRemark,
