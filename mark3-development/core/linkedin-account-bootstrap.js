@@ -125,6 +125,32 @@ function missionProgressText(job) {
   return parts.join('. ') + '.';
 }
 
+function missionContractText(job) {
+  const contract = job?.contract;
+  if (!contract) return 'This LinkedIn mission does not have a compiled mission contract.';
+  const hard = contract.hard || {};
+  const preferences = contract.preferences || {};
+  const target = contract.target || {};
+  const hardParts = [];
+  if (hard.topic) hardParts.push('topic=' + hard.topic);
+  if (hard.hiringRequired) hardParts.push('verified opening required');
+  if (Array.isArray(hard.locations) && hard.locations.length) hardParts.push('allowed locations=' + hard.locations.join(', '));
+  if (hard.employeeMin != null) hardParts.push('employees>=' + hard.employeeMin);
+  if (hard.employeeMax != null) hardParts.push('employees<=' + hard.employeeMax);
+  if (hard.workType) hardParts.push('work type=' + hard.workType);
+  const preferenceParts = [];
+  if (Array.isArray(preferences.locations) && preferences.locations.length) preferenceParts.push('location order=' + preferences.locations.join(' -> '));
+  if (preferences.workType) preferenceParts.push('work type=' + preferences.workType);
+  return [
+    'LinkedIn mission contract ' + job.id + '.',
+    'Target: ' + (target.mode || 'additional') + ' ' + (target.value ?? 'unknown') + '.',
+    'Hard constraints: ' + (hardParts.join('; ') || 'none') + '.',
+    'Preferences: ' + (preferenceParts.join('; ') || 'none') + '.',
+    'Global repeat policy: ' + (contract.dedupe?.allowPreviouslySeen ? 'previously seen companies allowed' : 'previously seen companies excluded') + '.',
+    contract.relaxation?.hardConstraintsLocked ? 'Hard constraints are locked unless you explicitly change them.' : '',
+  ].filter(Boolean).join(' ');
+}
+
 function install() {
   if (installed) return { installed: true, alreadyInstalled: true, ...operator.status() };
   const assistant = require('./assistant');
@@ -144,12 +170,12 @@ function install() {
     let result = null;
 
     try {
-      if (/\blinkedin mission (?:progress|pause|cancel|resume)\b/i.test(text)) {
+      if (/\blinkedin mission (?:progress|pause|cancel|resume|explain)\b/i.test(text)) {
         const latest = missionRunner.list()[0];
         if (!latest) return responseShape(true, 'No background LinkedIn mission exists yet.');
-        const action = text.match(/\blinkedin mission (progress|pause|cancel|resume)\b/i)[1].toLowerCase();
-        const job = action === 'progress' ? missionRunner.summary(latest) : missionRunner.control(latest.id, action);
-        return responseShape(true, job.result?.text || missionProgressText(job), { linkedinBackgroundMission: job });
+        const action = text.match(/\blinkedin mission (progress|pause|cancel|resume|explain)\b/i)[1].toLowerCase();
+        const job = action === 'progress' || action === 'explain' ? missionRunner.summary(latest) : missionRunner.control(latest.id, action);
+        return responseShape(true, action === 'explain' ? missionContractText(job) : (job.result?.text || missionProgressText(job)), { linkedinBackgroundMission: job });
       }
       const pending = await operator.resolvePending(text);
       if (pending) {
