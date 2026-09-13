@@ -1099,6 +1099,13 @@ function isBudgetStop(error) {
   return /LINKEDIN_(?:BURST|HOURLY|DAILY)_CAP/.test(String(error?.code || ''));
 }
 
+function isTransientMcpFailure(error) {
+  const code = String(error?.code || '');
+  const message = String(error?.message || error || '');
+  return /TIMEOUT|TIMED_OUT|ECONNRESET|EPIPE|ETIMEDOUT/i.test(code)
+    || /timed out|timeout|connection reset|socket hang up|temporary browser failure/i.test(message);
+}
+
 function missionCallBudget() {
   const safety = policy.status();
   const maximum = safety.localBudgetBypass
