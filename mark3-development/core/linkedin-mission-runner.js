@@ -26,7 +26,7 @@ function save(mission, preserveControl = true) {
 }
 function summary(m) {
   return { id: m.id, status: m.status, updatedAt: m.updatedAt, calls: m.calls || 0,
-    cacheHits: m.cacheHits || 0, error: m.error || null, result: m.result || null };
+    cacheHits: m.cacheHits || 0, progress: m.progress || null, error: m.error || null, result: m.result || null };
 }
 function list() {
   if (!fs.existsSync(root)) return [];
@@ -46,7 +46,7 @@ function start(fn) {
 function enqueue(prepared) {
   if (queue.length >= 20) throw new Error('LINKEDIN_QUEUE_FULL');
   const m = { id: randomUUID(), createdAt: new Date().toISOString(), status: 'created',
-    prepared, calls: 0, cacheHits: 0, responses: {}, research: null, followups: [] };
+    prepared, calls: 0, cacheHits: 0, responses: {}, research: null, followups: [], progress: { phase: 'queued' } };
   save(m);
   queue.push(m.id);
   setImmediate(pump);
@@ -118,6 +118,15 @@ function persistResearch(research) {
   if (!m) return;
   check(); m.research = research; m.status = 'writing_sheet'; save(m);
 }
+
+function updateProgress(patch = {}) {
+  const m = context.getStore();
+  if (!m) return null;
+  check();
+  m.progress = { ...(m.progress || {}), ...patch, updatedAt: new Date().toISOString() };
+  save(m);
+  return m.progress;
+}
 function control(id, action) {
   const m = get(id);
   if (action === 'resume') {
@@ -145,4 +154,4 @@ function active() {
   return list().find((m) => ['created', 'searching', 'writing_sheet'].includes(m.status)) || null;
 }
 
-module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, defer, active };
+module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, updateProgress, defer, active };
