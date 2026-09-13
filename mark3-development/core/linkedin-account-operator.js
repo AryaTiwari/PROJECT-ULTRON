@@ -11,6 +11,8 @@ const apollo = require('./apollo-enrichment');
 const config = require('./config');
 const missionRunner = require('./linkedin-mission-runner');
 const finalMaster = require('./linkedin-final-master');
+const missionContract = require('./linkedin-mission-contract');
+const queryStrategist = require('./linkedin-query-strategist');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'linkedin-account', 'operator-state.json');
@@ -260,7 +262,7 @@ function parseRequest(text) {
   const explicitlyPeople = /\b(?:people|persons?|professionals?|recruiters?|founders?|employees?|candidates?|profiles?)\b/i.test(peopleIntentText);
   const inferredMode = linkedinPublic.entityModeFromText(criteriaText);
   const entityMode = entity?.type || (hiring && !explicitlyPeople ? 'company' : inferredMode);
-  return {
+  const baseRequest = {
     originalMessage: value,
     criteriaText,
     count: entity ? 1 : parseCount(criteriaText),
@@ -280,6 +282,12 @@ function parseRequest(text) {
     usePrevious: /\b(?:use|same as|like)\b[\s\S]{0,30}\b(?:previous|last)\b|\bprevious format\b|\bsame format\b/i.test(value),
     useDefault: /\b(?:default|standard)\s+(?:format|layout|headers?|columns?)\b/i.test(value),
   };
+  const knownLocations = [
+    ...Object.keys(LOCATION_SEARCH_HUBS),
+    ...Object.values(LOCATION_SEARCH_HUBS).flat(),
+  ];
+  const contract = missionContract.compile(value, baseRequest, { knownLocations });
+  return missionContract.apply(contract, baseRequest);
 }
 
 function normalizeHeader(value) {
