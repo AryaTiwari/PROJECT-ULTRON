@@ -103,20 +103,76 @@ function check() {
     error.code = error.message; throw error;
   }
 }
+
+function compatibleDiscoveryMission(current, tool) {
+  const request = current?.prepared?.request || {};
+  const topic = String(request.topic || '').trim().toLowerCase();
+  const entityMode = String(request.entityMode || '').trim().toLowerCase();
+  return list().find((candidate) => {
+    if (!candidate || candidate.id === current.id) return false;
+    const source = candidate.prepared?.request || {};
+    if (String(source.entityMode || '').trim().toLowerCase() !== entityMode) return false;
+    if (String(source.topic || '').trim().toLowerCase() !== topic) return false;
+    return Object.keys(candidate.responses || {}).some((key) => {
+      try { return JSON.parse(key)[0] === tool; } catch { return false; }
+    });
+  }) || null;
+}
+
+function cachedToolValues(mission, tool) {
+  return Object.entries(mission?.responses || {}).filter(([key]) => {
+    try { return JSON.parse(key)[0] === tool; } catch { return false; }
+  }).map(([, cached]) => cached.value);
+}
 async function call(tool, args, invoke) {
   const m = context.getStore();
   if (!m) return invoke();
   check();
-  if (m.prepared?.request?.resumeExistingPool && /^search_/.test(tool)) {
-    if (m.discoveryReplayed) return { results: [] };
-    const values = Object.entries(m.responses || {}).filter(([key]) => {
-      try { return JSON.parse(key)[0] === tool; } catch { return false; }
-    }).map(([, cached]) => cached.value);
-    if (!values.length) throw Object.assign(new Error('No saved discovery response exists for this mission; fresh discovery was not started.'), { code: 'LINKEDIN_SAVED_POOL_MISSING' });
-    m.discoveryReplayed = true; m.cacheHits += values.length; save(m);
-    const jobIds = require('./linkedin-account-operator').jobIdsFromResult({ results: values });
-    if (tool === 'search_jobs' && !jobIds.length) throw Object.assign(new Error('Saved discovery could not be decoded into job IDs. No fresh searches or Sheet writes were attempted.'), { code: 'LINKEDIN_SAVED_POOL_UNREADABLE' });
-    return { job_ids: jobIds, results: values };
+  if (m.prepared?.request?.resumeExistingPool && /^search_/.test(tool) && !m.discoveryReplayed) {
+    let sourceMission = m;
+    let values = cachedToolValues(m, tool);
+
+    if (!values.length) {
+      const compatible = compatibleDiscoveryMission(m, tool);
+      if (compatible) {
+        sourceMission = compatible;
+        values = cachedToolValues(compatible, tool);
+      }
+    }
+
+    if (values.length) {
+      const jobIds = tool === 'search_jobs'
+        ? require('./linkedin-account-operator').jobIdsFromResult({ results: values })
+        : [];
+
+      if (tool !== 'search_jobs' || jobIds.length) {
+        m.discoveryReplayed = true;
+        m.discoverySourceMissionId = sourceMission.id;
+        m.cacheHits += values.length;
+        m.progress = {
+          ...(m.progress || {}),
+          reusedDiscoveryResponses: values.length,
+          reusedDiscoveryMissionId: sourceMission.id,
+          reuseMode: 'saved-first',
+        };
+        save(m);
+        return tool === 'search_jobs' ? { job_ids: jobIds, results: values } : { results: values };
+      }
+    }
+
+    // Saved discovery is an optimization, never a prerequisite.
+    // If it is absent or unreadable, fall through to a fresh authenticated
+    // LinkedIn search instead of failing a brand-new continuation mission.
+    m.discoveryReplayed = true;
+    m.prepared.request.resumeExistingPool = false;
+    m.progress = {
+      ...(m.progress || {}),
+      reuseMode: 'fresh-fallback',
+      reuseWarning: values.length
+        ? 'Saved discovery could not be decoded; fresh LinkedIn discovery started.'
+        : 'No compatible saved discovery existed; fresh LinkedIn discovery started.',
+    };
+    save(m);
   }
   const key = JSON.stringify([tool, args]);
   const cacheTtl = m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
