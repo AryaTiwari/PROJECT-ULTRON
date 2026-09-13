@@ -1237,24 +1237,33 @@ function jobSearchPlan(request) {
   }
 
   const plan = [];
-  const desiredWorkType = request.filters?.workType || request.preferredWorkType || null;
-  const add = (keyword, loc) => {
-    const key = String(keyword || '').trim().toLowerCase() + '|' + String(loc || '').trim().toLowerCase();
+  const hardWorkType = request.filters?.workType || null;
+  const preferredWorkType = !hardWorkType ? (request.preferredWorkType || null) : null;
+  const add = (keyword, loc, workType = hardWorkType || preferredWorkType || null) => {
+    const key = String(keyword || '').trim().toLowerCase() + '|' + String(loc || '').trim().toLowerCase() + '|' + String(workType || '').trim().toLowerCase();
     if (!keyword || plan.some((item) => item.key === key)) return;
     plan.push({
       key,
       keyword: String(keyword).trim(),
       location: String(loc || '').trim() || null,
-      workType: desiredWorkType,
+      workType: workType || null,
     });
   };
 
+  // Search preferences first.
   for (const place of hubs) add(keywords[0], place || null);
+
+  // Preferences are not hard filters. Add broader equivalents so the adaptive
+  // strategist can relax them when preferred queries underperform.
+  if (preferredWorkType) {
+    for (const place of hubs) add(keywords[0], place || null, null);
+  }
 
   const broadLocations = roots.filter(Boolean);
   for (const keyword of keywords.slice(1)) {
     for (const root of broadLocations.length ? broadLocations : [null]) {
       add(keyword, root);
+      if (preferredWorkType) add(keyword, root, null);
       if (plan.length >= 30) break;
     }
     if (plan.length >= 30) break;
@@ -1617,6 +1626,7 @@ async function companyMission(request) {
         trustedWorkType: trust.trustedWorkType || null,
         droppedFilters: trust.dropped,
         warning: warning?.error_type || null,
+        workType: step.workType || null,
       });
       missionRunner.updateProgress({
         phase: 'searching',
