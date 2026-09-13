@@ -1,5 +1,5 @@
 function key(query = {}) {
-  return String(query.keyword || '').trim().toLowerCase() + '|' + String(query.location || '').trim().toLowerCase();
+  return String(query.keyword || '').trim().toLowerCase() + '|' + String(query.location || '').trim().toLowerCase() + '|' + String(query.workType || '').trim().toLowerCase();
 }
 
 function uniqueQueries(plan = []) {
@@ -24,8 +24,17 @@ function score(query, context = {}) {
   else if (topic && keyword.startsWith(topic)) value += 10;
   for (const item of history.slice(-3)) {
     const yieldValue = Number(item.uniqueJobIdsAdded ?? item.jobIds ?? 0);
-    if (String(item.location || '').toLowerCase() === String(query.location || '').toLowerCase()) value += yieldValue > 0 ? Math.min(18, yieldValue) : -18;
-    if (String(item.keyword || '').toLowerCase() === keyword) value += yieldValue > 0 ? 5 : -12;
+    const sameLocation = String(item.location || '').toLowerCase() === String(query.location || '').toLowerCase();
+    const sameKeyword = String(item.keyword || '').toLowerCase() === keyword;
+    if (sameLocation) value += yieldValue > 0 ? Math.min(18, yieldValue) : -18;
+    if (sameKeyword) value += yieldValue > 0 ? 5 : -12;
+
+    // If a preferred work-type query produced little or nothing, explicitly
+    // reward the broader equivalent query. Preferences may relax; hard
+    // constraints never do.
+    if (sameLocation && sameKeyword && item.workType && !query.workType && yieldValue < 5) {
+      value += 42;
+    }
   }
   return value;
 }
@@ -52,6 +61,7 @@ function summarize(history = []) {
     jobIds: Number(item.jobIds || 0),
     uniqueJobIds: Number(item.uniqueJobIds || 0),
     uniqueJobIdsAdded: Number(item.uniqueJobIdsAdded || 0),
+    workType: item.workType || null,
     warning: item.warning || null,
   }));
 }
