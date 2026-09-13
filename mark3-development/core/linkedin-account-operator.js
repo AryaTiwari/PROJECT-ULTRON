@@ -2774,7 +2774,17 @@ function rowFor(record, headers) {
 }
 
 function isBuildFinalMasterRequest(text) {
-  return /\b(?:build|create|make|rebuild|migrate|generate)\b[\s\S]{0,40}\b(?:final\s+master|final\s+(?:lead\s+)?database|clean\s+master)\b/i.test(String(text || ''));
+  const value = String(text || '').trim();
+  const explicitBuild = /\b(?:build|create|rebuild|migrate|generate)\b[\s\S]{0,40}\b(?:final\s+master|final\s+(?:lead\s+)?database|clean\s+master)\b/i.test(value)
+    || /^make\s+(?:me\s+)?(?:a|the)\s+(?:clean\s+)?final\s+master\b/i.test(value);
+  if (!explicitBuild) return false;
+
+  // A research request that merely mentions the Final Master as its destination
+  // must stay a LinkedIn research mission. The runner will build/migrate the
+  // master automatically before calculating the remaining target.
+  const researchIntent = /\b(?:find|search|research|source|collect|add|get|bring)\b[\s\S]{0,100}\b(?:companies?|jobs?|roles?|leads?)\b/i.test(value)
+    || /\b(?:reach|go\s+to|make\s+(?:the\s+)?(?:list|final\s+master|master))\b[\s\S]{0,30}\b\d{1,3}\b/i.test(value);
+  return !researchIntent;
 }
 
 function historicalVerifiedCompanyRecords(options = {}) {
