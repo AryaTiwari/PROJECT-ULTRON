@@ -2801,9 +2801,25 @@ function historicalVerifiedCompanyRecords(options = {}) {
   return [...byKey.values()];
 }
 
+async function finalMasterSheetSchemaCurrent(url = finalMaster.masterSheetUrl()) {
+  if (!url) return false;
+  try {
+    const spreadsheetId = sheets.spreadsheetId(url);
+    const state = finalMaster.loadState();
+    const sheetName = state.sheetName || 'Leads';
+    const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(sheetName)}!A1:H1`);
+    const actual = (rows[0] || []).map((value) => String(value || '').trim().toUpperCase());
+    const expected = finalMaster.FINAL_MASTER_HEADERS.map((value) => String(value).trim().toUpperCase());
+    return actual.length === expected.length && expected.every((value, index) => actual[index] === value);
+  } catch {
+    return false;
+  }
+}
+
 async function buildFinalMaster(text = '') {
   const existingUrl = finalMaster.masterSheetUrl();
-  if (existingUrl && finalMaster.schemaCurrent() && !/\b(?:rebuild|replace|new)\b/i.test(String(text || ''))) {
+  const currentSchema = existingUrl ? await finalMasterSheetSchemaCurrent(existingUrl) : false;
+  if (existingUrl && currentSchema && !/\b(?:rebuild|replace|new)\b/i.test(String(text || ''))) {
     return {
       ok: true,
       sheetUrl: existingUrl,
@@ -2848,9 +2864,12 @@ async function buildFinalMaster(text = '') {
 async function run(request, headers) {
   if (request?.entityMode === 'company') {
     request.allowPreviouslySeenCompanies = Boolean(request.allowPreviouslySeenCompanies || finalMaster.allowRepeatFromText(request.originalMessage));
-    if ((request.useFinalMaster || request.targetMode === 'master_total')
-        && (!finalMaster.masterSheetUrl() || !finalMaster.schemaCurrent())) {
-      await buildFinalMaster(finalMaster.masterSheetUrl() ? 'rebuild final master' : 'build final master');
+    if (request.useFinalMaster || request.targetMode === 'master_total') {
+      const masterUrl = finalMaster.masterSheetUrl();
+      const currentSchema = masterUrl ? await finalMasterSheetSchemaCurrent(masterUrl) : false;
+      if (!masterUrl || !currentSchema) {
+        await buildFinalMaster(masterUrl ? 'rebuild final master' : 'build final master');
+      }
     }
     if (request.targetMode === 'master_total' && request.targetTotal) {
       const target = finalMaster.remainingForTarget(request.targetTotal);
@@ -3228,6 +3247,7 @@ module.exports = {
   prepareApolloCompanyContacts,
   enrichFinalMasterContacts,
   isBuildFinalMasterRequest,
+  finalMasterSheetSchemaCurrent,
   historicalVerifiedCompanyRecords,
   buildFinalMaster,
   run,
