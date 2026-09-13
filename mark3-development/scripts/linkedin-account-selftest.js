@@ -12,6 +12,10 @@ assert.equal(operator.isRequest('Find me 50 companies on LinkedIn that are hirin
 assert.equal(operator.isRequest('Find me 30 SAP recruiters on LinkedIn from Pune'), true);
 assert.equal(operator.isRequest('Tell me what LinkedIn is'), false);
 
+assert.equal(operator.isBuildFinalMasterRequest('Build the final LinkedIn master'), true);
+assert.equal(operator.isBuildFinalMasterRequest('Create a clean final master from verified historical missions'), true);
+assert.equal(operator.isBuildFinalMasterRequest('Find enough new SAP companies to make my Final Master reach 30 verified companies total'), false);
+
 const company = operator.parseRequest('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra');
 assert.equal(company.count, 50);
 assert.equal(company.entityMode, 'company');
