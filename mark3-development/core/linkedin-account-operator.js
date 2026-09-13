@@ -2949,7 +2949,7 @@ async function buildFinalMaster(text = '') {
   const rows = records.map((record) => finalMaster.rowFor(record, { missionId: record.sourceMissionId, firstSeenAt: record.sourceMissionCreatedAt }));
   const added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
   finalMaster.setMasterSheet(sheet);
-  finalMaster.registerRecords(records, { missionId: 'historical-migration' });
+  finalMaster.replaceMasterRecords(records, { missionId: 'historical-migration' });
 
   const state = loadState();
   rememberWorkspaceSheet(sheet.url, {
