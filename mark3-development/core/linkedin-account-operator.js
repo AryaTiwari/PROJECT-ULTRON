@@ -1125,8 +1125,11 @@ async function budgetedCall(budget, tool, args) {
     return null;
   }
   try {
+    const before = missionRunner.currentUsage?.();
     const result = await missionRunner.call(tool, args, () => mcp.callTool(tool, args));
-    budget.used++;
+    const after = missionRunner.currentUsage?.();
+    const replayedFromCache = Boolean(before && after && Number(after.cacheHits) > Number(before.cacheHits));
+    if (!replayedFromCache) budget.used++;
     return result;
   } catch (error) {
     if (isBudgetStop(error)) {
