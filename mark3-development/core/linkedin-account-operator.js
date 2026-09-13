@@ -1676,7 +1676,26 @@ async function companyMission(request) {
         break;
       }
 
-      let detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
+      let detail;
+      try {
+        detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
+      } catch (error) {
+        if (!isTransientMcpFailure(error)) throw error;
+        checkedJobIds.push(String(jobId));
+        missionRunner.updateProgress({
+          phase: 'verifying_jobs',
+          uniqueJobIds: jobMeta.size,
+          jobDetailsChecked: jobDetails,
+          transientFailures: Number(missionRunner.active()?.progress?.transientFailures || 0) + 1,
+          lastTransientFailure: 'get_job_details',
+          lastTimedOutJobId: String(jobId),
+          verifiedCompanies: acceptedCompanies.size,
+          remaining: Math.max(0, request.count - acceptedCompanies.size),
+          budgetUsed: budget.used,
+          budgetMaximum: budget.maximum,
+        });
+        continue;
+      }
       if (!detail) break;
       jobDetails++;
       checkedJobIds.push(String(jobId));
