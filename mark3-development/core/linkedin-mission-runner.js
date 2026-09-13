@@ -26,7 +26,9 @@ function save(mission, preserveControl = true) {
 }
 function summary(m) {
   return { id: m.id, status: m.status, updatedAt: m.updatedAt, calls: m.calls || 0,
-    cacheHits: m.cacheHits || 0, progress: m.progress || null, error: m.error || null, result: m.result || null };
+    cacheHits: m.cacheHits || 0, progress: m.progress || null,
+    contract: m.prepared?.request?.missionContract || null,
+    error: m.error || null, result: m.result || null };
 }
 function list() {
   if (!fs.existsSync(root)) return [];
