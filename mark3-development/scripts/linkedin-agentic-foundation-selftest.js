@@ -2,6 +2,7 @@
 const assert = require('assert');
 const contract = require('../core/linkedin-mission-contract');
 const strategist = require('../core/linkedin-query-strategist');
+const operator = require('../core/linkedin-account-operator');
 
 const legacy = {
   count: 25,
@@ -71,6 +72,9 @@ const second = strategist.selectNext(plan, {
 });
 assert.equal(second.location, 'Bengaluru');
 assert.equal(strategist.searchAllowance({ maximum: 12 }, 23), 2);
+assert.equal(operator.isTransientMcpFailure(Object.assign(new Error('LinkedIn MCP request timed out after 180000ms.'), { code: 'LINKEDIN_MCP_TIMEOUT' })), true);
+assert.equal(operator.isTransientMcpFailure(Object.assign(new Error('socket reset'), { code: 'ECONNRESET' })), true);
+assert.equal(operator.isTransientMcpFailure(new Error('invalid credentials')), false);
 
 const preferencePlan = [
   { keyword: 'SAP', location: 'India', workType: 'remote' },
@@ -85,4 +89,4 @@ const relaxedPreference = strategist.selectNext(preferencePlan, {
 assert.equal(relaxedPreference.location, 'India');
 assert.equal(relaxedPreference.workType, null);
 
-console.log('LinkedIn agentic foundation tests passed: mission contracts separate hard constraints/preferences, preserve multi-location intent, and adaptive queries can relax weak preferences without changing hard constraints.');
+console.log('LinkedIn agentic foundation tests passed: mission contracts separate hard constraints/preferences, preserve multi-location intent, adaptive queries can relax weak preferences without changing hard constraints, and transient MCP failures are recoverable.');
