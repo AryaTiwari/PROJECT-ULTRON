@@ -28,23 +28,30 @@ function extractLocations(text, fallback = '', known = []) {
 
 function workType(text, legacy = {}) {
   const value = String(text || '').toLowerCase();
+
+  const removeAnyWorkType = /(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:remote|hybrid|on[- ]?site|work\s*type|workplace)(?:\s+filter)?|not\s+necessarily\s+(?:remote|hybrid|on[- ]?site)|(?:remote|hybrid|work\s*type|workplace)\s+(?:doesn['’]?t|does\s+not)\s+matter|(?:doesn['’]?t|does\s+not)\s+(?:have|need)\s+to\s+be\s+remote/i.test(value);
+  if (removeAnyWorkType) return { value: null, strictness: 'none' };
+
   const selected = value.includes('remote') ? 'remote'
     : value.includes('hybrid') ? 'hybrid'
       : (value.includes('on-site') || value.includes('onsite') || value.includes('in-office')) ? 'on_site'
         : legacy.workType || null;
   if (!selected) return { value: null, strictness: 'none' };
+
   const labels = selected === 'on_site' ? ['on-site','onsite','in-office'] : [selected];
   let preferred = false;
   let hard = false;
   for (const label of labels) {
     const at = value.indexOf(label);
     if (at < 0) continue;
-    const before = value.slice(Math.max(0, at - 30), at);
-    const after = value.slice(at, at + 45);
-    if (/prefer|preferred|preferably|ideally/.test(before) || /prefer|preferred|ideally/.test(after)) preferred = true;
+    const before = value.slice(Math.max(0, at - 40), at);
+    const after = value.slice(at, at + 70);
+    if (/prefer|preferred|preferably|ideally|priority/.test(before) || /prefer|preferred|preferably|ideally/.test(after)) preferred = true;
     if (/must|required|mandatory|strictly|only\s*$/.test(before)
-        || /\bonly\b|required|mandatory|must\s+be|strictly/.test(after)) hard = true;
+        || /\bonly\b|mandatory|must\s+be|strictly/.test(after)) hard = true;
   }
+
+  if (/rather\s+than\s+required|not\s+required|preference\s+only/.test(value)) hard = false;
   return { value: selected, strictness: hard ? 'hard' : preferred ? 'preference' : 'hard' };
 }
 
