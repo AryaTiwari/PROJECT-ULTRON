@@ -1213,32 +1213,48 @@ function sapRoleKeywordVariants(topic) {
 
 function jobSearchPlan(request) {
   const keywords = sapRoleKeywordVariants(searchKeyword(request));
-  const location = String(request.location || '').trim();
-  const normalizedLocation = location.toLowerCase();
-  let hubs = LOCATION_SEARCH_HUBS[normalizedLocation] || (location ? [location] : ['']);
-  if (normalizedLocation === 'india' && request.locationPolicy?.allowOtherIndia
-      && (request.locationPolicy?.preferredLocations || []).some((value) => /^maharashtra$/i.test(String(value)))) {
-    const preferred = ['Maharashtra', 'Pune', 'Mumbai', 'Navi Mumbai', 'Thane', 'Nagpur', 'Nashik'];
-    hubs = [...preferred, ...hubs].filter((value, index, list) =>
-      list.findIndex((item) => String(item).toLowerCase() === String(value).toLowerCase()) === index
-    );
+  const allowed = requestedLocations(request);
+  const preferred = Array.isArray(request.preferredLocations) && request.preferredLocations.length
+    ? request.preferredLocations
+    : allowed;
+  const roots = [...preferred, ...allowed].filter((value, index, list) =>
+    list.findIndex((item) => String(item).toLowerCase() === String(value).toLowerCase()) === index
+  );
+  if (!roots.length && request.location) roots.push(request.location);
+  if (!roots.length) roots.push('');
+
+  const hubs = [];
+  for (const root of roots) {
+    const normalized = String(root || '').trim().toLowerCase();
+    const expanded = LOCATION_SEARCH_HUBS[normalized] || [root];
+    for (const place of expanded) {
+      if (!hubs.some((item) => String(item).toLowerCase() === String(place).toLowerCase())) hubs.push(place);
+    }
   }
+
   const plan = [];
+  const desiredWorkType = request.filters?.workType || request.preferredWorkType || null;
   const add = (keyword, loc) => {
-    const key = (String(keyword || '').trim().toLowerCase() + '|' + String(loc || '').trim().toLowerCase());
+    const key = String(keyword || '').trim().toLowerCase() + '|' + String(loc || '').trim().toLowerCase();
     if (!keyword || plan.some((item) => item.key === key)) return;
-    plan.push({ key, keyword: String(keyword).trim(), location: String(loc || '').trim() || null });
+    plan.push({
+      key,
+      keyword: String(keyword).trim(),
+      location: String(loc || '').trim() || null,
+      workType: desiredWorkType,
+    });
   };
 
-  // Geographic breadth comes first. A state/country request should not be
-  // reduced to one literal LinkedIn query when hiring is concentrated in hubs.
   for (const place of hubs) add(keywords[0], place || null);
 
-  // Then spend remaining search diversity on role/module variants at the
-  // broad requested geography. This keeps the planner generic while making
-  // SAP-style title fragmentation much less likely to hide valid companies.
-  const broadLocation = location || null;
-  for (const keyword of keywords.slice(1)) add(keyword, broadLocation);
+  const broadLocations = roots.filter(Boolean);
+  for (const keyword of keywords.slice(1)) {
+    for (const root of broadLocations.length ? broadLocations : [null]) {
+      add(keyword, root);
+      if (plan.length >= 30) break;
+    }
+    if (plan.length >= 30) break;
+  }
 
   return plan.slice(0, 20).map(({ key, ...item }) => item);
 }
@@ -1262,10 +1278,11 @@ function droppedSearchFilters(result) {
 
 function searchFilterTrust(result, step, request) {
   const dropped = droppedSearchFilters(result);
+  const requestedWorkType = step?.workType || request?.filters?.workType || request?.preferredWorkType || '';
   return {
     dropped: [...dropped],
     trustedLocation: step?.location && !dropped.has('location') ? String(step.location) : '',
-    trustedWorkType: request?.filters?.workType && !dropped.has('work_type') ? String(request.filters.workType) : '',
+    trustedWorkType: requestedWorkType && !dropped.has('work_type') ? String(requestedWorkType) : '',
   };
 }
 
