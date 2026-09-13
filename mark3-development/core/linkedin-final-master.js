@@ -7,28 +7,13 @@ const STATE_FILE = path.join(ROOT, 'state.json');
 
 const FINAL_MASTER_HEADERS = [
   'COMPANY NAME',
-  'COMPANY LINKEDIN',
-  'WEBSITE',
-  'PRIMARY SAP ROLE',
-  'PRIMARY JOB LINK',
-  'JOB LOCATION',
-  'STATE',
-  'WORK TYPE',
-  'EMPLOYEE RANGE',
-  'HIRING SIGNAL',
-  'OTHER MATCHING SAP JOBS',
-  'FIRST FOUND',
-  'LAST VERIFIED',
-  'SOURCE MISSION',
-  'LEAD STATUS',
-  'CONTACT NAME',
-  'CONTACT TITLE',
-  'CONTACT LINKEDIN',
-  'EMAIL',
+  'COMPANY LINK',
+  'JOB LINK',
+  'LOCATION',
+  'NO. OF APPLICANTS',
   'PHONE',
-  'ENRICHMENT STATUS',
-  'NOTES',
-  'NEXT ACTION',
+  'EMAIL',
+  'REMARKS',
 ];
 
 function nowIso() { return new Date().toISOString(); }
@@ -201,6 +186,7 @@ function registerRecords(records = [], metadata = {}) {
       primaryRole: record.role || previous.primaryRole || '',
       primaryJobUrl: record.jobUrl || previous.primaryJobUrl || '',
       location: record.location || previous.location || '',
+      applicants: record.applicants || previous.applicants || '',
       workType: record.workType || previous.workType || '',
       employeeCount: record.employeeCount || previous.employeeCount || null,
       jobs,
@@ -227,38 +213,31 @@ function remainingForTarget(total) {
   return { desired, current, remaining: Math.max(0, desired - current) };
 }
 
-function rowFor(record = {}, metadata = {}) {
+function contactRemark(name, title) {
+  const cleanName = String(name || '').trim();
+  const cleanTitle = String(title || '').trim();
+  if (!cleanName && !cleanTitle) return '';
+  if (!cleanTitle) return cleanName;
+  if (!cleanName) return cleanTitle;
+  return `${cleanName} (${cleanTitle})`;
+}
+
+function rowFor(record = {}) {
   const key = companyKey(record);
   const state = loadState();
   const previous = state.companies[key] || {};
-  const otherJobs = (previous.jobs || [])
-    .filter((job) => job.jobUrl && job.jobUrl !== record.jobUrl)
-    .map((job) => [job.role, job.jobUrl].filter(Boolean).join(' — '))
-    .join('\n');
+  const remark = previous.remarks
+    || contactRemark(previous.contactName, previous.contactTitle)
+    || '';
   return [
-    record.company || '',
-    normalizeLinkedIn(record.linkedin),
-    record.website || '',
-    record.role || '',
-    record.jobUrl || '',
-    record.location || '',
-    metadata.state || '',
-    record.workType || '',
-    record.employeeCount?.label || record.employeeRange || '',
-    record.hiringSignal || '',
-    otherJobs,
-    previous.firstSeenAt || metadata.firstSeenAt || nowIso(),
-    metadata.verifiedAt || nowIso(),
-    metadata.missionId || '',
-    'VERIFIED',
-    previous.contactName || '',
-    previous.contactTitle || '',
-    previous.contactLinkedin || '',
-    previous.email || record.email || '',
+    record.company || previous.company || '',
+    normalizeLinkedIn(record.linkedin) || previous.linkedin || '',
+    record.jobUrl || previous.primaryJobUrl || '',
+    record.location || previous.location || '',
+    record.applicants || previous.applicants || '',
     previous.phone || record.phone || '',
-    previous.enrichmentStatus || '',
-    previous.notes || '',
-    previous.nextAction || '',
+    previous.email || record.email || '',
+    remark,
   ];
 }
 
@@ -273,6 +252,7 @@ function contactUpdate(key, contact = {}) {
     email: contact.email || state.companies[key].email || '',
     phone: contact.phone || state.companies[key].phone || '',
     enrichmentStatus: contact.status || state.companies[key].enrichmentStatus || '',
+    remarks: contact.remarks || contactRemark(contact.name, contact.title) || state.companies[key].remarks || '',
   };
   saveState(state);
   return state.companies[key];
@@ -298,6 +278,7 @@ module.exports = {
   masterSheetUrl,
   masterCount,
   remainingForTarget,
+  contactRemark,
   rowFor,
   contactUpdate,
 };
