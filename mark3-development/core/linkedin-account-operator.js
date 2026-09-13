@@ -2775,8 +2775,8 @@ function rowFor(record, headers) {
 
 function isBuildFinalMasterRequest(text) {
   const value = String(text || '').trim();
-  const explicitBuild = /\b(?:build|create|rebuild|migrate|generate)\b[\s\S]{0,40}\b(?:final\s+master|final\s+(?:lead\s+)?database|clean\s+master)\b/i.test(value)
-    || /^make\s+(?:me\s+)?(?:a|the)\s+(?:clean\s+)?final\s+master\b/i.test(value);
+  const explicitBuild = /\b(?:build|create|rebuild|migrate|generate)\b[\s\S]{0,40}\b(?:final(?:\s+linkedin)?\s+master|final\s+(?:lead\s+)?database|clean\s+master)\b/i.test(value)
+    || /^make\s+(?:me\s+)?(?:a|the)\s+(?:clean\s+)?final(?:\s+linkedin)?\s+master\b/i.test(value);
   if (!explicitBuild) return false;
 
   // A research request that merely mentions the Final Master as its destination
