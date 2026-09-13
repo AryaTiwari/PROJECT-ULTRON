@@ -939,6 +939,36 @@ function locationEvidenceMatches(record, requestedLocation, options = {}) {
   return locationEvidenceDetails(record, requestedLocation, options).matched;
 }
 
+function requestedLocations(request = {}) {
+  const allowed = Array.isArray(request.allowedLocations) ? request.allowedLocations.filter(Boolean) : [];
+  if (allowed.length) return allowed;
+  return request.location ? [request.location] : [];
+}
+
+function locationEvidenceDetailsForRequest(record, request = {}, options = {}) {
+  const preferred = Array.isArray(request.preferredLocations) && request.preferredLocations.length
+    ? request.preferredLocations
+    : requestedLocations(request);
+  const allowed = requestedLocations(request);
+  if (!allowed.length) return { matched: true, source: 'none', label: '', requestedLocation: '' };
+
+  const ordered = [...preferred, ...allowed].filter((value, index, list) =>
+    list.findIndex((item) => String(item).toLowerCase() === String(value).toLowerCase()) === index
+  );
+
+  let firstConflict = null;
+  for (const location of ordered) {
+    const details = locationEvidenceDetails(record, location, options);
+    if (details.matched) return { ...details, requestedLocation: location };
+    if (!firstConflict && details.source === 'job_conflict') firstConflict = { ...details, requestedLocation: location };
+  }
+  return firstConflict || { matched: false, source: '', label: '', requestedLocation: ordered[0] || '' };
+}
+
+function locationEvidenceMatchesRequest(record, request = {}, options = {}) {
+  return locationEvidenceDetailsForRequest(record, request, options).matched;
+}
+
 function workTypeEvidenceDetails(record, requestedWorkType) {
   const requested = String(requestedWorkType || '').trim().toLowerCase();
   if (!requested) return { matched: true, source: 'none', value: '' };
@@ -1006,7 +1036,7 @@ function companyFilterFailures(record, request = {}) {
   const failures = [];
   if (request.hiring && !record?.hiringVerified) failures.push('hiring');
   if (!passesEmployeeFilter(record, request.filters || {})) failures.push('employee_count');
-  if (request.location && !locationEvidenceMatches(record, request.location, {
+  if (requestedLocations(request).length && !locationEvidenceMatchesRequest(record, request, {
     allowJobEvidence: Boolean(request.hiring),
     allowCompanyEvidence: request.locationScope !== 'job',
   })) failures.push('location');
@@ -1280,7 +1310,7 @@ function prioritizedJobIds(jobMeta) {
 function jobLevelFailures(record, request = {}) {
   const failures = [];
   if (request.hiring && !record?.hiringVerified) failures.push('hiring');
-  if (request.location && !locationEvidenceMatches(record, request.location, {
+  if (requestedLocations(request).length && !locationEvidenceMatchesRequest(record, request, {
     allowJobEvidence: true,
     allowCompanyEvidence: request.locationScope === 'company',
   })) failures.push('location');
