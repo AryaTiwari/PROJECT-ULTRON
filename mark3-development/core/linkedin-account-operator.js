@@ -1804,6 +1804,10 @@ async function companyMission(request) {
 
       jobCandidatesPassed++;
 
+      // A mastered company cannot contribute to the new-company target.
+      // Exclude it before spending a profile-verification call.
+      if (!request.allowPreviouslySeenCompanies && finalMaster.seen(record)) continue;
+
       const normalizedCompany = linkedinPublic.normalizeLinkedInEntityUrl(record.linkedin, 'company');
       const companyKey = normalizedCompany?.slug || String(record.company || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
       if (!companyKey) {

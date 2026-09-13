@@ -181,7 +181,14 @@ function resumeSaved(text) {
   const m = candidates.sort((a,b) => Object.keys(b.responses || {}).length - Object.keys(a.responses || {}).length)[0];
   if (!m) throw new Error('No saved LinkedIn job discovery mission was found. No new mission was created.');
   if (['created','searching','writing_sheet'].includes(m.status)) return { ...summary(m), alreadyActive: true };
-  if (m.research?.records?.length) throw new Error('Verified research already exists; recover its Sheet output before restarting verification.');
+  if (m.research?.records?.length) {
+    const output = m.result?.linkedinMission;
+    if (!output?.sheetUrl || !['completed','partial'].includes(output.status) || output.destinationWriteError) {
+      throw new Error('Verified research exists without a confirmed successful output. Recover its Sheet output before continuing.');
+    }
+    m.researchHistory = [...(m.researchHistory || []), { research: m.research, result: m.result, at: new Date().toISOString() }];
+    m.research = null;
+  }
   if (m.research && Array.isArray(m.research.records) && m.research.records.length === 0) m.research = null;
   const compiler = require('./linkedin-mission-contract');
   const previous = m.prepared.request;

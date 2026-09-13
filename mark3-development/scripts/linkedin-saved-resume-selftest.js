@@ -30,6 +30,14 @@ async function until(fn) { for (let i=0;i<100;i++) { if(fn())return; await new P
   assert.equal(resumed.id,initial.id);
   await until(()=>runner.get(initial.id).status==='completed');
   assert.equal(runner.list().length,1);
+  const partial = runner.get(initial.id);
+  partial.status = 'partial';
+  partial.research = { records: [{ company: 'Saved company' }] };
+  partial.result = { linkedinMission: { status: 'completed', sheetUrl: 'https://docs.google.com/spreadsheets/d/test/edit' } };
+  fs.writeFileSync(path.join(root,'.ultron','linkedin-missions',`${initial.id}.json`),JSON.stringify(partial));
+  runner.resumeSaved(text);
+  await until(()=>runner.get(initial.id).status==='completed');
+  assert.equal(runner.get(initial.id).researchHistory[0].research.records[0].company, 'Saved company');
   assert.equal(compiler.workType(text).strictness,'preference');
   console.log('Saved resume preserves mission identity and discovered jobs without a fresh search.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
