@@ -220,7 +220,7 @@ function registerRecords(records = [], metadata = {}) {
       linkedin: normalizeLinkedIn(record.linkedin) || previous.linkedin || '',
       website: record.website || previous.website || '',
       firstSeenAt: previous.firstSeenAt || metadata.firstSeenAt || nowIso(),
-      lastVerifiedAt: metadata.verifiedAt || nowIso(),
+      lastVerifiedAt: metadata.verifiedAt || record.lastVerifiedAt || previous.lastVerifiedAt || nowIso(),
       firstSeenMission: previous.firstSeenMission || metadata.missionId || null,
       lastMission: metadata.missionId || previous.lastMission || null,
       masterRow: metadata.rowsByKey?.[key] || previous.masterRow || null,
