@@ -30,11 +30,17 @@ const waitFor = async predicate => {
   assert.equal(maximum, 1); assert.equal(live, 2);
   assert.equal(runner.get(a.id).cacheHits, 1);
   assert.equal(runner.get(a.id).research.records[0].company, 'Acme');
-  runner.start(async () => { const e = new Error('cooldown'); e.code = 'LINKEDIN_COOLDOWN'; throw e; });
+  runner.start(async () => {
+    const e = new Error('LinkedIn safety window exhausted');
+    e.code = 'LINKEDIN_COOLDOWN_ACTIVE';
+    e.cooldownUntil = new Date(Date.now() + 80).toISOString();
+    throw e;
+  });
   const c = runner.enqueue({});
-  await waitFor(() => runner.get(c.id).status === 'paused_rate_limit');
+  await waitFor(() => runner.get(c.id).status === 'waiting_safety');
+  assert.ok(runner.get(c.id).progress.nextEligibleAt);
+  assert.equal(runner.isSafetyWaitCode('LINKEDIN_BURST_CAP'), true);
   runner.start(async () => ({ text: 'resumed' }));
-  runner.control(c.id, 'resume');
   await waitFor(() => runner.get(c.id).status === 'completed');
   assert.throws(() => runner.get('../escape'));
 
@@ -74,5 +80,5 @@ const waitFor = async predicate => {
   assert.equal(runner.get(auto.id).continuationCount, 1);
   assert.equal(finalMaster.masterCount(), 2);
 
-  console.log('LinkedIn mission runner tests passed: quick enqueue, serialization, persistent research, call reuse, cooldown pause/resume and automatic safe-window master-target continuation.');
+  console.log('LinkedIn mission runner tests passed: quick enqueue, serialization, persistent research, call reuse, automatic safety-window waiting/resume and master-target continuation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
