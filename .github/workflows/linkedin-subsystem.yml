@@ -10,6 +10,7 @@ on:
       - 'mark3-development/scripts/apollo-company-identity-selftest.js'
       - 'mark3-development/scripts/linkedin-*.py'
       - 'mark3-development/.env.example'
+      - 'mark3-development/package.json'
       - '.github/workflows/linkedin-subsystem.yml'
   pull_request:
     paths:
@@ -19,6 +20,7 @@ on:
       - 'mark3-development/scripts/apollo-company-identity-selftest.js'
       - 'mark3-development/scripts/linkedin-*.py'
       - 'mark3-development/.env.example'
+      - 'mark3-development/package.json'
       - '.github/workflows/linkedin-subsystem.yml'
 
 jobs:
@@ -31,6 +33,12 @@ jobs:
           node-version: '22'
       - name: Create non-secret test environment
         run: cp .env.example .env
+      - name: Install Mark 3 dependencies
+        working-directory: mark3-development
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Smoke-test official MCP client SDK
+        working-directory: mark3-development
+        run: node --input-type=module -e "await import('@modelcontextprotocol/client'); await import('@modelcontextprotocol/client/stdio'); console.log('Official MCP client SDK imports passed.')"
       - name: Run LinkedIn account subsystem regression
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-account-selftest.js
