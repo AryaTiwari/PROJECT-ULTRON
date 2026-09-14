@@ -7,10 +7,13 @@ const mcp = require('../core/linkedin-mcp-client');
 const joeyism = require('../core/linkedin-joeyism-bridge');
 const sheetOperator = require('../core/google-sheets-operator');
 const apollo = require('../core/apollo-enrichment');
+const routeGuard = require('../core/linkedin-route-guard');
 
 assert.equal(operator.isRequest('Find me 50 companies on LinkedIn that are hiring SAP professionals from Maharashtra'), true);
 assert.equal(operator.isRequest('Find me 30 SAP recruiters on LinkedIn from Pune'), true);
 assert.equal(operator.isRequest('Tell me what LinkedIn is'), false);
+assert.equal(routeGuard.isExplicitLinkedInResearch('LinkedIn only: find 30 SAP companies in Maharashtra'), true);
+assert.equal(routeGuard.isExplicitLinkedInResearch('Tell me what LinkedIn is'), false);
 
 assert.equal(operator.isBuildFinalMasterRequest('Build the final LinkedIn master'), true);
 assert.equal(operator.isBuildFinalMasterRequest('Create a clean final master from verified historical missions'), true);
