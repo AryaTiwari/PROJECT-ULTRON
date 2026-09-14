@@ -40,14 +40,14 @@ function runtimeAllowsTestBypass(scriptPath = process.argv?.[1], nodeEnv = proce
 }
 
 function settings() {
-  const speedProfile = String(process.env.ULTRON_M3_LINKEDIN_SPEED_PROFILE || 'balanced-fast').trim().toLowerCase();
+  const speedProfile = String(process.env.ULTRON_M3_LINKEDIN_SPEED_PROFILE || 'fast-safe').trim().toLowerCase();
   const migrateLegacy = speedProfile !== 'custom';
-  const profiledNumber = (name, fallback, legacyDefault, min, max) => {
+  const profiledNumber = (name, fallback, legacyDefaults, min, max) => {
     const raw = process.env[name];
     const parsed = Number(raw);
-    const value = migrateLegacy && Number.isFinite(parsed) && parsed === legacyDefault
-      ? fallback
-      : (Number.isFinite(parsed) ? parsed : fallback);
+    const legacy = Array.isArray(legacyDefaults) ? legacyDefaults : [legacyDefaults];
+    const shouldMigrate = migrateLegacy && Number.isFinite(parsed) && legacy.some((value) => Number(value) === parsed);
+    const value = shouldMigrate ? fallback : (Number.isFinite(parsed) ? parsed : fallback);
     return Math.max(min, Math.min(max, value));
   };
 
@@ -57,18 +57,22 @@ function settings() {
       && booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
     testMissionToolMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_MISSION_TOOL_MAX', 120, 12, 120),
     testJobSearchMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_JOB_SEARCH_MAX', 20, 4, 25),
-    minGapMs: profiledNumber('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 6000, 9000, 5000, 60000),
-    jitterMs: profiledNumber('ULTRON_M3_LINKEDIN_JITTER_MS', 1200, 4000, 0, 15000),
-    burstMax: profiledNumber('ULTRON_M3_LINKEDIN_BURST_MAX', 12, 10, 2, 12),
-    burstWindowMs: profiledNumber('ULTRON_M3_LINKEDIN_BURST_WINDOW_MS', 8 * 60 * 1000, 10 * 60 * 1000, 5 * 60 * 1000, 30 * 60 * 1000),
-    hourlyMax: profiledNumber('ULTRON_M3_LINKEDIN_HOURLY_MAX', 28, 24, 2, 30),
-    dailyMax: profiledNumber('ULTRON_M3_LINKEDIN_DAILY_MAX', 90, 75, 5, 120),
-    missionToolMax: numberSetting('ULTRON_M3_LINKEDIN_MISSION_TOOL_MAX', 12, 3, 20),
-    rateLimitCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_RATE_LIMIT_COOLDOWN_MS', 30 * 60 * 1000, 5 * 60 * 1000, 6 * 60 * 60 * 1000),
-    errorBackoffCooldownMs: numberSetting('ULTRON_M3_LINKEDIN_ERROR_BACKOFF_MS', 10 * 60 * 1000, 5 * 60 * 1000, 60 * 60 * 1000),
-    deepProfilesPerMission: numberSetting('ULTRON_M3_LINKEDIN_DEEP_PROFILE_MAX', 8, 1, 12),
+
+    // Fast-safe defaults: higher throughput without disabling account safety.
+    // Existing legacy/balanced-fast values automatically migrate unless the
+    // operator explicitly chooses ULTRON_M3_LINKEDIN_SPEED_PROFILE=custom.
+    minGapMs: profiledNumber('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 5000, [9000, 6000], 5000, 60000),
+    jitterMs: profiledNumber('ULTRON_M3_LINKEDIN_JITTER_MS', 500, [4000, 1200], 0, 15000),
+    burstMax: profiledNumber('ULTRON_M3_LINKEDIN_BURST_MAX', 12, [10, 12], 2, 12),
+    burstWindowMs: profiledNumber('ULTRON_M3_LINKEDIN_BURST_WINDOW_MS', 5 * 60 * 1000, [10 * 60 * 1000, 8 * 60 * 1000], 5 * 60 * 1000, 30 * 60 * 1000),
+    hourlyMax: profiledNumber('ULTRON_M3_LINKEDIN_HOURLY_MAX', 30, [24, 28], 2, 30),
+    dailyMax: profiledNumber('ULTRON_M3_LINKEDIN_DAILY_MAX', 100, [75, 90], 5, 120),
+    missionToolMax: profiledNumber('ULTRON_M3_LINKEDIN_MISSION_TOOL_MAX', 16, [12], 3, 20),
+    rateLimitCooldownMs: profiledNumber('ULTRON_M3_LINKEDIN_RATE_LIMIT_COOLDOWN_MS', 10 * 60 * 1000, [30 * 60 * 1000], 5 * 60 * 1000, 6 * 60 * 60 * 1000),
+    errorBackoffCooldownMs: profiledNumber('ULTRON_M3_LINKEDIN_ERROR_BACKOFF_MS', 5 * 60 * 1000, [10 * 60 * 1000], 5 * 60 * 1000, 60 * 60 * 1000),
+    deepProfilesPerMission: profiledNumber('ULTRON_M3_LINKEDIN_DEEP_PROFILE_MAX', 10, [8], 1, 12),
     maxJobPages: numberSetting('ULTRON_M3_LINKEDIN_JOB_MAX_PAGES', 3, 1, 5),
-    jobDetailMax: numberSetting('ULTRON_M3_LINKEDIN_JOB_DETAIL_MAX', 2, 0, 4),
+    jobDetailMax: profiledNumber('ULTRON_M3_LINKEDIN_JOB_DETAIL_MAX', 4, [2], 0, 4),
   };
 }
 
