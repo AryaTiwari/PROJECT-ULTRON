@@ -126,8 +126,11 @@ function missionProgressText(job) {
   if (Number.isFinite(Number(p.uniqueJobIds))) parts.push(`unique jobs: ${p.uniqueJobIds}`);
   if (Number.isFinite(Number(p.jobDetailsChecked))) parts.push(`job details: ${p.jobDetailsChecked}`);
   if (Number.isFinite(Number(p.companyProfilesChecked))) parts.push(`company profiles: ${p.companyProfilesChecked}`);
-  if (Number.isFinite(Number(p.verifiedCompanies))) parts.push(`verified companies: ${p.verifiedCompanies}`);
-  if (Number.isFinite(Number(p.remaining))) parts.push(`remaining this run: ${p.remaining}`);
+  if (Number.isFinite(Number(p.verifiedCompanies))) parts.push(`verified companies this batch: ${p.verifiedCompanies}`);
+  if (Number.isFinite(Number(job.masterCurrent))) parts.push(`Final Master total: ${job.masterCurrent}`);
+  if (Number.isFinite(Number(job.masterRemaining))) parts.push(`remaining to target: ${job.masterRemaining}`);
+  if (!Number.isFinite(Number(job.masterRemaining)) && Number.isFinite(Number(p.remaining))) parts.push(`remaining this run: ${p.remaining}`);
+  if (Number.isFinite(Number(p.durableCompanyProfileHits))) parts.push(`durable company profiles reused: ${p.durableCompanyProfileHits}`);
   if (Number.isFinite(Number(p.budgetUsed)) && Number.isFinite(Number(p.budgetMaximum))) {
     parts.push(`safe-call budget: ${p.budgetUsed}/${p.budgetMaximum}`);
   }
