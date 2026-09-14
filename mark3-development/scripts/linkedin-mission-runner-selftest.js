@@ -24,8 +24,13 @@ const waitFor = async predicate => {
     runner.persistResearch({ records: [{ company: 'Acme' }] });
     active--; return { text: 'done' };
   });
-  const a = runner.enqueue({}); const b = runner.enqueue({});
+  const a = runner.enqueue({ request: { entityMode: 'company', topic: 'Python', count: 5, filters: {} } });
+  const duplicateA = runner.enqueue({ request: { entityMode: 'company', topic: 'Python', count: 5, filters: {} } });
+  const b = runner.enqueue({ request: { entityMode: 'company', topic: 'Java', count: 5, filters: {} } });
   assert.equal(a.status, 'created');
+  assert.equal(duplicateA.id, a.id);
+  assert.equal(duplicateA.alreadyActive, true);
+  assert.notEqual(b.id, a.id);
   await waitFor(() => runner.get(b.id).status === 'completed');
   assert.equal(maximum, 1); assert.equal(live, 2);
   assert.equal(runner.get(a.id).cacheHits, 1);
@@ -80,5 +85,5 @@ const waitFor = async predicate => {
   assert.equal(runner.get(auto.id).continuationCount, 1);
   assert.equal(finalMaster.masterCount(), 2);
 
-  console.log('LinkedIn mission runner tests passed: quick enqueue, serialization, persistent research, call reuse, automatic safety-window waiting/resume and master-target continuation.');
+  console.log('LinkedIn mission runner tests passed: quick enqueue, equivalent-mission dedupe, serialization, persistent research, call reuse, automatic safety-window waiting/resume and master-target continuation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
