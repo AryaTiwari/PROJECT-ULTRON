@@ -156,7 +156,6 @@ async function syncAuthoritativeSheet(m, options = {}) {
   }
   const targetTotal = Number(request.targetTotal || 0);
   const remaining = Math.max(0, targetTotal - Number(snap.uniqueCompanies || 0));
-  m.lastMasterCount = Number(snap.uniqueCompanies || 0);
   m.progress = {
     ...(m.progress || {}),
     authoritativeSheet: true,
@@ -260,7 +259,13 @@ function start(fn) {
       continue;
     }
 
-    if (['waiting_safety', 'waiting_retry'].includes(m.status)) {
+    if (m.status === 'waiting_retry') {
+      queueOnce(m.id);
+      schedulePumpAt(m.notBefore || new Date(Date.now() + 10000).toISOString());
+      continue;
+    }
+
+    if (m.status === 'waiting_safety') {
       const recalculated = policy.nextEligibleAt?.();
       if (recalculated) {
         m.notBefore = recalculated;
