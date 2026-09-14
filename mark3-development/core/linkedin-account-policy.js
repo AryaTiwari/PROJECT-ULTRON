@@ -104,6 +104,19 @@ function prune(state, now = Date.now()) {
   const cutoff = now - 24 * 60 * 60 * 1000;
   state.events = (state.events || []).filter((event) => Number(event.at || 0) >= cutoff);
   if (state.cooldownUntil && Date.parse(state.cooldownUntil) <= now) state.cooldownUntil = null;
+
+  // Older builds could create a local error-backoff cooldown from MCP startup
+  // failures before those failures were separated from real LinkedIn account
+  // safety signals. Preserve any explicit LinkedIn rate-limit cooldown and any
+  // new-format counted "other" backoff, but clear legacy-only infrastructure
+  // backoff so upgrading the runtime can actually recover.
+  if (state.cooldownUntil && !state.manualLock) {
+    const hasRateLimit = state.events.some((event) => String(event.errorKind || '').toLowerCase() === 'rate-limit');
+    const hasNewCountedOther = state.events.some((event) =>
+      event.countsTowardSafety === true && String(event.errorKind || '').toLowerCase() === 'other'
+    );
+    if (!hasRateLimit && !hasNewCountedOther) state.cooldownUntil = null;
+  }
   return state;
 }
 
@@ -131,11 +144,18 @@ function classifyError(error) {
 }
 
 function eventCountsTowardSafety(event = {}) {
+  if (event.countsTowardSafety === true) return true;
   if (event.countsTowardSafety === false) return false;
-  // Backward-compatible repair for safety-state files written by older builds:
-  // transient transport failures and authentication/setup failures were
-  // mistakenly stored in the same event array as real LinkedIn account calls.
-  return !['transient', 'infrastructure', 'auth'].includes(String(event.errorKind || '').toLowerCase());
+
+  // Backward-compatible migration for safety-state files written before
+  // countsTowardSafety existed. Confirmed successful calls and explicit
+  // LinkedIn rate-limit/checkpoint events remain counted. Ambiguous legacy
+  // failures (especially old MCP startup/transport errors classified as
+  // "other") no longer burn account-call quota after an upgrade.
+  if (event.ok === true) return true;
+  const kind = String(event.errorKind || '').toLowerCase();
+  if (kind === 'rate-limit' || kind === 'manual-lock') return true;
+  return false;
 }
 
 function usage(state = loadState(), now = Date.now()) {
