@@ -423,7 +423,9 @@ function cachedExact(tool, args, options = {}) {
   if (/^(?:get_job_details|get_company_profile|get_person_profile)$/.test(tool)) {
     const crossMissionTtl = tool === 'get_job_details'
       ? (m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000)
-      : 24 * 60 * 60 * 1000;
+      : tool === 'get_company_profile'
+        ? 7 * 24 * 60 * 60 * 1000
+        : 24 * 60 * 60 * 1000;
     for (const compatible of compatibleDiscoveryMissions(m, tool)) {
       const cached = compatible.responses?.[key];
       if (!cached) continue;
