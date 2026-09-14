@@ -805,10 +805,43 @@ function applicantCountFromText(text, company = '') {
   const source = String(text || '');
   const companyKey = String(company || '').trim();
   const index = companyKey ? source.toLowerCase().indexOf(companyKey.toLowerCase()) : -1;
-  if (companyKey && index < 0) return '';
-  const scoped = companyKey ? source.slice(Math.max(0, index - 350), index + companyKey.length + 900) : source;
-  const match = scoped.match(/\b(\d[\d,]*\+?)\s+(?:people\s+clicked\s+apply|applicants?|applications?)\b/i);
-  return match?.[1] || '';
+  const scopes = [];
+  if (companyKey && index >= 0) {
+    scopes.push(source.slice(Math.max(0, index - 500), index + companyKey.length + 1400));
+  }
+  scopes.push(source);
+  const patterns = [
+    /\b(\d[\d,]*\+?)\s+(?:people\s+clicked\s+apply|applicants?|applications?)\b/i,
+    /\b(?:over|more\s+than)\s+(\d[\d,]*\+?)\s+(?:applicants?|applications?)\b/i,
+    /\b(?:applicant(?:_|\s)?count|applications?)\s*[:=]\s*(\d[\d,]*\+?)\b/i,
+  ];
+  for (const scoped of scopes) {
+    for (const pattern of patterns) {
+      const match = scoped.match(pattern);
+      if (match?.[1]) return match[1];
+    }
+  }
+  return '';
+}
+
+function applicantCountFromDetail(detail, company = '') {
+  const visited = new Set();
+  function scan(value, depth = 0) {
+    if (depth > 7 || value == null || typeof value !== 'object') return '';
+    if (visited.has(value)) return '';
+    visited.add(value);
+    for (const [key, item] of Object.entries(value)) {
+      if (/applicant|application|people.*clicked.*apply/i.test(String(key))) {
+        if (typeof item === 'number' && Number.isFinite(item)) return String(item);
+        const direct = String(item ?? '').match(/\b(\d[\d,]*\+?)\b/);
+        if (direct?.[1]) return direct[1];
+      }
+      const nested = scan(item, depth + 1);
+      if (nested) return nested;
+    }
+    return '';
+  }
+  return scan(detail) || applicantCountFromText(flattenText(detail), company);
 }
 
 function employeeCountFromText(text) {
@@ -1985,7 +2018,7 @@ async function companyMission(request) {
       record.hiringSignal = detailText.slice(0, 1000) || `Verified LinkedIn job ${jobId}.`;
       record.hiringVerified = Boolean(detailText && preferred);
       record.workType = detectWorkType(detailText);
-      record.applicants = applicantCountFromText(detailText, record.company);
+      record.applicants = applicantCountFromDetail(detail, record.company);
       record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified, deep: true });
       record.searchProvenance = {
         title: meta.title || '',
@@ -2012,7 +2045,7 @@ async function companyMission(request) {
           record.hiringSignal = mergeEvidenceText(record.hiringSignal, fallbackText.slice(0, 1200), 2200);
           record.role = jobTitleFromDetail(fallbackDetail, record.role || meta.title || '');
           record.workType = detectWorkType(record.jobEvidenceText);
-          record.applicants = record.applicants || applicantCountFromText(fallbackText, fallbackCompany?.text || record.company);
+          record.applicants = record.applicants || applicantCountFromDetail(fallbackDetail, fallbackCompany?.text || record.company);
           record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'joeyism-structured-job-fallback'])];
 
           if (fallbackCompany) {
@@ -3246,7 +3279,7 @@ function rowFor(record, headers) {
   return headers.map((header) => {
     const key = headerKey(header);
     if (key === 'name') return record.name || '';
-    if (key === 'company') return record.company || '';
+    if (key === 'company') return finalMaster.cleanCompanyDisplay(record.company || '');
     if (key === 'role') return record.role || '';
     if (key === 'jobLink') return record.jobUrl || '';
     if (key === 'linkedin') return record.linkedin || '';
@@ -3284,7 +3317,7 @@ function isBuildFinalMasterRequest(text) {
 function historicalVerifiedCompanyRecords(options = {}) {
   const state = loadState();
   const topic = String(options.topic || 'SAP');
-  const workType = options.workType === undefined ? 'remote' : options.workType;
+  const workType = options.workType === undefined ? null : options.workType;
   const employeeMax = options.employeeMax === undefined ? 1000 : options.employeeMax;
   const records = [];
   for (const mission of state.missions || []) {
@@ -3425,21 +3458,10 @@ async function reconcileFinalMasterRegistry(request = {}) {
     records.push(merged);
   }
 
-  if (invalidRows.length && Number.isInteger(sheetId)) {
-    const requests = invalidRows
-      .sort((a, b) => b - a)
-      .map((startIndex) => ({
-        deleteDimension: {
-          range: { sheetId, dimension: 'ROWS', startIndex, endIndex: startIndex + 1 },
-        },
-      }));
-    await apiRequest(`${API}/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
-      method: 'POST',
-      body: JSON.stringify({ requests }),
-    });
-  }
-
-  finalMaster.replaceMasterRecords(records, { missionId: 'sheet-reconciliation' });
+  // Reconciliation may affect how many rows count toward the current mission,
+  // but it must never delete historical verified rows from the canonical master.
+  // Keep the registry additive instead of replacing it with a filtered subset.
+  finalMaster.registerRecords(records, { missionId: 'sheet-reconciliation', master: true });
   for (const record of records) {
     const key = finalMaster.companyKey(record);
     if (!key) continue;
@@ -3452,7 +3474,8 @@ async function reconcileFinalMasterRegistry(request = {}) {
   return {
     count: records.length,
     records,
-    removedInvalid: invalidRows.length,
+    removedInvalid: 0,
+    preservedNonMatchingRows: invalidRows.length,
     requirements,
   };
 }
@@ -3809,6 +3832,7 @@ module.exports = {
   jobIdsFromResult,
   qualityScore,
   applicantCountFromText,
+  applicantCountFromDetail,
   employeeCountFromText,
   passesEmployeeFilter,
   scopedCompanyEvidence,
