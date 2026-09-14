@@ -233,8 +233,33 @@ function start(fn) {
   executor = fn;
   const missions = list();
   const newestLegacySafetyPause = missions.find((mission) => mission.status === 'paused_rate_limit') || null;
+  const newestRecoverablePersistent = missions.find((mission) =>
+    persistentTarget(mission)
+    && (
+      ['partial', 'paused_restart'].includes(mission.status)
+      || (mission.status === 'failed' && isRetryableMissionError(mission.error || {}))
+    )
+  ) || null;
 
   for (const m of missions) {
+    if (newestRecoverablePersistent && m.id === newestRecoverablePersistent.id) {
+      m.research = null;
+      m.status = 'created';
+      m.control = null;
+      m.notBefore = null;
+      m.error = null;
+      m.progress = {
+        ...(m.progress || {}),
+        phase: 'persistent_recovery',
+        persistentUntilTarget: true,
+        recoveredAt: new Date().toISOString(),
+      };
+      save(m, false);
+      queueOnce(m.id);
+      setImmediate(pump);
+      continue;
+    }
+
     if (['waiting_safety', 'waiting_retry'].includes(m.status)) {
       const recalculated = policy.nextEligibleAt?.();
       if (recalculated) {
