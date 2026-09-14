@@ -510,22 +510,6 @@ async function repairFinalMasterSheetSchema(url = finalMaster.masterSheetUrl()) 
   }));
   await sheets.writeCells(spreadsheetId, headerChanges);
 
-  if (gridColumns > finalMaster.FINAL_MASTER_HEADERS.length) {
-    await apiRequest(`${API}/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
-      method: 'POST',
-      body: JSON.stringify({ requests: [{
-        deleteDimension: {
-          range: {
-            sheetId,
-            dimension: 'COLUMNS',
-            startIndex: finalMaster.FINAL_MASTER_HEADERS.length,
-            endIndex: gridColumns,
-          },
-        },
-      }] }),
-    });
-  }
-
   const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(sheetName)}!A2:H`);
   const cleanup = [];
   let cleanedContacts = 0;
@@ -544,18 +528,9 @@ async function repairFinalMasterSheetSchema(url = finalMaster.masterSheetUrl()) 
     const phone = String(row[5] || '').trim();
     const email = String(row[6] || '').trim();
     const remarks = String(row[7] || '').trim();
-    if (phone && (!plausiblePhone(phone) || phone === applicants)) {
-      cleanup.push({ range: sheets.cellRange(sheetName, rowNumber, 5), value: '' });
-      cleanedContacts++;
-    }
-    if (email && (!plausibleEmail(email) || email === applicants)) {
-      cleanup.push({ range: sheets.cellRange(sheetName, rowNumber, 6), value: '' });
-      cleanedContacts++;
-    }
-    if (remarks && (remarks === applicants || /^\d+(?:\.\d+)?$/.test(remarks))) {
-      cleanup.push({ range: sheets.cellRange(sheetName, rowNumber, 7), value: '' });
-      cleanedContacts++;
-    }
+    if (phone && (!plausiblePhone(phone) || phone === applicants)) cleanedContacts++;
+    if (email && (!plausibleEmail(email) || email === applicants)) cleanedContacts++;
+    if (remarks && (remarks === applicants || /^\d+(?:\.\d+)?$/.test(remarks))) cleanedContacts++;
   }
   if (cleanup.length) await sheets.writeCells(spreadsheetId, cleanup);
 
@@ -570,8 +545,10 @@ async function repairFinalMasterSheetSchema(url = finalMaster.masterSheetUrl()) 
     spreadsheetId,
     sheetId,
     sheetName,
-    trimmedColumns: Math.max(0, gridColumns - finalMaster.FINAL_MASTER_HEADERS.length),
-    cleanedContacts,
+    trimmedColumns: 0,
+    preservedExtraColumns: Math.max(0, gridColumns - finalMaster.FINAL_MASTER_HEADERS.length),
+    cleanedContacts: 0,
+    preservedQuestionableCells: cleanedContacts,
     cleanedNames,
   };
 }
@@ -1347,13 +1324,22 @@ function safetyGateError(budget) {
 }
 
 async function cacheAwareVerificationCall(budget, tool, args) {
-  if (budget.used >= budget.maximum) {
-    const cached = missionRunner.cachedExact?.(tool, args) || { hit: false, value: null };
+  const cached = missionRunner.cachedExact?.(tool, args) || { hit: false, value: null, sourceMissionId: null };
+  if (cached.hit) {
     return {
-      value: cached.hit ? cached.value : null,
+      value: cached.value,
       cacheOnly: true,
-      cacheHit: Boolean(cached.hit),
+      cacheHit: true,
       sourceMissionId: cached.sourceMissionId || null,
+    };
+  }
+
+  if (budget.used >= budget.maximum) {
+    return {
+      value: null,
+      cacheOnly: true,
+      cacheHit: false,
+      sourceMissionId: null,
     };
   }
 
@@ -1550,26 +1536,37 @@ function jobReferenceMap(result) {
   return map;
 }
 
-function jobIdPriority(meta = {}) {
+function jobIdPriority(meta = {}, request = {}) {
   let score = 0;
   const title = String(meta.title || '');
   const keyword = String(meta.bestKeyword || '');
-  const trustedLocations = Array.isArray(meta.trustedLocations) ? meta.trustedLocations : [];
-  const trustedWorkTypes = Array.isArray(meta.trustedWorkTypes) ? meta.trustedWorkTypes : [];
+  const trustedLocations = (Array.isArray(meta.trustedLocations) ? meta.trustedLocations : []).map((value) => String(value).trim().toLowerCase());
+  const trustedWorkTypes = (Array.isArray(meta.trustedWorkTypes) ? meta.trustedWorkTypes : []).map((value) => String(value).trim().toLowerCase());
+  const allowedLocations = requestedLocations(request).map((value) => String(value).trim().toLowerCase());
+  const preferredLocations = (Array.isArray(request.preferredLocations) ? request.preferredLocations : []).map((value) => String(value).trim().toLowerCase());
+
   if (/\bSAP\b/i.test(title)) score += 60;
-  if (/\b(?:FICO|ABAP|S\/4HANA|S4HANA|SuccessFactors|Basis)\b/i.test(title)) score += 18;
+  if (/\b(?:FICO|ABAP|S\/4HANA|S4HANA|SuccessFactors|Basis|BTP|CPI|EWM|TM|BW|HANA|Ariba)\b/i.test(title)) score += 18;
   if (/\bSAP\b/i.test(keyword)) score += 8;
-  if (/\b(?:FICO|ABAP|MM|SD|Basis|S\/4HANA|SuccessFactors)\b/i.test(keyword)) score += 10;
-  if (trustedLocations.some((value) => /^(?:Pune|Mumbai|Navi Mumbai|Nagpur|Thane|Nashik|Maharashtra)$/i.test(String(value)))) score += 16;
-  if (trustedWorkTypes.some((value) => /^remote$/i.test(String(value)))) score += 12;
+  if (/\b(?:FICO|ABAP|MM|SD|Basis|S\/4HANA|SuccessFactors|BTP|CPI|EWM|TM|BW|HANA|Ariba)\b/i.test(keyword)) score += 10;
+
+  const indiaWide = allowedLocations.includes('india');
+  if (indiaWide && trustedLocations.length) score += 12;
+  if (!indiaWide && trustedLocations.some((value) => allowedLocations.some((allowed) => value.includes(allowed) || allowed.includes(value)))) score += 18;
+  if (trustedLocations.some((value) => preferredLocations.some((preferred) => value.includes(preferred) || preferred.includes(value)))) score += 10;
+
+  const preferredRemote = String(request.preferredWorkType || '').toLowerCase() === 'remote';
+  const hardRemote = String(request.filters?.workType || '').toLowerCase() === 'remote';
+  if (trustedWorkTypes.includes('remote')) score += hardRemote ? 14 : (preferredRemote ? 10 : 4);
+
   score += Math.max(0, Number(meta.hits || 1) - 1) * 12;
   score += Math.max(0, 12 - Number(meta.firstRank || 12));
   return score;
 }
 
-function prioritizedJobIds(jobMeta) {
+function prioritizedJobIds(jobMeta, request = {}) {
   return [...jobMeta.values()]
-    .sort((a, b) => jobIdPriority(b) - jobIdPriority(a) || Number(a.firstSeen || 0) - Number(b.firstSeen || 0))
+    .sort((a, b) => jobIdPriority(b, request) - jobIdPriority(a, request) || Number(a.firstSeen || 0) - Number(b.firstSeen || 0))
     .map((item) => item.id);
 }
 
@@ -1918,7 +1915,7 @@ async function companyMission(request) {
     // probes do not increment hit counters; consumption records the actual hit.
     const cachedDetailIds = new Set([...jobMeta.keys()].filter(jobId =>
       missionRunner.cachedExact?.('get_job_details', { job_id: jobId }, { recordHit: false })?.hit));
-    const orderedJobIds = prioritizedJobIds(jobMeta)
+    const orderedJobIds = prioritizedJobIds(jobMeta, request)
       .filter((jobId) => !previouslyChecked.has(String(jobId)))
       .sort((left, right) =>
         Number(cachedDetailIds.has(right)) - Number(cachedDetailIds.has(left))
@@ -3199,6 +3196,12 @@ async function consolidateVerifiedMissions(text = '') {
   };
 }
 
+function explicitDeletionIntent(text = '') {
+  const value = String(text || '').trim();
+  return /\b(?:delete|remove|erase|purge|drop)\b/i.test(value)
+    && /\b(?:duplicates?|rows?|records?|leads?|companies?|columns?|data)\b/i.test(value);
+}
+
 function isDedupeSheetRequest(text) {
   const value = String(text || '').trim();
   return /\b(?:dedupe|de-duplicate|remove\s+duplicates?|clean\s+duplicates?)\b/i.test(value)
@@ -3240,7 +3243,8 @@ async function dedupeWorkspaceSheet(text = '') {
     for (const key of keys) seen.add(key);
   }
 
-  if (duplicateRows.length) {
+  const deletionApproved = explicitDeletionIntent(text);
+  if (duplicateRows.length && deletionApproved) {
     const requests = duplicateRows
       .sort((a, b) => b - a)
       .map((rowIndex) => ({
@@ -3270,7 +3274,9 @@ async function dedupeWorkspaceSheet(text = '') {
     sheetUrl,
     spreadsheetTitle: destination.spreadsheetTitle,
     sheetName: destination.sheetName,
-    removed: duplicateRows.length,
+    removed: deletionApproved ? duplicateRows.length : 0,
+    duplicatesFound: duplicateRows.length,
+    deletionApproved,
   };
 }
 
@@ -3378,7 +3384,7 @@ async function buildFinalMaster(text = '') {
   const rows = records.map((record) => finalMaster.rowFor(record, { missionId: record.sourceMissionId, firstSeenAt: record.sourceMissionCreatedAt }));
   const added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
   finalMaster.setMasterSheet(sheet);
-  finalMaster.replaceMasterRecords(records, { missionId: 'historical-migration' });
+  finalMaster.registerRecords(records, { missionId: 'historical-migration', master: true });
 
   const state = loadState();
   rememberWorkspaceSheet(sheet.url, {
@@ -3875,6 +3881,7 @@ module.exports = {
   isConsolidateRequest,
   consolidatedRecordKey,
   consolidateVerifiedMissions,
+  explicitDeletionIntent,
   isDedupeSheetRequest,
   dedupeWorkspaceSheet,
   rowFor,
