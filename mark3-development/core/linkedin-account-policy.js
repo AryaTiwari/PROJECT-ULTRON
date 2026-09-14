@@ -241,7 +241,15 @@ async function waitTurn(tool) {
 function recordCall(tool, ok = true, metadata = {}) {
   const now = Date.now();
   const state = prune(loadState(), now);
-  state.events.push({ at: now, tool, ok: Boolean(ok), countsTowardSafety: true, ...metadata });
+  state.events.push({
+    at: now,
+    tool,
+    ok: Boolean(ok),
+    countsTowardSafety: true,
+    runtimeTestBypass: Boolean(settings().localBudgetBypass),
+    sourceScript: path.basename(String(process.argv?.[1] || '')),
+    ...metadata,
+  });
   state.lastCallAt = new Date(now).toISOString();
   state.lastSafetyCallAt = state.lastCallAt;
   saveState(state);
@@ -300,14 +308,27 @@ function nextEligibleAt(state = loadState(), now = Date.now()) {
   const last = Date.parse(current.lastSafetyCallAt || current.lastCallAt || '');
   if (Number.isFinite(last)) candidates.push(last + limits.minGapMs);
 
+  const thresholdExpiry = (windowEvents, limit, windowMs) => {
+    if (windowEvents.length < limit) return null;
+    // preflight blocks while usage >= limit. If usage is already above the
+    // limit (possible after a previous test-bypass build), wait until enough
+    // oldest events expire to leave limit-1 active events. Waking after only
+    // the first expiry would cause repeated waiting_safety loops.
+    const expiryIndex = Math.max(0, windowEvents.length - limit);
+    return Number(windowEvents[expiryIndex]) + windowMs + 1000;
+  };
+
   const burstEvents = events.filter((at) => at >= now - limits.burstWindowMs);
-  if (burstEvents.length >= limits.burstMax) candidates.push(burstEvents[0] + limits.burstWindowMs + 1000);
+  const burstReady = thresholdExpiry(burstEvents, limits.burstMax, limits.burstWindowMs);
+  if (burstReady) candidates.push(burstReady);
 
   const hourEvents = events.filter((at) => at >= now - 60 * 60 * 1000);
-  if (hourEvents.length >= limits.hourlyMax) candidates.push(hourEvents[0] + 60 * 60 * 1000 + 1000);
+  const hourReady = thresholdExpiry(hourEvents, limits.hourlyMax, 60 * 60 * 1000);
+  if (hourReady) candidates.push(hourReady);
 
   const dayEvents = events.filter((at) => at >= now - 24 * 60 * 60 * 1000);
-  if (dayEvents.length >= limits.dailyMax) candidates.push(dayEvents[0] + 24 * 60 * 60 * 1000 + 1000);
+  const dayReady = thresholdExpiry(dayEvents, limits.dailyMax, 24 * 60 * 60 * 1000);
+  if (dayReady) candidates.push(dayReady);
 
   return new Date(Math.max(...candidates)).toISOString();
 }
@@ -329,6 +350,12 @@ function status() {
     hourlyUsed: counts.hourly,
     dailyUsed: counts.daily,
     eventBreakdown,
+    nextEligibleAt: nextEligibleAt(state),
+    overCapBy: {
+      burst: Math.max(0, Number(counts.burst || 0) - Number(settings().burstMax || 0) + 1),
+      hourly: Math.max(0, Number(counts.hourly || 0) - Number(settings().hourlyMax || 0) + 1),
+      daily: Math.max(0, Number(counts.daily || 0) - Number(settings().dailyMax || 0) + 1),
+    },
     rateLimitStrikes24h: recentRateLimitStrikes(state),
     localBudgetBypass: Boolean(settings().localBudgetBypass),
     cooldownUntil: state.cooldownUntil,
