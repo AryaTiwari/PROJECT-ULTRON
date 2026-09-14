@@ -5,14 +5,18 @@ on:
     branches: [mark3-development]
     paths:
       - 'mark3-development/core/linkedin-*.js'
+      - 'mark3-development/core/apollo-enrichment.js'
       - 'mark3-development/scripts/linkedin-*.js'
+      - 'mark3-development/scripts/apollo-company-identity-selftest.js'
       - 'mark3-development/scripts/linkedin-*.py'
       - 'mark3-development/.env.example'
       - '.github/workflows/linkedin-subsystem.yml'
   pull_request:
     paths:
       - 'mark3-development/core/linkedin-*.js'
+      - 'mark3-development/core/apollo-enrichment.js'
       - 'mark3-development/scripts/linkedin-*.js'
+      - 'mark3-development/scripts/apollo-company-identity-selftest.js'
       - 'mark3-development/scripts/linkedin-*.py'
       - 'mark3-development/.env.example'
       - '.github/workflows/linkedin-subsystem.yml'
@@ -36,6 +40,9 @@ jobs:
       - name: Test canonical LinkedIn Final Master
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-final-master-selftest.js
+      - name: Test Apollo company priority and exact-person enrichment
+        working-directory: mark3-development
+        run: node --env-file=../.env scripts/apollo-company-identity-selftest.js
       - name: Test agentic LinkedIn mission foundation
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-agentic-foundation-selftest.js
