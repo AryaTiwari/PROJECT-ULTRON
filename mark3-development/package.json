@@ -58,7 +58,8 @@
     "linkedin:safety-balanced": "node scripts/linkedin-safety-balanced.js",
     "linkedin:status": "node --env-file=../.env scripts/linkedin-account-doctor.js",
     "linkedin:joeyism:setup": "node --env-file=../.env scripts/linkedin-joeyism-setup.js",
-    "linkedin:mcp-live": "node --env-file=../.env scripts/linkedin-mcp-live-smoke.js"
+    "linkedin:mcp-live": "node --env-file=../.env scripts/linkedin-mcp-live-smoke.js",
+    "linkedin:safety-audit": "node --env-file=../.env scripts/linkedin-safety-audit.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
