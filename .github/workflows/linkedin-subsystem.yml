@@ -37,6 +37,12 @@ jobs:
       - name: Test persistent LinkedIn mission runner
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-mission-runner-selftest.js
+      - name: Test saved LinkedIn discovery resume
+        working-directory: mark3-development
+        run: node --env-file=../.env scripts/linkedin-saved-resume-selftest.js
+      - name: Test zero-budget missions wait instead of completing empty
+        working-directory: mark3-development
+        run: node --env-file=../.env scripts/linkedin-zero-budget-resume-selftest.js
       - name: Test canonical LinkedIn Final Master
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-final-master-selftest.js
