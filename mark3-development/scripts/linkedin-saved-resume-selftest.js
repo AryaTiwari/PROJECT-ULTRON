@@ -82,7 +82,33 @@ async function until(fn) {
   );
   assert.equal(compiler.workType(text).strictness, 'preference');
 
-  console.log('Saved resume regression passed: same mission identity, cached LinkedIn discovery replayed, zero fresh search calls.');
+  const missingId = 'a2ef9454-42a0-41f0-abe7-f4ed93a9d6aa';
+  const recoveryText = `Resume LinkedIn mission ${missingId} from saved evidence. Target 30 unique SAP-hiring companies total, Maharashtra or Bengaluru, maximum 1000 employees; remote preferred. No Apollo.`;
+  const recovery = runner.resumeSaved(recoveryText);
+  assert.equal(recovery.recovered, true);
+  assert.equal(recovery.missingMissionId, missingId);
+  assert.notEqual(recovery.id, missingId);
+  assert.ok(recovery.recoverySourceMissionIds.includes(initial.id));
+  assert.equal(recovery.freshDiscoveryAllowed, false);
+
+  const recoveryMission = runner.get(recovery.id);
+  assert.equal(recoveryMission.prepared.request.resumeExistingPool, true);
+  assert.equal(recoveryMission.prepared.request.savedDiscoveryOnly, true);
+  assert.equal(recoveryMission.prepared.request.reuseCachedEvidence, true);
+  assert.equal(recoveryMission.prepared.request.wantsContacts, false);
+  assert.equal(recoveryMission.prepared.request.recoveredFromMissingMissionId, missingId);
+
+  await until(() => runner.get(recovery.id).status === 'completed');
+  assert.equal(freshSearchCalls, 0);
+  const recoveredComplete = runner.get(recovery.id);
+  assert.equal(recoveredComplete.discoveryReplayed, true);
+  assert.ok(
+    Array.isArray(recoveredComplete.discoverySourceMissionIds)
+      ? recoveredComplete.discoverySourceMissionIds.includes(initial.id)
+      : recoveredComplete.discoverySourceMissionId === initial.id,
+  );
+
+  console.log('Saved resume regression passed: exact mission resumes preserve identity; missing explicit IDs recover from compatible saved LinkedIn evidence with zero fresh discovery.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
