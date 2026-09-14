@@ -60,7 +60,8 @@
     "linkedin:joeyism:setup": "node --env-file=../.env scripts/linkedin-joeyism-setup.js",
     "linkedin:mcp-live": "node --env-file=../.env scripts/linkedin-mcp-live-smoke.js",
     "linkedin:safety-audit": "node --env-file=../.env scripts/linkedin-safety-audit.js",
-    "check:linkedin-route": "node --env-file=../.env scripts/linkedin-http-route-selftest.js"
+    "check:linkedin-route": "node --env-file=../.env scripts/linkedin-http-route-selftest.js",
+    "linkedin:recover-diagnostic": "node --env-file=../.env scripts/linkedin-mission-recovery-diagnostic.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
