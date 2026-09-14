@@ -95,8 +95,8 @@ async function handlePrepared(prepared, background = false) {
         { url: mission.sheetUrl, provider: 'google', ensureContactColumns: false, missionId: mission.id, entityMode: mission.request?.entityMode },
         mission.request?.entityMode === 'company'
           ? (mission.request?.hiring
-            ? `LinkedIn company research is complete. Apollo would search these ${mission.contactCandidates} verified hiring companies, prioritize Director/Founder first, Lead Recruiter/General Manager second, HR Recruiter third. It will enrich only one highest-priority person per company.`
-            : `LinkedIn company research is complete. Apollo would search heads at these ${mission.contactCandidates} verified companies and enrich only one highest-priority person per company.`)
+            ? `LinkedIn company research is complete. Apollo would search these ${mission.contactCandidates} verified hiring companies, prioritize Founder/Director/Owner first, Head Recruiter or hiring/recruitment/HR Manager second, HR Recruiter third. It will enrich only one highest-priority person per company.`
+            : `LinkedIn company research is complete. Apollo would search these ${mission.contactCandidates} verified companies using the canonical Founder/Director/Owner > Head Recruiter/Manager > HR Recruiter scale and enrich only one highest-priority person per company.`)
           : `LinkedIn people research is complete. Apollo would directly match these ${mission.contactCandidates} verified person profiles and fill missing phone/email cells.`
       );
       text += ` ${paidTools.prompt(approval)}`;
