@@ -13,6 +13,9 @@ assert.equal(operator.isRequest('Find me 50 companies on LinkedIn that are hirin
 assert.equal(operator.isRequest('Find me 30 SAP recruiters on LinkedIn from Pune'), true);
 assert.equal(operator.isRequest('Tell me what LinkedIn is'), false);
 assert.equal(routeGuard.isExplicitLinkedInResearch('LinkedIn only: find 30 SAP companies in Maharashtra'), true);
+assert.equal(routeGuard.isExplicitLinkedInResearch('Could you look through LinkedIn and pull SAP companies hiring in Maharashtra?'), true);
+assert.equal(routeGuard.isExplicitLinkedInResearch('LinkedIn mission progress'), true);
+assert.equal(routeGuard.isExplicitLinkedInResearch('LinkedIn MCP status'), true);
 assert.equal(routeGuard.isExplicitLinkedInResearch('Tell me what LinkedIn is'), false);
 
 assert.equal(operator.isBuildFinalMasterRequest('Build the final LinkedIn master'), true);
