@@ -63,6 +63,9 @@ jobs:
       - name: Test agentic LinkedIn mission foundation
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-agentic-foundation-selftest.js
+      - name: Test typed LinkedIn request compiler
+        working-directory: mark3-development
+        run: node --env-file=../.env scripts/linkedin-request-compiler-selftest.js
       - name: Test explicit contact intent
         working-directory: mark3-development
         env:
