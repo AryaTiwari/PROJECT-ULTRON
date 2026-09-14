@@ -119,11 +119,23 @@ function classifyError(error) {
   if (/authentication|not logged in|login required|no valid linkedin session|session expired|source session/.test(text)) {
     return { kind: 'auth', reason: 'The LinkedIn browser session is missing or expired.' };
   }
-  if (/timeout|timed_out|etimedout|econnreset|epipe/.test(code)
-      || /timed out|timeout|connection reset|socket hang up|temporary browser failure/.test(text)) {
+  if (/linkedin_mcp_client_sdk_missing|linkedin_mcp_start_failed|linkedin_mcp_not_installed|linkedin_mcp_toolset_mismatch|enoent/.test(code)
+      || /mcp client sdk is not installed|could not establish the stdio mcp connection|required tools are missing|could not start uvx/.test(text)) {
+    return { kind: 'infrastructure', reason: 'The local LinkedIn MCP runtime failed before a LinkedIn account action could be confirmed. This is not an account-safety event.' };
+  }
+  if (/timeout|timed_out|request_timeout|connection_closed|etimedout|econnreset|epipe/.test(code)
+      || /timed out|timeout|connection reset|connection closed|transport closed|socket hang up|broken pipe|temporary browser failure/.test(text)) {
     return { kind: 'transient', reason: 'The LinkedIn MCP/browser transport stalled temporarily. This is recoverable and is not treated as a LinkedIn account-safety event.' };
   }
   return { kind: 'other', reason: String(error?.message || error || 'LinkedIn tool error') };
+}
+
+function eventCountsTowardSafety(event = {}) {
+  if (event.countsTowardSafety === false) return false;
+  // Backward-compatible repair for safety-state files written by older builds:
+  // transient transport failures and authentication/setup failures were
+  // mistakenly stored in the same event array as real LinkedIn account calls.
+  return !['transient', 'infrastructure', 'auth'].includes(String(event.errorKind || '').toLowerCase());
 }
 
 function usage(state = loadState(), now = Date.now()) {
@@ -132,9 +144,10 @@ function usage(state = loadState(), now = Date.now()) {
   const burst = now - limits.burstWindowMs;
   const hour = now - 60 * 60 * 1000;
   const day = now - 24 * 60 * 60 * 1000;
-  const burstUsed = state.events.filter((event) => Number(event.at || 0) >= burst).length;
-  const hourly = state.events.filter((event) => Number(event.at || 0) >= hour).length;
-  const daily = state.events.filter((event) => Number(event.at || 0) >= day).length;
+  const safetyEvents = state.events.filter(eventCountsTowardSafety);
+  const burstUsed = safetyEvents.filter((event) => Number(event.at || 0) >= burst).length;
+  const hourly = safetyEvents.filter((event) => Number(event.at || 0) >= hour).length;
+  const daily = safetyEvents.filter((event) => Number(event.at || 0) >= day).length;
   return { burst: burstUsed, hourly, daily };
 }
 
@@ -197,7 +210,7 @@ function sleep(ms) {
 async function waitTurn(tool) {
   const check = preflight(tool);
   const now = Date.now();
-  const last = Date.parse(check.state.lastCallAt || '');
+  const last = Date.parse(check.state.lastSafetyCallAt || check.state.lastCallAt || '');
   const elapsed = Number.isFinite(last) ? now - last : Infinity;
   const base = Math.max(0, check.limits.minGapMs - elapsed);
   const jitter = check.limits.jitterMs ? Math.floor(Math.random() * (check.limits.jitterMs + 1)) : 0;
@@ -208,8 +221,9 @@ async function waitTurn(tool) {
 function recordCall(tool, ok = true, metadata = {}) {
   const now = Date.now();
   const state = prune(loadState(), now);
-  state.events.push({ at: now, tool, ok: Boolean(ok), ...metadata });
+  state.events.push({ at: now, tool, ok: Boolean(ok), countsTowardSafety: true, ...metadata });
   state.lastCallAt = new Date(now).toISOString();
+  state.lastSafetyCallAt = state.lastCallAt;
   saveState(state);
 }
 
@@ -217,8 +231,13 @@ function recordError(tool, error) {
   const classification = classifyError(error);
   const state = prune(loadState());
   const now = Date.now();
-  state.events.push({ at: now, tool, ok: false, errorKind: classification.kind });
-  state.lastCallAt = new Date(now).toISOString();
+  const countsTowardSafety = !['transient', 'infrastructure', 'auth'].includes(classification.kind);
+  state.events.push({ at: now, tool, ok: false, errorKind: classification.kind, countsTowardSafety });
+  state.lastErrorAt = new Date(now).toISOString();
+  if (countsTowardSafety) {
+    state.lastCallAt = state.lastErrorAt;
+    state.lastSafetyCallAt = state.lastErrorAt;
+  }
 
   if (classification.kind === 'rate-limit') {
     state.cooldownUntil = new Date(now + adaptiveRateLimitCooldownMs(state, now)).toISOString();
@@ -255,10 +274,10 @@ function nextEligibleAt(state = loadState(), now = Date.now()) {
   }
 
   const limits = settings();
-  const events = (current.events || []).map((event) => Number(event.at || 0)).filter(Number.isFinite).sort((a, b) => a - b);
+  const events = (current.events || []).filter(eventCountsTowardSafety).map((event) => Number(event.at || 0)).filter(Number.isFinite).sort((a, b) => a - b);
   const candidates = [now];
 
-  const last = Date.parse(current.lastCallAt || '');
+  const last = Date.parse(current.lastSafetyCallAt || current.lastCallAt || '');
   if (Number.isFinite(last)) candidates.push(last + limits.minGapMs);
 
   const burstEvents = events.filter((at) => at >= now - limits.burstWindowMs);
@@ -304,6 +323,7 @@ module.exports = {
   recentRateLimitStrikes,
   adaptiveRateLimitCooldownMs,
   usage,
+  eventCountsTowardSafety,
   assertReadOnlyTool,
   preflight,
   waitTurn,
