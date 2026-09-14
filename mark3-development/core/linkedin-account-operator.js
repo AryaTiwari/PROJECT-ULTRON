@@ -314,7 +314,13 @@ function headerKey(value) {
   return null;
 }
 
+function isFinalMasterRequest(request = {}) {
+  return request.entityMode === 'company'
+    && Boolean(request.useFinalMaster || request.targetMode === 'master_total');
+}
+
 function ensureHeaders(headers, request) {
+  if (isFinalMasterRequest(request)) return [...finalMaster.FINAL_MASTER_HEADERS];
   const defaults = request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS;
   const source = Array.isArray(headers) && headers.length ? headers : defaults;
   const out = source.map((value) => String(value ?? '').trim()).slice(0, 30);
@@ -465,6 +471,109 @@ async function syncDestinationHeaders(destination, headers) {
   destination.headers = headers;
   destination.rows[destination.headerRowNumber - 1] = headers.slice();
   return changes.length;
+}
+
+function plausiblePhone(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return true;
+  const digits = raw.replace(/\D/g, '');
+  return digits.length >= 10 && digits.length <= 15;
+}
+
+function plausibleEmail(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return true;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+}
+
+async function repairFinalMasterSheetSchema(url = finalMaster.masterSheetUrl()) {
+  if (!url) return { repaired: false, reason: 'missing-master' };
+  const spreadsheetId = sheets.spreadsheetId(url);
+  const state = finalMaster.loadState();
+  const meta = await sheets.metadata(spreadsheetId);
+  const tab = (meta.sheets || []).find((item) => item?.properties?.title === (state.sheetName || 'Leads'))
+    || (meta.sheets || [])[0];
+  if (!tab?.properties?.title) {
+    const error = new Error('Final Master Sheet tab could not be resolved.');
+    error.code = 'LINKEDIN_FINAL_MASTER_TAB_NOT_FOUND';
+    throw error;
+  }
+
+  const sheetName = tab.properties.title;
+  const sheetId = tab.properties.sheetId;
+  const gridColumns = Number(tab.properties?.gridProperties?.columnCount || 0);
+  await sheets.ensureGridSize(spreadsheetId, sheetId, { minColumns: finalMaster.FINAL_MASTER_HEADERS.length, minRows: 2 });
+
+  const headerChanges = finalMaster.FINAL_MASTER_HEADERS.map((value, index) => ({
+    range: sheets.cellRange(sheetName, 1, index),
+    value,
+  }));
+  await sheets.writeCells(spreadsheetId, headerChanges);
+
+  if (gridColumns > finalMaster.FINAL_MASTER_HEADERS.length) {
+    await apiRequest(`${API}/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({ requests: [{
+        deleteDimension: {
+          range: {
+            sheetId,
+            dimension: 'COLUMNS',
+            startIndex: finalMaster.FINAL_MASTER_HEADERS.length,
+            endIndex: gridColumns,
+          },
+        },
+      }] }),
+    });
+  }
+
+  const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(sheetName)}!A2:H`);
+  const cleanup = [];
+  let cleanedContacts = 0;
+  let cleanedNames = 0;
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index] || [];
+    const rowNumber = index + 2;
+    const company = String(row[0] || '').trim();
+    const cleanCompany = finalMaster.cleanCompanyDisplay(company);
+    if (company && cleanCompany && cleanCompany !== company) {
+      cleanup.push({ range: sheets.cellRange(sheetName, rowNumber, 0), value: cleanCompany });
+      cleanedNames++;
+    }
+
+    const applicants = String(row[4] || '').trim();
+    const phone = String(row[5] || '').trim();
+    const email = String(row[6] || '').trim();
+    const remarks = String(row[7] || '').trim();
+    if (phone && (!plausiblePhone(phone) || phone === applicants)) {
+      cleanup.push({ range: sheets.cellRange(sheetName, rowNumber, 5), value: '' });
+      cleanedContacts++;
+    }
+    if (email && (!plausibleEmail(email) || email === applicants)) {
+      cleanup.push({ range: sheets.cellRange(sheetName, rowNumber, 6), value: '' });
+      cleanedContacts++;
+    }
+    if (remarks && (remarks === applicants || /^\d+(?:\.\d+)?$/.test(remarks))) {
+      cleanup.push({ range: sheets.cellRange(sheetName, rowNumber, 7), value: '' });
+      cleanedContacts++;
+    }
+  }
+  if (cleanup.length) await sheets.writeCells(spreadsheetId, cleanup);
+
+  finalMaster.setMasterSheet({
+    url,
+    spreadsheetId,
+    sheetName,
+    title: meta?.properties?.title || state.spreadsheetTitle,
+  });
+  return {
+    repaired: true,
+    spreadsheetId,
+    sheetId,
+    sheetName,
+    trimmedColumns: Math.max(0, gridColumns - finalMaster.FINAL_MASTER_HEADERS.length),
+    cleanedContacts,
+    cleanedNames,
+  };
 }
 
 function destinationExistingKeys(destination, headers) {
@@ -1115,6 +1224,25 @@ function isTransientMcpFailure(error) {
     || /timed out|timeout|connection reset|socket hang up|temporary browser failure/i.test(message);
 }
 
+function safetyBudgetBlock(safety = policy.status()) {
+  if (safety.localBudgetBypass) return null;
+  const now = Date.now();
+  if (safety.manualLock) return { code: 'LINKEDIN_MANUAL_LOCK', message: 'LinkedIn is locked behind a manual checkpoint.' };
+  if (safety.cooldownUntil && Date.parse(safety.cooldownUntil) > now) {
+    return { code: 'LINKEDIN_COOLDOWN', message: 'LinkedIn rate-limit cooldown is still active.' };
+  }
+  if (Number(safety.burstUsed || 0) >= Number(safety.burstMax || Infinity)) {
+    return { code: 'LINKEDIN_BURST_CAP', message: 'LinkedIn short-window safety cap is still active.' };
+  }
+  if (Number(safety.hourlyUsed || 0) >= Number(safety.hourlyMax || Infinity)) {
+    return { code: 'LINKEDIN_HOURLY_CAP', message: 'LinkedIn hourly safety cap is still active.' };
+  }
+  if (Number(safety.dailyUsed || 0) >= Number(safety.dailyMax || Infinity)) {
+    return { code: 'LINKEDIN_DAILY_CAP', message: 'LinkedIn daily safety cap is still active.' };
+  }
+  return null;
+}
+
 function missionCallBudget() {
   const safety = policy.status();
   const maximum = safety.localBudgetBypass
@@ -1125,16 +1253,29 @@ function missionCallBudget() {
       safety.hourlyMax - safety.hourlyUsed,
       safety.dailyMax - safety.dailyUsed,
     ));
-  return { maximum, used: 0, stopped: null, localBudgetBypass: Boolean(safety.localBudgetBypass) };
+  return {
+    maximum,
+    used: 0,
+    stopped: null,
+    localBudgetBypass: Boolean(safety.localBudgetBypass),
+    safetyBlock: maximum < 1 ? safetyBudgetBlock(safety) : null,
+    nextEligibleAt: policy.nextEligibleAt?.() || null,
+  };
 }
 
 async function budgetedCall(budget, tool, args) {
-  // Always enter missionRunner.call first so a compatible cached response can be
-  // replayed even when the live LinkedIn safety budget is currently zero.
-  // The budget gate belongs around the live MCP invocation, not around cache lookup.
+  // Always enter missionRunner.call first so cached discovery can be replayed
+  // even while fresh LinkedIn calls are safety-blocked.
   try {
     const result = await missionRunner.call(tool, args, async () => {
       if (budget.used >= budget.maximum) {
+        if (budget.used === 0 && budget.safetyBlock) {
+          const error = new Error(budget.safetyBlock.message);
+          error.code = budget.safetyBlock.code;
+          error.cooldownUntil = budget.nextEligibleAt;
+          error.linkedinSafetyGate = true;
+          throw error;
+        }
         const error = new Error('mission LinkedIn-call budget reached');
         error.code = 'LINKEDIN_LOCAL_MISSION_BUDGET';
         throw error;
@@ -1145,6 +1286,7 @@ async function budgetedCall(budget, tool, args) {
     });
     return result;
   } catch (error) {
+    if (error?.linkedinSafetyGate) throw error;
     if (String(error?.code || '') === 'LINKEDIN_LOCAL_MISSION_BUDGET') {
       budget.stopped = budget.stopped || error.message;
       return null;
@@ -3064,8 +3206,9 @@ async function finalMasterSheetSchemaCurrent(url = finalMaster.masterSheetUrl())
     const spreadsheetId = sheets.spreadsheetId(url);
     const state = finalMaster.loadState();
     const sheetName = state.sheetName || 'Leads';
-    const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(sheetName)}!A1:H1`);
+    const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(sheetName)}!A1:ZZ1`);
     const actual = (rows[0] || []).map((value) => String(value || '').trim().toUpperCase());
+    while (actual.length && !actual[actual.length - 1]) actual.pop();
     const expected = finalMaster.FINAL_MASTER_HEADERS.map((value) => String(value).trim().toUpperCase());
     return actual.length === expected.length && expected.every((value, index) => actual[index] === value);
   } catch {
@@ -3088,7 +3231,7 @@ async function buildFinalMaster(text = '') {
     };
   }
 
-  const records = historicalVerifiedCompanyRecords({ topic: 'SAP', workType: 'remote', employeeMax: 1000 });
+  const records = historicalVerifiedCompanyRecords({ topic: 'SAP', employeeMax: 1000 });
   const sheet = await v2.createSpreadsheet('ULTRON LinkedIn Final Lead Master', finalMaster.FINAL_MASTER_HEADERS, Math.max(100, records.length + 20));
   await sheets.ensureGridSize(sheet.spreadsheetId, sheet.sheetId, {
     minColumns: finalMaster.FINAL_MASTER_HEADERS.length,
@@ -3118,41 +3261,86 @@ async function buildFinalMaster(text = '') {
   };
 }
 
-async function reconcileFinalMasterRegistry() {
+async function reconcileFinalMasterRegistry(request = {}) {
   const masterUrl = finalMaster.masterSheetUrl();
-  if (!masterUrl) return { count: 0, records: [] };
+  if (!masterUrl) return { count: 0, records: [], removedInvalid: 0 };
 
-  const state = finalMaster.loadState();
+  const registry = finalMaster.loadState();
   const spreadsheetId = sheets.spreadsheetId(masterUrl);
-  const sheetName = state.sheetName || 'Leads';
+  const sheetName = registry.sheetName || 'Leads';
+  const meta = await sheets.metadata(spreadsheetId);
+  const tab = (meta.sheets || []).find((item) => item?.properties?.title === sheetName);
+  const sheetId = tab?.properties?.sheetId;
   const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(sheetName)}!A2:H`);
   const records = [];
+  const invalidRows = [];
+
+  const requirements = {
+    topic: request.topic || 'SAP',
+    employeeMax: request.filters?.employeeMax ?? null,
+    workType: request.filters?.workType || null,
+    allowedLocations: request.allowedLocations || requestedLocations(request),
+    hiringRequired: request.hiring !== false,
+  };
 
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index] || [];
-    const company = String(row[0] || '').trim();
+    const company = finalMaster.cleanCompanyDisplay(String(row[0] || '').trim());
     const linkedin = String(row[1] || '').trim();
-    if (!company || !linkedin) continue;
-    records.push({
+    if (!company || !linkedin) {
+      if ((row || []).some((value) => String(value || '').trim())) invalidRows.push(index + 1);
+      continue;
+    }
+
+    const shell = { company, linkedin };
+    const key = finalMaster.companyKey(shell);
+    const existing = registry.companies?.[key];
+    if (!existing || existing.status !== 'verified') {
+      invalidRows.push(index + 1);
+      continue;
+    }
+
+    const merged = {
+      ...existing,
       company,
       linkedin,
-      jobUrl: String(row[2] || '').trim(),
-      location: String(row[3] || '').trim(),
-      applicants: String(row[4] || '').trim(),
-      phone: String(row[5] || '').trim(),
-      email: String(row[6] || '').trim(),
-      remarks: String(row[7] || '').trim(),
+      jobUrl: String(row[2] || '').trim() || existing.primaryJobUrl || '',
+      primaryJobUrl: String(row[2] || '').trim() || existing.primaryJobUrl || '',
+      location: String(row[3] || '').trim() || existing.location || '',
+      applicants: String(row[4] || '').trim() || existing.applicants || '',
+      phone: plausiblePhone(row[5]) ? String(row[5] || '').trim() : '',
+      email: plausibleEmail(row[6]) ? String(row[6] || '').trim() : '',
+      remarks: /^\d+(?:\.\d+)?$/.test(String(row[7] || '').trim()) ? '' : String(row[7] || '').trim(),
+    };
+
+    if (!finalMaster.qualifies(merged, requirements)) {
+      invalidRows.push(index + 1);
+      continue;
+    }
+    records.push(merged);
+  }
+
+  if (invalidRows.length && Number.isInteger(sheetId)) {
+    const requests = invalidRows
+      .sort((a, b) => b - a)
+      .map((startIndex) => ({
+        deleteDimension: {
+          range: { sheetId, dimension: 'ROWS', startIndex, endIndex: startIndex + 1 },
+        },
+      }));
+    await apiRequest(`${API}/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({ requests }),
     });
   }
 
-  finalMaster.registerRecords(records, {
-    missionId: 'sheet-reconciliation',
-    verifiedAt: nowIso(),
-    master: true,
-  });
-
-  const unique = new Set(records.map((record) => finalMaster.companyKey(record)).filter(Boolean));
-  return { count: unique.size, records };
+  finalMaster.replaceMasterRecords(records, { missionId: 'sheet-reconciliation' });
+  return {
+    count: records.length,
+    records,
+    removedInvalid: invalidRows.length,
+    requirements,
+  };
 }
 
 async function run(request, headers) {
@@ -3160,13 +3348,16 @@ async function run(request, headers) {
     request.allowPreviouslySeenCompanies = Boolean(request.allowPreviouslySeenCompanies || finalMaster.allowRepeatFromText(request.originalMessage));
     if (request.useFinalMaster || request.targetMode === 'master_total') {
       const masterUrl = finalMaster.masterSheetUrl();
+      if (masterUrl) {
+        await repairFinalMasterSheetSchema(masterUrl);
+      }
       const currentSchema = masterUrl ? await finalMasterSheetSchemaCurrent(masterUrl) : false;
       if (!masterUrl || !currentSchema) {
         await buildFinalMaster(masterUrl ? 'rebuild final master' : 'build final master');
       }
     }
     if (request.targetMode === 'master_total' && request.targetTotal) {
-      const reconciled = await reconcileFinalMasterRegistry();
+      const reconciled = await reconcileFinalMasterRegistry(request);
       const desired = Math.max(0, Number(request.targetTotal || 0));
       const target = {
         desired,
@@ -3209,7 +3400,7 @@ async function run(request, headers) {
     if (checkpointMission) Object.assign(checkpointMission, { verifiedRecords: researched.records, status: 'writing_sheet' });
     saveState(persisted);
     const title = `ULTRON LinkedIn - ${String(request.topic || request.entityMode).replace(/[^a-z0-9 ()&+._-]+/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 65)} - ${new Date().toISOString().slice(0, 10)}`;
-    const needsInternalContact = request.entityMode === 'company' && request.wantsContacts;
+    const needsInternalContact = request.entityMode === 'company' && request.wantsContacts && !isFinalMasterRequest(request);
 
     let destination = null;
     let destinationWriteError = null;
@@ -3466,7 +3657,10 @@ function formatMission(mission) {
     : mission.destinationMode === 'recovery-sheet'
       ? ` The requested master Sheet could not be written (${mission.destinationWriteError?.code || 'GOOGLE_SHEETS_API_ERROR'}: ${mission.destinationWriteError?.message || 'unknown Sheets error'}). I preserved the verified results in this recovery Sheet instead; your remembered master Sheet was not changed.`
       : '';
-  return `LinkedIn-only mission complete, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination}${masterTargetText}${globalSkipText} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
+  const label = mission.found < mission.requested || mission.budgetStopped
+    ? 'LinkedIn-only research batch complete'
+    : 'LinkedIn-only mission complete';
+  return `${label}, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination}${masterTargetText}${globalSkipText} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
 }
 
 module.exports = {
@@ -3485,6 +3679,7 @@ module.exports = {
   locationScopeFromText,
   headerKey,
   ensureHeaders,
+  isFinalMasterRequest,
   pendingRequest,
   latestCompletedMission,
   workspaceSheetUrl,
@@ -3557,6 +3752,7 @@ module.exports = {
   enrichFinalMasterContacts,
   isBuildFinalMasterRequest,
   finalMasterSheetSchemaCurrent,
+  repairFinalMasterSheetSchema,
   historicalVerifiedCompanyRecords,
   buildFinalMaster,
   reconcileFinalMasterRegistry,
