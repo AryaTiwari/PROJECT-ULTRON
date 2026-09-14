@@ -1536,6 +1536,17 @@ function jobReferenceMap(result) {
   return map;
 }
 
+function searchLocationMatches(trustedValue, requestedValue) {
+  const trusted = String(trustedValue || '').trim().toLowerCase();
+  const requested = String(requestedValue || '').trim().toLowerCase();
+  if (!trusted || !requested) return false;
+  if (requested === 'india') return true;
+  const hubs = (LOCATION_SEARCH_HUBS[requested] || [requested])
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+  return hubs.some((hub) => trusted === hub || trusted.includes(hub) || hub.includes(trusted));
+}
+
 function jobIdPriority(meta = {}, request = {}) {
   let score = 0;
   const title = String(meta.title || '');
@@ -1550,10 +1561,8 @@ function jobIdPriority(meta = {}, request = {}) {
   if (/\bSAP\b/i.test(keyword)) score += 8;
   if (/\b(?:FICO|ABAP|MM|SD|Basis|S\/4HANA|SuccessFactors|BTP|CPI|EWM|TM|BW|HANA|Ariba)\b/i.test(keyword)) score += 10;
 
-  const indiaWide = allowedLocations.includes('india');
-  if (indiaWide && trustedLocations.length) score += 12;
-  if (!indiaWide && trustedLocations.some((value) => allowedLocations.some((allowed) => value.includes(allowed) || allowed.includes(value)))) score += 18;
-  if (trustedLocations.some((value) => preferredLocations.some((preferred) => value.includes(preferred) || preferred.includes(value)))) score += 10;
+  if (trustedLocations.some((value) => allowedLocations.some((allowed) => searchLocationMatches(value, allowed)))) score += 18;
+  if (trustedLocations.some((value) => preferredLocations.some((preferred) => searchLocationMatches(value, preferred)))) score += 10;
 
   const preferredRemote = String(request.preferredWorkType || '').toLowerCase() === 'remote';
   const hardRemote = String(request.filters?.workType || '').toLowerCase() === 'remote';
@@ -3858,6 +3867,7 @@ module.exports = {
   droppedSearchFilters,
   searchFilterTrust,
   jobReferenceMap,
+  searchLocationMatches,
   jobIdPriority,
   prioritizedJobIds,
   jobLevelFailures,
