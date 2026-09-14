@@ -206,9 +206,41 @@ function enqueue(prepared) {
   setImmediate(pump);
   return summary(m);
 }
+
+function queuedMissionRunnable(id, now = Date.now()) {
+  let mission;
+  try { mission = get(id); } catch { return false; }
+  if (mission.control) return true;
+  if (mission.status === 'created') return true;
+  if (mission.status !== 'waiting_safety') return false;
+  const notBefore = Date.parse(String(mission.notBefore || ''));
+  return !Number.isFinite(notBefore) || notBefore <= now;
+}
+
+function nextRunnableQueueIndex(now = Date.now()) {
+  return queue.findIndex((id) => queuedMissionRunnable(id, now));
+}
+
 async function pump() {
   if (running || !executor || !queue.length) return;
-  const m = get(queue.shift());
+
+  const runnableIndex = nextRunnableQueueIndex();
+  if (runnableIndex < 0) {
+    let earliest = null;
+    for (const id of queue) {
+      let queued;
+      try { queued = get(id); } catch { continue; }
+      if (queued.status !== 'waiting_safety') continue;
+      const at = Date.parse(String(queued.notBefore || ''));
+      if (!Number.isFinite(at)) continue;
+      if (earliest == null || at < earliest) earliest = at;
+    }
+    if (earliest != null) schedulePumpAt(new Date(earliest).toISOString());
+    return;
+  }
+
+  const [id] = queue.splice(runnableIndex, 1);
+  const m = get(id);
 
   if (m.status === 'waiting_safety') {
     if (m.control) {
@@ -220,7 +252,7 @@ async function pump() {
     if (Number.isFinite(notBefore) && notBefore > Date.now()) {
       queueOnce(m.id);
       schedulePumpAt(m.notBefore);
-      return;
+      return setImmediate(pump);
     }
     m.status = 'created';
     m.notBefore = null;
@@ -748,4 +780,4 @@ function resumeSaved(text) {
   save(m);
   return control(m.id, 'resume');
 }
-module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, hasCachedTool, recoveryProfile, recoverySourceMissions, compileResumeRequest, resumeSaved };
+module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, queuedMissionRunnable, nextRunnableQueueIndex, hasCachedTool, recoveryProfile, recoverySourceMissions, compileResumeRequest, resumeSaved };
