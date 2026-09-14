@@ -225,7 +225,7 @@ async function handle(message, options = {}) {
         if (targetId) {
           try { selected = missionRunner.get(targetId); } catch {}
         } else {
-          selected = missionRunner.list()[0] || null;
+          selected = missionRunner.active() || missionRunner.list()[0] || null;
         }
         if (!selected) return responseShape(false, targetId
           ? `LinkedIn mission ${targetId} was not found in the current mission store.`
