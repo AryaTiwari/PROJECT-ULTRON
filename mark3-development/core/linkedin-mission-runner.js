@@ -6,6 +6,7 @@ const config = require('./config');
 const events = require('./events');
 const policy = require('./linkedin-account-policy');
 const finalMaster = require('./linkedin-final-master');
+const profileEvidenceCache = require('./linkedin-profile-evidence-cache');
 const context = new AsyncLocalStorage();
 const root = path.join(config.projectRoot, '.ultron', 'linkedin-missions');
 let running = false;
@@ -452,6 +453,26 @@ function cachedExact(tool, args, options = {}) {
 
   if (tool === 'get_company_profile' && args?.company_name) {
     const slug = String(args.company_name || '').trim().replace(/^https?:\/\/(?:www\.)?linkedin\.com\/company\//i, '').replace(/[/?#].*$/, '').toLowerCase();
+
+    const fromJobDetail = profileEvidenceCache.profileFromJobDetails(
+      [m, ...compatibleDiscoveryMissions(m, 'get_job_details')],
+      slug,
+    );
+    if (fromJobDetail) {
+      if (options.recordHit !== false) {
+        m.cacheHits++;
+        m.progress = {
+          ...(m.progress || {}),
+          reusedEvidenceTool: tool,
+          reusedEvidenceMissionId: fromJobDetail.sourceMissionId,
+          reuseMode: 'job-detail-company-profile',
+          jobDetailCompanyProfileHits: Number(m.progress?.jobDetailCompanyProfileHits || 0) + 1,
+        };
+        save(m);
+      }
+      return { hit: true, value: fromJobDetail.value, sourceMissionId: fromJobDetail.sourceMissionId };
+    }
+
     const stored = slug
       ? finalMaster.recordFor?.({ linkedin: `https://www.linkedin.com/company/${slug}` })
       : null;
