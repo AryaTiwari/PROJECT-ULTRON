@@ -1129,18 +1129,26 @@ function missionCallBudget() {
 }
 
 async function budgetedCall(budget, tool, args) {
-  if (budget.used >= budget.maximum) {
-    budget.stopped = budget.stopped || 'mission LinkedIn-call budget reached';
-    return null;
-  }
+  // Always enter missionRunner.call first so a compatible cached response can be
+  // replayed even when the live LinkedIn safety budget is currently zero.
+  // The budget gate belongs around the live MCP invocation, not around cache lookup.
   try {
-    const before = missionRunner.currentUsage?.();
-    const result = await missionRunner.call(tool, args, () => mcp.callTool(tool, args));
-    const after = missionRunner.currentUsage?.();
-    const replayedFromCache = Boolean(before && after && Number(after.cacheHits) > Number(before.cacheHits));
-    if (!replayedFromCache) budget.used++;
+    const result = await missionRunner.call(tool, args, async () => {
+      if (budget.used >= budget.maximum) {
+        const error = new Error('mission LinkedIn-call budget reached');
+        error.code = 'LINKEDIN_LOCAL_MISSION_BUDGET';
+        throw error;
+      }
+      const value = await mcp.callTool(tool, args);
+      budget.used++;
+      return value;
+    });
     return result;
   } catch (error) {
+    if (String(error?.code || '') === 'LINKEDIN_LOCAL_MISSION_BUDGET') {
+      budget.stopped = budget.stopped || error.message;
+      return null;
+    }
     if (isBudgetStop(error)) {
       budget.stopped = error.message;
       return null;
@@ -1547,11 +1555,9 @@ async function companyMission(request) {
     budget.maximum = Math.min(budget.maximum, 8);
     budget.localBudgetBypass = false;
   }
-  if (budget.maximum < 1) {
-    const error = new Error('No LinkedIn account calls remain in the current short-window/hourly/daily safety budget. Wait for the displayed safety window before starting another mission.');
-    error.code = 'LINKEDIN_BURST_CAP';
-    throw error;
-  }
+  // Zero live-call budget does not mean zero useful work. Rejected candidates
+  // and compatible saved discovery may still satisfy part or all of the mission.
+  // Fresh MCP calls will be blocked inside budgetedCall until the safety window reopens.
 
   let jobDetails = 0;
   let jobIdsDiscovered = 0;
