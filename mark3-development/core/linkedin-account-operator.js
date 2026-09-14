@@ -22,6 +22,7 @@ const PENDING_TTL_MS = 45 * 60 * 1000;
 const COMPANY_HEADERS = ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS'];
 const PERSON_HEADERS = ['Name', 'Company', 'Role', 'LinkedIn', 'Location', 'Post Details', 'Email', 'Phone No', 'Source', 'Lead Score'];
 const INTERNAL_CONTACT_HEADER = '__ULTRON CONTACT LINKEDIN';
+const APOLLO_SECTION_HEADERS = ['APOLLO CONTACT', 'APOLLO ROLE', 'APOLLO LINKEDIN', 'APOLLO PHONE', 'APOLLO EMAIL', 'APOLLO STATUS'];
 
 function nowIso() {
   return new Date().toISOString();
@@ -2780,6 +2781,174 @@ function contactRemark(name, role) {
   return title ? `${person} (${title})` : person;
 }
 
+
+function exactHeaderIndex(headers, label) {
+  const wanted = normalizeHeader(label);
+  return (headers || []).findIndex((value) => normalizeHeader(value) === wanted);
+}
+
+function baseHeaderIndex(headers, key) {
+  return (headers || []).findIndex((value) =>
+    !/^apollo\b/i.test(String(value || '').trim())
+    && headerKey(value) === key
+  );
+}
+
+async function ensureApolloSection(sheetUrl, options = {}) {
+  const request = {
+    entityMode: 'company',
+    hiring: true,
+    wantsContacts: false,
+    filters: {},
+    destinationSheetUrl: sheetUrl,
+  };
+  const destination = await inspectDestinationSheet(sheetUrl, request);
+  const headerRow = (destination.rows[destination.headerRowNumber - 1] || []).map((value) => String(value || '').trim());
+  const headers = headerRow.slice();
+  let cursor = headers.reduce((last, value, index) => String(value || '').trim() ? index + 1 : last, 0);
+  const changes = [];
+
+  for (const label of APOLLO_SECTION_HEADERS) {
+    if (exactHeaderIndex(headers, label) >= 0) continue;
+    headers[cursor] = label;
+    changes.push({
+      range: sheets.cellRange(destination.sheetName, destination.headerRowNumber, cursor),
+      value: label,
+    });
+    cursor++;
+  }
+
+  await sheets.ensureGridSize(destination.spreadsheetId, destination.sheetId, {
+    minColumns: Math.max(cursor, APOLLO_SECTION_HEADERS.length),
+    minRows: Math.max(2, destination.lastNonEmptyRow + 2),
+  });
+  if (changes.length) await sheets.writeCells(destination.spreadsheetId, changes);
+
+  return {
+    ...destination,
+    rawHeaders: headers,
+    apolloIndexes: Object.fromEntries(APOLLO_SECTION_HEADERS.map((label) => [label, exactHeaderIndex(headers, label)])),
+  };
+}
+
+async function prepareApolloSheetContacts(sheetUrl, options = {}) {
+  if (!sheetUrl) {
+    const error = new Error('Apollo Sheet enrichment requires a Google Sheets URL.');
+    error.code = 'LINKEDIN_APOLLO_SHEET_NOT_FOUND';
+    throw error;
+  }
+
+  const layout = await ensureApolloSection(sheetUrl, options);
+  const rows = await sheets.values(layout.spreadsheetId, `${sheets.quoteSheet(layout.sheetName)}!A:ZZ`);
+  const headers = rows[layout.headerRowNumber - 1] || layout.rawHeaders || [];
+  const companyIndex = baseHeaderIndex(headers, 'company');
+  const linkedinIndex = baseHeaderIndex(headers, 'linkedin');
+  const websiteIndex = baseHeaderIndex(headers, 'website');
+  const contactIndex = exactHeaderIndex(headers, 'APOLLO CONTACT');
+  const roleIndex = exactHeaderIndex(headers, 'APOLLO ROLE');
+  const personLinkedinIndex = exactHeaderIndex(headers, 'APOLLO LINKEDIN');
+  const phoneIndex = exactHeaderIndex(headers, 'APOLLO PHONE');
+  const emailIndex = exactHeaderIndex(headers, 'APOLLO EMAIL');
+  const statusIndex = exactHeaderIndex(headers, 'APOLLO STATUS');
+
+  if (companyIndex < 0 || linkedinIndex < 0 || personLinkedinIndex < 0 || phoneIndex < 0 || emailIndex < 0) {
+    const error = new Error('Apollo could not resolve the company and dedicated Apollo columns in this Sheet.');
+    error.code = 'LINKEDIN_APOLLO_COLUMNS_MISSING';
+    throw error;
+  }
+
+  const max = Math.max(1, Math.min(100, Number(apollo.setting('ULTRON_M3_APOLLO_COMPANY_SEARCH_MAX', '50')) || 50));
+  const master = finalMaster.loadState();
+  const changes = [];
+  const selected = [];
+  const unresolved = [];
+  let skippedComplete = 0;
+  let reusedSelectedContact = 0;
+  let attempted = 0;
+
+  for (let rowIndex = layout.headerRowNumber; rowIndex < rows.length && attempted < max; rowIndex++) {
+    const row = rows[rowIndex] || [];
+    const company = String(row[companyIndex] || '').trim();
+    const companyLinkedin = String(row[linkedinIndex] || '').trim();
+    if (!company || !/linkedin\.com\/company\//i.test(companyLinkedin)) continue;
+
+    const existingApolloEmail = String(row[emailIndex] || '').trim();
+    const existingApolloPhone = String(row[phoneIndex] || '').trim();
+    if (existingApolloEmail && existingApolloPhone && !/^(?:null)$/i.test(existingApolloEmail + existingApolloPhone)) {
+      skippedComplete++;
+      continue;
+    }
+
+    const existingPersonLinkedin = apollo.normalizeLinkedIn(row[personLinkedinIndex]);
+    if (existingPersonLinkedin) {
+      reusedSelectedContact++;
+      selected.push({
+        rowNumber: rowIndex + 1,
+        company,
+        linkedin: existingPersonLinkedin,
+        reused: true,
+      });
+      continue;
+    }
+
+    attempted++;
+    const key = finalMaster.companyKey({ company, linkedin: companyLinkedin });
+    const companyState = master.companies?.[key] || {};
+    const sheetWebsite = websiteIndex >= 0 ? String(row[websiteIndex] || '').trim() : '';
+    const domain = finalMaster.hostname(sheetWebsite || companyState.website || '');
+
+    try {
+      const result = await apollo.searchCompanyDecisionMaker({
+        company,
+        domain,
+        priorityMode: options.priorityMode || 'hiring',
+      });
+      const person = result.candidate ? await apollo.resolveDecisionMaker(result.candidate, company, domain) : null;
+      if (!person?.linkedinUrl) {
+        unresolved.push({ rowNumber: rowIndex + 1, company, reason: 'No verified priority decision-maker matched the company.' });
+        if (statusIndex >= 0) changes.push({ range: sheets.cellRange(layout.sheetName, rowIndex + 1, statusIndex), value: 'NO_MATCH' });
+      } else {
+        const name = String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || '').trim();
+        const title = String(person.title || '').trim();
+        if (contactIndex >= 0 && name) changes.push({ range: sheets.cellRange(layout.sheetName, rowIndex + 1, contactIndex), value: name });
+        if (roleIndex >= 0 && title) changes.push({ range: sheets.cellRange(layout.sheetName, rowIndex + 1, roleIndex), value: title });
+        changes.push({ range: sheets.cellRange(layout.sheetName, rowIndex + 1, personLinkedinIndex), value: person.linkedinUrl });
+        if (statusIndex >= 0) changes.push({ range: sheets.cellRange(layout.sheetName, rowIndex + 1, statusIndex), value: 'SELECTED' });
+        selected.push({
+          rowNumber: rowIndex + 1,
+          company,
+          name,
+          title,
+          linkedin: person.linkedinUrl,
+          priority: person.decisionPriority,
+          reused: false,
+        });
+      }
+    } catch (error) {
+      if (/APOLLO_(?:PEOPLE_SEARCH_ACCESS_REQUIRED|NOT_CONFIGURED)/.test(String(error.code || '')) || Number(error.status) === 429) throw error;
+      unresolved.push({ rowNumber: rowIndex + 1, company, reason: error.message });
+      if (statusIndex >= 0) changes.push({ range: sheets.cellRange(layout.sheetName, rowIndex + 1, statusIndex), value: 'ERROR' });
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, apolloSearchDelayMs()));
+  }
+
+  if (changes.length) await sheets.writeCells(layout.spreadsheetId, changes);
+
+  return {
+    sheetUrl,
+    spreadsheetId: layout.spreadsheetId,
+    sheetName: layout.sheetName,
+    selected: selected.length,
+    unresolved: unresolved.length,
+    skippedComplete,
+    reusedSelectedContact,
+    contacts: selected,
+    failures: unresolved,
+    apolloColumns: APOLLO_SECTION_HEADERS.slice(),
+  };
+}
+
 async function prepareApolloCompanyContacts(missionId) {
   const state = loadState();
   const mission = state.missions.find((item) => item.id === missionId);
@@ -2788,46 +2957,15 @@ async function prepareApolloCompanyContacts(missionId) {
     error.code = 'LINKEDIN_APOLLO_MISSION_NOT_FOUND';
     throw error;
   }
-  const targets = Array.isArray(mission.contactTargets) ? mission.contactTargets : [];
-  const max = Math.max(1, Math.min(100, Number(apollo.setting('ULTRON_M3_APOLLO_COMPANY_SEARCH_MAX', '50')) || 50));
-  const changes = [];
-  const selected = [];
-  const unresolved = [];
-  const nameIndex = mission.headers.findIndex((header) => headerKey(header) === 'name');
-  const remarksIndex = mission.headers.findIndex((header) => headerKey(header) === 'remarks');
-  const helperIndex = mission.storageHeaders.findIndex((header) => headerKey(header) === 'contactLinkedin');
-  const spreadsheetId = sheets.spreadsheetId(mission.sheetUrl);
 
-  for (const target of targets.slice(0, max)) {
-    try {
-      const result = await apollo.searchCompanyDecisionMaker({
-        company: target.company,
-        domain: target.domain,
-        priorityMode: mission.request?.hiring ? 'hiring' : 'general',
-      });
-      const person = result.candidate ? await apollo.resolveDecisionMaker(result.candidate, target.company, target.domain) : null;
-      if (!person) {
-        unresolved.push({ company: target.company, reason: 'No Apollo candidate matched the company and requested priority titles.' });
-      } else {
-        const name = String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || '').trim();
-        const remark = contactRemark(name, person.title);
-        if (nameIndex >= 0) changes.push({ range: sheets.cellRange(mission.sheetName, target.rowNumber, nameIndex), value: name });
-        if (remarksIndex >= 0) changes.push({ range: sheets.cellRange(mission.sheetName, target.rowNumber, remarksIndex), value: remark });
-        if (helperIndex >= 0) changes.push({ range: sheets.cellRange(mission.sheetName, target.rowNumber, helperIndex), value: person.linkedinUrl });
-        selected.push({ rowNumber: target.rowNumber, company: target.company, name, title: person.title || '', remark, linkedin: person.linkedinUrl, priority: person.decisionPriority });
-      }
-    } catch (error) {
-      if (/APOLLO_(?:PEOPLE_SEARCH_ACCESS_REQUIRED|NOT_CONFIGURED)/.test(String(error.code || '')) || Number(error.status) === 429) throw error;
-      unresolved.push({ company: target.company, reason: error.message });
-    }
-    await new Promise((resolve) => setTimeout(resolve, apolloSearchDelayMs()));
-  }
-  if (changes.length) await sheets.writeCells(spreadsheetId, changes);
-  mission.apolloDecisionMakers = selected;
-  mission.apolloDecisionMakerUnresolved = unresolved;
+  const prepared = await prepareApolloSheetContacts(mission.sheetUrl, {
+    priorityMode: mission.request?.hiring ? 'hiring' : 'general',
+  });
+  mission.apolloDecisionMakers = prepared.contacts;
+  mission.apolloDecisionMakerUnresolved = prepared.failures;
   mission.apolloDecisionMakerPreparedAt = nowIso();
   saveState(state);
-  return { mission, selected: selected.length, unresolved: unresolved.length };
+  return { mission, ...prepared };
 }
 
 async function enrichFinalMasterContacts() {
@@ -2838,100 +2976,25 @@ async function enrichFinalMasterContacts() {
     throw error;
   }
 
-  const spreadsheetId = sheets.spreadsheetId(master.sheetUrl);
-  const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(master.sheetName || 'Leads')}!A:H`);
-  if (!rows.length) {
-    return { selected: 0, enriched: 0, unresolved: 0, skippedComplete: 0, sheetUrl: master.sheetUrl };
-  }
+  const selection = await prepareApolloSheetContacts(master.sheetUrl, { priorityMode: 'hiring' });
+  const leadEnrichment = require('./lead-enrichment-operator');
+  const stats = await leadEnrichment.enrichSheet(master.sheetUrl, {
+    provider: 'google',
+    ensureContactColumns: false,
+  });
 
-  const headers = rows[0].map((value) => String(value || '').trim().toUpperCase());
-  const indexOf = (name) => headers.indexOf(name);
-  const companyIndex = indexOf('COMPANY NAME');
-  const linkedinIndex = indexOf('COMPANY LINK');
-  const phoneIndex = indexOf('PHONE');
-  const emailIndex = indexOf('EMAIL');
-  const remarksIndex = indexOf('REMARKS');
-
-  if ([companyIndex, linkedinIndex, phoneIndex, emailIndex, remarksIndex].some((index) => index < 0)) {
-    const error = new Error('Final Master columns do not match the current lead schema.');
-    error.code = 'LINKEDIN_FINAL_MASTER_CONTACT_COLUMNS_MISSING';
-    throw error;
-  }
-
-  const max = Math.max(1, Math.min(100, Number(apollo.setting('ULTRON_M3_APOLLO_COMPANY_SEARCH_MAX', '50')) || 50));
-  const changes = [];
-  const selected = [];
-  const unresolved = [];
-  let enriched = 0;
-  let skippedComplete = 0;
-
-  for (let rowIndex = 1; rowIndex < rows.length && selected.length + unresolved.length < max; rowIndex++) {
-    const row = rows[rowIndex] || [];
-    const company = String(row[companyIndex] || '').trim();
-    const companyLinkedin = String(row[linkedinIndex] || '').trim();
-    if (!company || !companyLinkedin) continue;
-
-    const existingEmail = String(row[emailIndex] || '').trim();
-    const existingPhone = String(row[phoneIndex] || '').trim();
-    const existingRemark = String(row[remarksIndex] || '').trim();
-
-    if (existingEmail && existingPhone && existingRemark) {
-      skippedComplete++;
-      continue;
-    }
-
-    const key = finalMaster.companyKey({ company, linkedin: companyLinkedin });
-    const companyState = master.companies?.[key] || {};
-    const domain = finalMaster.hostname(companyState.website || '');
-
-    try {
-      const result = await apollo.searchCompanyDecisionMaker({ company, domain, priorityMode: 'hiring' });
-      const person = result.candidate ? await apollo.resolveDecisionMaker(result.candidate, company, domain) : null;
-      if (!person?.linkedinUrl) {
-        unresolved.push({ company, reason: 'No verified priority decision-maker matched the company.' });
-        continue;
-      }
-
-      const contact = await apollo.enrich(person.linkedinUrl, { needEmail: !existingEmail, needPhone: !existingPhone });
-      const email = existingEmail || String(contact.email || '').trim();
-      const phone = existingPhone || String(contact.phone || '').trim();
-      const name = String(person.name || '').trim();
-      const title = String(person.title || '').trim();
-      const remarks = existingRemark || finalMaster.contactRemark(name, title);
-      const status = email && phone ? 'ENRICHED' : email ? 'EMAIL_ONLY' : phone ? 'PHONE_ONLY' : contact.ambiguous ? 'AMBIGUOUS' : 'NO_MATCH';
-
-      if (phone) changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, phoneIndex), value: phone });
-      if (email) changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, emailIndex), value: email });
-      if (remarks) changes.push({ range: sheets.cellRange(master.sheetName, rowIndex + 1, remarksIndex), value: remarks });
-
-      finalMaster.contactUpdate(key, {
-        name,
-        title,
-        linkedin: person.linkedinUrl,
-        email,
-        phone,
-        status,
-        remarks,
-      });
-
-      selected.push({ company, name, title, linkedin: person.linkedinUrl, email, phone, remarks, status });
-      if (email || phone) enriched++;
-    } catch (error) {
-      if (/APOLLO_(?:PEOPLE_SEARCH_ACCESS_REQUIRED|NOT_CONFIGURED)/.test(String(error.code || '')) || Number(error.status) === 429) throw error;
-      unresolved.push({ company, reason: error.message });
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, apolloSearchDelayMs()));
-  }
-
-  if (changes.length) await sheets.writeCells(spreadsheetId, changes);
   return {
-    selected: selected.length,
-    enriched,
-    unresolved: unresolved.length,
-    skippedComplete,
-    contacts: selected,
-    failures: unresolved,
+    selected: selection.selected,
+    enriched: Number(stats.enrichedProfiles || 0) + Number(stats.cachedProfiles || 0),
+    unresolved: Number(selection.unresolved || 0) + Number(stats.unresolvedRows || 0) + Number(stats.failedRows || 0),
+    skippedComplete: Number(selection.skippedComplete || 0) + Number(stats.skippedComplete || 0),
+    reusedSelectedContact: selection.reusedSelectedContact || 0,
+    emailsWritten: stats.emailsWritten || 0,
+    phonesWritten: stats.phonesWritten || 0,
+    pendingPhones: stats.pendingPhones || 0,
+    contacts: selection.contacts,
+    failures: selection.failures,
+    apolloColumns: selection.apolloColumns,
     sheetUrl: master.sheetUrl,
   };
 }
@@ -3851,6 +3914,7 @@ module.exports = {
   COMPANY_HEADERS,
   PERSON_HEADERS,
   INTERNAL_CONTACT_HEADER,
+  APOLLO_SECTION_HEADERS,
   isRequest,
   parseCount,
   parseExplicitCount,
@@ -3934,6 +3998,8 @@ module.exports = {
   latestRejectedMission,
   isRejectedSheetRequest,
   createRejectedCandidatesSheet,
+  ensureApolloSection,
+  prepareApolloSheetContacts,
   prepareApolloCompanyContacts,
   enrichFinalMasterContacts,
   isBuildFinalMasterRequest,
