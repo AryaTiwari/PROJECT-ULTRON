@@ -92,6 +92,37 @@ function list() {
   return fs.readdirSync(root).filter(n => n.endsWith('.json')).map(n => get(n.slice(0, -5)))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
+
+function missionSignature(prepared = {}) {
+  const request = prepared?.request || {};
+  const contract = request.missionContract || {};
+  const hard = contract.hard || {};
+  const preferences = contract.preferences || {};
+  const target = contract.target || {};
+  return JSON.stringify({
+    entityMode: request.entityMode || contract.entityMode || '',
+    topic: String(request.topic || contract.topic || '').trim().toLowerCase(),
+    targetMode: request.targetMode || target.mode || 'additional',
+    targetValue: Number(request.targetTotal || target.value || request.count || 0),
+    locations: (request.allowedLocations || hard.locations || []).map((x) => String(x).trim().toLowerCase()),
+    preferredLocations: (request.preferredLocations || preferences.locations || []).map((x) => String(x).trim().toLowerCase()),
+    employeeMin: request.filters?.employeeMin ?? hard.employeeMin ?? null,
+    employeeMax: request.filters?.employeeMax ?? hard.employeeMax ?? null,
+    workType: request.filters?.workType ?? hard.workType ?? null,
+    preferredWorkType: request.preferredWorkType ?? preferences.workType ?? null,
+    hiring: Boolean(request.hiring ?? hard.hiringRequired),
+    destination: request.destinationSheetUrl || contract.output?.destinationSheetUrl || null,
+    allowSeen: Boolean(request.allowPreviouslySeenCompanies || contract.dedupe?.allowPreviouslySeen),
+  });
+}
+
+function equivalentActiveMission(prepared = {}) {
+  const signature = missionSignature(prepared);
+  return list().find((mission) =>
+    ['created', 'searching', 'writing_sheet', 'waiting_safety'].includes(mission.status)
+    && (mission.signature || missionSignature(mission.prepared)) === signature
+  ) || null;
+}
 function start(fn) {
   executor = fn;
   for (const m of list()) {
@@ -129,8 +160,12 @@ function start(fn) {
   }
 }
 function enqueue(prepared) {
+  const existing = equivalentActiveMission(prepared);
+  if (existing) return { ...summary(existing), alreadyActive: true };
+
   if (queue.length >= 20) throw new Error('LINKEDIN_QUEUE_FULL');
   const m = { id: randomUUID(), createdAt: new Date().toISOString(), status: 'created',
+    signature: missionSignature(prepared),
     prepared, calls: 0, cacheHits: 0, responses: {}, research: null, followups: [], progress: { phase: 'queued' } };
   save(m);
   queueOnce(m.id);
@@ -424,4 +459,4 @@ function resumeSaved(text) {
   save(m);
   return control(m.id, 'resume');
 }
-module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, resumeSaved };
+module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, resumeSaved };
