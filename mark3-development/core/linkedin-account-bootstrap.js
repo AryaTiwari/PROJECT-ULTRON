@@ -192,7 +192,12 @@ async function handle(message, options = {}) {
     try {
       if (/^\s*resume\b[\s\S]*\blinkedin\b/i.test(text)) {
         const job = missionRunner.resumeSaved(text);
-        return responseShape(true, job.alreadyActive ? `LinkedIn mission ${job.id} is already active. No duplicate mission was created.` : `Resuming saved LinkedIn mission ${job.id}. Existing discovery responses will be reused; no fresh discovery searches will be made.`, { linkedinBackgroundMission: job });
+        const message = job.alreadyActive
+          ? `LinkedIn mission ${job.id} is already active. No duplicate mission was created.`
+          : job.recovered
+            ? `The original LinkedIn mission state ${job.missingMissionId} is missing from the current mission store. I created recovery continuation ${job.id} from ${job.recoverySourceMissionIds?.length || 0} compatible saved mission source(s), covering ${job.compatibleSearchResponses || 0} cached search_jobs response(s) and ${job.compatibleCachedResponses || 0} cached tool response(s). Fresh discovery is disabled for this recovery pass.`
+            : `Resuming saved LinkedIn mission ${job.id}. Existing discovery responses will be reused; no fresh discovery searches will be made.`;
+        return responseShape(true, message, { linkedinBackgroundMission: job });
       }
       if (/\blinkedin mission (?:progress|pause|cancel|resume|explain)\b/i.test(text)) {
         const latest = missionRunner.list()[0];
