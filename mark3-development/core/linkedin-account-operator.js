@@ -1293,10 +1293,44 @@ async function budgetedCall(budget, tool, args) {
     }
     if (isBudgetStop(error)) {
       budget.stopped = error.message;
+      if (missionRunner.isSafetyWaitCode?.(error.code)) {
+        budget.maximum = Math.min(budget.maximum, budget.used);
+        budget.safetyBlock = { code: String(error.code || 'LINKEDIN_SAFETY_WAIT'), message: String(error.message || error.code || 'LinkedIn safety wait') };
+        budget.nextEligibleAt = error.cooldownUntil || policy.nextEligibleAt?.() || budget.nextEligibleAt || null;
+      }
       return null;
     }
     throw error;
   }
+}
+
+function safetyGateError(budget) {
+  if (!budget?.safetyBlock) return null;
+  const error = new Error(budget.safetyBlock.message || 'LinkedIn safety window is unavailable.');
+  error.code = budget.safetyBlock.code || 'LINKEDIN_SAFETY_WAIT';
+  error.cooldownUntil = budget.nextEligibleAt || policy.nextEligibleAt?.() || null;
+  error.linkedinSafetyGate = true;
+  return error;
+}
+
+async function cacheAwareVerificationCall(budget, tool, args) {
+  if (budget.used >= budget.maximum) {
+    const cached = missionRunner.cachedExact?.(tool, args) || { hit: false, value: null };
+    return {
+      value: cached.hit ? cached.value : null,
+      cacheOnly: true,
+      cacheHit: Boolean(cached.hit),
+      sourceMissionId: cached.sourceMissionId || null,
+    };
+  }
+
+  const value = await budgetedCall(budget, tool, args);
+  return {
+    value,
+    cacheOnly: false,
+    cacheHit: false,
+    sourceMissionId: null,
+  };
 }
 
 function referenceRecord(ref, request) {
@@ -1707,6 +1741,10 @@ async function companyMission(request) {
   let jobCandidatesPassed = 0;
   let deepProfiles = 0;
   let verifiedDuringRun = 0;
+  let cachedJobDetailHits = 0;
+  let cachedJobDetailMisses = 0;
+  let cachedCompanyProfileHits = 0;
+  let cachedCompanyProfileMisses = 0;
   const searchCalls = [];
   const searchWarnings = [];
   const jobMeta = new Map();
@@ -1833,6 +1871,10 @@ async function companyMission(request) {
         remaining: Math.max(0, request.count - acceptedCompanies.size),
         budgetUsed: budget.used,
         budgetMaximum: budget.maximum,
+        cachedJobDetailHits,
+        cachedJobDetailMisses,
+        cachedCompanyProfileHits,
+        cachedCompanyProfileMisses,
       });
     }
 
@@ -1848,14 +1890,18 @@ async function companyMission(request) {
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
-      if (budget.used >= budget.maximum) {
-        budget.stopped = budget.stopped || 'mission LinkedIn-call budget reached';
-        break;
-      }
 
       let detail;
       try {
-        detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
+        const fetched = await cacheAwareVerificationCall(budget, 'get_job_details', { job_id: jobId });
+        if (fetched.cacheOnly) {
+          if (fetched.cacheHit) cachedJobDetailHits++;
+          else {
+            cachedJobDetailMisses++;
+            continue;
+          }
+        }
+        detail = fetched.value;
       } catch (error) {
         if (!isTransientMcpFailure(error)) throw error;
         const transientKey = String(jobId);
@@ -1882,7 +1928,10 @@ async function companyMission(request) {
         });
         continue;
       }
-      if (!detail) break;
+      if (!detail) {
+        if (budget.used >= budget.maximum) continue;
+        break;
+      }
       jobDetails++;
       checkedJobIds.push(String(jobId));
       missionRunner.updateProgress({
@@ -1894,6 +1943,10 @@ async function companyMission(request) {
         remaining: Math.max(0, request.count - acceptedCompanies.size),
         budgetUsed: budget.used,
         budgetMaximum: budget.maximum,
+        cachedJobDetailHits,
+        cachedJobDetailMisses,
+        cachedCompanyProfileHits,
+        cachedCompanyProfileMisses,
       });
 
       let detailText = flattenText(detail);
@@ -1995,16 +2048,24 @@ async function companyMission(request) {
         continue;
       }
 
-      if (budget.used >= budget.maximum) {
-        records.push(record);
-        budget.stopped = budget.stopped || 'mission LinkedIn-call budget reached before company-profile verification';
-        break;
-      }
-
       try {
-        const deep = await budgetedCall(budget, 'get_company_profile', { company_name: normalizedCompany?.slug || record.company });
+        const fetched = await cacheAwareVerificationCall(
+          budget,
+          'get_company_profile',
+          { company_name: normalizedCompany?.slug || record.company },
+        );
+        if (fetched.cacheOnly) {
+          if (fetched.cacheHit) cachedCompanyProfileHits++;
+          else {
+            cachedCompanyProfileMisses++;
+            records.push(record);
+            continue;
+          }
+        }
+        const deep = fetched.value;
         if (!deep) {
           records.push(record);
+          if (budget.used >= budget.maximum) continue;
           break;
         }
         deepProfiles++;
@@ -2107,6 +2168,27 @@ async function companyMission(request) {
         records.push(record);
       }
     }
+  }
+
+  if (request.hiring && acceptedCompanies.size < request.count && budget.used >= budget.maximum && budget.safetyBlock) {
+    missionRunner.updateProgress({
+      phase: 'waiting_safety',
+      uniqueJobIds: jobMeta.size,
+      jobDetailsChecked: jobDetails,
+      companyProfilesChecked: deepProfiles,
+      verifiedCompanies: acceptedCompanies.size,
+      remaining: Math.max(0, request.count - acceptedCompanies.size),
+      budgetUsed: budget.used,
+      budgetMaximum: budget.maximum,
+      cachedReconsidered: reconsidered.length,
+      cachedJobDetailHits,
+      cachedJobDetailMisses,
+      cachedCompanyProfileHits,
+      cachedCompanyProfileMisses,
+      cacheVerificationExhausted: true,
+    });
+    const error = safetyGateError(budget);
+    if (error) throw error;
   }
 
   const preProfileRejected = request.hiring
@@ -2225,6 +2307,10 @@ async function companyMission(request) {
       skippedPreviouslyChecked: request.hiring && request.continueFromPrevious ? previouslyChecked.size : 0,
       globallySeenSkipped: records.filter((record) => record.globalSeen).length,
       cachedReconsidered: reconsidered.length,
+      cachedJobDetailHits,
+      cachedJobDetailMisses,
+      cachedCompanyProfileHits,
+      cachedCompanyProfileMisses,
     },
     budgetStopped: budget.stopped,
     filters: request.filters,
