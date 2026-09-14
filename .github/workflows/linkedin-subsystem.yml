@@ -43,6 +43,9 @@ jobs:
       - name: Test zero-budget missions wait instead of completing empty
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-zero-budget-resume-selftest.js
+      - name: Test cache-only SAP verification
+        working-directory: mark3-development
+        run: node --env-file=../.env scripts/linkedin-cache-only-verification-selftest.js
       - name: Test canonical LinkedIn Final Master
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-final-master-selftest.js
