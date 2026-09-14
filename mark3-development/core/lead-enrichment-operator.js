@@ -225,7 +225,7 @@ async function enrichSheet(sheetUrl, options = {}) {
 
     const neededBeforeLocal = needEmail || needPhone;
 
-    if (needEmail) {
+    if (needEmail && !options.strictApolloColumns) {
       const visibleEmail = extractRowEmail(row, [layout.emailColumnIndex, layout.linkedinColumnIndex]);
       if (visibleEmail) {
         changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.emailColumnIndex), value: visibleEmail });
@@ -235,7 +235,7 @@ async function enrichSheet(sheetUrl, options = {}) {
       }
     }
 
-    if (needPhone) {
+    if (needPhone && !options.strictApolloColumns) {
       const visiblePhone = extractRowPhone(row, [layout.phoneColumnIndex, layout.linkedinColumnIndex]);
       if (visiblePhone) {
         changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: visiblePhone });
