@@ -28,6 +28,42 @@ function schedulePumpAt(iso) {
   }, Math.min(delay, 0x7fffffff));
 }
 
+function isSafetyWaitCode(code) {
+  return /LINKEDIN_(?:COOLDOWN|BURST_CAP|HOURLY_CAP|DAILY_CAP|RATE_LIMIT)/i.test(String(code || ''));
+}
+
+function parkForSafety(mission, error = null) {
+  const code = String(error?.code || mission.stopCode || 'LINKEDIN_SAFETY_WAIT');
+  if (!isSafetyWaitCode(code)) return false;
+
+  const configured = Date.parse(String(error?.cooldownUntil || ''));
+  const policyNext = Date.parse(String(policy.nextEligibleAt?.() || ''));
+  const minGap = Math.max(1000, Number(policy.settings?.().minGapMs || 9000));
+  const fallback = Date.now() + minGap;
+  const nextMs = Math.max(
+    Number.isFinite(configured) ? configured : 0,
+    Number.isFinite(policyNext) ? policyNext : 0,
+    fallback
+  );
+  const nextAt = new Date(nextMs).toISOString();
+
+  mission.status = 'waiting_safety';
+  mission.notBefore = nextAt;
+  mission.stopCode = code;
+  mission.error = error ? { code, message: String(error.message || code) } : mission.error || null;
+  mission.progress = {
+    ...(mission.progress || {}),
+    phase: 'waiting_safety',
+    autoContinue: true,
+    nextEligibleAt: nextAt,
+    safetyReason: error?.message || mission.progress?.safetyReason || code,
+  };
+  save(mission);
+  queueOnce(mission.id);
+  schedulePumpAt(nextAt);
+  return true;
+}
+
 function file(id) {
   if (!/^[a-z0-9-]+$/i.test(id)) throw new Error('Invalid mission ID');
   return path.join(root, `${id}.json`);
@@ -182,9 +218,16 @@ async function pump() {
   } catch (error) {
     const code = String(error.code || error.message || 'LINKEDIN_MISSION_FAILED');
     m.error = { code, message: String(error.message || code) };
+
+    if (isSafetyWaitCode(code) && !/CHECKPOINT|MANUAL_LOCK/.test(code)) {
+      parkForSafety(m, error);
+      return;
+    }
+
     m.status = /CHECKPOINT|MANUAL_LOCK/.test(code) ? 'paused_checkpoint'
-      : /COOLDOWN|CAP|RATE_LIMIT/.test(code) ? 'paused_rate_limit'
-        : code === 'LINKEDIN_MISSION_PAUSED' ? 'paused' : code === 'LINKEDIN_MISSION_CANCELLED' ? 'cancelled' : 'failed';
+      : code === 'LINKEDIN_MISSION_PAUSED' ? 'paused'
+        : code === 'LINKEDIN_MISSION_CANCELLED' ? 'cancelled'
+          : 'failed';
     save(m);
   } finally { running = false; setImmediate(pump); }
 }
@@ -349,4 +392,4 @@ function resumeSaved(text) {
   save(m);
   return control(m.id, 'resume');
 }
-module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, updateProgress, currentUsage, defer, active, resumeSaved };
+module.exports = { start, enqueue, get, list, summary, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, resumeSaved };
