@@ -190,7 +190,7 @@ async function handle(message, options = {}) {
     let result = null;
 
     try {
-      if (/^\s*resume\b[\s\S]*\blinkedin\b/i.test(text)) {
+      if (/^\s*(?:resume\b[\s\S]*\blinkedin\b|continue\b[\s\S]*[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/i.test(text)) {
         const job = missionRunner.resumeSaved(text);
         const message = job.alreadyActive
           ? `LinkedIn mission ${job.id} is already active. No duplicate mission was created.`
@@ -200,10 +200,21 @@ async function handle(message, options = {}) {
         return responseShape(true, message, { linkedinBackgroundMission: job });
       }
       if (/\blinkedin mission (?:progress|pause|cancel|resume|explain)\b/i.test(text)) {
-        const latest = missionRunner.list()[0];
-        if (!latest) return responseShape(true, 'No background LinkedIn mission exists yet.');
+        const targetId = String(text).match(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i)?.[0] || null;
+        let selected = null;
+        if (targetId) {
+          try { selected = missionRunner.get(targetId); } catch {}
+        } else {
+          selected = missionRunner.list()[0] || null;
+        }
+        if (!selected) return responseShape(false, targetId
+          ? `LinkedIn mission ${targetId} was not found in the current mission store.`
+          : 'No background LinkedIn mission exists yet.', {
+            error: targetId ? 'LINKEDIN_MISSION_NOT_FOUND' : 'LINKEDIN_MISSION_NONE',
+            requestedMissionId: targetId,
+          });
         const action = text.match(/\blinkedin mission (progress|pause|cancel|resume|explain)\b/i)[1].toLowerCase();
-        const job = action === 'progress' || action === 'explain' ? missionRunner.summary(latest) : missionRunner.control(latest.id, action);
+        const job = action === 'progress' || action === 'explain' ? missionRunner.summary(selected) : missionRunner.control(selected.id, action);
         const terminalResult = ['completed', 'partial', 'failed', 'cancelled'].includes(job.status) ? job.result?.text : null;
         return responseShape(true, action === 'explain' ? missionContractText(job) : (terminalResult || missionProgressText(job)), { linkedinBackgroundMission: job });
       }

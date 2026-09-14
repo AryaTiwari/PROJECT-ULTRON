@@ -645,9 +645,16 @@ function resumeSaved(text) {
   const explicit = String(text).match(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i)?.[0];
   const all = list();
   const exact = explicit ? all.find((mission) => mission.id === explicit) : null;
-  let m = (explicit ? (exact ? [exact] : []) : all)
-    .filter((mission) => hasCachedTool(mission, 'search_jobs'))
-    .sort((a,b) => Object.keys(b.responses || {}).length - Object.keys(a.responses || {}).length)[0];
+  const exactUsesCompatiblePool = Boolean(
+    exact?.prepared?.request?.resumeExistingPool
+    || exact?.prepared?.request?.recoveredFromMissingMissionId
+    || exact?.prepared?.request?.recoverySourceMissionIds?.length
+  );
+  let m = exact && (hasCachedTool(exact, 'search_jobs') || exactUsesCompatiblePool)
+    ? exact
+    : (explicit ? [] : all)
+      .filter((mission) => hasCachedTool(mission, 'search_jobs'))
+      .sort((a,b) => Object.keys(b.responses || {}).length - Object.keys(a.responses || {}).length)[0];
 
   // The original mission file may be missing after a local cleanup/rebuild even
   // though compatible discovery evidence from sibling missions still exists.

@@ -99,6 +99,15 @@ async function until(fn) {
   assert.equal(recoveryMission.prepared.request.recoveredFromMissingMissionId, missingId);
 
   await until(() => runner.get(recovery.id).status === 'completed');
+
+  const beforeTargetedCount = runner.list().length;
+  const targeted = runner.resumeSaved(
+    `Continue recovery mission ${recovery.id}. Do not create another mission. Reuse the existing saved evidence only.`
+  );
+  assert.equal(targeted.id, recovery.id);
+  assert.equal(runner.list().length, beforeTargetedCount, 'Explicit recovery continuation must not create another mission.');
+
+  await until(() => runner.get(recovery.id).status === 'completed');
   assert.equal(freshSearchCalls, 0);
   const recoveredComplete = runner.get(recovery.id);
   assert.equal(recoveredComplete.discoveryReplayed, true);
