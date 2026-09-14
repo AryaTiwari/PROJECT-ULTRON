@@ -247,6 +247,32 @@ function clearManualLock(reason = 'manual re-authentication confirmed') {
   return status();
 }
 
+function nextEligibleAt(state = loadState(), now = Date.now()) {
+  const current = prune({ ...state, events: Array.isArray(state.events) ? [...state.events] : [] }, now);
+  if (current.manualLock) return null;
+  if (current.cooldownUntil && Date.parse(current.cooldownUntil) > now) {
+    return current.cooldownUntil;
+  }
+
+  const limits = settings();
+  const events = (current.events || []).map((event) => Number(event.at || 0)).filter(Number.isFinite).sort((a, b) => a - b);
+  const candidates = [now];
+
+  const last = Date.parse(current.lastCallAt || '');
+  if (Number.isFinite(last)) candidates.push(last + limits.minGapMs);
+
+  const burstEvents = events.filter((at) => at >= now - limits.burstWindowMs);
+  if (burstEvents.length >= limits.burstMax) candidates.push(burstEvents[0] + limits.burstWindowMs + 1000);
+
+  const hourEvents = events.filter((at) => at >= now - 60 * 60 * 1000);
+  if (hourEvents.length >= limits.hourlyMax) candidates.push(hourEvents[0] + 60 * 60 * 1000 + 1000);
+
+  const dayEvents = events.filter((at) => at >= now - 24 * 60 * 60 * 1000);
+  if (dayEvents.length >= limits.dailyMax) candidates.push(dayEvents[0] + 24 * 60 * 60 * 1000 + 1000);
+
+  return new Date(Math.max(...candidates)).toISOString();
+}
+
 function status() {
   const state = prune(loadState());
   saveState(state);
@@ -284,5 +310,6 @@ module.exports = {
   recordCall,
   recordError,
   clearManualLock,
+  nextEligibleAt,
   status,
 };
