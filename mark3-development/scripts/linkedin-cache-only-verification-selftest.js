@@ -106,7 +106,7 @@ mcp.callTool = async () => {
 const request = {
   entityMode: 'company',
   topic: 'SAP',
-  count: 1,
+  count: 2,
   hiring: true,
   location: 'Maharashtra',
   locationScope: 'job',
@@ -156,16 +156,17 @@ async function waitFor(fn) {
   mcp.callTool = originalCallTool;
 
   assert.notEqual(finished.status, 'failed');
-  assert.notEqual(finished.status, 'waiting_safety');
+  assert.equal(finished.status, 'partial');
   assert(captured, 'Research result was not captured.');
   assert.equal(captured.records.length, 1);
+  assert.ok(captured.budgetStopped, 'Partial cache-only verification should preserve verified rows and mark the remaining live work as safety-limited.');
   assert.equal(captured.records[0].company, 'Acme Software');
   assert.equal(captured.records[0].jobUrl, 'https://www.linkedin.com/jobs/view/90000001');
   assert.equal(captured.toolCalls.cachedJobDetailHits, 1);
   assert.equal(captured.toolCalls.cachedCompanyProfileHits, 1);
   assert.equal(liveCalls, 0);
 
-  console.log('Cache-only SAP verification passed: cached search, job detail and company profile produced a verified company with zero live LinkedIn calls.');
+  console.log('Cache-only SAP verification passed: cached evidence produced a verified company with zero live calls, returned it for writing, and left only the remaining target safety-limited.');
 })().catch((error) => {
   policy.status = originalStatus;
   policy.nextEligibleAt = originalNextEligibleAt;
