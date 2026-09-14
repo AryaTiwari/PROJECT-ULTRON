@@ -185,7 +185,8 @@ function install() {
         if (!latest) return responseShape(true, 'No background LinkedIn mission exists yet.');
         const action = text.match(/\blinkedin mission (progress|pause|cancel|resume|explain)\b/i)[1].toLowerCase();
         const job = action === 'progress' || action === 'explain' ? missionRunner.summary(latest) : missionRunner.control(latest.id, action);
-        return responseShape(true, action === 'explain' ? missionContractText(job) : (job.result?.text || missionProgressText(job)), { linkedinBackgroundMission: job });
+        const terminalResult = ['completed', 'partial', 'failed', 'cancelled'].includes(job.status) ? job.result?.text : null;
+        return responseShape(true, action === 'explain' ? missionContractText(job) : (terminalResult || missionProgressText(job)), { linkedinBackgroundMission: job });
       }
       const pending = await operator.resolvePending(text);
       if (pending) {
