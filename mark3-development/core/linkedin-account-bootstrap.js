@@ -331,7 +331,10 @@ async function handle(message, options = {}) {
       } else if (operator.isDedupeSheetRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-sheet-dedupe', inputMode });
         const cleaned = await operator.dedupeWorkspaceSheet(text);
-        result = responseShape(true, `Cleaned “${cleaned.spreadsheetTitle}” / ${cleaned.sheetName}: removed ${cleaned.removed} duplicate row${cleaned.removed === 1 ? '' : 's'}. ${cleaned.sheetUrl}`, {
+        const message = cleaned.deletionApproved
+          ? `Cleaned “${cleaned.spreadsheetTitle}” / ${cleaned.sheetName}: removed ${cleaned.removed} duplicate row${cleaned.removed === 1 ? '' : 's'} after explicit deletion approval. ${cleaned.sheetUrl}`
+          : `Checked “${cleaned.spreadsheetTitle}” / ${cleaned.sheetName}: found ${cleaned.duplicatesFound} duplicate row${cleaned.duplicatesFound === 1 ? '' : 's'}. Nothing was deleted because the command did not explicitly ask to delete/remove duplicates. ${cleaned.sheetUrl}`;
+        result = responseShape(true, message, {
           linkedinSheetDedupe: cleaned,
           spreadsheetUrl: cleaned.sheetUrl,
         });
