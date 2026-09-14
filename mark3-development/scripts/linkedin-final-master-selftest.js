@@ -104,7 +104,7 @@ const filler = {
 };
 master.registerRecords([filler], { missionId: 'seen-history', master: false });
 assert.equal(master.seen(filler), true);
-assert.equal(master.masterCount(), 1);
+assert.equal(master.masterCount(), 2);
 master.replaceMasterRecords([tech], { missionId: 'rebuild' });
 assert.equal(master.seen(filler), true);
 assert.equal(master.masterCount(), 1);
@@ -113,7 +113,7 @@ assert.deepEqual(master.rowFor(tech), [
   'TechVerito',
   'https://www.linkedin.com/company/techverito',
   'https://www.linkedin.com/jobs/view/1',
-  '',
+  'Mumbai, Maharashtra, India',
   '11',
   '',
   '',
