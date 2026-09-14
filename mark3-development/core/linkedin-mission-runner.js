@@ -120,6 +120,7 @@ function equivalentActiveMission(prepared = {}) {
   const signature = missionSignature(prepared);
   return list().find((mission) =>
     ['created', 'searching', 'writing_sheet', 'waiting_safety'].includes(mission.status)
+    && !mission.control
     && (mission.signature || missionSignature(mission.prepared)) === signature
   ) || null;
 }
@@ -506,7 +507,28 @@ function control(id, action) {
     queueOnce(id);
     setImmediate(pump);
   } else {
-    m.control = action === 'cancel' ? 'cancel' : 'pause'; save(m, false);
+    const nextControl = action === 'cancel' ? 'cancel' : 'pause';
+
+    // A parked safety mission is not executing any tool call, so pausing or
+    // cancelling it can be applied immediately. Leaving it as waiting_safety
+    // until its old timer fires made duplicate detection resurrect a mission
+    // the user had already cancelled.
+    if (m.status === 'waiting_safety') {
+      m.control = null;
+      m.notBefore = null;
+      m.stopCode = nextControl === 'cancel' ? 'LINKEDIN_MISSION_CANCELLED' : null;
+      m.status = nextControl === 'cancel' ? 'cancelled' : 'paused';
+      m.progress = {
+        ...(m.progress || {}),
+        phase: m.status,
+        nextEligibleAt: null,
+        safetyReason: null,
+      };
+      save(m, false);
+    } else {
+      m.control = nextControl;
+      save(m, false);
+    }
   }
   return summary(m);
 }
