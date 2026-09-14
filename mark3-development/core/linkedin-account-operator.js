@@ -2901,7 +2901,9 @@ async function prepareApolloSheetContacts(sheetUrl, options = {}) {
 
     const existingApolloEmail = String(row[emailIndex] || '').trim();
     const existingApolloPhone = String(row[phoneIndex] || '').trim();
-    if (existingApolloEmail && existingApolloPhone && !/^(?:null)$/i.test(existingApolloEmail + existingApolloPhone)) {
+    const hasApolloEmail = Boolean(existingApolloEmail && !/^null$/i.test(existingApolloEmail));
+    const hasApolloPhone = Boolean(existingApolloPhone && !/^null$/i.test(existingApolloPhone));
+    if (hasApolloEmail && hasApolloPhone) {
       skippedComplete++;
       continue;
     }
@@ -3008,6 +3010,7 @@ async function enrichFinalMasterContacts() {
   const stats = await leadEnrichment.enrichSheet(master.sheetUrl, {
     provider: 'google',
     ensureContactColumns: false,
+    strictApolloColumns: true,
   });
 
   return {
