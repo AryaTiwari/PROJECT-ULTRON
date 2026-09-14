@@ -33,6 +33,9 @@ jobs:
           ffprobe -version
       - name: Create non-secret test environment
         run: cp .env.example .env
+      - name: Install Mark 3 dependencies
+        working-directory: mark3-development
+        run: npm install --ignore-scripts --no-audit --no-fund
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight
