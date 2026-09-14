@@ -431,9 +431,15 @@ const lock = policy.classifyError(new Error('LinkedIn security checkpoint detect
 assert.equal(lock.kind, 'manual-lock');
 const rate = policy.classifyError(new Error('429 Too Many Requests'));
 assert.equal(rate.kind, 'rate-limit');
+const transientTimeout = Object.assign(new Error('LinkedIn MCP request timed out after 180000ms.'), { code: 'LINKEDIN_MCP_TIMEOUT' });
+assert.equal(policy.classifyError(transientTimeout).kind, 'transient');
+assert.equal(mcp.isTransientTransportError(transientTimeout), true);
+assert.equal(mcp.isTransientTransportError(Object.assign(new Error('socket reset'), { code: 'ECONNRESET' })), true);
+assert.ok(mcp.toolTimeoutMs('get_job_details') >= 15000);
+assert.ok(mcp.toolTimeoutMs('search_jobs') >= 15000);
 const strikeNow = Date.now();
 const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at: strikeNow - 1000, errorKind: 'rate-limit' }] };
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, implicit hiring-intent routing, headcount-safe company/person classification, India/state hub expansion, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, auto-expanding master Sheet grids, recoverable destination writes, actionable Sheets diagnostics, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, implicit hiring-intent routing, headcount-safe company/person classification, India/state hub expansion, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, auto-expanding master Sheet grids, recoverable destination writes, actionable Sheets diagnostics, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, transient MCP session recovery, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
