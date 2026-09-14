@@ -4,6 +4,7 @@ const assert = require('assert/strict');
 const operator = require('../core/linkedin-account-operator');
 const master = require('../core/linkedin-final-master');
 const runner = require('../core/linkedin-mission-runner');
+const profileEvidenceCache = require('../core/linkedin-profile-evidence-cache');
 
 assert.equal(operator.explicitDeletionIntent('dedupe this LinkedIn sheet'), false);
 assert.equal(operator.explicitDeletionIntent('clean duplicates in this LinkedIn sheet'), false);
@@ -81,4 +82,36 @@ const cacheOnly = runner.compileResumeRequest(
 );
 assert.equal(cacheOnly.savedDiscoveryOnly, true);
 
-console.log('LinkedIn lead-scraper safety self-test passed: cache-first discovery, India override, applicant extraction, mission-aware ranking, and explicit-only deletion are enforced.');
+const cachedProfile = profileEvidenceCache.profileFromJobDetails([{
+  id: 'mission-a',
+  prepared: { request: { resumeExistingPool: true } },
+  responses: {
+    [JSON.stringify(['get_job_details', { job_id: '1' }])]: {
+      at: Date.now(),
+      value: {
+        url: 'https://www.linkedin.com/jobs/view/1',
+        references: [{ url: 'https://www.linkedin.com/company/acme-sap' }],
+        sections: { job_posting: 'SAP Consultant\\nCompany size: 51-200 employees' },
+      },
+    },
+  },
+}], 'acme-sap');
+assert.ok(cachedProfile);
+assert.ok(/51-200 employees/i.test(cachedProfile.value.sections.main));
+
+const staleProfile = profileEvidenceCache.profileFromJobDetails([{
+  id: 'mission-b',
+  prepared: { request: { resumeExistingPool: false } },
+  responses: {
+    [JSON.stringify(['get_job_details', { job_id: '2' }])]: {
+      at: Date.now() - 7 * 60 * 60 * 1000,
+      value: {
+        references: [{ url: 'https://www.linkedin.com/company/stale-sap' }],
+        sections: { job_posting: 'SAP Consultant\\nCompany size: 51-200 employees' },
+      },
+    },
+  },
+}], 'stale-sap');
+assert.equal(staleProfile, null);
+
+console.log('LinkedIn lead-scraper safety self-test passed: cache-first discovery, India override, applicant extraction, mission-aware ranking, explicit-only deletion, and job-detail company-size reuse are enforced.');
