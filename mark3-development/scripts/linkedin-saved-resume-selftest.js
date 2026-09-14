@@ -61,7 +61,31 @@ async function until(fn) {
       require('../core/linkedin-account-operator').jobIdsFromResult(result),
       ['4252026496', '4252026497'],
     );
-    return { text: 'done' };
+
+    // Persistent target missions only complete when the authoritative target
+    // is actually reached. Simulate a successful 30-company master instead of
+    // relying on the old partial-is-terminal behavior.
+    const finalMaster = require('../core/linkedin-final-master');
+    const records = Array.from({ length: 30 }, (_, index) => ({
+      company: `Resume Test Company ${index + 1}`,
+      linkedin: `https://www.linkedin.com/company/resume-test-${index + 1}`,
+      role: 'SAP Consultant',
+      jobUrl: `https://www.linkedin.com/jobs/view/42520${String(30000 + index).slice(-5)}`,
+      location: 'India',
+      employeeCount: { min: 51, max: 200, label: '51-200' },
+      hiringSignal: 'Active SAP role in India',
+    }));
+    finalMaster.registerRecords(records, { missionId: 'saved-resume-selftest', master: true });
+
+    return {
+      text: 'done',
+      linkedinMission: {
+        found: 30,
+        requested: 30,
+        added: 30,
+        budgetStopped: null,
+      },
+    };
   });
 
   const text = 'Resume the failed LinkedIn SAP mission. Maharashtra or Bengaluru. remote preferred, not mandatory. maximum 1000 employees. Continue toward 30 unique verified companies TOTAL.';
