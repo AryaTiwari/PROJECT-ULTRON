@@ -625,13 +625,22 @@ function recoverySourceMissions(text) {
 
 function compileResumeRequest(text, previous) {
   const compiler = require('./linkedin-mission-contract');
-  const limit = String(text).match(/(?:maximum|max|under|up to)\s*([\d,]+)\s+employees/i)?.[1];
+  const value = String(text || '');
+  const limit = value.match(/(?:maximum|max|under|up to)\s*([\d,]+)\s+employees/i)?.[1];
+  const freshAfterExhaustion =
+    /\b(?:unless|once|after|when)\b[\s\S]{0,180}\b(?:exhausted|exhaustion|processed|used\s+up)\b/i.test(value);
+  const forbidsFresh =
+    /\b(?:do\s+not|don't|no|without)\b[\s\S]{0,80}\b(?:fresh|new)\s+(?:linkedin\s+)?(?:search_jobs|discovery|search(?:es)?)\b/i.test(value);
+  const savedDiscoveryOnly = freshAfterExhaustion
+    ? false
+    : (forbidsFresh ? true : Boolean(previous?.savedDiscoveryOnly));
   const base = {
     ...previous,
     originalMessage: text,
     resumeExistingPool: true,
-    savedDiscoveryOnly: true,
+    savedDiscoveryOnly,
     reuseCachedEvidence: true,
+    continueFromPrevious: true,
     wantsContacts: false,
     filters: { ...previous.filters, ...(limit ? { employeeMax: Number(limit.replace(/,/g,'')) } : {}) },
   };
