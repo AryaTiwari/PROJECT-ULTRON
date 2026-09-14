@@ -6,6 +6,8 @@ const master = require('../core/linkedin-final-master');
 const runner = require('../core/linkedin-mission-runner');
 const policy = require('../core/linkedin-account-policy');
 const profileEvidenceCache = require('../core/linkedin-profile-evidence-cache');
+const sheetProgress = require('../core/linkedin-sheet-progress');
+const googleSheets = require('../core/google-sheets-operator');
 
 assert.equal(operator.explicitDeletionIntent('dedupe this LinkedIn sheet'), false);
 assert.equal(operator.explicitDeletionIntent('clean duplicates in this LinkedIn sheet'), false);
@@ -115,6 +117,27 @@ const staleProfile = profileEvidenceCache.profileFromJobDetails([{
 }], 'stale-sap');
 assert.equal(staleProfile, null);
 
+const manualSnapshot = sheetProgress.snapshotRows([
+  ['COMPANY NAME', 'COMPANY LINK', 'JOB LINK', 'LOCATION'],
+  ['Manual One', 'https://www.linkedin.com/company/manual-one', 'https://www.linkedin.com/jobs/view/4460000001', 'India'],
+  ['Manual Two', 'https://www.linkedin.com/company/manual-two', 'https://www.linkedin.com/jobs/view/4460000002', 'Pune'],
+  ['Manual One duplicate', 'https://www.linkedin.com/company/manual-one', 'https://www.linkedin.com/jobs/view/4460000003', 'India'],
+]);
+assert.equal(manualSnapshot.uniqueCompanies, 2, 'Manual Sheet rows must count toward authoritative target completion.');
+assert.equal(manualSnapshot.jobIds.length, 3, 'Existing Sheet job IDs must be reusable as a pre-verification skip set.');
+
+assert.equal(operator.searchTopicConfidence({ title: 'SAP ABAP Consultant' }, { topic: 'SAP' }), 2);
+assert.equal(operator.searchTopicConfidence({ title: 'Product Marketing Manager' }, { topic: 'SAP' }), 0);
+assert.equal(operator.searchTopicConfidence({ title: '' }, { topic: 'SAP' }), 1);
+
+assert.ok(Array.isArray(operator.APOLLO_SECTION_HEADERS));
+assert.ok(operator.APOLLO_SECTION_HEADERS.includes('APOLLO PHONE'));
+assert.ok(operator.APOLLO_SECTION_HEADERS.includes('APOLLO EMAIL'));
+assert.equal(typeof operator.prepareApolloSheetContacts, 'function');
+assert.ok(googleSheets.headerScore('APOLLO PHONE', 'phone') > googleSheets.headerScore('PHONE', 'phone'));
+assert.ok(googleSheets.headerScore('APOLLO EMAIL', 'email') > googleSheets.headerScore('EMAIL', 'email'));
+assert.ok(googleSheets.headerScore('APOLLO LINKEDIN', 'linkedin') > googleSheets.headerScore('LinkedIn', 'linkedin'));
+
 const limits = policy.settings();
 assert.equal(limits.speedProfile, 'fast-safe');
 assert.equal(limits.minGapMs, 5000, 'Fast-safe profile should use the bounded 5s minimum call gap.');
@@ -132,5 +155,10 @@ assert.equal(runnerSource.includes('continuationCount || 0) < 30'), false, 'Targ
 assert.equal(runnerSource.includes('stagnantBatches || 0) < 3'), false, 'Target missions must not stop merely because three batches were stagnant.');
 assert.equal(runnerSource.includes('persistentUntilTarget: true'), true, 'Persistent target telemetry must be present.');
 assert.equal(runnerSource.includes('Math.min(60000, 8000 *'), true, 'Stagnant persistent retries should use the shortened 8-60s cadence.');
+assert.equal(runnerSource.includes('waiting_retry'), true, 'Recoverable target failures must enter a retry state instead of terminating.');
+assert.equal(runnerSource.includes('restart_recovery'), true, 'Persistent target missions must recover automatically after process restart.');
+assert.equal(typeof runner.refreshSheetProgress, 'function');
+assert.equal(typeof runner.syncAuthoritativeSheet, 'function');
+assert.equal(typeof runner.isRetryableMissionError, 'function');
 
-console.log('LinkedIn lead-scraper safety self-test passed: cache-first discovery, India override, applicant extraction, mission-aware ranking, explicit-only deletion, and job-detail company-size reuse are enforced.');
+console.log('LinkedIn lead-scraper safety self-test passed: Sheet-authoritative completion, persistent retries/restarts, Apollo separation, cache-first verification, SAP prioritization, and explicit-only deletion are enforced.');
