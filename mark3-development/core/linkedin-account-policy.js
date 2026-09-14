@@ -33,9 +33,16 @@ function booleanSetting(name, fallback = false) {
   return /^(?:1|true|yes|on)$/i.test(String(raw).trim());
 }
 
+function runtimeAllowsTestBypass() {
+  const script = String(process.argv?.[1] || '').toLowerCase();
+  return /(?:selftest|live-test|diagnostic|doctor)\.(?:js|mjs|cjs)$/.test(script)
+    || String(process.env.NODE_ENV || '').toLowerCase() === 'test';
+}
+
 function settings() {
   return {
-    localBudgetBypass: booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
+    localBudgetBypass: runtimeAllowsTestBypass()
+      && booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
     testMissionToolMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_MISSION_TOOL_MAX', 120, 12, 120),
     testJobSearchMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_JOB_SEARCH_MAX', 20, 4, 25),
     minGapMs: numberSetting('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 9000, 5000, 60000),
@@ -264,6 +271,7 @@ module.exports = {
   WRITE_TOOLS,
   settings,
   booleanSetting,
+  runtimeAllowsTestBypass,
   loadState,
   saveState,
   classifyError,
