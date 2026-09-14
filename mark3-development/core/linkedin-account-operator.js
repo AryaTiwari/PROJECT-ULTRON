@@ -1683,7 +1683,14 @@ async function companyMission(request) {
     }
 
     jobIdsDiscovered = jobMeta.size;
-    const orderedJobIds = prioritizedJobIds(jobMeta).filter((jobId) => !previouslyChecked.has(String(jobId)));
+    request.transientJobAttempts = { ...(request.transientJobAttempts || {}) };
+    request.transientCompanyAttempts = { ...(request.transientCompanyAttempts || {}) };
+    const orderedJobIds = prioritizedJobIds(jobMeta)
+      .filter((jobId) => !previouslyChecked.has(String(jobId)))
+      .sort((left, right) =>
+        Number(request.transientJobAttempts[String(left)] || 0)
+        - Number(request.transientJobAttempts[String(right)] || 0)
+      );
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
@@ -1697,14 +1704,23 @@ async function companyMission(request) {
         detail = await budgetedCall(budget, 'get_job_details', { job_id: jobId });
       } catch (error) {
         if (!isTransientMcpFailure(error)) throw error;
-        checkedJobIds.push(String(jobId));
+        const transientKey = String(jobId);
+        const attempts = Number(request.transientJobAttempts[transientKey] || 0) + 1;
+        request.transientJobAttempts[transientKey] = attempts;
+
+        // Give a timed-out candidate one later-batch retry, but never let one
+        // pathological job block the whole mission forever.
+        if (attempts >= 2) checkedJobIds.push(transientKey);
+
         missionRunner.updateProgress({
           phase: 'verifying_jobs',
           uniqueJobIds: jobMeta.size,
           jobDetailsChecked: jobDetails,
           transientFailures: Number(missionRunner.active()?.progress?.transientFailures || 0) + 1,
+          deferredJobCandidates: Object.values(request.transientJobAttempts).filter((count) => Number(count) < 2).length,
           lastTransientFailure: 'get_job_details',
-          lastTimedOutJobId: String(jobId),
+          lastTimedOutJobId: transientKey,
+          lastTimedOutJobAttempt: attempts,
           verifiedCompanies: acceptedCompanies.size,
           remaining: Math.max(0, request.count - acceptedCompanies.size),
           budgetUsed: budget.used,
@@ -1866,6 +1882,34 @@ async function companyMission(request) {
         }
       } catch (error) {
         if (error.code === 'LINKEDIN_COOLDOWN_ACTIVE' || error.code === 'LINKEDIN_MANUAL_LOCK') throw error;
+
+        if (isTransientMcpFailure(error)) {
+          const attempts = Number(request.transientCompanyAttempts[companyKey] || 0) + 1;
+          request.transientCompanyAttempts[companyKey] = attempts;
+
+          missionRunner.updateProgress({
+            phase: 'verifying_companies',
+            uniqueJobIds: jobMeta.size,
+            jobDetailsChecked: jobDetails,
+            companyProfilesChecked: deepProfiles,
+            transientFailures: Number(missionRunner.active()?.progress?.transientFailures || 0) + 1,
+            deferredCompanyCandidates: Object.values(request.transientCompanyAttempts).filter((count) => Number(count) < 2).length,
+            lastTransientFailure: 'get_company_profile',
+            lastTimedOutCompany: record.company || companyKey,
+            lastTimedOutCompanyAttempt: attempts,
+            verifiedCompanies: acceptedCompanies.size,
+            remaining: Math.max(0, request.count - acceptedCompanies.size),
+            budgetUsed: budget.used,
+            budgetMaximum: budget.maximum,
+          });
+
+          if (attempts < 2) {
+            const checkedIndex = checkedJobIds.lastIndexOf(String(jobId));
+            if (checkedIndex >= 0) checkedJobIds.splice(checkedIndex, 1);
+            continue;
+          }
+        }
+
         record.deepError = error.message;
       }
 
