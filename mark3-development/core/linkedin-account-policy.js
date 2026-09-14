@@ -33,10 +33,10 @@ function booleanSetting(name, fallback = false) {
   return /^(?:1|true|yes|on)$/i.test(String(raw).trim());
 }
 
-function runtimeAllowsTestBypass() {
-  const script = String(process.argv?.[1] || '').toLowerCase();
+function runtimeAllowsTestBypass(scriptPath = process.argv?.[1], nodeEnv = process.env.NODE_ENV) {
+  const script = String(scriptPath || '').toLowerCase();
   return /(?:selftest|live-test|diagnostic|doctor)\.(?:js|mjs|cjs)$/.test(script)
-    || String(process.env.NODE_ENV || '').toLowerCase() === 'test';
+    || String(nodeEnv || '').toLowerCase() === 'test';
 }
 
 function settings() {
