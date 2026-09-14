@@ -132,6 +132,21 @@ function employeeMaximum(record = {}) {
   return one ? Number(one[1]) : null;
 }
 
+function employeeMinimum(record = {}) {
+  const value = record.employeeCount;
+  if (value && typeof value === 'object') {
+    if (Number.isFinite(Number(value.min))) return Number(value.min);
+    if (Number.isFinite(Number(value.max)) && value.min == null) return 0;
+  }
+  const raw = String(record.employeeRange || record.employees || value || '').replace(/,/g, '');
+  const range = raw.match(/(\d+)\s*(?:-|to)\s*(\d+)/i);
+  if (range) return Number(range[1]);
+  const plus = raw.match(/(\d+)\s*\+/);
+  if (plus) return Number(plus[1]);
+  const one = raw.match(/\b(\d+)\b/);
+  return one ? Number(one[1]) : null;
+}
+
 function normalizedLocation(value) {
   return String(value || '')
     .toLowerCase()
@@ -163,6 +178,10 @@ function qualifies(record = {}, requirements = {}) {
   if (requirements.hiringRequired !== false && !Boolean(record.jobUrl || record.jobId || record.primaryJobUrl || record.hiringSignal)) return false;
   if (!locationAllowed(record, requirements.allowedLocations || requirements.locations || [])) return false;
   if (requirements.workType && String(record.workType || '').toLowerCase() !== String(requirements.workType).toLowerCase()) return false;
+  if (requirements.employeeMin != null) {
+    const min = employeeMinimum(record);
+    if (min == null || min < Number(requirements.employeeMin)) return false;
+  }
   if (requirements.employeeMax != null) {
     const max = employeeMaximum(record);
     if (max == null || max > Number(requirements.employeeMax)) return false;
@@ -365,6 +384,8 @@ module.exports = {
   companyKey,
   isCompanyRecord,
   hasSapOpening,
+  employeeMinimum,
+  employeeMaximum,
   locationAllowed,
   qualifies,
   allowRepeatFromText,
