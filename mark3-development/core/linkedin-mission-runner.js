@@ -12,6 +12,7 @@ let running = false;
 let executor;
 const queue = [];
 let wakeTimer = null;
+let wakeTimerAt = null;
 
 function queueOnce(id) {
   if (!queue.includes(id)) queue.push(id);
@@ -20,10 +21,17 @@ function queueOnce(id) {
 function schedulePumpAt(iso) {
   const at = Date.parse(String(iso || ''));
   if (!Number.isFinite(at)) return setImmediate(pump);
-  const delay = Math.max(0, at - Date.now());
+
+  // Keep the earliest wake-up. A later parked mission must never postpone an
+  // earlier mission that is already eligible to resume.
+  if (wakeTimer && Number.isFinite(wakeTimerAt) && wakeTimerAt <= at) return;
   if (wakeTimer) clearTimeout(wakeTimer);
+
+  const delay = Math.max(0, at - Date.now());
+  wakeTimerAt = at;
   wakeTimer = setTimeout(() => {
     wakeTimer = null;
+    wakeTimerAt = null;
     pump();
   }, Math.min(delay, 0x7fffffff));
 }
@@ -131,6 +139,16 @@ function start(fn) {
 
   for (const m of missions) {
     if (m.status === 'waiting_safety') {
+      const recalculated = policy.nextEligibleAt?.();
+      if (recalculated) {
+        m.notBefore = recalculated;
+        m.progress = {
+          ...(m.progress || {}),
+          nextEligibleAt: recalculated,
+          schedulerRecalculatedAt: new Date().toISOString(),
+        };
+        save(m);
+      }
       queueOnce(m.id);
       schedulePumpAt(m.notBefore);
       continue;
