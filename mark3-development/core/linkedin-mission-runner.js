@@ -416,6 +416,26 @@ async function call(tool, args, invoke) {
   if (m.responses[key] && Date.now() - m.responses[key].at < cacheTtl) {
     m.cacheHits++; save(m); return m.responses[key].value;
   }
+
+  // Continuations may reuse deterministic evidence from any compatible mission,
+  // not just the original search response. Job/company/profile detail calls are
+  // expensive but their exact arguments make them safe to replay cross-mission.
+  if (m.prepared?.request?.resumeExistingPool && /^(?:get_job_details|get_company_profile|get_person_profile)$/.test(tool)) {
+    for (const compatible of compatibleDiscoveryMissions(m, tool)) {
+      const cached = compatible.responses?.[key];
+      if (!cached) continue;
+      m.cacheHits++;
+      m.progress = {
+        ...(m.progress || {}),
+        reusedEvidenceTool: tool,
+        reusedEvidenceMissionId: compatible.id,
+        reuseMode: m.progress?.reuseMode || 'saved-first',
+      };
+      save(m);
+      return cached.value;
+    }
+  }
+
   let value;
   try { value = await invoke(); }
   catch (error) { m.stopCode = String(error.code || ''); save(m); throw error; }
