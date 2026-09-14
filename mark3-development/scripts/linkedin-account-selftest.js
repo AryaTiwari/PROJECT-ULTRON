@@ -396,9 +396,16 @@ assert.equal(bootstrap.isSetupRequest('LinkedIn account login'), true);
 assert.equal(bootstrap.isUnlockRequest('LinkedIn account unlock'), true);
 
 assert.equal(mcp.HOST, '127.0.0.1');
-assert.ok(mcp.ENDPOINT.startsWith('http://127.0.0.1:'));
+assert.equal(mcp.TRANSPORT_MODE, 'stdio');
+assert.equal(mcp.PACKAGE_SPEC, process.env.ULTRON_M3_LINKEDIN_MCP_PACKAGE || 'mcp-server-linkedin@4.24.2');
 assert.ok(mcp.serverArgs().includes('--no-auto-import'));
-assert.ok(mcp.serverArgs().includes('127.0.0.1'));
+assert.ok(mcp.serverArgs().includes('stdio'));
+assert.ok(mcp.serverArgs().includes('--browser-wait'));
+assert.ok(mcp.serverArgs().includes('--tool-timeout'));
+assert.equal(mcp.status().transport, 'stdio');
+assert.ok(mcp.REQUIRED_TOOLS.includes('search_jobs'));
+assert.ok(mcp.REQUIRED_TOOLS.includes('get_job_details'));
+assert.ok(mcp.REQUIRED_TOOLS.includes('get_company_profile'));
 
 assert.ok(policy.READ_ONLY_TOOLS.has('search_people'));
 assert.ok(policy.READ_ONLY_TOOLS.has('search_companies'));
