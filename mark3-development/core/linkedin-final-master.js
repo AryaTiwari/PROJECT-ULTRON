@@ -182,6 +182,26 @@ function seen(record, state = loadState()) {
   return Boolean(key && state.companies[key]);
 }
 
+function inMaster(record, state = loadState()) {
+  const key = companyKey(record);
+  return Boolean(key && (state.masterKeys || []).includes(key));
+}
+
+function recordFor(record, state = loadState()) {
+  const key = companyKey(record);
+  return key ? (state.companies?.[key] || null) : null;
+}
+
+function reusableCompanyProfile(record, options = {}) {
+  const state = options.state || loadState();
+  const stored = recordFor(record, state);
+  if (!stored || stored.status !== 'verified' || !stored.employeeCount) return null;
+  const verifiedAt = Date.parse(String(stored.lastVerifiedAt || ''));
+  const maxAgeMs = Number(options.maxAgeMs || 30 * 24 * 60 * 60 * 1000);
+  if (!Number.isFinite(verifiedAt) || Date.now() - verifiedAt > maxAgeMs) return null;
+  return stored;
+}
+
 function filterUnseen(records = [], options = {}) {
   const state = options.state || loadState();
   if (options.allowPreviouslySeen) return { records: records.slice(), skipped: [] };
@@ -233,6 +253,8 @@ function registerRecords(records = [], metadata = {}) {
       applicants: record.applicants || previous.applicants || '',
       workType: record.workType || previous.workType || '',
       employeeCount: record.employeeCount || previous.employeeCount || null,
+      companyLocation: record.companyLocation || previous.companyLocation || '',
+      companyEvidenceText: record.companyEvidenceText || previous.companyEvidenceText || '',
       jobEvidenceText: record.jobEvidenceText || previous.jobEvidenceText || '',
       jobs,
     };
@@ -347,6 +369,9 @@ module.exports = {
   qualifies,
   allowRepeatFromText,
   seen,
+  inMaster,
+  recordFor,
+  reusableCompanyProfile,
   filterUnseen,
   registerRecords,
   replaceMasterRecords,
