@@ -125,6 +125,11 @@ function missionProgressText(job) {
     parts.push(`safe-call budget: ${p.budgetUsed}/${p.budgetMaximum}`);
   }
   if (Number.isFinite(Number(p.cachedReconsidered))) parts.push(`cached candidates reconsidered: ${p.cachedReconsidered}`);
+  if (Number.isFinite(Number(p.cachedJobDetailHits))) parts.push(`cached job details reused: ${p.cachedJobDetailHits}`);
+  if (Number.isFinite(Number(p.cachedJobDetailMisses))) parts.push(`job details still needing live verification: ${p.cachedJobDetailMisses}`);
+  if (Number.isFinite(Number(p.cachedCompanyProfileHits))) parts.push(`cached company profiles reused: ${p.cachedCompanyProfileHits}`);
+  if (Number.isFinite(Number(p.cachedCompanyProfileMisses))) parts.push(`company profiles still needing live verification: ${p.cachedCompanyProfileMisses}`);
+  if (p.cacheVerificationExhausted) parts.push('all reusable verification evidence has been scanned');
   if (p.nextEligibleAt) parts.push(`next safe resume: ${p.nextEligibleAt}`);
   if (p.safetyReason) parts.push(`waiting reason: ${p.safetyReason}`);
   if (job.error?.message && !p.safetyReason) parts.push(job.error.message);
