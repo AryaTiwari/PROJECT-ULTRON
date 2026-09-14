@@ -234,12 +234,6 @@ function registerRecords(records = [], metadata = {}) {
       workType: record.workType || previous.workType || '',
       employeeCount: record.employeeCount || previous.employeeCount || null,
       jobEvidenceText: record.jobEvidenceText || previous.jobEvidenceText || '',
-      phone: record.phone || previous.phone || '',
-      email: record.email || previous.email || '',
-      remarks: record.remarks || previous.remarks || '',
-      contactName: record.contactName || previous.contactName || '',
-      contactTitle: record.contactTitle || previous.contactTitle || '',
-      contactLinkedin: record.contactLinkedin || previous.contactLinkedin || '',
       jobs,
     };
     if (master) masterKeys.add(key);
