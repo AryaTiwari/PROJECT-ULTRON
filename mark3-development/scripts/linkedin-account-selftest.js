@@ -464,10 +464,14 @@ const mixedSafetyState = {
     { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'infrastructure' },
     { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'auth' },
     { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'rate-limit' },
+    { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'other' },
+    { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'other', countsTowardSafety: true },
   ],
 };
 const mixedUsage = policy.usage(mixedSafetyState, safetyNow);
-assert.equal(mixedUsage.hourly, 2, 'Only a confirmed call and an actual rate-limit event should consume LinkedIn safety budget.');
+assert.equal(mixedUsage.hourly, 3, 'Confirmed calls, explicit rate limits, and new-format counted errors consume safety budget; ambiguous legacy failures do not.');
+assert.equal(policy.eventCountsTowardSafety({ ok: false, errorKind: 'other' }), false);
+assert.equal(policy.eventCountsTowardSafety({ ok: false, errorKind: 'other', countsTowardSafety: true }), true);
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'transient' }), false);
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'auth' }), false);
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'rate-limit' }), true);
