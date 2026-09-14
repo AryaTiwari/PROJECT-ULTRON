@@ -76,7 +76,10 @@ async function handlePrepared(prepared, background = false) {
   if (prepared.type === 'run') {
     if (!background) {
       const job = missionRunner.enqueue(prepared);
-      return responseShape(true, `LinkedIn mission queued: ${job.id}. Research runs in the background. Ask “LinkedIn mission progress” for status.`, { linkedinBackgroundMission: job });
+      const text = job.alreadyActive
+        ? `Matching LinkedIn mission ${job.id} is already ${job.status}. No duplicate mission was created. Ask “LinkedIn mission progress” for status.`
+        : `LinkedIn mission queued: ${job.id}. Research runs in the background. Ask “LinkedIn mission progress” for status.`;
+      return responseShape(true, text, { linkedinBackgroundMission: job });
     }
     const mission = await operator.run(prepared.request, prepared.headers);
     let text = operator.formatMission(mission);
