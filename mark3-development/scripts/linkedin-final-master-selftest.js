@@ -105,9 +105,11 @@ const filler = {
 master.registerRecords([filler], { missionId: 'seen-history', master: false });
 assert.equal(master.seen(filler), true);
 assert.equal(master.masterCount(), 2);
-master.replaceMasterRecords([tech], { missionId: 'rebuild' });
+master.replaceMasterRecords([tech], { missionId: 'safe-rebuild' });
 assert.equal(master.seen(filler), true);
-assert.equal(master.masterCount(), 1);
+assert.equal(master.masterCount(), 2, 'Default registry replacement must preserve existing master rows.');
+master.replaceMasterRecords([tech], { missionId: 'explicit-destructive-rebuild', allowDestructiveReplace: true });
+assert.equal(master.masterCount(), 1, 'Destructive registry replacement must require explicit opt-in.');
 assert.deepEqual(master.remainingForTarget(30), { desired: 30, current: 1, remaining: 29 });
 assert.deepEqual(master.rowFor(tech), [
   'TechVerito',
