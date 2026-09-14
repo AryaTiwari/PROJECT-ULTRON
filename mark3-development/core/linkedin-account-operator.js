@@ -3701,15 +3701,16 @@ async function run(request, headers) {
       const authoritative = masterUrl
         ? await sheetProgress.snapshot(masterUrl, { requireJob: Boolean(request.hiring) })
         : null;
-      const current = Math.max(
-        Number(reconciled.count || 0),
-        Number(authoritative?.uniqueCompanies || 0),
-      );
+      // Completion counts only companies that are both present in the Sheet
+      // and verified in ULTRON's registry against the active hard requirements.
+      // All Sheet rows still participate in dedupe and Apollo enrichment.
+      const current = Number(reconciled.count || 0);
       const target = {
         desired,
         current,
         remaining: Math.max(0, desired - current),
-        source: authoritative ? 'sheet+registry' : 'registry',
+        sheetUniqueCompanies: Number(authoritative?.uniqueCompanies || 0),
+        source: authoritative ? 'verified-sheet-registry' : 'registry',
       };
       request.count = target.remaining;
       request.masterTarget = target;
@@ -3717,6 +3718,7 @@ async function run(request, headers) {
       request.existingDestinationCompanyKeys = authoritative?.companyKeys || [];
       request.authoritativeSheetProgress = authoritative ? {
         uniqueCompanies: authoritative.uniqueCompanies,
+        verifiedTargetCompanies: current,
         validRows: authoritative.validRows,
         totalDataRows: authoritative.totalDataRows,
         readAt: authoritative.readAt,
