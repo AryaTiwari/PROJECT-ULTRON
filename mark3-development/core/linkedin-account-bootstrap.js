@@ -200,6 +200,20 @@ function install() {
         conversation.append('user', text, { taskType: 'linkedin-account-unlock', inputMode });
         const safety = policy.clearManualLock('user explicitly confirmed LinkedIn account unlock after manual verification');
         result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} today. Normal rate limits still apply.`, { linkedinSafety: safety });
+      } else if (commandRouter.isApolloEnrichmentRequest(text)) {
+        conversation.append('user', text, { taskType: 'linkedin-final-master-apollo-enrichment', inputMode });
+        const enriched = await operator.enrichFinalMasterContacts();
+        const parts = [
+          `Apollo enrichment checked the canonical Final Master.`,
+          `Selected ${enriched.selected || 0} company contact${Number(enriched.selected || 0) === 1 ? '' : 's'}.`,
+          `Enriched ${enriched.enriched || 0} row${Number(enriched.enriched || 0) === 1 ? '' : 's'}.`,
+          `Unresolved ${enriched.unresolved || 0}.`,
+          `Skipped ${enriched.skippedComplete || 0} already-complete row${Number(enriched.skippedComplete || 0) === 1 ? '' : 's'}.`,
+        ];
+        result = responseShape(true, parts.join(' ') + (enriched.sheetUrl ? ` ${enriched.sheetUrl}` : ''), {
+          linkedinApolloEnrichment: enriched,
+          spreadsheetUrl: enriched.sheetUrl || operator.workspaceSheetUrl() || null,
+        });
       } else if (operator.isBuildFinalMasterRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-final-master-build', inputMode });
         const built = await operator.buildFinalMaster(text);
