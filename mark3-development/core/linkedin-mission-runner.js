@@ -633,7 +633,7 @@ function compileResumeRequest(text, previous) {
     /\b(?:do\s+not|don't|no|without)\b[\s\S]{0,80}\b(?:fresh|new)\s+(?:linkedin\s+)?(?:search_jobs|discovery|search(?:es)?)\b/i.test(value);
   const savedDiscoveryOnly = freshAfterExhaustion
     ? false
-    : (forbidsFresh ? true : Boolean(previous?.savedDiscoveryOnly));
+    : true;
   const base = {
     ...previous,
     originalMessage: text,
