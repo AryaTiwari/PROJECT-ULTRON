@@ -51,7 +51,7 @@ function pendingCount(state = loadState()) {
   return count;
 }
 
-function makeJob(layout, sheetUrl, adapter) {
+function makeJob(layout, sheetUrl, adapter, options = {}) {
   return {
     id: `apollo-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
     provider: adapter.provider || 'google',
@@ -63,6 +63,7 @@ function makeJob(layout, sheetUrl, adapter) {
     linkedinColumnIndex: layout.linkedinColumnIndex,
     phoneColumnIndex: layout.phoneColumnIndex,
     emailColumnIndex: layout.emailColumnIndex,
+    strictApolloColumns: Boolean(options.strictApolloColumns),
     status: 'running',
     rows: {},
     createdAt: new Date().toISOString(),
@@ -174,7 +175,7 @@ async function enrichSheet(sheetUrl, options = {}) {
   const layout = await adapter.inspect(sheetUrl);
   const data = await adapter.readSheet(sheetUrl, layout);
   const state = loadState();
-  const job = makeJob(layout, sheetUrl, adapter);
+  const job = makeJob(layout, sheetUrl, adapter, options);
   state.jobs.push(job);
   saveState(state);
 
@@ -431,8 +432,18 @@ async function resume() {
   const state = loadState();
   const latest = [...(state.jobs || [])].reverse().find((job) => ['running', 'completed_with_errors'].includes(job.status));
   if (!latest) return { ...synced, resumed: false };
-  const stats = await enrichSheet(latest.sheetUrl, { provider: latest.provider });
-  return { ...synced, resumed: true, stats };
+  const strictApolloColumns = Boolean(latest.strictApolloColumns);
+  const stats = await enrichSheet(latest.sheetUrl, {
+    provider: latest.provider,
+    strictApolloColumns,
+  });
+  return {
+    ...synced,
+    resumed: true,
+    stats,
+    sheetUrl: latest.sheetUrl,
+    strictApolloColumns,
+  };
 }
 
 function status() {
