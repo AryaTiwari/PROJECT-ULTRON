@@ -8,7 +8,27 @@ function isExplicitLinkedInResearch(text) {
   return operational && target;
 }
 
-module.exports = { isExplicitLinkedInResearch };
+function isExplicitLinkedInArtifactRequest(text) {
+  const value = String(text || '').trim();
+  if (!/\blinkedin\b|linkedin\.com\//i.test(value)) return false;
+
+  // Strong file/media formats are unambiguous artifact requests when paired
+  // with an explicit creation/delivery verb. Generic words such as "report"
+  // alone are intentionally not enough because operational mission prompts
+  // commonly contain headings like "Report:" or "report progress".
+  const action = /\b(?:generate|create|make|render|design|produce|export|save|send|give|prepare|provide|deliver|turn|convert)\b/i;
+  const strongFormat = /\b(?:pdf|docx|word document|word file|image|picture|poster|thumbnail|visual|wallpaper|artwork|logo|video|clip|animation|b-roll|broll)\b/i;
+  if (action.test(value) && strongFormat.test(value)) return true;
+
+  const genericArtifactPhrase = /\b(?:generate|create|make|export|save|send|give|prepare|provide|deliver)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:[^.\n]{0,48}\s+)?(?:document|report|brief|proposal)\b/i;
+  return genericArtifactPhrase.test(value);
+}
+
+function isReservedLinkedInCommand(text) {
+  return isExplicitLinkedInResearch(text) && !isExplicitLinkedInArtifactRequest(text);
+}
+
+module.exports = { isExplicitLinkedInResearch, isExplicitLinkedInArtifactRequest, isReservedLinkedInCommand };
 
 let installed = false;
 let originalHandle = null;
@@ -20,7 +40,7 @@ function install() {
   originalHandle = assistant.handle;
   assistant.handle = async (message, options = {}) => {
     const text = String(message || '').trim();
-    if (!isExplicitLinkedInResearch(text)) return originalHandle(message, options);
+    if (!isReservedLinkedInCommand(text)) return originalHandle(message, options);
     const status = linkedin.status();
     if (!status.installed) {
       return linkedin.responseShape(false, 'LinkedIn research is unavailable because the dedicated LinkedIn operator did not finish installing. ULTRON will not route this request to a general model. Restart after LinkedIn startup checks pass.', { linkedinRouteGuard: true, reason: 'linkedin_operator_not_installed' });
@@ -45,4 +65,4 @@ function uninstall() {
   return true;
 }
 
-module.exports = { isExplicitLinkedInResearch, install, uninstall };
+module.exports = { isExplicitLinkedInResearch, isExplicitLinkedInArtifactRequest, isReservedLinkedInCommand, install, uninstall };
