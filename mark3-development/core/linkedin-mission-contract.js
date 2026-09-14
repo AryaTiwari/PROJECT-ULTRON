@@ -65,11 +65,22 @@ function workType(text, legacy = {}) {
   for (const label of labels) {
     const at = value.indexOf(label);
     if (at < 0) continue;
-    const before = value.slice(Math.max(0, at - 40), at);
-    const after = value.slice(at, at + 70);
-    if (/prefer|preferred|preferably|ideally|priority/.test(before) || /prefer|preferred|preferably|ideally/.test(after)) preferred = true;
-    if (/must|required|mandatory|strictly|only\s*$/.test(before)
-        || /\bonly\b|mandatory|must\s+be|strictly/.test(after)) hard = true;
+
+    // Constraint words must bind to this work-type phrase, not to some other
+    // nearby clause such as "companies only".
+    const before = value.slice(Math.max(0, at - 35), at);
+    const after = value.slice(at + label.length, at + label.length + 35);
+    const beforeTail = before.slice(-28);
+
+    if (/(?:prefer|preferred|preferably|ideally|priority)\s*(?:for|is|are|:)?\s*$/.test(beforeTail)
+        || /^\s*(?:roles?\s+)?(?:preferred|preferably|ideally)\b/.test(after)) {
+      preferred = true;
+    }
+
+    if (/(?:must(?:\s+be)?|required|mandatory|strictly|only)\s*$/.test(beforeTail)
+        || /^\s*(?:roles?\s+)?(?:only|required|mandatory)\b/.test(after)) {
+      hard = true;
+    }
   }
 
   if (/rather\s+than\s+required|not\s+(?:required|mandatory)|preference\s+only/.test(value)) { hard = false; preferred = true; }
