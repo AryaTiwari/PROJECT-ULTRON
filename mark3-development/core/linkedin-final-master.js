@@ -243,6 +243,9 @@ function registerRecords(records = [], metadata = {}) {
 }
 
 function replaceMasterRecords(records = [], metadata = {}) {
+  if (metadata.allowDestructiveReplace !== true) {
+    return registerRecords(records, { ...metadata, master: true });
+  }
   const state = loadState();
   state.masterKeys = [];
   saveState(state);
