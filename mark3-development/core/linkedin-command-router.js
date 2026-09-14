@@ -26,6 +26,13 @@ function isApolloEnrichmentRequest(text) {
     && /\b(?:lead|leads|companies|company|them|those|these|email|phone|number|contacts?)\b/i.test(value);
 }
 
+function reuseExistingEvidenceFromText(text) {
+  const value = String(text || '');
+  const disabled = /\b(?:do\s+not|don['’]t|without|ignore|skip)\b[\s\S]{0,45}\b(?:saved\s+discovery|cache|cached\s+evidence|previous(?:ly)?\s+rejected\s+candidates?|previous\s+evidence)\b/i.test(value);
+  if (disabled) return false;
+  return /\b(?:saved\s+discovery|cached\s+evidence|previous(?:ly)?\s+rejected\s+candidates?|reuse\s+(?:the\s+)?(?:cache|cached|saved|previous)|existing\s+(?:discovery|evidence))\b/i.test(value);
+}
+
 function genericLocationFromText(text, existing = '') {
   if (String(existing || '').trim()) return String(existing).trim();
   const value = String(text || '')
@@ -373,6 +380,8 @@ function enhanceRequest(request, text, workspaceSheetUrl = null) {
     locationScope: request.locationScope || (request.hiring ? 'job' : 'company'),
     topic,
     wantsContacts: requestedContactEnrichment(text),
+    resumeExistingPool: Boolean(request.resumeExistingPool || reuseExistingEvidenceFromText(text)),
+    reuseCachedEvidence: request.reuseCachedEvidence !== false && reuseExistingEvidenceFromText(text),
     destinationSheetUrl: request.destinationSheetUrl || (wantsMasterSheet(text) ? workspaceSheetUrl : null),
   };
 }
@@ -543,6 +552,7 @@ module.exports = {
   normalize,
   requestedContactEnrichment,
   isApolloEnrichmentRequest,
+  reuseExistingEvidenceFromText,
   genericLocationFromText,
   genericTopicFromText,
   employeeRangeFromText,
