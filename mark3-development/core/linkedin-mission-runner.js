@@ -388,17 +388,21 @@ function cachedExact(tool, args, options = {}) {
     return { hit: true, value: current.value, sourceMissionId: m.id };
   }
 
-  if (m.prepared?.request?.resumeExistingPool && /^(?:get_job_details|get_company_profile|get_person_profile)$/.test(tool)) {
+  if (/^(?:get_job_details|get_company_profile|get_person_profile)$/.test(tool)) {
+    const crossMissionTtl = tool === 'get_job_details'
+      ? (m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000)
+      : 24 * 60 * 60 * 1000;
     for (const compatible of compatibleDiscoveryMissions(m, tool)) {
       const cached = compatible.responses?.[key];
       if (!cached) continue;
+      if (Date.now() - Number(cached.at || 0) >= crossMissionTtl) continue;
       if (options.recordHit !== false) {
         m.cacheHits++;
         m.progress = {
           ...(m.progress || {}),
           reusedEvidenceTool: tool,
           reusedEvidenceMissionId: compatible.id,
-          reuseMode: m.progress?.reuseMode || 'saved-first',
+          reuseMode: m.progress?.reuseMode || (m.prepared?.request?.resumeExistingPool ? 'saved-first' : 'cross-mission'),
         };
         save(m);
       }
@@ -644,10 +648,24 @@ function compileResumeRequest(text, previous) {
     wantsContacts: false,
     filters: { ...previous.filters, ...(limit ? { employeeMax: Number(limit.replace(/,/g,'')) } : {}) },
   };
-  return compiler.apply(
+  const next = compiler.apply(
     compiler.compile(text, base, { knownLocations: ['India','Maharashtra','Bengaluru','Bangalore'] }),
     base
   );
+  const explicitIndiaScope =
+    /\bindia\s+only\b/i.test(value)
+    || (/\bhard requirements?\b/i.test(value) && /\bindia\b/i.test(value));
+  if (explicitIndiaScope) {
+    next.allowedLocations = ['India'];
+    next.preferredLocations = ['India'];
+    next.location = 'India';
+    next.missionContract = {
+      ...(next.missionContract || {}),
+      hard: { ...(next.missionContract?.hard || {}), locations: ['India'] },
+      preferences: { ...(next.missionContract?.preferences || {}), locations: ['India'] },
+    };
+  }
+  return next;
 }
 
 function resumeSaved(text) {
