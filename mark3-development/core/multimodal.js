@@ -147,6 +147,8 @@ async function persistGenerated(kind, payload, prompt) {
 }
 
 async function generateImage(prompt, options = {}) {
+  require('./command-control-plane').assertAllowed('artifact');
+
   const model = await selectModel('image', options.model);
   if (!model) throw new Error('OmniRoute has no configured image-generation model.');
   const payload = { model, prompt: String(prompt || '').trim(), ...(options.size ? { size: options.size } : {}), n: 1 };
@@ -155,6 +157,8 @@ async function generateImage(prompt, options = {}) {
 }
 
 async function generateVideo(prompt, options = {}) {
+  require('./command-control-plane').assertAllowed('artifact');
+
   const model = await selectModel('video', options.model);
   if (!model) throw new Error('OmniRoute has no configured video-generation model.');
   const payload = { model, prompt: String(prompt || '').trim(), ...(options.duration ? { duration: options.duration } : {}) };
@@ -180,6 +184,8 @@ async function documentContent(prompt, attachmentContext = '') {
 }
 
 async function generateDocument(prompt, format = 'pdf', options = {}) {
+  require('./command-control-plane').assertAllowed('artifact');
+
   const composed = await documentContent(prompt, options.attachmentContext || '');
   const title = String(options.title || 'ULTRON Document').trim().slice(0, 120);
   const target = String(format || 'pdf').toLowerCase() === 'docx' ? 'docx' : 'pdf';
@@ -298,6 +304,8 @@ function generationIntent(message) {
 }
 
 async function generate(intent, options = {}) {
+  require('./command-control-plane').assertAllowed('artifact');
+
   if (!intent?.kind) throw new Error('Generation intent is required.');
   if (intent.kind === 'image') return generateImage(intent.prompt, options);
   if (intent.kind === 'video') return generateVideo(intent.prompt, options);

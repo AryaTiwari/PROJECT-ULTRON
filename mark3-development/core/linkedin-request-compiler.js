@@ -179,13 +179,13 @@ async function compile(text) {
   ];
 
   try {
-    const result = await direct.chat({
+    const result = await require('./command-control-plane').compileWithGemini(() => direct.chat({
       messages,
       model: COMPILER_MODEL,
       tools: toolSpec(),
       taskType: 'automation',
       timeoutMs: COMPILER_TIMEOUT_MS,
-    });
+    }));
     const raw = parseCandidate(result);
     if (!raw) return { ok: false, reason: 'compiler_returned_no_structured_contract', model: result?.model || COMPILER_MODEL };
     const validated = normalizedIR(raw);

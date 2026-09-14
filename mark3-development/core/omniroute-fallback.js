@@ -58,6 +58,8 @@ function launch() {
 }
 
 async function ensure({ reason = 'direct providers unavailable' } = {}) {
+  require('./command-control-plane').assertAllowed('omniroute');
+
   if (await ready()) return { ok: true, alreadyRunning: true, started: false };
   if (inflight) return inflight;
 

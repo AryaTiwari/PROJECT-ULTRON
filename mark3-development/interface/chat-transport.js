@@ -139,29 +139,9 @@
     return linkedinResearch ? LINKEDIN_RESEARCH_TIMEOUT_MS : CHAT_TRANSPORT_TIMEOUT_MS;
   }
 
+  // Transport preserves semantics. The backend owns command/artifact inference.
   function normalizeArtifactMessage(message) {
-    const original = String(message || '').trim();
-    if (!original) return original;
-    const match = original.match(/^((?:hey\s+)?ultron\b[\s,:;.!-]*)?(.*)$/i);
-    const wake = match?.[1] || '';
-    const text = String(match?.[2] || original).trim();
-    const artifact = /\b(?:pdf|docx|word document|word file|document|report|brief|proposal|image|picture|poster|thumbnail|visual|wallpaper|artwork|logo|video|clip|animation|b-roll|broll)\b/i.test(text);
-    const alreadyGenerative = /\b(?:generate|create|make|render|design|produce|build)\b/i.test(text);
-    const informational = /^(?:what|why|how|when|where|who)\b|^(?:tell me|explain|describe|compare)\b/i.test(text);
-    if (!artifact || alreadyGenerative || informational) return original;
-
-    let rewritten = text
-      .replace(/^(?:can|could|would|will)\s+you\s+/i, '')
-      .replace(/^please\s+/i, '')
-      .replace(/^send\s+me\s+/i, 'create ')
-      .replace(/^give\s+me\s+/i, 'create ')
-      .replace(/^prepare(?:\s+me)?\s+/i, 'create ')
-      .replace(/^export\s+/i, 'create ')
-      .replace(/^save\s+(?:me\s+)?/i, 'create ')
-      .replace(/^i\s+(?:want|need)\s+/i, 'create ');
-
-    if (!/\b(?:generate|create|make|render|design|produce|build)\b/i.test(rewritten)) rewritten = `create ${rewritten}`;
-    return `${wake}${rewritten}`.trim();
+    return String(message || '').trim();
   }
 
   function normalizeArtifactRequest(init = {}) {
@@ -170,8 +150,7 @@
       const parsed = typeof init.body === 'string' ? JSON.parse(init.body) : { ...(init.body || {}) };
       if (!parsed || typeof parsed !== 'object' || !parsed.message) return init;
       const normalized = normalizeArtifactMessage(parsed.message);
-      if (normalized === parsed.message) return init;
-      return { ...init, body: JSON.stringify({ ...parsed, message: normalized, originalMessage: parsed.originalMessage || parsed.message }) };
+      return { ...init, body: JSON.stringify({ ...parsed, message: normalized, resolvedMessage: normalized, originalMessage: parsed.originalMessage || parsed.message }) };
     } catch {
       return init;
     }

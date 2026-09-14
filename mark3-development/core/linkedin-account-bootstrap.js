@@ -25,7 +25,7 @@ function responseShape(ok, text, extra = {}) {
 }
 
 function isStatusRequest(text) {
-  return /\blinkedin\s+(?:account\s+)?(?:scraper\s+|research\s+|tool\s+)?(?:status|health|doctor)\b/i.test(String(text || ''));
+  return /\blinkedin\s+(?:account\s+)?(?:mcp\s+|scraper\s+|research\s+|tool\s+)?(?:status|health|doctor)\b/i.test(String(text || ''));
 }
 
 function isSetupRequest(text) {
@@ -169,20 +169,22 @@ function missionContractText(job) {
   ].filter(Boolean).join(' ');
 }
 
-function install() {
-  if (installed) return { installed: true, alreadyInstalled: true, ...operator.status() };
-  const assistant = require('./assistant');
+let initialized = false;
+function initialize() {
+  if (initialized) return;
   const conversation = require('./conversation');
-  const voice = require('./voice-orchestrator');
-  const { emit } = require('./events');
-  originalHandle = assistant.handle;
-  missionRunner.start(async prepared => {
+  missionRunner.start(prepared => require('./command-control-plane').runExclusive(async () => {
     const result = await handlePrepared(prepared, true);
     conversation.append('assistant', result.text, { taskType: 'linkedin-account-research', model: result.model, ok: result.ok });
     return result;
-  });
-
-  assistant.handle = async (message, options = {}) => {
+  }));
+  initialized = true;
+}
+async function handle(message, options = {}) {
+  initialize();
+  const conversation = require('./conversation');
+  const voice = require('./voice-orchestrator');
+  const { emit } = require('./events');
     const text = String(message || '').trim();
     const inputMode = String(options.inputMode || 'chat').toLowerCase() === 'voice' ? 'voice' : 'chat';
     let result = null;
@@ -429,7 +431,7 @@ function install() {
         }
       );
     }
-    if (!result) return originalHandle(message, options);
+    if (!result) return null;
     conversation.append('assistant', result.text, {
       model: result.model,
       provider: result.provider,
@@ -439,6 +441,20 @@ function install() {
     });
     void voice.enqueue(result.text);
     return { ...result, inputMode };
+}
+
+function install() {
+  if (installed) return { installed: true, alreadyInstalled: true, ...operator.status() };
+  initialize();
+  const assistant = require('./assistant');
+  originalHandle = assistant.handle;
+  // Compatibility for non-HTTP callers and implicit workspace follow-ups.
+  // HTTP ownership invokes the domain controller directly, never this adapter.
+  assistant.handle = async (message, options = {}) => {
+    const claimed = await require('./command-control-plane').dispatch(message, options);
+    if (claimed) return claimed;
+    const result = await handle(message, options);
+    return result || originalHandle(message, options);
   };
 
   installed = true;
@@ -455,6 +471,8 @@ function uninstall() {
 
 module.exports = {
   install,
+  initialize,
+  handle,
   uninstall,
   responseShape,
   isStatusRequest,

@@ -247,6 +247,8 @@ async function candidateModels(requestedModel = 'auto', taskType = 'general', { 
 }
 
 async function chatExact({ messages, model, tools = null, taskType = 'general', timeoutMs = null } = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
   if (!Array.isArray(messages) || !messages.length) throw new Error('Exact model request requires messages.');
   const requested = normalizeModel(model);
   if (!requested || isRoutingAlias(requested) || isBlockedModel(requested)) throw new Error(`Model is not eligible for exact Mark 3 inference: ${requested || model}`);
@@ -276,6 +278,8 @@ async function chatExact({ messages, model, tools = null, taskType = 'general', 
 }
 
 async function streamExact({ messages, model, tools = null, taskType = 'general', onDelta, firstTokenTimeoutMs = null } = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
   if (!Array.isArray(messages) || !messages.length) throw new Error('Exact streaming request requires messages.');
   if (typeof onDelta !== 'function') throw new Error('Exact streaming request requires an onDelta callback.');
   const requested = normalizeModel(model);
@@ -321,6 +325,8 @@ async function runManagedCandidate(candidate, messages, tools, taskType, timeout
 }
 
 async function chat({ messages, model = 'auto', tools = null, taskType = 'general' } = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
   if (!Array.isArray(messages) || !messages.length) throw new Error('Mark 3 model request requires messages.');
   const failures = [];
   const requested = normalizeModel(model);
@@ -369,6 +375,8 @@ async function chat({ messages, model = 'auto', tools = null, taskType = 'genera
 }
 
 async function streamChat({ messages, model = 'auto', tools = null, taskType = 'general', onDelta, firstTokenTimeoutMs = null } = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
   if (!Array.isArray(messages) || !messages.length) throw new Error('Mark 3 streaming request requires messages.');
   if (typeof onDelta !== 'function') throw new Error('Mark 3 streaming requires an onDelta callback.');
   const failures = [];

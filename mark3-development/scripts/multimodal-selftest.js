@@ -62,7 +62,7 @@ assert(/multimodal\.css/.test(index), 'Multimodal interface stylesheet is not lo
 assert(transportIndex >= 0 && appIndex > transportIndex && voiceIndex > appIndex && filesIndex > voiceIndex, 'Chat transport, native voice and attachment wrappers must load in the intended fetch-chain order.');
 
 assert(/normalizeArtifactMessage/.test(chatTransport), 'Natural artifact-request normalization is missing from chat transport.');
-assert(/send\\s\+me/.test(chatTransport) && /give\\s\+me/.test(chatTransport), 'Natural send/give artifact commands are not normalized into generation requests.');
+assert(!chatTransport.includes('rewritten = `create'), 'Transport must not prepend artifact generation intent.');
 assert(/originalMessage/.test(chatTransport), 'Artifact normalization should preserve the original user wording for provenance.');
 assert(!/sandbox:\/\/mnt\/data/.test(chatTransport), 'Chat transport must never introduce ChatGPT sandbox artifact links.');
 

@@ -311,6 +311,8 @@ async function fetchPage(input, options = {}) {
 }
 
 async function searchWeb(query, options = {}) {
+  require('./command-control-plane').assertAllowed('public-research');
+
   const key = tinyfishApiKey();
   const text = String(query || '').trim();
   if (!text) throw new Error('Search query is required.');
@@ -514,6 +516,8 @@ function dedupeEvidence(items = []) {
 }
 
 async function searchAndFetch(query, options = {}) {
+  require('./command-control-plane').assertAllowed('public-research');
+
   const text = String(query || '').trim();
   if (!text) throw new Error('Search query is required.');
   const profile = researchProfile(text);

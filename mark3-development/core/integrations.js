@@ -72,15 +72,23 @@ function behavioralMessages(messages) {
 }
 
 async function chat(messages, model = 'auto', tools = null, options = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
   return modelRouter.chat({ messages: behavioralMessages(messages), model, tools, taskType: options.taskType || 'general' });
 }
 async function streamChat(messages, model = 'auto', tools = null, options = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
   return modelRouter.streamChat({ messages: behavioralMessages(messages), model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
 async function chatExact(messages, model, tools = null, options = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
   return modelRouter.chatExact({ messages: behavioralMessages(messages), model, tools, taskType: options.taskType || 'general', timeoutMs: options.timeoutMs });
 }
 async function streamExact(messages, model, tools = null, options = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
   return modelRouter.streamExact({ messages: behavioralMessages(messages), model, tools, taskType: options.taskType || 'general', onDelta: options.onDelta, firstTokenTimeoutMs: options.firstTokenTimeoutMs });
 }
 async function health() { return modelRouter.health(); }

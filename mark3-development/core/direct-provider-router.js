@@ -504,6 +504,8 @@ function poolUnavailableError(provider, configured) {
 }
 
 async function chat({ messages, model, tools = null, taskType = 'general', timeoutMs = null } = {}) {
+  require('./command-control-plane').assertAllowed('direct-model', { model, messages });
+
   const parsed = parse(model);
   if (!parsed.provider) throw new Error(`Not a direct provider model: ${model}`);
   const pool = await credentialPool(parsed.provider);
@@ -618,6 +620,8 @@ async function streamWithKey({ parsed, entry, messages, taskType, onDelta, first
 }
 
 async function streamChat({ messages, model, tools = null, taskType = 'general', onDelta, firstTokenTimeoutMs = null } = {}) {
+  require('./command-control-plane').assertAllowed('direct-model', { model, messages });
+
   if (typeof onDelta !== 'function') throw new Error('Direct streaming requires onDelta.');
   if (Array.isArray(tools) && tools.length) {
     const data = await chat({ messages, model, tools, taskType, timeoutMs: timeoutFor(taskType) });

@@ -20,8 +20,7 @@ const selfRepository = require('./core/self-repository');
 const voice = require('./core/voice-orchestrator');
 const nativeVoice = require('./core/native-voice-input');
 const multimodal = require('./core/multimodal');
-const linkedinRouteGuard = require('./core/linkedin-route-guard');
-const linkedinAccount = require('./core/linkedin-account-bootstrap');
+const commandControl = require('./core/command-control-plane');
 const fileVault = require('./core/file-vault');
 const { subscribe, emit } = require('./core/events');
 const proactive = require('./core/proactive');
@@ -280,46 +279,20 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method === 'POST' && req.url === '/api/chat') {
       const data=await body(req, 4 * 1024 * 1024);
+      // Older browser transports may have prefixed 'create' to an operational
+      // request. The original user wording has authority over that rewrite.
+      data.message = typeof data.originalMessage === 'string' && data.originalMessage.trim()
+        ? data.originalMessage : data.message;
 
-      // Reserve explicit LinkedIn operational commands at the HTTP dispatch
-      // boundary. This runs before self-repository and multimodal generation,
-      // so incidental words such as "report" or "build" cannot hijack a
-      // LinkedIn mission into a DOCX/model route.
-      if (linkedinRouteGuard.isReservedLinkedInCommand(data.message)) {
-        const linkedinStatus = linkedinAccount.status();
-        if (!linkedinStatus.installed) {
-          const blocked = linkedinAccount.responseShape(false,
-            'LinkedIn operational routing is reserved, but the dedicated LinkedIn operator has not finished installing. General models and artifact generation were not invoked.',
-            { linkedinRouteGuard: true, reason: 'linkedin_operator_not_installed_at_http_boundary' });
-          const delivery=responseDelivery(blocked.response||blocked.text||'');
-          return send(res,503,{...blocked,response:delivery.text,text:delivery.text,operatingMode:operatingModes.status(),listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply});
-        }
-
-        const attachment = await multimodal.attachmentContext(data.attachments || [], data.message || '');
-        emit('linkedin_http_route_reserved',{inputMode:data.inputMode||'chat'});
-        let result=await assistant.handle(data.message,{
-          model:data.model,
-          history:privateHistoryWithAttachments(data,attachment),
-          taskType:'linkedin-account-research',
-          inputMode:data.inputMode,
-          codingWorkspace:data.codingWorkspace
-        });
-
-        const model=String(result?.model||'').toLowerCase();
-        const provider=String(result?.provider||'').toLowerCase();
-        if (model !== 'linkedin-account-operator' && provider !== 'linkedin-account-mcp') {
-          result = linkedinAccount.responseShape(false,
-            'LinkedIn operational routing failed closed at the HTTP boundary because the request escaped the dedicated operator. No general-model or artifact response was returned.',
-            {
-              linkedinRouteGuard: true,
-              reason: 'linkedin_http_route_escape_blocked',
-              blockedModel: result?.model || null,
-              blockedProvider: result?.provider || null,
-            });
-        }
-
-        const delivery=responseDelivery(result.response||result.text||'');
-        return send(res,200,{...result,response:delivery.text,text:delivery.text,attachments:attachment.files,voiceRecognition:data.voiceRecognition||null,operatingMode:operatingModes.status(),listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply,hasSuggestion:delivery.hasSuggestion});
+      // Exclusive ownership is resolved before attachments, modes, continuity,
+      // artifact inference and the mutable assistant wrapper chain.
+      const controlled = await commandControl.dispatch(data.message, {
+        inputMode: data.inputMode, history: data.history
+      });
+      if (controlled) {
+        const delivery = responseDelivery(controlled.response || controlled.text || '');
+        return send(res, 200, { ...controlled, response: delivery.text, text: delivery.text,
+          listenAfterResponseMs: delivery.listenAfterResponseMs, invitesReply: delivery.invitesReply });
       }
 
       const modeControl=operatingModes.handleCommand(data.message);
@@ -367,6 +340,9 @@ const server = http.createServer(async (req,res) => {
     try{res.end();}catch{}
   }
 });
+// Synchronous domain initialization closes the preload setImmediate startup gap.
+require('./core/linkedin-domain-controller').initialize();
+module.exports = server;
 server.listen(config.port,config.host,()=>{
   if (!/^(0|false|off)$/i.test(process.env.ULTRON_M3_LINKEDIN_AUTOSTART || '1')) {
     void require('./core/linkedin-mcp-client').ensureServer()

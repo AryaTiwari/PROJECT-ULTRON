@@ -1881,10 +1881,15 @@ async function companyMission(request) {
     jobIdsDiscovered = jobMeta.size;
     request.transientJobAttempts = { ...(request.transientJobAttempts || {}) };
     request.transientCompanyAttempts = { ...(request.transientCompanyAttempts || {}) };
+    // Verify every fresh cached detail before spending an account call. Cache
+    // probes do not increment hit counters; consumption records the actual hit.
+    const cachedDetailIds = new Set([...jobMeta.keys()].filter(jobId =>
+      missionRunner.cachedExact?.('get_job_details', { job_id: jobId }, { recordHit: false })?.hit));
     const orderedJobIds = prioritizedJobIds(jobMeta)
       .filter((jobId) => !previouslyChecked.has(String(jobId)))
       .sort((left, right) =>
-        Number(request.transientJobAttempts[String(left)] || 0)
+        Number(cachedDetailIds.has(right)) - Number(cachedDetailIds.has(left))
+        || Number(request.transientJobAttempts[String(left)] || 0)
         - Number(request.transientJobAttempts[String(right)] || 0)
       );
 
@@ -2309,6 +2314,7 @@ async function companyMission(request) {
       deepCompanyProfiles: deepProfiles,
       verifiedDuringRun,
       total: budget.used,
+      callsPerVerifiedCompany: merged.length ? Number((budget.used / merged.length).toFixed(2)) : null,
       maximum: budget.maximum,
       checkedJobIds: request.hiring ? checkedJobIds : [],
       skippedPreviouslyChecked: request.hiring && request.continueFromPrevious ? previouslyChecked.size : 0,

@@ -412,6 +412,7 @@ async function call(tool, args, invoke) {
   const m = context.getStore();
   if (!m) return invoke();
   check();
+  if (m.prepared?.request?.savedDiscoveryOnly && /^search_/.test(tool) && m.discoveryReplayed) return null;
   if (m.prepared?.request?.resumeExistingPool && /^search_/.test(tool) && !m.discoveryReplayed) {
     let sourceMission = m;
     let values = cachedToolValues(m, tool);
@@ -459,7 +460,10 @@ async function call(tool, args, invoke) {
       }
     }
 
-    // Saved discovery is an optimization, never a prerequisite.
+    if (m.prepared?.request?.savedDiscoveryOnly) {
+      throw Object.assign(new Error('Saved discovery is missing or unreadable; no fresh search was made.'), { code: 'LINKEDIN_SAVED_POOL_UNAVAILABLE' });
+    }
+    // Saved discovery is an optimization for new missions, never a prerequisite.
     // If it is absent or unreadable, fall through to a fresh authenticated
     // LinkedIn search instead of failing a brand-new continuation mission.
     m.discoveryReplayed = true;
@@ -584,7 +588,7 @@ function resumeSaved(text) {
   const compiler = require('./linkedin-mission-contract');
   const previous = m.prepared.request;
   const limit = String(text).match(/(?:maximum|max|under|up to)\s*([\d,]+)\s+employees/i)?.[1];
-  const base = { ...previous, originalMessage: text, resumeExistingPool: true, wantsContacts: false,
+  const base = { ...previous, originalMessage: text, resumeExistingPool: true, savedDiscoveryOnly: true, wantsContacts: false,
     filters: { ...previous.filters, ...(limit ? { employeeMax: Number(limit.replace(/,/g,'')) } : {}) } };
   m.prepared.request = compiler.apply(compiler.compile(text, base, { knownLocations: ['India','Maharashtra','Bengaluru','Bangalore'] }), base);
   save(m);

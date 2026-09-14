@@ -225,6 +225,8 @@ function receiptEvidence(task, receipt) {
 }
 
 async function run(task, options = {}) {
+  require('./command-control-plane').assertAllowed('public-research');
+
   if (!task?.query) throw new Error('Research task query is required.');
   if (task.kind === 'research-provenance') return receiptEvidence(task, lastReceipt());
 
