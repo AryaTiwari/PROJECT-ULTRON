@@ -35,6 +35,12 @@ function isUnlockRequest(text) {
   return /\blinkedin\s+(?:account\s+)?(?:unlock|clear\s+(?:the\s+)?lock|resume\s+after\s+(?:re-?login|verification))\b/i.test(String(text || ''));
 }
 
+function isExplicitLinkedInOperationalIntent(text) {
+  const value = String(text || '').trim();
+  if (!/\blinkedin\b|linkedin\.com\//i.test(value)) return false;
+  return /\b(?:find|get|search|research|source|scrape|collect|bring|list|show|extract|add|append|continue|resume|build|fill|edit|update|dedupe|consolidate|enrich|mission|progress|status|health|doctor|setup|login|authenticate|unlock|master|sheet|spreadsheet|companies?|jobs?|roles?|profiles?|recruiters?|mcp)\b/i.test(value);
+}
+
 function setupText() {
   return `LinkedIn account setup is explicit and local. Stop ULTRON, then run: cd "${config.mark3Root}" ; npm run linkedin:setup. Complete LinkedIn login/2FA/checkpoints yourself in the visible browser. ULTRON never needs your LinkedIn password.`;
 }
@@ -389,6 +395,12 @@ function install() {
       });
     }
 
+    if (!result && isExplicitLinkedInOperationalIntent(text)) {
+      result = responseShape(false,
+        'LinkedIn command was claimed by the dedicated operator but could not be compiled safely. General model routing was not invoked. Use “LinkedIn account status” to verify MCP health, or restate the LinkedIn operation with the target, filters and desired count.',
+        { linkedinRouteGuard: true, reason: 'linkedin_command_uncompiled_fail_closed' }
+      );
+    }
     if (!result) return originalHandle(message, options);
     conversation.append('assistant', result.text, {
       model: result.model,
@@ -420,6 +432,7 @@ module.exports = {
   isStatusRequest,
   isSetupRequest,
   isUnlockRequest,
+  isExplicitLinkedInOperationalIntent,
   setupText,
   errorText,
   status: () => ({ installed, ...operator.status() }),
