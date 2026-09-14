@@ -102,6 +102,7 @@ function prune(state, now = Date.now()) {
 
 function classifyError(error) {
   const text = String(error?.message || error || '').toLowerCase();
+  const code = String(error?.code || '').toLowerCase();
   if (/checkpoint|challenge|captcha|security verification|verify your identity|unusual activity|account restricted|temporarily restricted/.test(text)) {
     return { kind: 'manual-lock', reason: 'LinkedIn presented a security checkpoint/challenge. ULTRON stopped all account scraping until you re-authenticate manually.' };
   }
@@ -110,6 +111,10 @@ function classifyError(error) {
   }
   if (/authentication|not logged in|login required|no valid linkedin session|session expired|source session/.test(text)) {
     return { kind: 'auth', reason: 'The LinkedIn browser session is missing or expired.' };
+  }
+  if (/timeout|timed_out|etimedout|econnreset|epipe/.test(code)
+      || /timed out|timeout|connection reset|socket hang up|temporary browser failure/.test(text)) {
+    return { kind: 'transient', reason: 'The LinkedIn MCP/browser transport stalled temporarily. This is recoverable and is not treated as a LinkedIn account-safety event.' };
   }
   return { kind: 'other', reason: String(error?.message || error || 'LinkedIn tool error') };
 }
@@ -213,7 +218,9 @@ function recordError(tool, error) {
   } else if (classification.kind === 'manual-lock') {
     state.manualLock = { at: new Date(now).toISOString(), reason: classification.reason };
   } else if (classification.kind === 'other') {
-    const recentErrors = state.events.filter((event) => !event.ok && Number(event.at || 0) >= now - 30 * 60 * 1000);
+    const recentErrors = state.events.filter((event) => !event.ok
+      && event.errorKind === 'other'
+      && Number(event.at || 0) >= now - 30 * 60 * 1000);
     if (recentErrors.length >= 3) {
       state.cooldownUntil = new Date(now + settings().errorBackoffCooldownMs).toISOString();
     }
