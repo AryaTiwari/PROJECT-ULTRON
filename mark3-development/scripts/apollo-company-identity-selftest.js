@@ -9,6 +9,19 @@ process.env.APOLLO_API_KEY = 'mock-only';
 process.env.APOLLO_WEBHOOK_URL = 'https://example.invalid/callback';
 process.env.APOLLO_WEBHOOK_SECRET = 'mock-only';
 const apollo = require('../core/apollo-enrichment');
+
+assert.equal(apollo.decisionPriority('Founder'), 1);
+assert.equal(apollo.decisionPriority('Managing Director'), 1);
+assert.equal(apollo.decisionPriority('Head Recruiter'), 2);
+assert.equal(apollo.decisionPriority('Recruitment Manager'), 2);
+assert.equal(apollo.decisionPriority('Manager'), 2);
+assert.equal(apollo.decisionPriority('HR Recruiter'), 3);
+assert.equal(apollo.decisionPriority('Account Manager'), 99);
+assert.deepEqual(
+  apollo.COMPANY_DECISION_PRIORITY.map((tier) => tier.priority),
+  [1, 2, 3],
+);
+
 let calls = 0;
 global.fetch = async url => {
   calls++;
@@ -28,5 +41,5 @@ global.fetch = async url => {
   assert.equal(enriched.cached, true);
   assert.equal(enriched.email, 'test@example.com');
   assert.equal(calls, 1);
-  console.log('Apollo identity tests passed: ID lookup, verified company, complete name and cache reuse without duplicate enrichment calls.');
+  console.log('Apollo identity tests passed: canonical company priority scale, ID lookup, verified company, complete name and exact-person cache reuse without duplicate enrichment calls.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
