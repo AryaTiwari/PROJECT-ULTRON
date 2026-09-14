@@ -478,6 +478,29 @@ assert.equal(policy.eventCountsTowardSafety({ ok: false, errorKind: 'other', cou
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'transient' }), false);
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'auth' }), false);
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'rate-limit' }), true);
+
+const schedulerNow = Date.now();
+const schedulerLimit = policy.settings().dailyMax;
+const schedulerEvents = Array.from({ length: schedulerLimit + 2 }, (_, index) => ({
+  at: schedulerNow - (20 * 60 * 60 * 1000) + (index * 1000),
+  tool: 'get_job_details',
+  ok: true,
+  countsTowardSafety: true,
+}));
+const schedulerState = {
+  events: schedulerEvents,
+  cooldownUntil: null,
+  manualLock: null,
+  lastCallAt: null,
+  lastSafetyCallAt: null,
+};
+const expectedReady = schedulerEvents[2].at + (24 * 60 * 60 * 1000) + 1000;
+assert.equal(
+  Date.parse(policy.nextEligibleAt(schedulerState, schedulerNow)),
+  expectedReady,
+  'When usage is above the daily cap, nextEligibleAt must jump until enough events expire to get below the cap.'
+);
+
 assert.equal(mcp.isTransientTransportError(transientTimeout), true);
 assert.equal(mcp.shouldRetryTransient(transientTimeout), false);
 assert.equal(mcp.shouldRetryTransient(Object.assign(new Error('socket reset'), { code: 'ECONNRESET' })), true);
