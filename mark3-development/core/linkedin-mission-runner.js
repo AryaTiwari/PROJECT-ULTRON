@@ -7,6 +7,7 @@ const events = require('./events');
 const policy = require('./linkedin-account-policy');
 const finalMaster = require('./linkedin-final-master');
 const profileEvidenceCache = require('./linkedin-profile-evidence-cache');
+const sheetProgress = require('./linkedin-sheet-progress');
 const context = new AsyncLocalStorage();
 const root = path.join(config.projectRoot, '.ultron', 'linkedin-missions');
 let running = false;
@@ -90,17 +91,106 @@ function save(mission, preserveControl = true) {
   fs.renameSync(`${target}.tmp`, target);
   events.emit('linkedin:progress', summary(mission));
 }
+function persistentTarget(m) {
+  const request = m?.prepared?.request || {};
+  return request.targetMode === 'master_total' && Number(request.targetTotal || 0) > 0;
+}
+
+function elapsedMetrics(m, current = null, targetTotal = null) {
+  const startedAt = Date.parse(String(m.startedAt || m.createdAt || ''));
+  const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
+  const activeWorkMs = Math.max(0, Number(m.activeWorkMs || 0));
+  const initial = Number.isFinite(Number(m.initialSheetCount)) ? Number(m.initialSheetCount) : null;
+  const added = initial != null && Number.isFinite(Number(current))
+    ? Math.max(0, Number(current) - initial)
+    : 0;
+  const avgActiveMsPerCompany = added > 0 ? Math.round(activeWorkMs / added) : null;
+  const remaining = targetTotal && Number.isFinite(Number(current))
+    ? Math.max(0, Number(targetTotal) - Number(current))
+    : null;
+  const estimatedActiveMsRemaining = avgActiveMsPerCompany != null && remaining != null
+    ? avgActiveMsPerCompany * remaining
+    : null;
+  return { elapsedMs, activeWorkMs, addedSinceStart: added, avgActiveMsPerCompany, estimatedActiveMsRemaining };
+}
+
 function summary(m) {
   const request = m.prepared?.request || {};
   const targetTotal = request.targetMode === 'master_total' ? Number(request.targetTotal || 0) : null;
-  const masterCurrent = targetTotal ? finalMaster.masterCount() : null;
+  const sheetCurrent = Number(m.authoritativeSheet?.uniqueCompanies);
+  const masterCurrent = targetTotal
+    ? (Number.isFinite(sheetCurrent) ? sheetCurrent : Number(m.progress?.masterCurrent ?? finalMaster.masterCount()))
+    : null;
+  const timing = elapsedMetrics(m, masterCurrent, targetTotal);
   return { id: m.id, status: m.status, updatedAt: m.updatedAt, calls: m.calls || 0,
     cacheHits: m.cacheHits || 0, progress: m.progress || null,
     contract: request.missionContract || null,
     targetTotal,
     masterCurrent,
     masterRemaining: targetTotal ? Math.max(0, targetTotal - Number(masterCurrent || 0)) : null,
+    startedAt: m.startedAt || m.createdAt || null,
+    lastProgressAt: m.lastProgressAt || null,
+    batchCount: Number(m.batchCount || 0),
+    ...timing,
     error: m.error || null, result: m.result || null };
+}
+
+async function syncAuthoritativeSheet(m, options = {}) {
+  if (!persistentTarget(m)) return null;
+  const request = m.prepared?.request || {};
+  const url = finalMaster.masterSheetUrl() || request.destinationSheetUrl || null;
+  if (!url) return null;
+  const snap = await sheetProgress.snapshot(url, { requireJob: Boolean(request.hiring) });
+  const previous = Number(m.authoritativeSheet?.uniqueCompanies);
+  m.authoritativeSheet = {
+    uniqueCompanies: snap.uniqueCompanies,
+    validRows: snap.validRows,
+    totalDataRows: snap.totalDataRows,
+    readAt: snap.readAt,
+  };
+  if (!Number.isFinite(Number(m.initialSheetCount))) {
+    m.initialSheetCount = Number(snap.uniqueCompanies || 0);
+  }
+  if (!Number.isFinite(previous) || snap.uniqueCompanies > previous) {
+    m.lastProgressAt = snap.readAt || new Date().toISOString();
+  }
+  const targetTotal = Number(request.targetTotal || 0);
+  const remaining = Math.max(0, targetTotal - Number(snap.uniqueCompanies || 0));
+  m.lastMasterCount = Number(snap.uniqueCompanies || 0);
+  m.progress = {
+    ...(m.progress || {}),
+    authoritativeSheet: true,
+    masterCurrent: Number(snap.uniqueCompanies || 0),
+    targetTotal,
+    remaining,
+    sheetReadAt: snap.readAt || new Date().toISOString(),
+  };
+  request.existingDestinationJobIds = snap.jobIds || [];
+  request.existingDestinationCompanyKeys = snap.companyKeys || [];
+  request.count = remaining;
+  if (remaining === 0 && options.complete !== false) {
+    m.status = 'completed';
+    m.notBefore = null;
+    m.stopCode = null;
+    m.error = null;
+    m.completedAt = m.completedAt || new Date().toISOString();
+    m.progress = { ...(m.progress || {}), phase: 'completed', persistentUntilTarget: true, remaining: 0 };
+  }
+  return snap;
+}
+
+async function refreshSheetProgress(id) {
+  const m = typeof id === 'string' ? get(id) : id;
+  await syncAuthoritativeSheet(m, { complete: true });
+  save(m);
+  return summary(m);
+}
+
+function isRetryableMissionError(error) {
+  const code = String(error?.code || '');
+  const text = String(error?.message || error || '');
+  if (/CHECKPOINT|MANUAL_LOCK|AUTH|LOGIN|FORBIDDEN|NOT_FOUND|INVALID|NOT_CONFIGURED|TOOL_NOT_ALLOWED|WRITE_ACTION_DISABLED/i.test(code + ' ' + text)) return false;
+  return /TIMEOUT|TIMED_OUT|TRANSIENT|ECONNRESET|ECONNREFUSED|EPIPE|NETWORK|FETCH|MCP_START_FAILED|MCP_CONNECTION|GOOGLE_SHEETS_API_ERROR|HTTP_5\d\d|TEMPORAR/i.test(code + ' ' + text);
 }
 function list() {
   if (!fs.existsSync(root)) return [];
@@ -134,7 +224,7 @@ function missionSignature(prepared = {}) {
 function equivalentActiveMission(prepared = {}) {
   const signature = missionSignature(prepared);
   return list().find((mission) =>
-    ['created', 'searching', 'writing_sheet', 'waiting_safety'].includes(mission.status)
+    ['created', 'searching', 'writing_sheet', 'waiting_safety', 'waiting_retry'].includes(mission.status)
     && !mission.control
     && (mission.signature || missionSignature(mission.prepared)) === signature
   ) || null;
@@ -145,7 +235,7 @@ function start(fn) {
   const newestLegacySafetyPause = missions.find((mission) => mission.status === 'paused_rate_limit') || null;
 
   for (const m of missions) {
-    if (m.status === 'waiting_safety') {
+    if (['waiting_safety', 'waiting_retry'].includes(m.status)) {
       const recalculated = policy.nextEligibleAt?.();
       if (recalculated) {
         m.notBefore = recalculated;
@@ -194,9 +284,25 @@ function start(fn) {
     }
 
     if (['created', 'searching', 'writing_sheet'].includes(m.status)) {
-      // Never replay possibly committed Sheet writes automatically.
-      m.status = 'paused_restart';
-      save(m);
+      if (persistentTarget(m)) {
+        // Persistent target missions recover from the authoritative Sheet.
+        // Append dedupe + readback makes replay safe even if a previous process
+        // died after partially committing rows.
+        m.research = null;
+        m.status = 'created';
+        m.progress = {
+          ...(m.progress || {}),
+          phase: 'restart_recovery',
+          persistentUntilTarget: true,
+          restartRecoveredAt: new Date().toISOString(),
+        };
+        save(m);
+        queueOnce(m.id);
+        setImmediate(pump);
+      } else {
+        m.status = 'paused_restart';
+        save(m);
+      }
     }
   }
 }
@@ -205,9 +311,12 @@ function enqueue(prepared) {
   if (existing) return { ...summary(existing), alreadyActive: true };
 
   if (queue.length >= 20) throw new Error('LINKEDIN_QUEUE_FULL');
-  const m = { id: randomUUID(), createdAt: new Date().toISOString(), status: 'created',
+  const createdAt = new Date().toISOString();
+  const m = { id: randomUUID(), createdAt, startedAt: null, status: 'created',
     signature: missionSignature(prepared),
-    prepared, calls: 0, cacheHits: 0, responses: {}, research: null, followups: [], progress: { phase: 'queued' } };
+    prepared, calls: 0, cacheHits: 0, responses: {}, research: null, followups: [],
+    activeWorkMs: 0, batchCount: 0, lastProgressAt: null,
+    progress: { phase: 'queued', persistentUntilTarget: prepared?.request?.targetMode === 'master_total' } };
   save(m);
   queueOnce(m.id);
   setImmediate(pump);
@@ -219,7 +328,7 @@ function queuedMissionRunnable(id, now = Date.now()) {
   try { mission = get(id); } catch { return false; }
   if (mission.control) return true;
   if (mission.status === 'created') return true;
-  if (mission.status !== 'waiting_safety') return false;
+  if (!['waiting_safety', 'waiting_retry'].includes(mission.status)) return false;
   const notBefore = Date.parse(String(mission.notBefore || ''));
   return !Number.isFinite(notBefore) || notBefore <= now;
 }
@@ -237,7 +346,7 @@ async function pump() {
     for (const id of queue) {
       let queued;
       try { queued = get(id); } catch { continue; }
-      if (queued.status !== 'waiting_safety') continue;
+      if (!['waiting_safety', 'waiting_retry'].includes(queued.status)) continue;
       const at = Date.parse(String(queued.notBefore || ''));
       if (!Number.isFinite(at)) continue;
       if (earliest == null || at < earliest) earliest = at;
@@ -249,7 +358,7 @@ async function pump() {
   const [id] = queue.splice(runnableIndex, 1);
   const m = get(id);
 
-  if (m.status === 'waiting_safety') {
+  if (['waiting_safety', 'waiting_retry'].includes(m.status)) {
     if (m.control) {
       m.status = m.control === 'cancel' ? 'cancelled' : 'paused';
       save(m);
@@ -276,7 +385,18 @@ async function pump() {
 
   if (m.status !== 'created') return setImmediate(pump);
   running = true;
+  const batchStartedMs = Date.now();
   try {
+    if (!m.startedAt) m.startedAt = new Date(batchStartedMs).toISOString();
+    m.batchCount = Number(m.batchCount || 0) + 1;
+    if (persistentTarget(m)) {
+      await syncAuthoritativeSheet(m, { complete: true });
+      if (m.status === 'completed') {
+        save(m);
+        events.emit('linkedin:complete', summary(m));
+        return;
+      }
+    }
     m.status = 'searching'; save(m);
     m.discoveryReplayed = false;
     const result = await context.run(m, () => executor(m.prepared));
@@ -284,7 +404,11 @@ async function pump() {
     const mission = result?.linkedinMission;
     const request = m.prepared?.request || {};
     const targetTotal = request.targetMode === 'master_total' ? Number(request.targetTotal || 0) : 0;
-    const currentMaster = targetTotal > 0 ? finalMaster.masterCount() : 0;
+    let currentMaster = targetTotal > 0 ? finalMaster.masterCount() : 0;
+    if (targetTotal > 0) {
+      const snap = await syncAuthoritativeSheet(m, { complete: false });
+      if (snap) currentMaster = Number(snap.uniqueCompanies || 0);
+    }
     const remainingTarget = targetTotal > 0 ? Math.max(0, targetTotal - currentMaster) : 0;
     const priorMaster = Number(m.lastMasterCount ?? request.masterTarget?.current ?? currentMaster);
     const madeProgress = currentMaster > priorMaster;
@@ -293,6 +417,7 @@ async function pump() {
       ? (madeProgress ? 0 : budgetLimited ? Number(m.stagnantBatches || 0) : Number(m.stagnantBatches || 0) + 1)
       : 0;
     m.lastMasterCount = currentMaster;
+    if (madeProgress) m.lastProgressAt = new Date().toISOString();
 
     const safetyLocked = /CHECKPOINT|MANUAL_LOCK/.test(String(m.stopCode || '')) || Boolean(mission?.safety?.manualLock);
     const canAutoContinue = targetTotal > 0
@@ -374,8 +499,13 @@ async function pump() {
       apolloFollowup.status = 'approval_requested';
       apolloFollowup.approvalId = approval.id;
     }
-    m.status = /COOLDOWN|CAP|RATE_LIMIT/.test(m.stopCode || '') ? 'paused_rate_limit'
-      : mission && (mission.budgetStopped || mission.found < mission.requested) ? 'partial' : 'completed';
+    if (targetTotal > 0) {
+      m.status = remainingTarget === 0 ? 'completed' : 'partial';
+    } else {
+      m.status = /COOLDOWN|CAP|RATE_LIMIT/.test(m.stopCode || '') ? 'paused_rate_limit'
+        : mission && (mission.budgetStopped || mission.found < mission.requested) ? 'partial' : 'completed';
+    }
+    if (m.status === 'completed') m.completedAt = m.completedAt || new Date().toISOString();
     save(m);
     events.emit('linkedin:complete', summary(m));
   } catch (error) {
@@ -387,12 +517,42 @@ async function pump() {
       return;
     }
 
+    if (persistentTarget(m) && isRetryableMissionError(error)) {
+      m.retryCount = Number(m.retryCount || 0) + 1;
+      const retryMs = Math.min(120000, 10000 * (2 ** Math.min(3, m.retryCount - 1)));
+      const nextAt = new Date(Date.now() + retryMs).toISOString();
+      m.status = 'waiting_retry';
+      m.notBefore = nextAt;
+      m.progress = {
+        ...(m.progress || {}),
+        phase: 'waiting_retry',
+        autoContinue: true,
+        persistentUntilTarget: true,
+        retryCount: m.retryCount,
+        nextEligibleAt: nextAt,
+        retryReason: String(error.message || code),
+      };
+      save(m);
+      queueOnce(m.id);
+      schedulePumpAt(nextAt);
+      return;
+    }
+
     m.status = /CHECKPOINT|MANUAL_LOCK/.test(code) ? 'paused_checkpoint'
       : code === 'LINKEDIN_MISSION_PAUSED' ? 'paused'
         : code === 'LINKEDIN_MISSION_CANCELLED' ? 'cancelled'
           : 'failed';
     save(m);
-  } finally { running = false; setImmediate(pump); }
+  } finally {
+    if (batchStartedMs) {
+      const duration = Math.max(0, Date.now() - batchStartedMs);
+      m.activeWorkMs = Number(m.activeWorkMs || 0) + duration;
+      m.lastBatchDurationMs = duration;
+      try { save(m); } catch {}
+    }
+    running = false;
+    setImmediate(pump);
+  }
 }
 function check() {
   const m = context.getStore();
@@ -631,7 +791,7 @@ function currentUsage() {
 function control(id, action) {
   const m = get(id);
   if (action === 'resume') {
-    const cacheOnlySafetyResume = m.status === 'waiting_safety' && Boolean(m.prepared?.request?.resumeExistingPool);
+    const cacheOnlySafetyResume = ['waiting_safety', 'waiting_retry'].includes(m.status) && Boolean(m.prepared?.request?.resumeExistingPool);
     if (!cacheOnlySafetyResume && !['paused', 'paused_restart', 'paused_checkpoint', 'paused_rate_limit', 'failed', 'partial'].includes(m.status)) {
       throw new Error('Mission is not resumable');
     }
@@ -657,7 +817,7 @@ function control(id, action) {
     // cancelling it can be applied immediately. Leaving it as waiting_safety
     // until its old timer fires made duplicate detection resurrect a mission
     // the user had already cancelled.
-    if (m.status === 'waiting_safety') {
+    if (['waiting_safety', 'waiting_retry'].includes(m.status)) {
       m.control = null;
       m.notBefore = null;
       m.stopCode = nextControl === 'cancel' ? 'LINKEDIN_MISSION_CANCELLED' : null;
@@ -689,7 +849,7 @@ function defer(id, followup) {
 }
 
 function active() {
-  return list().find((m) => ['created', 'searching', 'writing_sheet', 'waiting_safety'].includes(m.status)) || null;
+  return list().find((m) => ['created', 'searching', 'writing_sheet', 'waiting_safety', 'waiting_retry'].includes(m.status)) || null;
 }
 
 function hasCachedTool(mission, tool) {
@@ -866,4 +1026,4 @@ function resumeSaved(text) {
   save(m);
   return control(m.id, 'resume');
 }
-module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, queuedMissionRunnable, nextRunnableQueueIndex, hasCachedTool, recoveryProfile, recoverySourceMissions, compileResumeRequest, resumeSaved };
+module.exports = { start, enqueue, get, list, summary, refreshSheetProgress, syncAuthoritativeSheet, persistentTarget, isRetryableMissionError, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, queuedMissionRunnable, nextRunnableQueueIndex, hasCachedTool, recoveryProfile, recoverySourceMissions, compileResumeRequest, resumeSaved };
