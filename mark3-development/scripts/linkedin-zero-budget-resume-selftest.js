@@ -5,11 +5,11 @@ const path = require('path');
 
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ultron-linkedin-zero-budget-'));
 const configPath = require.resolve('../core/config');
-require.cache[configPath] = {
-  id: configPath,
-  filename: configPath,
-  loaded: true,
-  exports: { projectRoot, mark3Root: projectRoot },
+const originalConfig = require(configPath);
+require.cache[configPath].exports = {
+  ...originalConfig,
+  projectRoot,
+  mark3Root: projectRoot,
 };
 
 const policy = require('../core/linkedin-account-policy');
