@@ -1575,9 +1575,22 @@ function jobIdPriority(meta = {}, request = {}) {
   return score;
 }
 
+function searchTopicConfidence(meta = {}, request = {}) {
+  const topic = String(request.topic || '').trim();
+  if (!/^SAP(?:\s|$)/i.test(topic)) return 1;
+  const evidence = [meta.title, ...(meta.contexts || [])].filter(Boolean).join(' ');
+  if (!evidence.trim()) return 1;
+  return /\bSAP\b|\bABAP\b|\bFICO\b|S\/?4HANA|SuccessFactors?|\bAriba\b|\bBTP\b|\bCPI\b|\bEWM\b|\bHANA\b|\bSAP\s+(?:MM|SD|TM|BW|Basis|Security)\b/i.test(evidence)
+    ? 2
+    : 0;
+}
+
 function prioritizedJobIds(jobMeta, request = {}) {
   return [...jobMeta.values()]
-    .sort((a, b) => jobIdPriority(b, request) - jobIdPriority(a, request) || Number(a.firstSeen || 0) - Number(b.firstSeen || 0))
+    .sort((a, b) =>
+      searchTopicConfidence(b, request) - searchTopicConfidence(a, request)
+      || jobIdPriority(b, request) - jobIdPriority(a, request)
+      || Number(a.firstSeen || 0) - Number(b.firstSeen || 0))
     .map((item) => item.id);
 }
 
@@ -1867,6 +1880,7 @@ async function companyMission(request) {
           trustedLocations: [],
           trustedWorkTypes: [],
           keywords: [],
+          contexts: [],
           searches: [],
           bestKeyword: '',
           firstRank: rank,
@@ -1875,6 +1889,7 @@ async function companyMission(request) {
         current.hits += 1;
         current.firstRank = Math.min(Number(current.firstRank ?? rank), rank);
         if (!current.title && ref.title) current.title = ref.title;
+        if (ref.context && !current.contexts.includes(String(ref.context))) current.contexts.push(String(ref.context));
         if (step.location && !current.locations.includes(step.location)) current.locations.push(step.location);
         if (trust.trustedLocation && !current.trustedLocations.includes(trust.trustedLocation)) current.trustedLocations.push(trust.trustedLocation);
         if (trust.trustedWorkType && !current.trustedWorkTypes.includes(trust.trustedWorkType)) current.trustedWorkTypes.push(trust.trustedWorkType);
@@ -1928,13 +1943,24 @@ async function companyMission(request) {
       missionRunner.cachedExact?.('get_job_details', { job_id: jobId }, { recordHit: false })?.hit));
     const destinationJobIds = new Set((request.existingDestinationJobIds || []).map((value) => String(value)));
     const destinationCompanyKeys = new Set((request.existingDestinationCompanyKeys || []).map((value) => String(value)));
-    const orderedJobIds = prioritizedJobIds(jobMeta, request)
-      .filter((jobId) => !previouslyChecked.has(String(jobId)) && !destinationJobIds.has(String(jobId)))
+    const availableJobIds = prioritizedJobIds(jobMeta, request)
+      .filter((jobId) => !previouslyChecked.has(String(jobId)) && !destinationJobIds.has(String(jobId)));
+
+    const cachedOrdered = availableJobIds.filter((jobId) => cachedDetailIds.has(jobId));
+    const liveStrong = availableJobIds.filter((jobId) =>
+      !cachedDetailIds.has(jobId) && searchTopicConfidence(jobMeta.get(jobId) || {}, request) > 0);
+    const liveWeak = availableJobIds.filter((jobId) =>
+      !cachedDetailIds.has(jobId) && searchTopicConfidence(jobMeta.get(jobId) || {}, request) === 0);
+    const strongEnough = liveStrong.length >= Math.max(request.count * 2, request.count + 5);
+    const orderedJobIds = [...cachedOrdered, ...liveStrong, ...(strongEnough ? [] : liveWeak)]
       .sort((left, right) =>
         Number(cachedDetailIds.has(right)) - Number(cachedDetailIds.has(left))
+        || searchTopicConfidence(jobMeta.get(right) || {}, request) - searchTopicConfidence(jobMeta.get(left) || {}, request)
         || Number(request.transientJobAttempts[String(left)] || 0)
         - Number(request.transientJobAttempts[String(right)] || 0)
+        || jobIdPriority(jobMeta.get(right) || {}, request) - jobIdPriority(jobMeta.get(left) || {}, request)
       );
+    const weakLiveDeferred = strongEnough ? liveWeak.length : 0;
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
@@ -2371,6 +2397,7 @@ async function companyMission(request) {
       skippedPreviouslyChecked: request.hiring && request.continueFromPrevious ? previouslyChecked.size : 0,
       skippedDestinationJobs: request.hiring ? destinationJobIds.size : 0,
       destinationCompaniesKnown: request.hiring ? destinationCompanyKeys.size : 0,
+      weakLiveJobsDeferred: request.hiring ? weakLiveDeferred : 0,
       globallySeenSkipped: records.filter((record) => record.globalSeen).length,
       cachedReconsidered: reconsidered.length,
       cachedJobDetailHits,
@@ -3963,6 +3990,7 @@ module.exports = {
   jobReferenceMap,
   searchLocationMatches,
   jobIdPriority,
+  searchTopicConfidence,
   prioritizedJobIds,
   jobLevelFailures,
   jobTitleFromDetail,
