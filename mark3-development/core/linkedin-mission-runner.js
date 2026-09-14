@@ -570,11 +570,136 @@ function active() {
   return list().find((m) => ['created', 'searching', 'writing_sheet', 'waiting_safety'].includes(m.status)) || null;
 }
 
+function hasCachedTool(mission, tool) {
+  return Object.keys(mission?.responses || {}).some((key) => {
+    try { return JSON.parse(key)[0] === tool; } catch { return false; }
+  });
+}
+
+function recoveryProfile(text) {
+  const value = String(text || '');
+  return {
+    entityMode: /\b(?:company|companies|employers?|business(?:es)?|organizations?|organisations?)\b/i.test(value) ? 'company'
+      : /\b(?:people|persons?|professionals?|recruiters?|profiles?)\b/i.test(value) ? 'person' : '',
+    topic: /\bsap\b/i.test(value) ? 'sap' : '',
+    locations: [
+      /\bmaharashtra\b/i.test(value) ? 'maharashtra' : '',
+      /\b(?:bengaluru|bangalore)\b/i.test(value) ? 'bengaluru' : '',
+    ].filter(Boolean),
+  };
+}
+
+function recoverySourceMissions(text) {
+  const profile = recoveryProfile(text);
+  return list()
+    .filter((mission) => hasCachedTool(mission, 'search_jobs'))
+    .map((mission) => {
+      const request = mission.prepared?.request || {};
+      const entityMode = String(request.entityMode || '').trim().toLowerCase();
+      const topic = String(request.topic || '').trim().toLowerCase();
+      if (profile.entityMode && entityMode && profile.entityMode !== entityMode) return null;
+      if (profile.topic && topic && !topic.includes(profile.topic)) return null;
+
+      const sourceLocations = [
+        ...(Array.isArray(request.allowedLocations) ? request.allowedLocations : []),
+        ...(Array.isArray(request.preferredLocations) ? request.preferredLocations : []),
+        request.location,
+      ].filter(Boolean).map((value) => /bangalore/i.test(String(value)) ? 'bengaluru' : String(value).trim().toLowerCase());
+
+      const locationOverlap = profile.locations.filter((location) => sourceLocations.includes(location)).length;
+      const responseCount = Object.keys(mission.responses || {}).length;
+      const searchCount = Object.keys(mission.responses || {}).filter((key) => {
+        try { return JSON.parse(key)[0] === 'search_jobs'; } catch { return false; }
+      }).length;
+      const score = (profile.topic && topic.includes(profile.topic) ? 1000 : 0)
+        + (profile.entityMode && entityMode === profile.entityMode ? 500 : 0)
+        + locationOverlap * 100
+        + searchCount * 10
+        + Math.min(responseCount, 999);
+
+      return { mission, score, responseCount, searchCount, locationOverlap };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score || right.responseCount - left.responseCount);
+}
+
+function compileResumeRequest(text, previous) {
+  const compiler = require('./linkedin-mission-contract');
+  const limit = String(text).match(/(?:maximum|max|under|up to)\s*([\d,]+)\s+employees/i)?.[1];
+  const base = {
+    ...previous,
+    originalMessage: text,
+    resumeExistingPool: true,
+    savedDiscoveryOnly: true,
+    reuseCachedEvidence: true,
+    wantsContacts: false,
+    filters: { ...previous.filters, ...(limit ? { employeeMax: Number(limit.replace(/,/g,'')) } : {}) },
+  };
+  return compiler.apply(
+    compiler.compile(text, base, { knownLocations: ['India','Maharashtra','Bengaluru','Bangalore'] }),
+    base
+  );
+}
+
 function resumeSaved(text) {
   const explicit = String(text).match(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i)?.[0];
-  const candidates = list().filter(m => !explicit || m.id === explicit).filter(m => Object.keys(m.responses || {}).some(k => k.includes('search_jobs')));
-  const m = candidates.sort((a,b) => Object.keys(b.responses || {}).length - Object.keys(a.responses || {}).length)[0];
-  if (!m) throw new Error('No saved LinkedIn job discovery mission was found. No new mission was created.');
+  const all = list();
+  const exact = explicit ? all.find((mission) => mission.id === explicit) : null;
+  let m = (explicit ? (exact ? [exact] : []) : all)
+    .filter((mission) => hasCachedTool(mission, 'search_jobs'))
+    .sort((a,b) => Object.keys(b.responses || {}).length - Object.keys(a.responses || {}).length)[0];
+
+  // The original mission file may be missing after a local cleanup/rebuild even
+  // though compatible discovery evidence from sibling missions still exists.
+  // Recover into a new continuation rather than silently falling back to fresh
+  // LinkedIn discovery or dead-ending with "mission not found".
+  if (!m && explicit) {
+    const sources = recoverySourceMissions(text);
+    if (!sources.length) {
+      const error = new Error(`Saved LinkedIn mission ${explicit} is not present in the current mission store, and no compatible cached search_jobs evidence was found. No fresh LinkedIn search was started.`);
+      error.code = 'LINKEDIN_SAVED_MISSION_MISSING';
+      error.missingMissionId = explicit;
+      throw error;
+    }
+
+    const primary = sources[0].mission;
+    const prepared = {
+      ...primary.prepared,
+      request: {
+        ...compileResumeRequest(text, primary.prepared?.request || {}),
+        recoveredFromMissingMissionId: explicit,
+        recoverySourceMissionIds: sources.map((source) => source.mission.id),
+      },
+    };
+    const queued = enqueue(prepared);
+    const recovered = get(queued.id);
+    recovered.progress = {
+      ...(recovered.progress || {}),
+      phase: 'recovery_queued',
+      recoveryMode: 'compatible-saved-evidence',
+      missingMissionId: explicit,
+      recoverySourceMissionIds: sources.map((source) => source.mission.id),
+      compatibleSearchResponses: sources.reduce((sum, source) => sum + source.searchCount, 0),
+      compatibleCachedResponses: sources.reduce((sum, source) => sum + source.responseCount, 0),
+      freshDiscoveryAllowed: false,
+    };
+    save(recovered);
+    return {
+      ...summary(recovered),
+      recovered: true,
+      missingMissionId: explicit,
+      recoverySourceMissionIds: recovered.progress.recoverySourceMissionIds,
+      compatibleSearchResponses: recovered.progress.compatibleSearchResponses,
+      compatibleCachedResponses: recovered.progress.compatibleCachedResponses,
+      freshDiscoveryAllowed: false,
+    };
+  }
+
+  if (!m) {
+    const error = new Error('No saved LinkedIn job discovery mission was found. No fresh LinkedIn search was started.');
+    error.code = 'LINKEDIN_SAVED_MISSION_MISSING';
+    throw error;
+  }
   if (['created','searching','writing_sheet'].includes(m.status)) return { ...summary(m), alreadyActive: true };
   if (m.research?.records?.length) {
     const output = m.result?.linkedinMission;
@@ -585,13 +710,8 @@ function resumeSaved(text) {
     m.research = null;
   }
   if (m.research && Array.isArray(m.research.records) && m.research.records.length === 0) m.research = null;
-  const compiler = require('./linkedin-mission-contract');
-  const previous = m.prepared.request;
-  const limit = String(text).match(/(?:maximum|max|under|up to)\s*([\d,]+)\s+employees/i)?.[1];
-  const base = { ...previous, originalMessage: text, resumeExistingPool: true, savedDiscoveryOnly: true, wantsContacts: false,
-    filters: { ...previous.filters, ...(limit ? { employeeMax: Number(limit.replace(/,/g,'')) } : {}) } };
-  m.prepared.request = compiler.apply(compiler.compile(text, base, { knownLocations: ['India','Maharashtra','Bengaluru','Bangalore'] }), base);
+  m.prepared.request = compileResumeRequest(text, m.prepared.request || {});
   save(m);
   return control(m.id, 'resume');
 }
-module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, resumeSaved };
+module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, hasCachedTool, recoveryProfile, recoverySourceMissions, compileResumeRequest, resumeSaved };
