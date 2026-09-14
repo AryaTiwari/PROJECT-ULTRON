@@ -2978,23 +2978,26 @@ async function prepareApolloSheetContacts(sheetUrl, options = {}) {
   };
 }
 
-async function prepareApolloCompanyContacts(missionId) {
+async function prepareApolloCompanyContacts(missionId = null, sheetUrl = null) {
   const state = loadState();
-  const mission = state.missions.find((item) => item.id === missionId);
-  if (!mission?.sheetUrl || mission.request?.entityMode !== 'company') {
-    const error = new Error('The LinkedIn company mission is no longer available for Apollo decision-maker enrichment.');
-    error.code = 'LINKEDIN_APOLLO_MISSION_NOT_FOUND';
+  const mission = missionId ? state.missions.find((item) => item.id === missionId) : null;
+  const resolvedSheetUrl = sheetUrl || mission?.sheetUrl || workspaceSheetUrl(state) || finalMaster.masterSheetUrl();
+  if (!resolvedSheetUrl) {
+    const error = new Error('There is no LinkedIn company Sheet available for Apollo enrichment.');
+    error.code = 'LINKEDIN_APOLLO_SHEET_NOT_FOUND';
     throw error;
   }
 
-  const prepared = await prepareApolloSheetContacts(mission.sheetUrl, {
-    priorityMode: mission.request?.hiring ? 'hiring' : 'general',
+  const prepared = await prepareApolloSheetContacts(resolvedSheetUrl, {
+    priorityMode: mission?.request?.hiring === false ? 'general' : 'hiring',
   });
-  mission.apolloDecisionMakers = prepared.contacts;
-  mission.apolloDecisionMakerUnresolved = prepared.failures;
-  mission.apolloDecisionMakerPreparedAt = nowIso();
-  saveState(state);
-  return { mission, ...prepared };
+  if (mission) {
+    mission.apolloDecisionMakers = prepared.contacts;
+    mission.apolloDecisionMakerUnresolved = prepared.failures;
+    mission.apolloDecisionMakerPreparedAt = nowIso();
+    saveState(state);
+  }
+  return { mission: mission || null, ...prepared };
 }
 
 async function enrichFinalMasterContacts() {
