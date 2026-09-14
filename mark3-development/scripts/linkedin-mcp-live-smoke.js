@@ -32,15 +32,32 @@ async function main() {
     console.log('section_errors:', result?.section_errors || null);
     console.log('Safety after:', policy.status());
   } catch (error) {
-    console.error('LIVE LINKEDIN MCP: FAIL');
-    console.error('code:', error.code || null);
-    console.error('message:', error.message || String(error));
-    console.error('linkedinSafety:', error.linkedinSafety || null);
-    console.error('sessionRecovered:', Boolean(error.sessionRecovered));
-    console.error('recoveryError:', error.recoveryError || null);
-    console.error('MCP status:', mcp.status());
-    console.error('Safety status:', policy.status());
-    process.exitCode = 1;
+    const code = String(error?.code || '');
+    const localSafetyBlock = /^(?:LINKEDIN_(?:BURST|HOURLY|DAILY)_CAP|LINKEDIN_COOLDOWN_ACTIVE|LINKEDIN_MANUAL_LOCK)$/.test(code);
+    if (localSafetyBlock) {
+      const safety = policy.status();
+      console.error('LIVE LINKEDIN MCP: NOT ATTEMPTED — LOCAL SAFETY POLICY BLOCK');
+      console.error('code:', code);
+      console.error('message:', error.message || String(error));
+      console.error('nextEligibleAt:', safety.nextEligibleAt || null);
+      console.error('usage:', {
+        burst: `${safety.burstUsed}/${safety.burstMax}`,
+        hourly: `${safety.hourlyUsed}/${safety.hourlyMax}`,
+        daily: `${safety.dailyUsed}/${safety.dailyMax}`,
+      });
+      console.error('No LinkedIn MCP tool call was made by this smoke test.');
+      process.exitCode = 2;
+    } else {
+      console.error('LIVE LINKEDIN MCP: FAIL');
+      console.error('code:', error.code || null);
+      console.error('message:', error.message || String(error));
+      console.error('linkedinSafety:', error.linkedinSafety || null);
+      console.error('sessionRecovered:', Boolean(error.sessionRecovered));
+      console.error('recoveryError:', error.recoveryError || null);
+      console.error('MCP status:', mcp.status());
+      console.error('Safety status:', policy.status());
+      process.exitCode = 1;
+    }
   } finally {
     await mcp.shutdown();
   }
