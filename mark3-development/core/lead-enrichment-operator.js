@@ -437,12 +437,19 @@ async function resume() {
     provider: latest.provider,
     strictApolloColumns,
   });
+  let apolloStatusSummary = null;
+  if (strictApolloColumns && latest.provider === 'google') {
+    try {
+      apolloStatusSummary = await require('./linkedin-account-operator').finalizeApolloSheetStatuses(latest.sheetUrl);
+    } catch {}
+  }
   return {
     ...synced,
     resumed: true,
     stats,
     sheetUrl: latest.sheetUrl,
     strictApolloColumns,
+    apolloStatusSummary,
   };
 }
 
