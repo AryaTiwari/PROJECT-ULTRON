@@ -2978,6 +2978,77 @@ async function prepareApolloSheetContacts(sheetUrl, options = {}) {
   };
 }
 
+function apolloValuePresent(value) {
+  const text = String(value || '').trim();
+  return Boolean(text && !/^null$/i.test(text));
+}
+
+function apolloStatusForValues(personLinkedin, phone, email, existingStatus = '') {
+  const person = apollo.normalizeLinkedIn(personLinkedin);
+  const hasPhone = apolloValuePresent(phone);
+  const hasEmail = apolloValuePresent(email);
+  const phoneNull = /^null$/i.test(String(phone || '').trim());
+  const emailNull = /^null$/i.test(String(email || '').trim());
+
+  if (hasPhone && hasEmail) return 'ENRICHED';
+  if (hasEmail && phoneNull) return 'EMAIL_ONLY';
+  if (hasPhone && emailNull) return 'PHONE_ONLY';
+  if (phoneNull && emailNull) return 'NO_CONTACT';
+  if (hasEmail && person) return 'EMAIL_FOUND';
+  if (hasPhone && person) return 'PHONE_FOUND';
+  if (person) return 'SELECTED';
+  return String(existingStatus || '').trim();
+}
+
+async function finalizeApolloSheetStatuses(sheetUrl) {
+  if (!sheetUrl) return { updated: 0, statuses: {}, sheetUrl: null };
+  const layout = await ensureApolloSection(sheetUrl);
+  const rows = await sheets.values(layout.spreadsheetId, `${sheets.quoteSheet(layout.sheetName)}!A:ZZ`);
+  const headers = rows[layout.headerRowNumber - 1] || layout.rawHeaders || [];
+  const companyIndex = baseHeaderIndex(headers, 'company');
+  const personLinkedinIndex = exactHeaderIndex(headers, 'APOLLO LINKEDIN');
+  const phoneIndex = exactHeaderIndex(headers, 'APOLLO PHONE');
+  const emailIndex = exactHeaderIndex(headers, 'APOLLO EMAIL');
+  const statusIndex = exactHeaderIndex(headers, 'APOLLO STATUS');
+  if ([companyIndex, personLinkedinIndex, phoneIndex, emailIndex, statusIndex].some((index) => index < 0)) {
+    return { updated: 0, statuses: {}, sheetUrl, sheetName: layout.sheetName };
+  }
+
+  const changes = [];
+  const statuses = {};
+  for (let rowIndex = layout.headerRowNumber; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex] || [];
+    const company = String(row[companyIndex] || '').trim();
+    if (!company) continue;
+    const current = String(row[statusIndex] || '').trim();
+    if (/^(?:NO_MATCH|ERROR)$/i.test(current) && !apollo.normalizeLinkedIn(row[personLinkedinIndex])) {
+      statuses[current.toUpperCase()] = Number(statuses[current.toUpperCase()] || 0) + 1;
+      continue;
+    }
+    const next = apolloStatusForValues(
+      row[personLinkedinIndex],
+      row[phoneIndex],
+      row[emailIndex],
+      current,
+    );
+    if (!next) continue;
+    statuses[next] = Number(statuses[next] || 0) + 1;
+    if (next !== current) {
+      changes.push({
+        range: sheets.cellRange(layout.sheetName, rowIndex + 1, statusIndex),
+        value: next,
+      });
+    }
+  }
+  if (changes.length) await sheets.writeCells(layout.spreadsheetId, changes);
+  return {
+    updated: changes.length,
+    statuses,
+    sheetUrl,
+    sheetName: layout.sheetName,
+  };
+}
+
 async function prepareApolloCompanyContacts(missionId = null, sheetUrl = null) {
   const state = loadState();
   const mission = missionId ? state.missions.find((item) => item.id === missionId) : null;
@@ -3015,6 +3086,7 @@ async function enrichFinalMasterContacts() {
     ensureContactColumns: false,
     strictApolloColumns: true,
   });
+  const statusSummary = await finalizeApolloSheetStatuses(master.sheetUrl);
 
   return {
     selected: selection.selected,
@@ -3028,6 +3100,8 @@ async function enrichFinalMasterContacts() {
     contacts: selection.contacts,
     failures: selection.failures,
     apolloColumns: selection.apolloColumns,
+    apolloStatuses: statusSummary.statuses,
+    apolloStatusCellsUpdated: statusSummary.updated,
     sheetUrl: master.sheetUrl,
   };
 }
@@ -4034,6 +4108,9 @@ module.exports = {
   createRejectedCandidatesSheet,
   ensureApolloSection,
   prepareApolloSheetContacts,
+  apolloValuePresent,
+  apolloStatusForValues,
+  finalizeApolloSheetStatuses,
   prepareApolloCompanyContacts,
   enrichFinalMasterContacts,
   isBuildFinalMasterRequest,
