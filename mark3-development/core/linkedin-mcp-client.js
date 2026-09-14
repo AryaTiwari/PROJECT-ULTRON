@@ -1,21 +1,44 @@
-const { spawn } = require('child_process');
 const policy = require('./linkedin-account-policy');
 
 const HOST = '127.0.0.1';
 const PORT = Math.max(1024, Math.min(65535, Number(process.env.ULTRON_M3_LINKEDIN_MCP_PORT || 8793)));
 const ENDPOINT = `http://${HOST}:${PORT}/mcp`;
-const PACKAGE_SPEC = String(process.env.ULTRON_M3_LINKEDIN_MCP_PACKAGE || 'mcp-server-linkedin@4.24.0').trim();
+const TRANSPORT_MODE = 'stdio';
+const PACKAGE_SPEC = String(process.env.ULTRON_M3_LINKEDIN_MCP_PACKAGE || 'mcp-server-linkedin@4.24.2').trim();
 const START_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_LINKEDIN_MCP_START_TIMEOUT_MS || 90000));
-const TOOL_TIMEOUT_MS = Math.max(15000, Number(process.env.ULTRON_M3_LINKEDIN_MCP_TOOL_TIMEOUT_MS || 180000));
+const TOOL_TIMEOUT_MS = Math.max(15000, Number(process.env.ULTRON_M3_LINKEDIN_MCP_TOOL_TIMEOUT_MS || 300000));
+const SERVER_TOOL_TIMEOUT_SECONDS = Math.max(60, Math.ceil(TOOL_TIMEOUT_MS / 1000));
+const BROWSER_IDLE_SECONDS = Math.max(0, Number(process.env.ULTRON_M3_LINKEDIN_BROWSER_IDLE_SECONDS || 600));
+const BROWSER_WAIT_SECONDS = Math.max(0, Math.min(45, Number(process.env.ULTRON_M3_LINKEDIN_BROWSER_WAIT_SECONDS || 45)));
+const PAGE_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_LINKEDIN_PAGE_TIMEOUT_MS || 10000));
+const REQUIRED_TOOLS = Object.freeze([
+  'search_jobs',
+  'get_job_details',
+  'get_company_profile',
+  'search_companies',
+  'search_people',
+  'get_person_profile',
+]);
+
+let client = null;
+let transport = null;
+let connectPromise = null;
+let lastTransportError = '';
+let toolNames = [];
+let connectionGeneration = 0;
+
+function uvxCommand() {
+  return process.platform === 'win32' ? 'uvx.exe' : 'uvx';
+}
 
 function toolTimeoutMs(tool) {
   const defaults = {
-    search_jobs: 120000,
-    get_job_details: 90000,
-    get_company_profile: 120000,
-    get_person_profile: 120000,
-    search_people: 120000,
-    search_companies: 120000,
+    search_jobs: 240000,
+    get_job_details: 180000,
+    get_company_profile: 240000,
+    get_person_profile: 240000,
+    search_people: 240000,
+    search_companies: 240000,
   };
   const envKey = 'ULTRON_M3_LINKEDIN_MCP_' + String(tool || '').toUpperCase() + '_TIMEOUT_MS';
   const configured = Number(process.env[envKey]);
@@ -26,50 +49,59 @@ function toolTimeoutMs(tool) {
 function isTransientTransportError(error) {
   const code = String(error?.code || '');
   const message = String(error?.message || error || '');
-  return /TIMEOUT|TIMED_OUT|ETIMEDOUT|ECONNRESET|EPIPE/i.test(code)
-    || /timed out|timeout|connection reset|socket hang up|temporary browser failure/i.test(message);
+  return /TIMEOUT|TIMED_OUT|REQUEST_TIMEOUT|CONNECTION_CLOSED|ETIMEDOUT|ECONNRESET|EPIPE/i.test(code)
+    || /timed out|timeout|connection (?:closed|reset)|transport closed|broken pipe|econnreset|epipe|temporary browser failure/i.test(message);
 }
 
 function shouldRetryTransient(error) {
   if (!isTransientTransportError(error)) return false;
-  return String(error?.code || '') !== 'LINKEDIN_MCP_TIMEOUT';
+  return String(error?.code || '') !== 'LINKEDIN_MCP_TIMEOUT'
+    && !/REQUEST_TIMEOUT/i.test(String(error?.code || ''));
 }
 
-let child = null;
-let startPromise = null;
-let sessionId = null;
-let requestId = 100;
-let lastStderr = '';
-
-function uvxCommand() {
-  return process.platform === 'win32' ? 'uvx.exe' : 'uvx';
+function stringEnvironment(source = process.env) {
+  return Object.fromEntries(
+    Object.entries(source)
+      .filter(([, value]) => value != null)
+      .map(([key, value]) => [key, String(value)])
+  );
 }
 
-function serverArgs() {
-  return [
+function serverArgs(mode = 'stdio') {
+  const args = [
     PACKAGE_SPEC,
-    '--transport', 'streamable-http',
-    '--host', HOST,
-    '--port', String(PORT),
-    '--log-level', 'WARNING',
+    '--transport', mode === 'streamable-http' ? 'streamable-http' : 'stdio',
+    '--log-level', String(process.env.ULTRON_M3_LINKEDIN_MCP_LOG_LEVEL || 'WARNING').toUpperCase(),
     '--no-auto-import',
     '--login-inline-wait', '0',
+    '--browser-wait', String(BROWSER_WAIT_SECONDS),
+    '--browser-idle-timeout', String(BROWSER_IDLE_SECONDS),
+    '--timeout', String(PAGE_TIMEOUT_MS),
+    '--tool-timeout', String(SERVER_TOOL_TIMEOUT_SECONDS),
   ];
+  if (mode === 'streamable-http') {
+    args.push('--host', HOST, '--port', String(PORT), '--path', '/mcp');
+  }
+  return args;
 }
 
 function serverEnv() {
   return {
     ...process.env,
+    UV_HTTP_TIMEOUT: String(process.env.UV_HTTP_TIMEOUT || 300),
     HEADLESS: 'true',
     AUTO_IMPORT_FROM_BROWSER: 'false',
     LOGIN_INLINE_WAIT: '0',
-    HOST,
-    PORT: String(PORT),
-    TRANSPORT: 'streamable-http',
-    BROWSER_IDLE_TIMEOUT: String(process.env.ULTRON_M3_LINKEDIN_BROWSER_IDLE_SECONDS || 180),
+    BROWSER_WAIT: String(BROWSER_WAIT_SECONDS),
+    BROWSER_IDLE_TIMEOUT: String(BROWSER_IDLE_SECONDS),
+    TIMEOUT: String(PAGE_TIMEOUT_MS),
+    TOOL_TIMEOUT: String(SERVER_TOOL_TIMEOUT_SECONDS),
   };
 }
 
+// Retained for compatibility with older tests/diagnostics that imported these
+// helpers. Stdio is now the live transport; no HTTP payload parsing is required
+// during normal operation.
 function parsePayload(text) {
   const raw = String(text || '').trim();
   if (!raw) return null;
@@ -81,131 +113,6 @@ function parsePayload(text) {
     try { events.push(JSON.parse(match[1])); } catch {}
   }
   return events.reverse().find((item) => item && typeof item === 'object') || null;
-}
-
-async function postMcp(payload, options = {}) {
-  const controller = new AbortController();
-  const timeoutMs = Math.max(1000, Number(options.timeoutMs || TOOL_TIMEOUT_MS));
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const headers = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-    };
-    if (options.sessionId) headers['Mcp-Session-Id'] = options.sessionId;
-    const response = await fetch(ENDPOINT, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    const raw = await response.text();
-    const body = parsePayload(raw);
-    if (!response.ok) {
-      const error = new Error(body?.error?.message || raw.slice(0, 1200) || `LinkedIn MCP HTTP ${response.status}`);
-      error.status = response.status;
-      throw error;
-    }
-    return {
-      body,
-      raw,
-      sessionId: response.headers.get('mcp-session-id') || options.sessionId || null,
-    };
-  } catch (error) {
-    if (controller.signal.aborted || error?.name === 'AbortError') {
-      const timeout = new Error(`LinkedIn MCP request timed out after ${timeoutMs}ms.`);
-      timeout.code = 'LINKEDIN_MCP_TIMEOUT';
-      throw timeout;
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function initializeSession(timeoutMs = 5000) {
-  const id = ++requestId;
-  const response = await postMcp({
-    jsonrpc: '2.0',
-    id,
-    method: 'initialize',
-    params: {
-      protocolVersion: '2025-03-26',
-      capabilities: {},
-      clientInfo: { name: 'ultron-mark3', version: '3.0.0' },
-    },
-  }, { timeoutMs });
-  if (response.body?.error) throw new Error(response.body.error.message || 'LinkedIn MCP initialize failed.');
-  const idHeader = response.sessionId;
-  if (!idHeader) throw new Error('LinkedIn MCP initialized without returning Mcp-Session-Id.');
-  sessionId = idHeader;
-  try {
-    await postMcp({
-      jsonrpc: '2.0',
-      method: 'notifications/initialized',
-      params: {},
-    }, { sessionId, timeoutMs: 3000 });
-  } catch {}
-  return sessionId;
-}
-
-function childIsRunning() {
-  return Boolean(child && child.exitCode == null && !child.killed);
-}
-
-function startChild() {
-  if (childIsRunning()) return child;
-  lastStderr = '';
-  child = spawn(uvxCommand(), serverArgs(), {
-    cwd: process.cwd(),
-    env: serverEnv(),
-    windowsHide: true,
-    stdio: ['ignore', 'ignore', 'pipe'],
-  });
-  child.stderr?.on('data', (chunk) => {
-    lastStderr = (lastStderr + String(chunk || '')).slice(-5000);
-  });
-  child.on('exit', () => {
-    sessionId = null;
-  });
-  child.on('error', (error) => {
-    lastStderr = (lastStderr + '\n' + error.message).slice(-5000);
-  });
-  return child;
-}
-
-async function ensureServer() {
-  if (sessionId) return sessionId;
-  try {
-    return await initializeSession(1800);
-  } catch {}
-
-  if (startPromise) return startPromise;
-  startPromise = (async () => {
-    startChild();
-    const startedAt = Date.now();
-    let lastError = null;
-    while (Date.now() - startedAt < START_TIMEOUT_MS) {
-      if (child && child.exitCode != null) {
-        const detail = lastStderr.trim();
-        const error = new Error(detail || `LinkedIn MCP server exited with code ${child.exitCode}.`);
-        error.code = /ENOENT|not recognized|not found/i.test(detail) ? 'LINKEDIN_MCP_NOT_INSTALLED' : 'LINKEDIN_MCP_START_FAILED';
-        throw error;
-      }
-      try {
-        return await initializeSession(2500);
-      } catch (error) {
-        lastError = error;
-        await new Promise((resolve) => setTimeout(resolve, 1200));
-      }
-    }
-    const error = new Error(`LinkedIn MCP server did not become ready on ${ENDPOINT}. ${lastError?.message || lastStderr}`.trim());
-    error.code = 'LINKEDIN_MCP_START_TIMEOUT';
-    throw error;
-  })().finally(() => {
-    startPromise = null;
-  });
-  return startPromise;
 }
 
 function normalizeToolResult(payload) {
@@ -225,59 +132,195 @@ function normalizeToolResult(payload) {
   };
 }
 
-function toolErrorMessage(body) {
-  if (body?.error) return body.error.message || JSON.stringify(body.error);
-  const result = body?.result;
+function toolErrorMessage(result) {
   if (!result?.isError) return '';
   const content = Array.isArray(result.content) ? result.content : [];
-  return content.map((item) => item?.text || '').filter(Boolean).join('\n') || 'LinkedIn MCP tool returned an error.';
+  return content.map((item) => item?.text || '').filter(Boolean).join('\n')
+    || 'LinkedIn MCP tool returned an error.';
 }
 
-async function rawCall(tool, args = {}, retrySession = true) {
-  await ensureServer();
-  const id = ++requestId;
+function sdkMissingError(error) {
+  const wrapped = new Error(
+    'The official MCP client SDK is not installed. Run npm install in mark3-development, then restart ULTRON. '
+    + `Underlying error: ${error?.message || error}`
+  );
+  wrapped.code = 'LINKEDIN_MCP_CLIENT_SDK_MISSING';
+  return wrapped;
+}
+
+async function sdkModules() {
   try {
-    const response = await postMcp({
-      jsonrpc: '2.0',
-      id,
-      method: 'tools/call',
-      params: { name: tool, arguments: args },
-    }, { sessionId, timeoutMs: toolTimeoutMs(tool) });
-    if (response.body?.error && /session|Mcp-Session-Id/i.test(String(response.body.error.message || '')) && retrySession) {
-      sessionId = null;
-      await initializeSession(5000);
-      return rawCall(tool, args, false);
-    }
-    const toolError = toolErrorMessage(response.body);
-    if (toolError) throw new Error(toolError);
-    return normalizeToolResult(response.body?.result);
+    const [{ Client }, { StdioClientTransport }] = await Promise.all([
+      import('@modelcontextprotocol/client'),
+      import('@modelcontextprotocol/client/stdio'),
+    ]);
+    return { Client, StdioClientTransport };
   } catch (error) {
-    if (retrySession && /session.*(?:invalid|expired|not found)|Mcp-Session-Id/i.test(String(error.message || ''))) {
-      sessionId = null;
-      await initializeSession(5000);
-      return rawCall(tool, args, false);
+    throw sdkMissingError(error);
+  }
+}
+
+function classifySdkTimeout(error, timeoutMs) {
+  const code = String(error?.code || '');
+  const message = String(error?.message || error || '');
+  if (/REQUEST_TIMEOUT|TIMEOUT|TIMED_OUT/i.test(code) || /timed out|timeout/i.test(message)) {
+    const wrapped = new Error(`LinkedIn MCP request timed out after ${timeoutMs}ms.`);
+    wrapped.code = 'LINKEDIN_MCP_TIMEOUT';
+    wrapped.cause = error;
+    return wrapped;
+  }
+  return error;
+}
+
+async function closeTransport() {
+  const currentClient = client;
+  const currentTransport = transport;
+  client = null;
+  transport = null;
+  toolNames = [];
+
+  try {
+    if (currentClient?.close) await currentClient.close();
+    else if (currentTransport?.close) await currentTransport.close();
+  } catch {}
+
+  return true;
+}
+
+async function connectStdio() {
+  if (client && transport) return client;
+  if (connectPromise) return connectPromise;
+
+  connectPromise = (async () => {
+    const { Client, StdioClientTransport } = await sdkModules();
+
+    const nextTransport = new StdioClientTransport({
+      command: uvxCommand(),
+      args: serverArgs('stdio'),
+      env: stringEnvironment(serverEnv()),
+      cwd: process.cwd(),
+      // Do not use stderr:'pipe' without continuously draining it. The SDK's
+      // inherited/default stderr cannot deadlock when the LinkedIn server logs.
+      stderr: 'inherit',
+      maxBufferSize: 20 * 1024 * 1024,
+    });
+
+    const nextClient = new Client({
+      name: 'ultron-mark3-linkedin',
+      version: '3.0.0',
+    });
+
+    nextClient.onerror = (error) => {
+      lastTransportError = String(error?.message || error || '').slice(-4000);
+    };
+    nextClient.onclose = () => {
+      if (client === nextClient) {
+        client = null;
+        transport = null;
+        toolNames = [];
+      }
+    };
+
+    try {
+      await nextClient.connect(nextTransport);
+      const listed = await nextClient.listTools();
+      const names = (listed?.tools || []).map((item) => String(item?.name || '')).filter(Boolean);
+      const missing = REQUIRED_TOOLS.filter((name) => !names.includes(name));
+      if (missing.length) {
+        const error = new Error(`LinkedIn MCP connected but required tools are missing: ${missing.join(', ')}`);
+        error.code = 'LINKEDIN_MCP_TOOLSET_MISMATCH';
+        throw error;
+      }
+
+      client = nextClient;
+      transport = nextTransport;
+      toolNames = names;
+      connectionGeneration += 1;
+      lastTransportError = '';
+      return client;
+    } catch (error) {
+      try { await nextClient.close(); } catch {}
+      try { await nextTransport.close(); } catch {}
+      throw error;
+    }
+  })().finally(() => {
+    connectPromise = null;
+  });
+
+  return connectPromise;
+}
+
+async function initializeSession() {
+  return connectStdio();
+}
+
+async function ensureServer() {
+  return connectStdio();
+}
+
+async function listTools() {
+  const connected = await ensureServer();
+  const result = await connected.listTools();
+  toolNames = (result?.tools || []).map((item) => String(item?.name || '')).filter(Boolean);
+  return result?.tools || [];
+}
+
+async function rawCall(tool, args = {}, retryConnection = true) {
+  const connected = await ensureServer();
+  const timeoutMs = toolTimeoutMs(tool);
+
+  try {
+    const result = await connected.callTool(
+      { name: tool, arguments: args },
+      {
+        timeout: timeoutMs,
+        resetTimeoutOnProgress: true,
+        maxTotalTimeout: Math.max(timeoutMs, Math.round(timeoutMs * 1.5)),
+      },
+    );
+
+    const toolError = toolErrorMessage(result);
+    if (toolError) {
+      const error = new Error(toolError);
+      error.code = 'LINKEDIN_MCP_TOOL_ERROR';
+      throw error;
+    }
+    return normalizeToolResult(result);
+  } catch (rawError) {
+    const error = classifySdkTimeout(rawError, timeoutMs);
+    if (retryConnection && isTransientTransportError(error) && shouldRetryTransient(error)) {
+      await closeTransport();
+      const retryClient = await ensureServer();
+      try {
+        const result = await retryClient.callTool(
+          { name: tool, arguments: args },
+          {
+            timeout: timeoutMs,
+            resetTimeoutOnProgress: true,
+            maxTotalTimeout: Math.max(timeoutMs, Math.round(timeoutMs * 1.5)),
+          },
+        );
+        const toolError = toolErrorMessage(result);
+        if (toolError) {
+          const next = new Error(toolError);
+          next.code = 'LINKEDIN_MCP_TOOL_ERROR';
+          throw next;
+        }
+        return normalizeToolResult(result);
+      } catch (retryRawError) {
+        throw classifySdkTimeout(retryRawError, timeoutMs);
+      }
     }
     throw error;
   }
 }
 
 async function recoverSession(error) {
-  sessionId = null;
-
-  // A timed-out browser-backed request can continue running inside the MCP
-  // process after the client aborts. Restart the local read-only MCP process
-  // once so the next candidate is not sent into the same wedged browser task.
-  if (String(error?.code || '') === 'LINKEDIN_MCP_TIMEOUT') {
-    shutdown();
-    return ensureServer();
-  }
-
-  try {
-    return await initializeSession(5000);
-  } catch {
-    shutdown();
-    return ensureServer();
-  }
+  // With stdio the MCP client owns the LinkedIn server subprocess. Closing the
+  // transport tears down stale JSON-RPC/browser ownership state, then reconnects
+  // from the same persisted LinkedIn profile.
+  await closeTransport();
+  return ensureServer();
 }
 
 async function callTool(tool, args = {}) {
@@ -292,11 +335,9 @@ async function callTool(tool, args = {}) {
 
     if (classification.kind !== 'transient' && !isTransientTransportError(error)) throw error;
 
-    // Timeouts on browser-backed LinkedIn tools are different from a cheap
-    // socket/session reset. The timed-out task may still be running inside the
-    // browser process. Restart the local MCP session, but do not immediately
-    // repeat the same expensive LinkedIn action. The mission controller will
-    // defer that candidate and continue from its checkpoint.
+    // An MCP request timeout may leave a browser operation alive. Restart the
+    // owned stdio subprocess, but let the mission controller defer this exact
+    // candidate instead of immediately repeating an expensive LinkedIn action.
     if (!shouldRetryTransient(error)) {
       try {
         await recoverSession(error);
@@ -310,7 +351,7 @@ async function callTool(tool, args = {}) {
     try {
       await recoverSession(error);
       await policy.waitTurn(tool);
-      const result = await rawCall(tool, args);
+      const result = await rawCall(tool, args, false);
       policy.recordCall(tool, true, { recoveredAfterTransient: true });
       return result;
     } catch (retryError) {
@@ -321,37 +362,47 @@ async function callTool(tool, args = {}) {
   }
 }
 
-function shutdown() {
-  if (!childIsRunning()) return;
-  try { child.kill(); } catch {}
-  child = null;
-  sessionId = null;
+async function shutdown() {
+  return closeTransport();
 }
 
 function status() {
   return {
     provider: 'stickerdaniel/linkedin-mcp-server',
     package: PACKAGE_SPEC,
-    endpoint: ENDPOINT,
-    loopbackOnly: HOST === '127.0.0.1',
+    transport: TRANSPORT_MODE,
+    sdk: '@modelcontextprotocol/client',
+    endpoint: null,
+    loopbackOnly: true,
     autoImportDisabled: true,
     headlessRuntime: true,
-    childRunning: childIsRunning(),
-    sessionInitialized: Boolean(sessionId),
+    childRunning: Boolean(client && transport),
+    sessionInitialized: Boolean(client && transport),
+    connectionGeneration,
+    requiredTools: [...REQUIRED_TOOLS],
+    discoveredTools: [...toolNames],
+    lastTransportError: lastTransportError || null,
     readOnlyTools: [...policy.READ_ONLY_TOOLS],
     safety: policy.status(),
   };
 }
 
-process.once('exit', shutdown);
+process.once('exit', () => {
+  void closeTransport();
+});
 
 module.exports = {
   HOST,
   PORT,
   ENDPOINT,
+  TRANSPORT_MODE,
   PACKAGE_SPEC,
+  REQUIRED_TOOLS,
+  START_TIMEOUT_MS,
+  TOOL_TIMEOUT_MS,
   uvxCommand,
   serverArgs,
+  serverEnv,
   parsePayload,
   normalizeToolResult,
   toolTimeoutMs,
@@ -359,6 +410,7 @@ module.exports = {
   shouldRetryTransient,
   initializeSession,
   ensureServer,
+  listTools,
   recoverSession,
   callTool,
   shutdown,
