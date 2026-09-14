@@ -251,7 +251,10 @@ async function handlePaidToolDecision(decision) {
           return responseShape(false, `Apollo company-head selection stopped safely: ${access} No contact was guessed and no fallback person was enriched.`, { error: error.code || error.message, apolloCalled: false });
         }
       }
-      const response = await handleEnrichment(decision.payload.url, decision.payload.provider || 'google', { ensureContactColumns: false });
+      const response = await handleEnrichment(decision.payload.url, decision.payload.provider || 'google', {
+        ensureContactColumns: false,
+        strictApolloColumns: decision.payload?.entityMode === 'company',
+      });
       if (selection && response?.text) {
         response.text = `Apollo selected ${selection.selected} highest-priority company head${selection.selected === 1 ? '' : 's'}; ${selection.unresolved} compan${selection.unresolved === 1 ? 'y' : 'ies'} had no verified priority match. ${response.text}`;
         response.response = response.text;
