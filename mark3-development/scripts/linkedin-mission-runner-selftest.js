@@ -49,6 +49,26 @@ const waitFor = async predicate => {
   await waitFor(() => runner.get(c.id).status === 'completed');
   assert.throws(() => runner.get('../escape'));
 
+  // Cancelling a mission parked in waiting_safety must be immediate so the old
+  // mission cannot keep blocking an equivalent replacement until its timer.
+  runner.start(async () => {
+    const e = new Error('LinkedIn hourly cap');
+    e.code = 'LINKEDIN_HOURLY_CAP';
+    e.cooldownUntil = new Date(Date.now() + 500).toISOString();
+    throw e;
+  });
+  const parkedPrepared = { request: { entityMode: 'company', topic: 'Ruby', count: 3, filters: {} } };
+  const parked = runner.enqueue(parkedPrepared);
+  await waitFor(() => runner.get(parked.id).status === 'waiting_safety');
+  const cancelled = runner.control(parked.id, 'cancel');
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(runner.get(parked.id).notBefore, null);
+  runner.start(async () => ({ text: 'replacement complete' }));
+  const replacement = runner.enqueue(parkedPrepared);
+  assert.notEqual(replacement.id, parked.id);
+  assert.notEqual(replacement.alreadyActive, true);
+  await waitFor(() => runner.get(replacement.id).status === 'completed');
+
   // A master-total mission should remain one logical mission across safe
   // batches instead of requiring a human to keep typing "continue".
   let batch = 0;
@@ -85,5 +105,5 @@ const waitFor = async predicate => {
   assert.equal(runner.get(auto.id).continuationCount, 1);
   assert.equal(finalMaster.masterCount(), 2);
 
-  console.log('LinkedIn mission runner tests passed: quick enqueue, equivalent-mission dedupe, serialization, persistent research, call reuse, automatic safety-window waiting/resume and master-target continuation.');
+  console.log('LinkedIn mission runner tests passed: quick enqueue, equivalent-mission dedupe, serialization, persistent research, call reuse, automatic safety-window waiting/resume, immediate parked-mission cancellation, replacement enqueue and master-target continuation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
