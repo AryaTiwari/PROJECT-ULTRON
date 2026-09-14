@@ -287,6 +287,21 @@ async function callTool(tool, args = {}) {
 
     if (classification.kind !== 'transient' && !isTransientTransportError(error)) throw error;
 
+    // Timeouts on browser-backed LinkedIn tools are different from a cheap
+    // socket/session reset. The timed-out task may still be running inside the
+    // browser process. Restart the local MCP session, but do not immediately
+    // repeat the same expensive LinkedIn action. The mission controller will
+    // defer that candidate and continue from its checkpoint.
+    if (String(error?.code || '') === 'LINKEDIN_MCP_TIMEOUT') {
+      try {
+        await recoverSession(error);
+        error.sessionRecovered = true;
+      } catch (recoveryError) {
+        error.recoveryError = recoveryError.message;
+      }
+      throw error;
+    }
+
     try {
       await recoverSession(error);
       await policy.waitTurn(tool);
