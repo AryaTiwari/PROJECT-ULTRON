@@ -5,10 +5,31 @@ function uniq(values = []) {
   });
 }
 
+const CANONICAL_LOCATIONS = {
+  india: 'India',
+  maharashtra: 'Maharashtra',
+  karnataka: 'Karnataka',
+  bengaluru: 'Bengaluru',
+  bangalore: 'Bengaluru',
+  pune: 'Pune',
+  mumbai: 'Mumbai',
+  'navi mumbai': 'Navi Mumbai',
+  thane: 'Thane',
+  nagpur: 'Nagpur',
+  nashik: 'Nashik',
+  hyderabad: 'Hyderabad',
+  chennai: 'Chennai',
+  'delhi ncr': 'Delhi NCR',
+  delhi: 'Delhi',
+  gurugram: 'Gurugram',
+  noida: 'Noida',
+  kolkata: 'Kolkata',
+  ahmedabad: 'Ahmedabad',
+};
+
 function canonicalLocation(value) {
   const clean = String(value || '').trim();
-  if (/^bangalore$/i.test(clean)) return 'Bengaluru';
-  return clean;
+  return CANONICAL_LOCATIONS[clean.toLowerCase()] || clean;
 }
 
 function extractLocations(text, fallback = '', known = []) {
@@ -147,4 +168,4 @@ function apply(contract, request = {}) {
   return next;
 }
 
-module.exports = { uniq, canonicalLocation, extractLocations, workType, target, compile, apply };
+module.exports = { CANONICAL_LOCATIONS, uniq, canonicalLocation, extractLocations, workType, target, compile, apply };
