@@ -230,7 +230,10 @@ async function pump() {
     const remainingTarget = targetTotal > 0 ? Math.max(0, targetTotal - currentMaster) : 0;
     const priorMaster = Number(m.lastMasterCount ?? request.masterTarget?.current ?? currentMaster);
     const madeProgress = currentMaster > priorMaster;
-    m.stagnantBatches = remainingTarget > 0 ? (madeProgress ? 0 : Number(m.stagnantBatches || 0) + 1) : 0;
+    const budgetLimited = Boolean(mission?.budgetStopped);
+    m.stagnantBatches = remainingTarget > 0
+      ? (madeProgress ? 0 : budgetLimited ? Number(m.stagnantBatches || 0) : Number(m.stagnantBatches || 0) + 1)
+      : 0;
     m.lastMasterCount = currentMaster;
 
     const safetyLocked = /CHECKPOINT|MANUAL_LOCK/.test(String(m.stopCode || '')) || Boolean(mission?.safety?.manualLock);
@@ -238,7 +241,7 @@ async function pump() {
       && remainingTarget > 0
       && request.autoContinue !== false
       && !safetyLocked
-      && Number(m.continuationCount || 0) < 12
+      && Number(m.continuationCount || 0) < 30
       && Number(m.stagnantBatches || 0) < 3;
 
     if (canAutoContinue) {
@@ -323,11 +326,11 @@ function check() {
   }
 }
 
-function compatibleDiscoveryMission(current, tool) {
+function compatibleDiscoveryMissions(current, tool) {
   const request = current?.prepared?.request || {};
   const topic = String(request.topic || '').trim().toLowerCase();
   const entityMode = String(request.entityMode || '').trim().toLowerCase();
-  return list().find((candidate) => {
+  return list().filter((candidate) => {
     if (!candidate || candidate.id === current.id) return false;
     const source = candidate.prepared?.request || {};
     if (String(source.entityMode || '').trim().toLowerCase() !== entityMode) return false;
@@ -335,7 +338,7 @@ function compatibleDiscoveryMission(current, tool) {
     return Object.keys(candidate.responses || {}).some((key) => {
       try { return JSON.parse(key)[0] === tool; } catch { return false; }
     });
-  }) || null;
+  });
 }
 
 function cachedToolValues(mission, tool) {
@@ -351,12 +354,25 @@ async function call(tool, args, invoke) {
     let sourceMission = m;
     let values = cachedToolValues(m, tool);
 
+    const sourceMissionIds = [];
+    if (values.length) sourceMissionIds.push(m.id);
+
     if (!values.length) {
-      const compatible = compatibleDiscoveryMission(m, tool);
-      if (compatible) {
-        sourceMission = compatible;
-        values = cachedToolValues(compatible, tool);
+      const compatibles = compatibleDiscoveryMissions(m, tool);
+      const seen = new Set();
+      values = [];
+      for (const compatible of compatibles) {
+        const cachedValues = cachedToolValues(compatible, tool);
+        if (!cachedValues.length) continue;
+        sourceMissionIds.push(compatible.id);
+        for (const value of cachedValues) {
+          const signature = JSON.stringify(value);
+          if (seen.has(signature)) continue;
+          seen.add(signature);
+          values.push(value);
+        }
       }
+      if (sourceMissionIds.length) sourceMission = { id: sourceMissionIds[0] };
     }
 
     if (values.length) {
@@ -367,11 +383,13 @@ async function call(tool, args, invoke) {
       if (tool !== 'search_jobs' || jobIds.length) {
         m.discoveryReplayed = true;
         m.discoverySourceMissionId = sourceMission.id;
+        m.discoverySourceMissionIds = sourceMissionIds;
         m.cacheHits += values.length;
         m.progress = {
           ...(m.progress || {}),
           reusedDiscoveryResponses: values.length,
           reusedDiscoveryMissionId: sourceMission.id,
+          reusedDiscoveryMissionIds: sourceMissionIds,
           reuseMode: 'saved-first',
         };
         save(m);
@@ -474,4 +492,4 @@ function resumeSaved(text) {
   save(m);
   return control(m.id, 'resume');
 }
-module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, resumeSaved };
+module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, resumeSaved };
