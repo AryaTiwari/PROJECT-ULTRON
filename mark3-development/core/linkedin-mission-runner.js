@@ -314,7 +314,7 @@ async function pump() {
         }
         const policyAt = Date.parse(String(nextAt || ''));
         if (!Number.isFinite(policyAt) || policyAt <= now + 1000) {
-          const retryMs = Math.min(120000, 15000 * (2 ** Math.min(3, stagnant - 1)));
+          const retryMs = Math.min(60000, 8000 * (2 ** Math.min(3, stagnant - 1)));
           nextAt = new Date(now + retryMs).toISOString();
         }
       }
