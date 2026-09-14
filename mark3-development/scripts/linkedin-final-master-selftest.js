@@ -132,7 +132,7 @@ assert.deepEqual(master.rowFor(tech), [
   'TechVerito',
   'https://www.linkedin.com/company/techverito',
   'https://www.linkedin.com/jobs/view/1',
-  '',
+  'Mumbai, Maharashtra, India',
   '11',
   '+10000000000',
   'test@example.invalid',
