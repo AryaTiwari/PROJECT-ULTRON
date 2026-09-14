@@ -155,6 +155,14 @@ async function pump() {
     }
     m.status = 'created';
     m.notBefore = null;
+    m.stopCode = null;
+    m.error = null;
+    m.progress = {
+      ...(m.progress || {}),
+      phase: 'resuming',
+      nextEligibleAt: null,
+      safetyReason: null,
+    };
     save(m);
   }
 
