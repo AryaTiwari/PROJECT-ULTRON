@@ -258,8 +258,18 @@ async function handlePaidToolDecision(decision) {
         ensureContactColumns: false,
         strictApolloColumns: decision.payload?.entityMode === 'company',
       });
+      let apolloStatusSummary = null;
+      if (decision.payload?.entityMode === 'company' && response?.ok) {
+        try {
+          apolloStatusSummary = await require('./linkedin-account-operator').finalizeApolloSheetStatuses(decision.payload.url);
+          response.apolloStatusSummary = apolloStatusSummary;
+        } catch {}
+      }
       if (selection && response?.text) {
-        response.text = `Apollo selected ${selection.selected} highest-priority company head${selection.selected === 1 ? '' : 's'}; ${selection.unresolved} compan${selection.unresolved === 1 ? 'y' : 'ies'} had no verified priority match. ${response.text}`;
+        const statusTail = apolloStatusSummary?.updated
+          ? ` Finalized ${apolloStatusSummary.updated} Apollo status cell${apolloStatusSummary.updated === 1 ? '' : 's'}.`
+          : '';
+        response.text = `Apollo selected ${selection.selected} highest-priority company head${selection.selected === 1 ? '' : 's'}; ${selection.unresolved} compan${selection.unresolved === 1 ? 'y' : 'ies'} had no verified priority match. ${response.text}${statusTail}`;
         response.response = response.text;
         response.apolloDecisionMakers = selection;
       }
