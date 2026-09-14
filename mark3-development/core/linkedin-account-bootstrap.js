@@ -2,6 +2,7 @@ const operator = require('./linkedin-account-operator');
 const policy = require('./linkedin-account-policy');
 const paidTools = require('./paid-tool-approval');
 const commandRouter = require('./linkedin-command-router');
+const requestCompiler = require('./linkedin-request-compiler');
 const config = require('./config');
 const missionRunner = require('./linkedin-mission-runner');
 const finalMaster = require('./linkedin-final-master');
@@ -363,7 +364,29 @@ function install() {
           });
         }
       } else {
-        const parsed = operator.parseRequest(text);
+        let parsed = operator.parseRequest(text);
+        let compilerResult = null;
+
+        // Deterministic parsing remains primary. The bounded Gemini compiler is
+        // only a rescue path for explicit LinkedIn research phrasing the grammar
+        // did not understand. It never executes research and never routes through
+        // Nemotron/OmniRoute.
+        if (!parsed && requestCompiler.shouldCompile(text)) {
+          compilerResult = await requestCompiler.compile(text);
+          if (compilerResult.ok && compilerResult.canonicalPrompt) {
+            parsed = operator.parseRequest(compilerResult.canonicalPrompt);
+            if (parsed) {
+              parsed.originalMessage = text;
+              parsed.compiler = {
+                mode: 'typed-gemini-rescue',
+                model: compilerResult.model,
+                provider: compilerResult.provider,
+                canonicalPrompt: compilerResult.canonicalPrompt,
+              };
+            }
+          }
+        }
+
         const request = commandRouter.enhanceRequest(parsed, text, operator.workspaceSheetUrl());
         if (request) {
           conversation.append('user', text, {
@@ -378,6 +401,7 @@ function install() {
             entityMode: request.entityMode,
             location: request.location,
             linkedinOnly: true,
+            compiler: request.compiler || compilerResult || null,
           });
           const prepared = await operator.prepare(request);
           result = await handlePrepared(prepared);
@@ -398,7 +422,11 @@ function install() {
     if (!result && isExplicitLinkedInOperationalIntent(text)) {
       result = responseShape(false,
         'LinkedIn command was claimed by the dedicated operator but could not be compiled safely. General model routing was not invoked. Use “LinkedIn account status” to verify MCP health, or restate the LinkedIn operation with the target, filters and desired count.',
-        { linkedinRouteGuard: true, reason: 'linkedin_command_uncompiled_fail_closed' }
+        {
+          linkedinRouteGuard: true,
+          reason: 'linkedin_command_uncompiled_fail_closed',
+          linkedinCompiler: requestCompiler.hasGeminiCredential() ? 'typed-gemini-rescue-available' : 'deterministic-only-gemini-not-configured',
+        }
       );
     }
     if (!result) return originalHandle(message, options);
