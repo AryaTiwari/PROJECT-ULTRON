@@ -100,6 +100,13 @@ async function until(fn) {
 
   await until(() => runner.get(recovery.id).status === 'completed');
 
+  const resumableRecovery = runner.get(recovery.id);
+  resumableRecovery.status = 'partial';
+  fs.writeFileSync(
+    path.join(root, '.ultron', 'linkedin-missions', `${recovery.id}.json`),
+    JSON.stringify(resumableRecovery),
+  );
+
   const beforeTargetedCount = runner.list().length;
   const targeted = runner.resumeSaved(
     `Continue recovery mission ${recovery.id}. Do not create another mission. Reuse the existing saved evidence only.`
