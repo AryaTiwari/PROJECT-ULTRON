@@ -3335,6 +3335,15 @@ async function reconcileFinalMasterRegistry(request = {}) {
   }
 
   finalMaster.replaceMasterRecords(records, { missionId: 'sheet-reconciliation' });
+  for (const record of records) {
+    const key = finalMaster.companyKey(record);
+    if (!key) continue;
+    finalMaster.contactUpdate(key, {
+      phone: record.phone || '',
+      email: record.email || '',
+      remarks: record.remarks || '',
+    });
+  }
   return {
     count: records.length,
     records,
