@@ -262,39 +262,49 @@ async function handle(message, options = {}) {
         const latest = operator.latestCompletedMission();
         const workspaceUrl = operator.workspaceSheetUrl();
         const masterUrl = finalMaster.masterSheetUrl();
+        const explicitSheetUrl = commandRouter.sheetUrlFromText(text) || null;
         const explicitlyMaster = /\b(?:final\s+master|master\s+sheet|canonical\s+master)\b/i.test(text);
-        const workspaceIsMaster = Boolean(masterUrl && workspaceUrl && workspaceUrl === masterUrl);
-        const latestIsMaster = Boolean(masterUrl && latest?.sheetUrl && latest.sheetUrl === masterUrl);
+        const preferredSheetUrl = explicitSheetUrl || workspaceUrl || null;
 
         let approval = null;
         let targetUrl = null;
         let entityMode = null;
 
-        if (masterUrl && (explicitlyMaster || workspaceIsMaster || latestIsMaster || !latest?.sheetUrl)) {
+        if (masterUrl && (explicitlyMaster || preferredSheetUrl === masterUrl)) {
           targetUrl = masterUrl;
           entityMode = 'company';
           approval = paidTools.request(
             'apollo',
             'linkedin-final-master-enrichment',
             { url: masterUrl, provider: 'google', entityMode: 'company' },
-            `The canonical Final Master has ${finalMaster.masterCount()} verified unique compan${finalMaster.masterCount() === 1 ? 'y' : 'ies'}. For each incomplete company row, Apollo will select exactly one contact using Founder/Director/Owner > Head Recruiter/Manager > HR Recruiter, then fill only that selected person's missing phone/email fields.`
+            'Apollo will scan every company row currently present in the canonical Final Master, including manually pasted rows, and write results only into the dedicated APOLLO CONTACT / ROLE / LINKEDIN / PHONE / EMAIL / STATUS section.'
           );
-        } else if (latest?.sheetUrl) {
-          targetUrl = latest.sheetUrl;
-          entityMode = latest.request?.entityMode || 'person';
+        } else if (preferredSheetUrl || latest?.sheetUrl) {
+          targetUrl = preferredSheetUrl || latest.sheetUrl;
+          const matchingMission = latest?.sheetUrl === targetUrl ? latest : null;
+          entityMode = matchingMission?.request?.entityMode || 'company';
           approval = paidTools.request(
             'apollo',
             'linkedin-account-enrichment',
             {
-              url: latest.sheetUrl,
+              url: targetUrl,
               provider: 'google',
               ensureContactColumns: false,
-              missionId: latest.id,
+              missionId: matchingMission?.id || null,
               entityMode,
             },
             entityMode === 'company'
-              ? `This company-based LinkedIn sheet will select one verified contact per company using Founder/Director/Owner > Head Recruiter/Manager > HR Recruiter, then enrich that selected person's phone/email.`
-              : `This people-based LinkedIn sheet will enrich the exact LinkedIn person already stored in each row. ULTRON will not substitute a different company contact.`
+              ? 'Apollo will scan every company row currently in this Sheet, including rows pasted manually or added by older missions, select one verified priority contact per incomplete company, and write only to the dedicated Apollo columns.'
+              : 'This people-based Sheet will enrich the exact LinkedIn person stored in each row. ULTRON will not substitute a different company contact.'
+          );
+        } else if (masterUrl) {
+          targetUrl = masterUrl;
+          entityMode = 'company';
+          approval = paidTools.request(
+            'apollo',
+            'linkedin-final-master-enrichment',
+            { url: masterUrl, provider: 'google', entityMode: 'company' },
+            'Apollo will scan every company row currently present in the canonical Final Master and use the dedicated Apollo enrichment section.'
           );
         }
 
