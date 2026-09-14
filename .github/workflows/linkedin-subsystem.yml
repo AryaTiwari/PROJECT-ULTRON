@@ -1,5 +1,9 @@
 name: LinkedIn Subsystem Regression
 
+concurrency:
+  group: linkedin-subsystem-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [mark3-development]
