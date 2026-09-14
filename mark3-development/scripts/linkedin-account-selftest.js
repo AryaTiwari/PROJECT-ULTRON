@@ -455,6 +455,22 @@ const rate = policy.classifyError(new Error('429 Too Many Requests'));
 assert.equal(rate.kind, 'rate-limit');
 const transientTimeout = Object.assign(new Error('LinkedIn MCP request timed out after 180000ms.'), { code: 'LINKEDIN_MCP_TIMEOUT' });
 assert.equal(policy.classifyError(transientTimeout).kind, 'transient');
+assert.equal(policy.classifyError(Object.assign(new Error('The official MCP client SDK is not installed.'), { code: 'LINKEDIN_MCP_CLIENT_SDK_MISSING' })).kind, 'infrastructure');
+const safetyNow = Date.now();
+const mixedSafetyState = {
+  events: [
+    { at: safetyNow, tool: 'search_jobs', ok: true },
+    { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'transient' },
+    { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'infrastructure' },
+    { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'auth' },
+    { at: safetyNow, tool: 'search_jobs', ok: false, errorKind: 'rate-limit' },
+  ],
+};
+const mixedUsage = policy.usage(mixedSafetyState, safetyNow);
+assert.equal(mixedUsage.hourly, 2, 'Only a confirmed call and an actual rate-limit event should consume LinkedIn safety budget.');
+assert.equal(policy.eventCountsTowardSafety({ errorKind: 'transient' }), false);
+assert.equal(policy.eventCountsTowardSafety({ errorKind: 'auth' }), false);
+assert.equal(policy.eventCountsTowardSafety({ errorKind: 'rate-limit' }), true);
 assert.equal(mcp.isTransientTransportError(transientTimeout), true);
 assert.equal(mcp.shouldRetryTransient(transientTimeout), false);
 assert.equal(mcp.shouldRetryTransient(Object.assign(new Error('socket reset'), { code: 'ECONNRESET' })), true);
