@@ -1,9 +1,11 @@
 function isExplicitLinkedInResearch(text) {
   const value = String(text || '').trim().toLowerCase();
-  if (!value.includes('linkedin')) return false;
-  const action = ['find','search','research','source','collect','bring','list','add','continue','resume'].some(word => value.includes(word));
-  const target = ['company','companies','job','jobs','role','roles','lead','leads','profile','profiles','recruiter','recruiters'].some(word => value.includes(word));
-  return action && target;
+  if (!/\blinkedin\b|linkedin\.com\//i.test(value)) return false;
+
+  const operational = /\b(?:find|get|search|research|source|collect|bring|list|show|look|pull|discover|scrape|extract|add|append|continue|resume|build|fill|edit|update|dedupe|consolidate|enrich|mission|progress|status|health|doctor|setup|login|authenticate|unlock|mcp)\b/i.test(value);
+  const target = /\b(?:company|companies|job|jobs|role|roles|lead|leads|profile|profiles|people|person|recruiter|recruiters|founder|founders|hiring|master|sheet|spreadsheet|account|mission|mcp)\b/i.test(value);
+
+  return operational && target;
 }
 
 module.exports = { isExplicitLinkedInResearch };
