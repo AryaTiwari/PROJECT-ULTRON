@@ -298,12 +298,27 @@ async function pump() {
     const canAutoContinue = targetTotal > 0
       && remainingTarget > 0
       && request.autoContinue !== false
-      && !safetyLocked
-      && Number(m.continuationCount || 0) < 30
-      && Number(m.stagnantBatches || 0) < 3;
+      && !safetyLocked;
 
     if (canAutoContinue) {
-      const nextAt = policy.nextEligibleAt();
+      let nextAt = policy.nextEligibleAt();
+      const now = Date.now();
+
+      // Target missions are persistent: do not stop after an arbitrary number
+      // of continuation or stagnant batches. If a non-safety batch makes no
+      // progress, avoid a hot loop and broaden to fresh discovery when allowed.
+      if (!madeProgress && !budgetLimited) {
+        const stagnant = Math.max(1, Number(m.stagnantBatches || 1));
+        if (stagnant >= 2 && request.savedDiscoveryOnly !== true) {
+          m.prepared.request.resumeExistingPool = false;
+        }
+        const policyAt = Date.parse(String(nextAt || ''));
+        if (!Number.isFinite(policyAt) || policyAt <= now + 1000) {
+          const retryMs = Math.min(120000, 15000 * (2 ** Math.min(3, stagnant - 1)));
+          nextAt = new Date(now + retryMs).toISOString();
+        }
+      }
+
       if (nextAt) {
         m.researchHistory = [...(m.researchHistory || []), {
           at: new Date().toISOString(),
@@ -312,20 +327,25 @@ async function pump() {
           masterCount: currentMaster,
           remainingTarget,
           budgetStopped: mission?.budgetStopped || null,
-        }].slice(-20);
+        }].slice(-50);
         m.research = null;
         m.continuationCount = Number(m.continuationCount || 0) + 1;
         m.prepared.request.continueFromPrevious = true;
-        m.prepared.request.resumeExistingPool = true;
+        if (m.prepared.request.resumeExistingPool !== false) {
+          m.prepared.request.resumeExistingPool = true;
+        }
         m.status = 'waiting_safety';
         m.notBefore = nextAt;
         m.stopCode = null;
         m.error = null;
         m.progress = {
           ...(m.progress || {}),
-          phase: 'waiting_safety',
+          phase: budgetLimited ? 'waiting_safety' : 'waiting_resume',
           autoContinue: true,
+          persistentUntilTarget: true,
           continuationCount: m.continuationCount,
+          stagnantBatches: Number(m.stagnantBatches || 0),
+          discoveryMode: m.prepared.request.resumeExistingPool === false ? 'fresh-after-cache' : 'saved-first',
           masterCurrent: currentMaster,
           targetTotal,
           remaining: remainingTarget,
