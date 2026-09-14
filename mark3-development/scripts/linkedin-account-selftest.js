@@ -28,6 +28,15 @@ assert.equal(company.topic, 'SAP');
 assert.equal(company.wantsContacts, true);
 
 const filtered = operator.parseRequest('Find me 20 companies on LinkedIn with SAP roles under 1000 employees, remote, located in Maharashtra');
+const agenticSapRequest = operator.parseRequest('LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total. Allowed locations: Maharashtra and Bengaluru/Bangalore. Prioritize Maharashtra first, then use Bengaluru. Remote roles preferred. Maximum 1000 employees. Companies only.');
+assert.equal(agenticSapRequest.targetMode, 'master_total');
+assert.equal(agenticSapRequest.targetTotal, 30);
+assert.ok(agenticSapRequest.allowedLocations.includes('Maharashtra'));
+assert.ok(agenticSapRequest.allowedLocations.includes('Bengaluru'));
+assert.equal(agenticSapRequest.filters.employeeMax, 1000);
+assert.equal(agenticSapRequest.filters.workType, null);
+assert.equal(agenticSapRequest.preferredWorkType, 'remote');
+assert.equal(agenticSapRequest.missionContract.relaxation.hardConstraintsLocked, true);
 const exactUserSapRequest = operator.parseRequest('Find me 20 companies on LinkedIn with SAP role openings, under 1000 employees, remote, and located in Maharashtra.');
 assert.equal(exactUserSapRequest.topic, 'SAP');
 assert.equal(operator.requestTopic('Find me companies on LinkedIn with SAP FICO role openings in Maharashtra', 'company', 'Maharashtra'), 'SAP FICO');
@@ -440,6 +449,8 @@ assert.equal(rate.kind, 'rate-limit');
 const transientTimeout = Object.assign(new Error('LinkedIn MCP request timed out after 180000ms.'), { code: 'LINKEDIN_MCP_TIMEOUT' });
 assert.equal(policy.classifyError(transientTimeout).kind, 'transient');
 assert.equal(mcp.isTransientTransportError(transientTimeout), true);
+assert.equal(mcp.shouldRetryTransient(transientTimeout), false);
+assert.equal(mcp.shouldRetryTransient(Object.assign(new Error('socket reset'), { code: 'ECONNRESET' })), true);
 assert.equal(mcp.isTransientTransportError(Object.assign(new Error('socket reset'), { code: 'ECONNRESET' })), true);
 assert.ok(mcp.toolTimeoutMs('get_job_details') >= 15000);
 assert.ok(mcp.toolTimeoutMs('search_jobs') >= 15000);
@@ -448,4 +459,4 @@ const strikeState = { events: [{ at: strikeNow, errorKind: 'rate-limit' }, { at:
 assert.equal(policy.recentRateLimitStrikes(strikeState, strikeNow), 2);
 assert.equal(policy.adaptiveRateLimitCooldownMs(strikeState, strikeNow), Math.min(6 * 60 * 60 * 1000, limits.rateLimitCooldownMs * 2));
 
-console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, implicit hiring-intent routing, headcount-safe company/person classification, India/state hub expansion, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, auto-expanding master Sheet grids, recoverable destination writes, actionable Sheets diagnostics, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, transient MCP session recovery, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
+console.log('LinkedIn account integration self-test passed. Dedicated routing, company-profile links, strict location/work-type/headcount/topic gates, rejected-candidate persistence/export, temporary local-budget test bypass, canonical SAP topic parsing, 20-query target-driven SAP discovery, implicit hiring-intent routing, headcount-safe company/person classification, India/state hub expansion, trusted retained-filter evidence with explicit-conflict precedence, strict company-size ranges, resumable criteria, persistent Sheet workspace, auto-expanding master Sheet grids, recoverable destination writes, actionable Sheets diagnostics, consolidation/dedupe/reuse, structured joeyism job/company recovery, target-driven people/recruiter research, adaptive SAP role/city discovery, criteria-only hard gates, bullet-safe workplace parsing, job-first hiring linkage, evidence columns, hiring-aware Apollo preparation, hidden person linkage, bounded LinkedIn calls, adaptive cooldowns, agentic hard-vs-preference mission contracts, multi-location targeting, transient candidate deferral, bounded MCP recovery, read-only enforcement and checkpoint circuit breaking are structurally healthy.');
