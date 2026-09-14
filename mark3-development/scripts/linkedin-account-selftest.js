@@ -397,6 +397,9 @@ assert.throws(() => policy.assertReadOnlyTool('connect_with_person'), /disabled|
 
 const limits = policy.settings();
 assert.equal(typeof limits.localBudgetBypass, 'boolean');
+assert.equal(policy.runtimeAllowsTestBypass('C:/app/server.js', ''), false);
+assert.equal(policy.runtimeAllowsTestBypass('C:/app/scripts/linkedin-account-selftest.js', ''), true);
+assert.equal(policy.runtimeAllowsTestBypass('C:/app/server.js', 'test'), true);
 const previousBudgetBypass = process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = '1';
 assert.equal(policy.settings().localBudgetBypass, true);
