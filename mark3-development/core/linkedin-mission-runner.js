@@ -4,11 +4,29 @@ const { randomUUID } = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
 const config = require('./config');
 const events = require('./events');
+const policy = require('./linkedin-account-policy');
+const finalMaster = require('./linkedin-final-master');
 const context = new AsyncLocalStorage();
 const root = path.join(config.projectRoot, '.ultron', 'linkedin-missions');
 let running = false;
 let executor;
 const queue = [];
+let wakeTimer = null;
+
+function queueOnce(id) {
+  if (!queue.includes(id)) queue.push(id);
+}
+
+function schedulePumpAt(iso) {
+  const at = Date.parse(String(iso || ''));
+  if (!Number.isFinite(at)) return setImmediate(pump);
+  const delay = Math.max(0, at - Date.now());
+  if (wakeTimer) clearTimeout(wakeTimer);
+  wakeTimer = setTimeout(() => {
+    wakeTimer = null;
+    pump();
+  }, Math.min(delay, 0x7fffffff));
+}
 
 function file(id) {
   if (!/^[a-z0-9-]+$/i.test(id)) throw new Error('Invalid mission ID');
@@ -38,6 +56,11 @@ function list() {
 function start(fn) {
   executor = fn;
   for (const m of list()) {
+    if (m.status === 'waiting_safety') {
+      queueOnce(m.id);
+      schedulePumpAt(m.notBefore);
+      continue;
+    }
     if (['created', 'searching', 'writing_sheet'].includes(m.status)) {
       // Never replay possibly committed Sheet writes automatically.
       m.status = 'paused_restart';
@@ -50,21 +73,92 @@ function enqueue(prepared) {
   const m = { id: randomUUID(), createdAt: new Date().toISOString(), status: 'created',
     prepared, calls: 0, cacheHits: 0, responses: {}, research: null, followups: [], progress: { phase: 'queued' } };
   save(m);
-  queue.push(m.id);
+  queueOnce(m.id);
   setImmediate(pump);
   return summary(m);
 }
 async function pump() {
   if (running || !executor || !queue.length) return;
-  running = true;
   const m = get(queue.shift());
+
+  if (m.status === 'waiting_safety') {
+    if (m.control) {
+      m.status = m.control === 'cancel' ? 'cancelled' : 'paused';
+      save(m);
+      return setImmediate(pump);
+    }
+    const notBefore = Date.parse(String(m.notBefore || ''));
+    if (Number.isFinite(notBefore) && notBefore > Date.now()) {
+      queueOnce(m.id);
+      schedulePumpAt(m.notBefore);
+      return;
+    }
+    m.status = 'created';
+    m.notBefore = null;
+    save(m);
+  }
+
+  if (m.status !== 'created') return setImmediate(pump);
+  running = true;
   try {
-    if (m.status !== 'created') return;
     m.status = 'searching'; save(m);
     m.discoveryReplayed = false;
     const result = await context.run(m, () => executor(m.prepared));
     m.result = result;
     const mission = result?.linkedinMission;
+    const request = m.prepared?.request || {};
+    const targetTotal = request.targetMode === 'master_total' ? Number(request.targetTotal || 0) : 0;
+    const currentMaster = targetTotal > 0 ? finalMaster.masterCount() : 0;
+    const remainingTarget = targetTotal > 0 ? Math.max(0, targetTotal - currentMaster) : 0;
+    const priorMaster = Number(m.lastMasterCount ?? request.masterTarget?.current ?? currentMaster);
+    const madeProgress = currentMaster > priorMaster;
+    m.stagnantBatches = remainingTarget > 0 ? (madeProgress ? 0 : Number(m.stagnantBatches || 0) + 1) : 0;
+    m.lastMasterCount = currentMaster;
+
+    const safetyLocked = /CHECKPOINT|MANUAL_LOCK/.test(String(m.stopCode || '')) || Boolean(mission?.safety?.manualLock);
+    const canAutoContinue = targetTotal > 0
+      && remainingTarget > 0
+      && request.autoContinue !== false
+      && !safetyLocked
+      && Number(m.continuationCount || 0) < 12
+      && Number(m.stagnantBatches || 0) < 3;
+
+    if (canAutoContinue) {
+      const nextAt = policy.nextEligibleAt();
+      if (nextAt) {
+        m.researchHistory = [...(m.researchHistory || []), {
+          at: new Date().toISOString(),
+          found: Number(mission?.found || 0),
+          added: Number(mission?.added || 0),
+          masterCount: currentMaster,
+          remainingTarget,
+          budgetStopped: mission?.budgetStopped || null,
+        }].slice(-20);
+        m.research = null;
+        m.continuationCount = Number(m.continuationCount || 0) + 1;
+        m.prepared.request.continueFromPrevious = true;
+        m.prepared.request.resumeExistingPool = true;
+        m.status = 'waiting_safety';
+        m.notBefore = nextAt;
+        m.stopCode = null;
+        m.error = null;
+        m.progress = {
+          ...(m.progress || {}),
+          phase: 'waiting_safety',
+          autoContinue: true,
+          continuationCount: m.continuationCount,
+          masterCurrent: currentMaster,
+          targetTotal,
+          remaining: remainingTarget,
+          nextEligibleAt: nextAt,
+        };
+        save(m);
+        queueOnce(m.id);
+        schedulePumpAt(nextAt);
+        return;
+      }
+    }
+
     const noApollo = /\b(?:no\s+apollo|without\s+apollo|do\s+not\s+use\s+apollo)\b/i.test(m.prepared?.request?.originalMessage || '');
     const apolloFollowup = !noApollo && (m.followups || []).find((item) => item?.type === 'apollo-enrichment' && item.status === 'queued');
     if (apolloFollowup && mission?.contactCandidates > 0) {
@@ -209,7 +303,7 @@ function control(id, action) {
   if (action === 'resume') {
     if (!['paused', 'paused_restart', 'paused_checkpoint', 'paused_rate_limit', 'failed', 'partial'].includes(m.status)) throw new Error('Mission is not resumable');
     if (m.research) throw new Error('Research is preserved; inspect the existing Sheet before retrying output to avoid duplicate writes.');
-    m.control = null; m.stopCode = null; m.error = null; m.status = 'created'; save(m, false); queue.push(id); setImmediate(pump);
+    m.control = null; m.stopCode = null; m.error = null; m.status = 'created'; save(m, false); queueOnce(id); setImmediate(pump);
   } else {
     m.control = action === 'cancel' ? 'cancel' : 'pause'; save(m, false);
   }
@@ -228,7 +322,7 @@ function defer(id, followup) {
 }
 
 function active() {
-  return list().find((m) => ['created', 'searching', 'writing_sheet'].includes(m.status)) || null;
+  return list().find((m) => ['created', 'searching', 'writing_sheet', 'waiting_safety'].includes(m.status)) || null;
 }
 
 function resumeSaved(text) {
