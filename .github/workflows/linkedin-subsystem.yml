@@ -57,6 +57,9 @@ jobs:
       - name: Test canonical LinkedIn Final Master
         working-directory: mark3-development
         run: node --env-file=../.env scripts/linkedin-final-master-selftest.js
+      - name: Test LinkedIn lead scraper deletion safety
+        working-directory: mark3-development
+        run: node --env-file=../.env scripts/linkedin-lead-scraper-safety-selftest.js
       - name: Test Apollo company priority and exact-person enrichment
         working-directory: mark3-development
         run: node --env-file=../.env scripts/apollo-company-identity-selftest.js
