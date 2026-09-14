@@ -2171,8 +2171,9 @@ async function companyMission(request) {
   }
 
   if (request.hiring && acceptedCompanies.size < request.count && budget.used >= budget.maximum && budget.safetyBlock) {
+    budget.stopped = budget.stopped || budget.safetyBlock.message || 'LinkedIn safety window is unavailable.';
     missionRunner.updateProgress({
-      phase: 'waiting_safety',
+      phase: acceptedCompanies.size > 0 ? 'writing_cached_verified' : 'waiting_safety',
       uniqueJobIds: jobMeta.size,
       jobDetailsChecked: jobDetails,
       companyProfilesChecked: deepProfiles,
@@ -2187,8 +2188,14 @@ async function companyMission(request) {
       cachedCompanyProfileMisses,
       cacheVerificationExhausted: true,
     });
-    const error = safetyGateError(budget);
-    if (error) throw error;
+
+    // If cache produced valid companies, return them so run() can append them
+    // immediately. The runner will park the remaining target after the write.
+    // Only a zero-result cache pass throws directly into waiting_safety.
+    if (acceptedCompanies.size === 0) {
+      const error = safetyGateError(budget);
+      if (error) throw error;
+    }
   }
 
   const preProfileRejected = request.hiring
