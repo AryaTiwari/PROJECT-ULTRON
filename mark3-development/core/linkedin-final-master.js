@@ -308,15 +308,21 @@ function rowFor(record = {}) {
 function contactUpdate(key, contact = {}) {
   const state = loadState();
   if (!state.companies[key]) return null;
+  const previous = state.companies[key];
+  const has = (name) => Object.prototype.hasOwnProperty.call(contact, name);
+  const value = (name, fallback) => has(name) ? String(contact[name] ?? '') : String(fallback || '');
+  const name = value('name', previous.contactName);
+  const title = value('title', previous.contactTitle);
+  const explicitRemarks = has('remarks') ? String(contact.remarks ?? '') : null;
   state.companies[key] = {
-    ...state.companies[key],
-    contactName: contact.name || state.companies[key].contactName || '',
-    contactTitle: contact.title || state.companies[key].contactTitle || '',
-    contactLinkedin: contact.linkedin || state.companies[key].contactLinkedin || '',
-    email: contact.email || state.companies[key].email || '',
-    phone: contact.phone || state.companies[key].phone || '',
-    enrichmentStatus: contact.status || state.companies[key].enrichmentStatus || '',
-    remarks: contact.remarks || contactRemark(contact.name, contact.title) || state.companies[key].remarks || '',
+    ...previous,
+    contactName: name,
+    contactTitle: title,
+    contactLinkedin: value('linkedin', previous.contactLinkedin),
+    email: value('email', previous.email),
+    phone: value('phone', previous.phone),
+    enrichmentStatus: value('status', previous.enrichmentStatus),
+    remarks: explicitRemarks !== null ? explicitRemarks : (contactRemark(name, title) || previous.remarks || ''),
   };
   saveState(state);
   return state.companies[key];
