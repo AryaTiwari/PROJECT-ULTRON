@@ -60,6 +60,7 @@
     "linkedin:joeyism:setup": "node --env-file=../.env scripts/linkedin-joeyism-setup.js"
   },
   "dependencies": {
-    "exceljs": "^4.4.0"
+    "exceljs": "^4.4.0",
+    "@modelcontextprotocol/client": "^2.0.0"
   }
 }
