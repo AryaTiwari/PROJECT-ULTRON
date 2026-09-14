@@ -71,6 +71,14 @@ const ALIASES = {
 function headerScore(value, type) {
   const h = normalizeHeader(value);
   if (!h) return 0;
+
+  // Dedicated Apollo enrichment columns intentionally outrank generic contact
+  // columns. This keeps Apollo output separate from scraper/manual phone/email
+  // fields while preserving the existing enrichment engine.
+  if (type === 'linkedin' && h === 'apollo linkedin') return 130;
+  if (type === 'phone' && h === 'apollo phone') return 130;
+  if (type === 'email' && h === 'apollo email') return 130;
+
   if (ALIASES[type].has(h)) return 100;
   const words = new Set(h.split(' '));
   if (type === 'linkedin') {
