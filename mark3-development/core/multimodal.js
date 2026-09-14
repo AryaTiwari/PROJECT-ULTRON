@@ -6,6 +6,7 @@ const documentRenderer = require('./document-renderer');
 const omniFallback = require('./omniroute-fallback');
 const integrations = require('./integrations');
 const nativeVoice = require('./native-voice-input');
+const { isReservedLinkedInCommand } = require('./linkedin-route-guard');
 const { load: loadCredentials } = require('../../core/credentials/local-store');
 
 const MEDIA_TIMEOUT_MS = Math.max(30000, Number(process.env.ULTRON_M3_MEDIA_TIMEOUT_MS || 180000));
@@ -275,6 +276,12 @@ function stripWake(text) {
 function generationIntent(message) {
   const text = stripWake(message);
   if (!text) return null;
+
+  // LinkedIn operational commands are reserved for the authenticated account
+  // operator. Words like "report" or "build" inside a mission prompt must not
+  // silently turn the request into a DOCX generation job.
+  if (isReservedLinkedInCommand(text)) return null;
+
   const artifact = /\b(?:pdf|docx|word document|word file|document|report|brief|proposal|image|picture|poster|thumbnail|visual|wallpaper|artwork|logo|video|clip|animation|b-roll|broll)\b/i.test(text);
   if (!artifact) return null;
   const informational = /^(?:what|why|how|when|where|who)\b|^(?:tell me|explain|describe|compare)\b/i.test(text);
