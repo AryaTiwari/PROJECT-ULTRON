@@ -1720,9 +1720,15 @@ async function companyMission(request) {
 
   if (request.hiring) {
     const plan = jobSearchPlan(request);
-    const maxSearchCalls = acceptedCompanies.size >= request.count ? 0 : (budget.localBudgetBypass
+    const normalSearchAllowance = budget.localBudgetBypass
       ? Math.min(plan.length, Number(policy.settings().testJobSearchMax || 20))
-      : Math.min(plan.length, queryStrategist.searchAllowance(budget, Math.max(0, request.count - acceptedCompanies.size))));
+      : Math.min(plan.length, queryStrategist.searchAllowance(budget, Math.max(0, request.count - acceptedCompanies.size)));
+    // Even with zero fresh-call budget, enter one search step. missionRunner.call
+    // will replay saved discovery at zero cost; if no cache exists, budgetedCall
+    // raises the real safety gate and the mission parks instead of completing 0/target.
+    const maxSearchCalls = acceptedCompanies.size >= request.count
+      ? 0
+      : (budget.maximum < 1 ? Math.min(1, plan.length) : normalSearchAllowance);
 
     for (let searchIndex = 0; searchIndex < maxSearchCalls; searchIndex++) {
       const step = queryStrategist.selectNext(plan, {
