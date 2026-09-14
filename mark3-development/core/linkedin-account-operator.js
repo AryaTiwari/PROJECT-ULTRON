@@ -1782,7 +1782,10 @@ async function companyMission(request) {
   const records = reconsidered.slice();
   const budget = missionCallBudget();
   if (request.resumeExistingPool) {
-    budget.maximum = Math.min(budget.maximum, 8);
+    // Saved-first continuations may use the full currently-safe burst. The
+    // account policy already bounds this by burst/hour/day limits, so an
+    // additional 8-call cap only slowed long-running target missions.
+    budget.maximum = Math.min(budget.maximum, Number(policy.settings().burstMax || 12));
     budget.localBudgetBypass = false;
   }
   // Zero live-call budget does not mean zero useful work. Rejected candidates
