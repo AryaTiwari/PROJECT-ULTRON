@@ -121,7 +121,9 @@ function missionProgressText(job) {
     parts.push(`safe-call budget: ${p.budgetUsed}/${p.budgetMaximum}`);
   }
   if (Number.isFinite(Number(p.cachedReconsidered))) parts.push(`cached candidates reconsidered: ${p.cachedReconsidered}`);
-  if (job.error?.message) parts.push(job.error.message);
+  if (p.nextEligibleAt) parts.push(`next safe resume: ${p.nextEligibleAt}`);
+  if (p.safetyReason) parts.push(`waiting reason: ${p.safetyReason}`);
+  if (job.error?.message && !p.safetyReason) parts.push(job.error.message);
   return parts.join('. ') + '.';
 }
 
