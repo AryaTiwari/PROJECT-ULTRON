@@ -116,16 +116,21 @@ const staleProfile = profileEvidenceCache.profileFromJobDetails([{
 assert.equal(staleProfile, null);
 
 const limits = policy.settings();
-assert.equal(limits.speedProfile, 'balanced-fast');
-assert.ok(limits.minGapMs <= 6000, 'Balanced-fast profile should reduce the legacy 9s call gap.');
-assert.ok(limits.jitterMs <= 1200, 'Balanced-fast profile should reduce legacy jitter.');
+assert.equal(limits.speedProfile, 'fast-safe');
+assert.equal(limits.minGapMs, 5000, 'Fast-safe profile should use the bounded 5s minimum call gap.');
+assert.ok(limits.jitterMs <= 500, 'Fast-safe profile should keep jitter small.');
 assert.equal(limits.burstMax, 12);
-assert.equal(limits.hourlyMax, 28);
-assert.equal(limits.dailyMax, 90);
+assert.equal(limits.burstWindowMs, 5 * 60 * 1000);
+assert.equal(limits.hourlyMax, 30);
+assert.equal(limits.dailyMax, 100);
+assert.equal(limits.missionToolMax, 16);
+assert.equal(limits.rateLimitCooldownMs, 10 * 60 * 1000);
+assert.equal(limits.errorBackoffCooldownMs, 5 * 60 * 1000);
 
 const runnerSource = require('fs').readFileSync(require.resolve('../core/linkedin-mission-runner'), 'utf8');
 assert.equal(runnerSource.includes('continuationCount || 0) < 30'), false, 'Target missions must not stop after 30 continuation cycles.');
 assert.equal(runnerSource.includes('stagnantBatches || 0) < 3'), false, 'Target missions must not stop merely because three batches were stagnant.');
 assert.equal(runnerSource.includes('persistentUntilTarget: true'), true, 'Persistent target telemetry must be present.');
+assert.equal(runnerSource.includes('Math.min(60000, 8000 *'), true, 'Stagnant persistent retries should use the shortened 8-60s cadence.');
 
 console.log('LinkedIn lead-scraper safety self-test passed: cache-first discovery, India override, applicant extraction, mission-aware ranking, explicit-only deletion, and job-detail company-size reuse are enforced.');
