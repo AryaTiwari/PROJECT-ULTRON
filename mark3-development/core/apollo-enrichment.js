@@ -166,12 +166,54 @@ function hostname(value) {
   }
 }
 
+const COMPANY_DECISION_PRIORITY = Object.freeze([
+  Object.freeze({
+    priority: 1,
+    key: 'founder_director',
+    label: 'Founder / Director / Owner',
+    titles: Object.freeze([
+      'founder', 'co-founder', 'owner', 'director', 'managing director', 'executive director',
+    ]),
+  }),
+  Object.freeze({
+    priority: 2,
+    key: 'head_recruiter_manager',
+    label: 'Head Recruiter / Manager',
+    titles: Object.freeze([
+      'head recruiter', 'lead recruiter', 'head of recruitment', 'recruitment head',
+      'recruitment lead', 'recruiting lead', 'head of talent acquisition',
+      'talent acquisition head', 'talent acquisition lead', 'head of HR', 'head of people',
+      'recruitment manager', 'recruiting manager', 'hiring manager',
+      'talent acquisition manager', 'HR manager', 'human resources manager',
+      'general manager', 'manager',
+    ]),
+  }),
+  Object.freeze({
+    priority: 3,
+    key: 'hr_recruiter',
+    label: 'HR Recruiter',
+    titles: Object.freeze([
+      'HR recruiter', 'human resources recruiter', 'recruiter',
+      'technical recruiter', 'talent acquisition recruiter',
+    ]),
+  }),
+]);
+
 function decisionPriority(title, mode = 'general') {
   const value = normalizedWords(title);
-  // User preference applies to hiring and general company research alike.
-  if (/\b(?:director|founder|co founder|owner)\b/.test(value)) return 1;
-  if (/\b(?:lead recruiter|head recruiter|recruitment lead|recruiting lead|general manager)\b/.test(value)) return 2;
-  if (/\b(?:hr recruiter|human resources recruiter|recruiter)\b/.test(value)) return 3;
+  if (!value) return 99;
+
+  // One canonical scale for every company-based lead workflow.
+  // Mode is retained only for backwards compatibility with existing callers.
+  if (/\b(?:founder|co founder|owner|director)\b/.test(value)) return 1;
+
+  const exactManager = value === 'manager';
+  if (
+    /\b(?:head recruiter|lead recruiter|recruitment head|head of recruitment|recruitment lead|recruiting lead|head of talent acquisition|talent acquisition head|talent acquisition lead|head of hr|head of people|recruitment manager|recruiting manager|hiring manager|talent acquisition manager|hr manager|human resources manager|general manager)\b/.test(value)
+    || exactManager
+  ) return 2;
+
+  if (/\b(?:hr recruiter|human resources recruiter|technical recruiter|talent acquisition recruiter|recruiter)\b/.test(value)) return 3;
   return 99;
 }
 
@@ -205,53 +247,61 @@ async function searchCompanyDecisionMaker({ company, domain = '', location = '',
     error.code = 'APOLLO_NOT_CONFIGURED';
     throw error;
   }
-  const url = new URL(APOLLO_PEOPLE_SEARCH);
-  const titles = priorityMode === 'hiring'
-    ? [
-      'head of talent acquisition', 'talent acquisition director', 'head of recruitment', 'recruitment director',
-      'head of HR', 'HR director', 'human resources director', 'head of people',
-      'talent acquisition manager', 'recruitment manager', 'recruiting manager', 'hiring manager', 'HR manager',
-      'senior recruiter', 'technical recruiter', 'HR recruiter', 'recruiter', 'talent acquisition',
-      'founder', 'co-founder', 'owner', 'managing director',
-    ]
-    : [
-      'founder', 'co-founder', 'owner', 'director', 'managing director',
-      'manager', 'head recruiter', 'hiring manager', 'recruitment manager', 'talent acquisition head',
-      'HR recruiter', 'human resources recruiter', 'recruiter',
-    ];
-  const seniorities = priorityMode === 'hiring'
-    ? ['head', 'director', 'vp', 'manager', 'owner', 'founder']
-    : ['owner', 'founder', 'head', 'director', 'manager'];
-  for (const title of titles) url.searchParams.append('person_titles[]', title);
-  // Seniority filters exclude individual-contributor HR recruiters.
-  for (const title of ['director', 'founder', 'lead recruiter', 'head recruiter', 'general manager', 'HR recruiter']) url.searchParams.append('person_titles[]', title);
-  const cleanDomain = hostname(domain);
-  if (cleanDomain) url.searchParams.append('q_organization_domains_list[]', cleanDomain);
-  else url.searchParams.set('q_keywords', String(company || '').trim());
-  if (location) url.searchParams.append('person_locations[]', String(location).trim());
-  url.searchParams.set('include_similar_titles', 'true');
-  url.searchParams.set('page', '1');
-  url.searchParams.set('per_page', '25');
 
-  let lastError;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const response = await fetch(url, { method: 'POST', headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } });
-    const text = await response.text();
-    let data = {};
-    try { data = JSON.parse(text); } catch {}
-    if (response.ok) {
-      const ranked = rankedDecisionMakers(data.people || data.contacts || [], company, cleanDomain, priorityMode);
-      return { ok: true, company, domain: cleanDomain, candidate: ranked[0] || null, candidatesChecked: Array.isArray(data.people) ? data.people.length : 0 };
+  const cleanDomain = hostname(domain);
+  let candidatesChecked = 0;
+
+  // Query Apollo in priority order rather than asking for every title at once.
+  // This guarantees that a lower-priority recruiter cannot beat an available
+  // founder/director merely because Apollo returned that recruiter earlier.
+  for (const tier of COMPANY_DECISION_PRIORITY) {
+    const url = new URL(APOLLO_PEOPLE_SEARCH);
+    for (const title of tier.titles) url.searchParams.append('person_titles[]', title);
+    if (cleanDomain) url.searchParams.append('q_organization_domains_list[]', cleanDomain);
+    else url.searchParams.set('q_keywords', String(company || '').trim());
+    if (location) url.searchParams.append('person_locations[]', String(location).trim());
+    url.searchParams.set('include_similar_titles', 'true');
+    url.searchParams.set('page', '1');
+    url.searchParams.set('per_page', '25');
+
+    let lastError;
+    let tierCompleted = false;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const response = await fetch(url, { method: 'POST', headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } });
+      const text = await response.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch {}
+      if (response.ok) {
+        const people = data.people || data.contacts || [];
+        candidatesChecked += Array.isArray(people) ? people.length : 0;
+        const ranked = rankedDecisionMakers(people, company, cleanDomain, priorityMode);
+        const candidate = ranked.find((person) => person.decisionPriority <= tier.priority) || null;
+        if (candidate) {
+          return {
+            ok: true,
+            company,
+            domain: cleanDomain,
+            candidate,
+            candidatesChecked,
+            selectedPriority: candidate.decisionPriority,
+            selectedPriorityLabel: COMPANY_DECISION_PRIORITY.find((item) => item.priority === candidate.decisionPriority)?.label || null,
+          };
+        }
+        tierCompleted = true;
+        break;
+      }
+      const message = data?.error || data?.error_message || data?.message || `Apollo people search failed (${response.status}).`;
+      const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
+      error.status = response.status;
+      error.code = response.status === 403 ? 'APOLLO_PEOPLE_SEARCH_ACCESS_REQUIRED' : 'APOLLO_PEOPLE_SEARCH_FAILED';
+      lastError = error;
+      if (response.status !== 429 && response.status < 500) throw error;
+      if (attempt < 3) await sleep(retryDelay(response, attempt));
     }
-    const message = data?.error || data?.error_message || data?.message || `Apollo people search failed (${response.status}).`;
-    const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
-    error.status = response.status;
-    error.code = response.status === 403 ? 'APOLLO_PEOPLE_SEARCH_ACCESS_REQUIRED' : 'APOLLO_PEOPLE_SEARCH_FAILED';
-    lastError = error;
-    if (response.status !== 429 && response.status < 500) throw error;
-    if (attempt < 3) await sleep(retryDelay(response, attempt));
+    if (!tierCompleted && lastError) throw lastError;
   }
-  throw lastError || new Error('Apollo people search failed.');
+
+  return { ok: true, company, domain: cleanDomain, candidate: null, candidatesChecked, selectedPriority: null, selectedPriorityLabel: null };
 }
 
 function personFromResponse(data) {
@@ -454,8 +504,8 @@ function status() {
     peopleSearchReady: Boolean(setting('APOLLO_API_KEY')),
     companySearchMax: Math.max(1, Math.min(100, numericSetting('ULTRON_M3_APOLLO_COMPANY_SEARCH_MAX', 50))),
     decisionMakerPriority: {
-      general: ['director/founder/owner', 'manager/head recruiter', 'HR recruiter'],
-      hiring: ['talent/HR head or director', 'talent/recruitment/HR manager', 'recruiter/talent acquisition', 'founder/owner fallback'],
+      company: COMPANY_DECISION_PRIORITY.map((tier) => `${tier.priority}. ${tier.label}`),
+      people: 'Exact LinkedIn person only -> enrich that person phone/email; never substitute a company contact.',
     },
     cacheFile: CACHE_FILE,
     positiveCacheDays: numericSetting('ULTRON_M3_APOLLO_POSITIVE_CACHE_DAYS', 180),
@@ -467,6 +517,7 @@ module.exports = {
   setting,
   normalizeLinkedIn,
   matchDecision,
+  COMPANY_DECISION_PRIORITY,
   decisionPriority,
   sameOrganization,
   rankedDecisionMakers,
