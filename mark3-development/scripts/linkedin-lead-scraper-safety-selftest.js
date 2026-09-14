@@ -145,6 +145,11 @@ assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', 
 assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '', ''), 'SELECTED');
 assert.equal(typeof operator.finalizeApolloSheetStatuses, 'function');
 
+const enrichmentSource = require('fs').readFileSync(require.resolve('../core/lead-enrichment-operator'), 'utf8');
+assert.equal(enrichmentSource.includes('strictApolloColumns: Boolean(options.strictApolloColumns)'), true, 'Apollo-only column mode must persist in enrichment job state.');
+assert.equal(enrichmentSource.includes('strictApolloColumns,'), true, 'Apollo-only column mode must be restored during enrichment resume.');
+assert.equal(enrichmentSource.includes('finalizeApolloSheetStatuses(latest.sheetUrl)'), true, 'Apollo status must refresh after delayed phone resume.');
+
 const limits = policy.settings();
 assert.equal(limits.speedProfile, 'fast-safe');
 assert.equal(limits.minGapMs, 5000, 'Fast-safe profile should use the bounded 5s minimum call gap.');
