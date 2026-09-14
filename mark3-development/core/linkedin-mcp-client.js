@@ -8,6 +8,28 @@ const PACKAGE_SPEC = String(process.env.ULTRON_M3_LINKEDIN_MCP_PACKAGE || 'mcp-s
 const START_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_LINKEDIN_MCP_START_TIMEOUT_MS || 90000));
 const TOOL_TIMEOUT_MS = Math.max(15000, Number(process.env.ULTRON_M3_LINKEDIN_MCP_TOOL_TIMEOUT_MS || 180000));
 
+function toolTimeoutMs(tool) {
+  const defaults = {
+    search_jobs: 120000,
+    get_job_details: 90000,
+    get_company_profile: 120000,
+    get_person_profile: 120000,
+    search_people: 120000,
+    search_companies: 120000,
+  };
+  const envKey = 'ULTRON_M3_LINKEDIN_MCP_' + String(tool || '').toUpperCase() + '_TIMEOUT_MS';
+  const configured = Number(process.env[envKey]);
+  if (Number.isFinite(configured)) return Math.max(15000, configured);
+  return Math.max(15000, Number(defaults[tool] || TOOL_TIMEOUT_MS));
+}
+
+function isTransientTransportError(error) {
+  const code = String(error?.code || '');
+  const message = String(error?.message || error || '');
+  return /TIMEOUT|TIMED_OUT|ETIMEDOUT|ECONNRESET|EPIPE/i.test(code)
+    || /timed out|timeout|connection reset|socket hang up|temporary browser failure/i.test(message);
+}
+
 let child = null;
 let startPromise = null;
 let sessionId = null;
@@ -215,7 +237,7 @@ async function rawCall(tool, args = {}, retrySession = true) {
       id,
       method: 'tools/call',
       params: { name: tool, arguments: args },
-    }, { sessionId, timeoutMs: TOOL_TIMEOUT_MS });
+    }, { sessionId, timeoutMs: toolTimeoutMs(tool) });
     if (response.body?.error && /session|Mcp-Session-Id/i.test(String(response.body.error.message || '')) && retrySession) {
       sessionId = null;
       await initializeSession(5000);
@@ -234,6 +256,25 @@ async function rawCall(tool, args = {}, retrySession = true) {
   }
 }
 
+async function recoverSession(error) {
+  sessionId = null;
+
+  // A timed-out browser-backed request can continue running inside the MCP
+  // process after the client aborts. Restart the local read-only MCP process
+  // once so the next candidate is not sent into the same wedged browser task.
+  if (String(error?.code || '') === 'LINKEDIN_MCP_TIMEOUT') {
+    shutdown();
+    return ensureServer();
+  }
+
+  try {
+    return await initializeSession(5000);
+  } catch {
+    shutdown();
+    return ensureServer();
+  }
+}
+
 async function callTool(tool, args = {}) {
   await policy.waitTurn(tool);
   try {
@@ -243,7 +284,20 @@ async function callTool(tool, args = {}) {
   } catch (error) {
     const classification = policy.recordError(tool, error);
     error.linkedinSafety = classification;
-    throw error;
+
+    if (classification.kind !== 'transient' && !isTransientTransportError(error)) throw error;
+
+    try {
+      await recoverSession(error);
+      await policy.waitTurn(tool);
+      const result = await rawCall(tool, args);
+      policy.recordCall(tool, true, { recoveredAfterTransient: true });
+      return result;
+    } catch (retryError) {
+      const retryClassification = policy.recordError(tool, retryError);
+      retryError.linkedinSafety = retryClassification;
+      throw retryError;
+    }
   }
 }
 
@@ -280,8 +334,11 @@ module.exports = {
   serverArgs,
   parsePayload,
   normalizeToolResult,
+  toolTimeoutMs,
+  isTransientTransportError,
   initializeSession,
   ensureServer,
+  recoverSession,
   callTool,
   shutdown,
   status,
