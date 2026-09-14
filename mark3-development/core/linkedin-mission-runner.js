@@ -97,6 +97,27 @@ function start(fn) {
       schedulePumpAt(m.notBefore);
       continue;
     }
+
+    // Migrate missions parked by older builds. Rate-limit/cap pauses are not
+    // human-action states; they should become durable timed waits.
+    if (m.status === 'paused_rate_limit') {
+      const nextAt = policy.nextEligibleAt?.()
+        || new Date(Date.now() + Math.max(1000, Number(policy.settings?.().minGapMs || 9000))).toISOString();
+      m.status = 'waiting_safety';
+      m.notBefore = nextAt;
+      m.progress = {
+        ...(m.progress || {}),
+        phase: 'waiting_safety',
+        autoContinue: true,
+        nextEligibleAt: nextAt,
+        safetyReason: m.error?.message || 'Migrated from a previous safety pause.',
+      };
+      save(m);
+      queueOnce(m.id);
+      schedulePumpAt(nextAt);
+      continue;
+    }
+
     if (['created', 'searching', 'writing_sheet'].includes(m.status)) {
       // Never replay possibly committed Sheet writes automatically.
       m.status = 'paused_restart';
