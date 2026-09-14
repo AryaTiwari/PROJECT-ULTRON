@@ -61,10 +61,16 @@ function normalizeLinkedIn(value) {
   return match ? `https://www.linkedin.com/company/${match[1].toLowerCase()}` : '';
 }
 
-function normalizeName(value) {
+function cleanCompanyDisplay(value) {
   return String(value || '')
-    .replace(/\b\d[\d,.]*\s+followers?\b/gi, ' ')
-    .replace(/\([^)]*followers?[^)]*\)/gi, ' ')
+    .replace(/\s+\d[\d,.]*\s+followers?\s*$/i, '')
+    .replace(/\s*\([^)]*followers?[^)]*\)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeName(value) {
+  return cleanCompanyDisplay(value)
     .replace(/&/g, ' and ')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
@@ -126,15 +132,42 @@ function employeeMaximum(record = {}) {
   return one ? Number(one[1]) : null;
 }
 
+function normalizedLocation(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/bengaluru/g, 'bangalore')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function locationAllowed(record = {}, allowedLocations = []) {
+  const allowed = (Array.isArray(allowedLocations) ? allowedLocations : [allowedLocations])
+    .map(normalizedLocation)
+    .filter(Boolean);
+  if (!allowed.length) return true;
+  const actual = normalizedLocation(record.location || record.companyLocation || '');
+  if (!actual) return false;
+  return allowed.some((candidate) => {
+    if (candidate === 'maharashtra') {
+      return /\b(?:maharashtra|mumbai|pune|nagpur|nashik|thane|navi mumbai|aurangabad|chhatrapati sambhajinagar)\b/.test(actual);
+    }
+    if (candidate === 'bangalore') return /\bbangalore\b/.test(actual);
+    return actual.includes(candidate) || candidate.includes(actual);
+  });
+}
+
 function qualifies(record = {}, requirements = {}) {
   if (!isCompanyRecord(record)) return false;
   if (requirements.topic && /^sap(?:\s|$)/i.test(String(requirements.topic)) && !hasSapOpening(record)) return false;
+  if (requirements.hiringRequired !== false && !Boolean(record.jobUrl || record.jobId || record.primaryJobUrl || record.hiringSignal)) return false;
+  if (!locationAllowed(record, requirements.allowedLocations || requirements.locations || [])) return false;
   if (requirements.workType && String(record.workType || '').toLowerCase() !== String(requirements.workType).toLowerCase()) return false;
   if (requirements.employeeMax != null) {
     const max = employeeMaximum(record);
     if (max == null || max > Number(requirements.employeeMax)) return false;
   }
-  return Boolean(record.jobUrl || record.jobId || record.hiringSignal);
+  return true;
 }
 
 function allowRepeatFromText(text) {
@@ -183,7 +216,7 @@ function registerRecords(records = [], metadata = {}) {
     state.companies[key] = {
       ...previous,
       key,
-      company: record.company || previous.company || '',
+      company: cleanCompanyDisplay(record.company || previous.company || ''),
       linkedin: normalizeLinkedIn(record.linkedin) || previous.linkedin || '',
       website: record.website || previous.website || '',
       firstSeenAt: previous.firstSeenAt || metadata.firstSeenAt || nowIso(),
@@ -192,12 +225,15 @@ function registerRecords(records = [], metadata = {}) {
       lastMission: metadata.missionId || previous.lastMission || null,
       masterRow: metadata.rowsByKey?.[key] || previous.masterRow || null,
       status: 'verified',
-      primaryRole: record.role || previous.primaryRole || '',
-      primaryJobUrl: record.jobUrl || previous.primaryJobUrl || '',
-      location: record.location || previous.location || '',
+      primaryRole: record.role || record.primaryRole || previous.primaryRole || '',
+      primaryJobUrl: record.jobUrl || record.primaryJobUrl || previous.primaryJobUrl || '',
+      primaryJobId: record.jobId || record.primaryJobId || previous.primaryJobId || '',
+      hiringSignal: record.hiringSignal || previous.hiringSignal || '',
+      location: record.location || record.companyLocation || previous.location || '',
       applicants: record.applicants || previous.applicants || '',
       workType: record.workType || previous.workType || '',
       employeeCount: record.employeeCount || previous.employeeCount || null,
+      jobEvidenceText: record.jobEvidenceText || previous.jobEvidenceText || '',
       jobs,
     };
     if (master) masterKeys.add(key);
@@ -226,14 +262,18 @@ function setMasterSheet(sheet = {}) {
 
 function masterSheetUrl() { return loadState().sheetUrl || null; }
 function schemaCurrent() { return Number(loadState().schemaVersion || 0) === 2; }
-function masterCount() {
+function masterCount(requirements = null) {
   const state = loadState();
-  return (state.masterKeys || []).filter((key) => Boolean(state.companies?.[key]?.status === 'verified')).length;
+  return (state.masterKeys || []).filter((key) => {
+    const record = state.companies?.[key];
+    if (!record || record.status !== 'verified') return false;
+    return requirements ? qualifies(record, requirements) : true;
+  }).length;
 }
 
-function remainingForTarget(total) {
+function remainingForTarget(total, requirements = null) {
   const desired = Math.max(0, Number(total || 0));
-  const current = masterCount();
+  const current = masterCount(requirements);
   return { desired, current, remaining: Math.max(0, desired - current) };
 }
 
@@ -254,7 +294,7 @@ function rowFor(record = {}) {
     || contactRemark(previous.contactName, previous.contactTitle)
     || '';
   return [
-    record.company || previous.company || '',
+    cleanCompanyDisplay(record.company || previous.company || ''),
     normalizeLinkedIn(record.linkedin) || previous.linkedin || '',
     record.jobUrl || previous.primaryJobUrl || '',
     record.location || previous.location || '',
@@ -288,11 +328,13 @@ module.exports = {
   loadState,
   saveState,
   normalizeLinkedIn,
+  cleanCompanyDisplay,
   normalizeName,
   hostname,
   companyKey,
   isCompanyRecord,
   hasSapOpening,
+  locationAllowed,
   qualifies,
   allowRepeatFromText,
   seen,
