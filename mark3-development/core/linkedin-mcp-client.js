@@ -30,6 +30,11 @@ function isTransientTransportError(error) {
     || /timed out|timeout|connection reset|socket hang up|temporary browser failure/i.test(message);
 }
 
+function shouldRetryTransient(error) {
+  if (!isTransientTransportError(error)) return false;
+  return String(error?.code || '') !== 'LINKEDIN_MCP_TIMEOUT';
+}
+
 let child = null;
 let startPromise = null;
 let sessionId = null;
@@ -292,7 +297,7 @@ async function callTool(tool, args = {}) {
     // browser process. Restart the local MCP session, but do not immediately
     // repeat the same expensive LinkedIn action. The mission controller will
     // defer that candidate and continue from its checkpoint.
-    if (String(error?.code || '') === 'LINKEDIN_MCP_TIMEOUT') {
+    if (!shouldRetryTransient(error)) {
       try {
         await recoverSession(error);
         error.sessionRecovered = true;
@@ -351,6 +356,7 @@ module.exports = {
   normalizeToolResult,
   toolTimeoutMs,
   isTransientTransportError,
+  shouldRetryTransient,
   initializeSession,
   ensureServer,
   recoverSession,
