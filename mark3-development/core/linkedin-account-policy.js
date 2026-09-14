@@ -296,12 +296,19 @@ function status() {
   const state = prune(loadState());
   saveState(state);
   const counts = usage(state);
+  const eventBreakdown = {};
+  for (const event of state.events || []) {
+    const kind = String(event.errorKind || (event.ok ? 'success' : 'failed-unspecified'));
+    const key = eventCountsTowardSafety(event) ? `counted:${kind}` : `ignored:${kind}`;
+    eventBreakdown[key] = Number(eventBreakdown[key] || 0) + 1;
+  }
   return {
     stateFile: STATE_FILE,
     ...settings(),
     burstUsed: counts.burst,
     hourlyUsed: counts.hourly,
     dailyUsed: counts.daily,
+    eventBreakdown,
     rateLimitStrikes24h: recentRateLimitStrikes(state),
     localBudgetBypass: Boolean(settings().localBudgetBypass),
     cooldownUntil: state.cooldownUntil,
