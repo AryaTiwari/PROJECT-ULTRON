@@ -125,16 +125,31 @@ function equivalentActiveMission(prepared = {}) {
 }
 function start(fn) {
   executor = fn;
-  for (const m of list()) {
+  const missions = list();
+  const newestLegacySafetyPause = missions.find((mission) => mission.status === 'paused_rate_limit') || null;
+
+  for (const m of missions) {
     if (m.status === 'waiting_safety') {
       queueOnce(m.id);
       schedulePumpAt(m.notBefore);
       continue;
     }
 
-    // Migrate missions parked by older builds. Rate-limit/cap pauses are not
-    // human-action states; they should become durable timed waits.
+    // Migrate only the newest mission parked by older builds. Reviving every
+    // historical safety pause would create a surprise backlog and waste the
+    // next safe LinkedIn window.
     if (m.status === 'paused_rate_limit') {
+      if (!newestLegacySafetyPause || m.id !== newestLegacySafetyPause.id) {
+        m.status = 'paused';
+        m.progress = {
+          ...(m.progress || {}),
+          phase: 'paused',
+          migrationNote: 'Older rate-limited mission left paused to avoid automatic duplicate backlog.',
+        };
+        save(m);
+        continue;
+      }
+
       const nextAt = policy.nextEligibleAt?.()
         || new Date(Date.now() + Math.max(1000, Number(policy.settings?.().minGapMs || 9000))).toISOString();
       m.status = 'waiting_safety';
