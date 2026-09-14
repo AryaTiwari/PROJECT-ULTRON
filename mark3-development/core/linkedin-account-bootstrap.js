@@ -4,6 +4,7 @@ const paidTools = require('./paid-tool-approval');
 const commandRouter = require('./linkedin-command-router');
 const config = require('./config');
 const missionRunner = require('./linkedin-mission-runner');
+const finalMaster = require('./linkedin-final-master');
 
 let installed = false;
 let originalHandle = null;
@@ -201,19 +202,60 @@ function install() {
         const safety = policy.clearManualLock('user explicitly confirmed LinkedIn account unlock after manual verification');
         result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} today. Normal rate limits still apply.`, { linkedinSafety: safety });
       } else if (commandRouter.isApolloEnrichmentRequest(text)) {
-        conversation.append('user', text, { taskType: 'linkedin-final-master-apollo-enrichment', inputMode });
-        const enriched = await operator.enrichFinalMasterContacts();
-        const parts = [
-          `Apollo enrichment checked the canonical Final Master.`,
-          `Selected ${enriched.selected || 0} company contact${Number(enriched.selected || 0) === 1 ? '' : 's'}.`,
-          `Enriched ${enriched.enriched || 0} row${Number(enriched.enriched || 0) === 1 ? '' : 's'}.`,
-          `Unresolved ${enriched.unresolved || 0}.`,
-          `Skipped ${enriched.skippedComplete || 0} already-complete row${Number(enriched.skippedComplete || 0) === 1 ? '' : 's'}.`,
-        ];
-        result = responseShape(true, parts.join(' ') + (enriched.sheetUrl ? ` ${enriched.sheetUrl}` : ''), {
-          linkedinApolloEnrichment: enriched,
-          spreadsheetUrl: enriched.sheetUrl || operator.workspaceSheetUrl() || null,
-        });
+        conversation.append('user', text, { taskType: 'linkedin-apollo-enrichment-request', inputMode });
+
+        const latest = operator.latestCompletedMission();
+        const workspaceUrl = operator.workspaceSheetUrl();
+        const masterUrl = finalMaster.masterSheetUrl();
+        const explicitlyMaster = /\b(?:final\s+master|master\s+sheet|canonical\s+master)\b/i.test(text);
+        const workspaceIsMaster = Boolean(masterUrl && workspaceUrl && workspaceUrl === masterUrl);
+        const latestIsMaster = Boolean(masterUrl && latest?.sheetUrl && latest.sheetUrl === masterUrl);
+
+        let approval = null;
+        let targetUrl = null;
+        let entityMode = null;
+
+        if (masterUrl && (explicitlyMaster || workspaceIsMaster || latestIsMaster || !latest?.sheetUrl)) {
+          targetUrl = masterUrl;
+          entityMode = 'company';
+          approval = paidTools.request(
+            'apollo',
+            'linkedin-final-master-enrichment',
+            { url: masterUrl, provider: 'google', entityMode: 'company' },
+            `The canonical Final Master has ${finalMaster.masterCount()} verified unique compan${finalMaster.masterCount() === 1 ? 'y' : 'ies'}. For each incomplete company row, Apollo will select exactly one contact using Founder/Director/Owner > Head Recruiter/Manager > HR Recruiter, then fill only that selected person's missing phone/email fields.`
+          );
+        } else if (latest?.sheetUrl) {
+          targetUrl = latest.sheetUrl;
+          entityMode = latest.request?.entityMode || 'person';
+          approval = paidTools.request(
+            'apollo',
+            'linkedin-account-enrichment',
+            {
+              url: latest.sheetUrl,
+              provider: 'google',
+              ensureContactColumns: false,
+              missionId: latest.id,
+              entityMode,
+            },
+            entityMode === 'company'
+              ? `This company-based LinkedIn sheet will select one verified contact per company using Founder/Director/Owner > Head Recruiter/Manager > HR Recruiter, then enrich that selected person's phone/email.`
+              : `This people-based LinkedIn sheet will enrich the exact LinkedIn person already stored in each row. ULTRON will not substitute a different company contact.`
+          );
+        }
+
+        if (!approval) {
+          result = responseShape(false, 'Apollo enrichment needs a current LinkedIn mission Sheet or the canonical Final Master. No Apollo call was made.', {
+            error: 'LINKEDIN_APOLLO_TARGET_NOT_FOUND',
+            apolloCalled: false,
+          });
+        } else {
+          result = responseShape(true, paidTools.prompt(approval), {
+            paidToolApproval: { id: approval.id, tool: approval.tool, operation: approval.operation, expiresAt: approval.expiresAt },
+            spreadsheetUrl: targetUrl,
+            linkedinApolloEntityMode: entityMode,
+            apolloCalled: false,
+          });
+        }
       } else if (operator.isBuildFinalMasterRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-final-master-build', inputMode });
         const built = await operator.buildFinalMaster(text);
