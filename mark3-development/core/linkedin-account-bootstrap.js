@@ -115,6 +115,16 @@ async function handlePrepared(prepared, background = false) {
   return null;
 }
 
+function formatDuration(ms) {
+  const total = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 function missionProgressText(job) {
   const p = job?.progress || {};
   const parts = [
@@ -127,6 +137,13 @@ function missionProgressText(job) {
   if (Number.isFinite(Number(p.jobDetailsChecked))) parts.push(`job details: ${p.jobDetailsChecked}`);
   if (Number.isFinite(Number(p.companyProfilesChecked))) parts.push(`company profiles: ${p.companyProfilesChecked}`);
   if (Number.isFinite(Number(p.verifiedCompanies))) parts.push(`verified companies this batch: ${p.verifiedCompanies}`);
+  if (Number.isFinite(Number(job.elapsedMs))) parts.push(`elapsed: ${formatDuration(job.elapsedMs)}`);
+  if (Number.isFinite(Number(job.activeWorkMs))) parts.push(`active work: ${formatDuration(job.activeWorkMs)}`);
+  if (Number.isFinite(Number(job.addedSinceStart))) parts.push(`rows added since start: ${job.addedSinceStart}`);
+  if (Number.isFinite(Number(job.avgActiveMsPerCompany)) && job.avgActiveMsPerCompany > 0) parts.push(`avg active time/new company: ${formatDuration(job.avgActiveMsPerCompany)}`);
+  if (Number.isFinite(Number(job.estimatedActiveMsRemaining)) && job.estimatedActiveMsRemaining >= 0) parts.push(`estimated active work remaining: ${formatDuration(job.estimatedActiveMsRemaining)}`);
+  if (job.lastProgressAt) parts.push(`last Sheet progress: ${job.lastProgressAt}`);
+  if (Number.isFinite(Number(job.batchCount))) parts.push(`batches: ${job.batchCount}`);
   if (Number.isFinite(Number(job.masterCurrent))) parts.push(`Final Master total: ${job.masterCurrent}`);
   if (Number.isFinite(Number(job.masterRemaining))) parts.push(`remaining to target: ${job.masterRemaining}`);
   if (!Number.isFinite(Number(job.masterRemaining)) && Number.isFinite(Number(p.remaining))) parts.push(`remaining this run: ${p.remaining}`);
@@ -217,7 +234,11 @@ async function handle(message, options = {}) {
             requestedMissionId: targetId,
           });
         const action = text.match(/\blinkedin mission (progress|pause|cancel|resume|explain)\b/i)[1].toLowerCase();
-        const job = action === 'progress' || action === 'explain' ? missionRunner.summary(selected) : missionRunner.control(selected.id, action);
+        const job = action === 'progress'
+          ? await missionRunner.refreshSheetProgress(selected.id)
+          : action === 'explain'
+            ? missionRunner.summary(selected)
+            : missionRunner.control(selected.id, action);
         const terminalResult = ['completed', 'partial', 'failed', 'cancelled'].includes(job.status) ? job.result?.text : null;
         return responseShape(true, action === 'explain' ? missionContractText(job) : (terminalResult || missionProgressText(job)), { linkedinBackgroundMission: job });
       }
