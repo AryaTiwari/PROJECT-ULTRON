@@ -222,8 +222,14 @@ async function connectStdio() {
     };
 
     try {
-      await nextClient.connect(nextTransport);
-      const listed = await nextClient.listTools();
+      await nextClient.connect(nextTransport, {
+        timeout: START_TIMEOUT_MS,
+        maxTotalTimeout: START_TIMEOUT_MS,
+      });
+      const listed = await nextClient.listTools({
+        timeout: Math.min(START_TIMEOUT_MS, 30000),
+        maxTotalTimeout: Math.min(START_TIMEOUT_MS, 30000),
+      });
       const names = (listed?.tools || []).map((item) => String(item?.name || '')).filter(Boolean);
       const missing = REQUIRED_TOOLS.filter((name) => !names.includes(name));
       if (missing.length) {
@@ -238,10 +244,18 @@ async function connectStdio() {
       connectionGeneration += 1;
       lastTransportError = '';
       return client;
-    } catch (error) {
+    } catch (rawError) {
       try { await nextClient.close(); } catch {}
       try { await nextTransport.close(); } catch {}
-      throw error;
+      const code = String(rawError?.code || '');
+      const message = String(rawError?.message || rawError || '');
+      if (/REQUEST_TIMEOUT|TIMEOUT|TIMED_OUT/i.test(code) || /timed out|timeout/i.test(message)) {
+        const error = new Error(`LinkedIn MCP stdio startup/tool discovery timed out after ${START_TIMEOUT_MS}ms.`);
+        error.code = 'LINKEDIN_MCP_START_TIMEOUT';
+        error.cause = rawError;
+        throw error;
+      }
+      throw rawError;
     }
   })().finally(() => {
     connectPromise = null;
