@@ -138,6 +138,13 @@ assert.ok(googleSheets.headerScore('APOLLO PHONE', 'phone') > googleSheets.heade
 assert.ok(googleSheets.headerScore('APOLLO EMAIL', 'email') > googleSheets.headerScore('EMAIL', 'email'));
 assert.ok(googleSheets.headerScore('APOLLO LINKEDIN', 'linkedin') > googleSheets.headerScore('LinkedIn', 'linkedin'));
 
+assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '+919876543210', 'a@b.com'), 'ENRICHED');
+assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', 'null', 'a@b.com'), 'EMAIL_ONLY');
+assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '+919876543210', 'null'), 'PHONE_ONLY');
+assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', 'null', 'null'), 'NO_CONTACT');
+assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '', ''), 'SELECTED');
+assert.equal(typeof operator.finalizeApolloSheetStatuses, 'function');
+
 const limits = policy.settings();
 assert.equal(limits.speedProfile, 'fast-safe');
 assert.equal(limits.minGapMs, 5000, 'Fast-safe profile should use the bounded 5s minimum call gap.');
@@ -155,6 +162,7 @@ assert.equal(runnerSource.includes('continuationCount || 0) < 30'), false, 'Targ
 assert.equal(runnerSource.includes('stagnantBatches || 0) < 3'), false, 'Target missions must not stop merely because three batches were stagnant.');
 assert.equal(runnerSource.includes('persistentUntilTarget: true'), true, 'Persistent target telemetry must be present.');
 assert.equal(runnerSource.includes('Math.min(60000, 8000 *'), true, 'Stagnant persistent retries should use the shortened 8-60s cadence.');
+assert.equal(operator.companyMission.toString().includes('policy.settings().burstMax'), true, 'Saved-first missions should use the full currently-safe burst rather than an arbitrary 8-call cap.');
 assert.equal(runnerSource.includes('waiting_retry'), true, 'Recoverable target failures must enter a retry state instead of terminating.');
 assert.equal(runnerSource.includes('restart_recovery'), true, 'Persistent target missions must recover automatically after process restart.');
 assert.equal(typeof runner.refreshSheetProgress, 'function');
