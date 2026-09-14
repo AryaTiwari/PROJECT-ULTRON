@@ -6,6 +6,7 @@ const configPath = require.resolve('../core/config');
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ultron-linkedin-test-'));
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true, exports: { projectRoot } };
 const runner = require('../core/linkedin-mission-runner');
+const finalMaster = require('../core/linkedin-final-master');
 const waitFor = async predicate => {
   for (let i = 0; i < 200; i++) {
     if (predicate()) return;
@@ -36,5 +37,42 @@ const waitFor = async predicate => {
   runner.control(c.id, 'resume');
   await waitFor(() => runner.get(c.id).status === 'completed');
   assert.throws(() => runner.get('../escape'));
-  console.log('LinkedIn mission runner tests passed: quick enqueue, serialization, persistent research, call reuse, cooldown pause and resume.');
+
+  // A master-total mission should remain one logical mission across safe
+  // batches instead of requiring a human to keep typing "continue".
+  let batch = 0;
+  runner.start(async prepared => {
+    batch++;
+    finalMaster.registerRecords([{
+      company: 'Auto Continue ' + batch,
+      linkedin: 'https://www.linkedin.com/company/auto-continue-' + batch,
+      jobUrl: 'https://www.linkedin.com/jobs/view/' + (9000000 + batch),
+    }], { missionId: 'auto-batch-' + batch });
+    return {
+      text: 'batch ' + batch,
+      linkedinMission: {
+        found: 1,
+        requested: 1,
+        added: 1,
+        budgetStopped: batch === 1 ? 'mission LinkedIn-call budget reached' : null,
+        safety: {},
+      },
+    };
+  });
+  const auto = runner.enqueue({
+    request: {
+      targetMode: 'master_total',
+      targetTotal: 2,
+      autoContinue: true,
+      entityMode: 'company',
+      topic: 'SAP',
+      filters: {},
+    },
+  });
+  await waitFor(() => runner.get(auto.id).status === 'completed');
+  assert.equal(batch, 2);
+  assert.equal(runner.get(auto.id).continuationCount, 1);
+  assert.equal(finalMaster.masterCount(), 2);
+
+  console.log('LinkedIn mission runner tests passed: quick enqueue, serialization, persistent research, call reuse, cooldown pause/resume and automatic safe-window master-target continuation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
