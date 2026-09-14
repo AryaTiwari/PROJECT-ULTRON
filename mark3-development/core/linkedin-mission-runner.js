@@ -90,9 +90,15 @@ function save(mission, preserveControl = true) {
   events.emit('linkedin:progress', summary(mission));
 }
 function summary(m) {
+  const request = m.prepared?.request || {};
+  const targetTotal = request.targetMode === 'master_total' ? Number(request.targetTotal || 0) : null;
+  const masterCurrent = targetTotal ? finalMaster.masterCount() : null;
   return { id: m.id, status: m.status, updatedAt: m.updatedAt, calls: m.calls || 0,
     cacheHits: m.cacheHits || 0, progress: m.progress || null,
-    contract: m.prepared?.request?.missionContract || null,
+    contract: request.missionContract || null,
+    targetTotal,
+    masterCurrent,
+    masterRemaining: targetTotal ? Math.max(0, targetTotal - Number(masterCurrent || 0)) : null,
     error: m.error || null, result: m.result || null };
 }
 function list() {
@@ -441,6 +447,43 @@ function cachedExact(tool, args, options = {}) {
         save(m);
       }
       return { hit: true, value: cached.value, sourceMissionId: compatible.id };
+    }
+  }
+
+  if (tool === 'get_company_profile' && args?.company_name) {
+    const slug = String(args.company_name || '').trim().replace(/^https?:\/\/(?:www\.)?linkedin\.com\/company\//i, '').replace(/[/?#].*$/, '').toLowerCase();
+    const stored = slug
+      ? finalMaster.recordFor?.({ linkedin: `https://www.linkedin.com/company/${slug}` })
+      : null;
+    if (stored?.status === 'verified' && stored.employeeCount) {
+      const employeeLabel = stored.employeeCount?.label
+        || (Number.isFinite(Number(stored.employeeCount?.min)) && Number.isFinite(Number(stored.employeeCount?.max))
+          ? `${stored.employeeCount.min}-${stored.employeeCount.max} employees`
+          : String(stored.employeeCount || ''));
+      const evidence = stored.companyEvidenceText
+        || [
+          stored.company || slug,
+          employeeLabel ? `Company size: ${employeeLabel}` : '',
+          (stored.companyLocation || stored.location) ? `Headquarters: ${stored.companyLocation || stored.location}` : '',
+        ].filter(Boolean).join('\n');
+      const value = {
+        url: stored.linkedin || `https://www.linkedin.com/company/${slug}`,
+        sections: { main: evidence },
+        references: [],
+        ultronDurableCache: true,
+      };
+      if (options.recordHit !== false) {
+        m.cacheHits++;
+        m.progress = {
+          ...(m.progress || {}),
+          reusedEvidenceTool: tool,
+          reusedEvidenceMissionId: 'final-master-registry',
+          reuseMode: 'durable-company-profile',
+          durableCompanyProfileHits: Number(m.progress?.durableCompanyProfileHits || 0) + 1,
+        };
+        save(m);
+      }
+      return { hit: true, value, sourceMissionId: 'final-master-registry' };
     }
   }
 
