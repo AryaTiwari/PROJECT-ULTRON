@@ -10,6 +10,20 @@ if (run('intent')) {
   assert.equal(router.requestedContactEnrichment('Find 20 SAP companies on LinkedIn and get HR contact emails'), true);
   assert.equal(router.requestedContactEnrichment('now enrich those leads with email and number using Apollo'), true);
   assert.equal(router.isApolloEnrichmentRequest('now enrich those leads with email and number using Apollo'), true);
+
+  const savedFirstText = 'LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total. Reuse saved discovery, cached evidence and previously rejected candidates before making unnecessary fresh LinkedIn calls. Do not use Apollo yet.';
+  const savedFirst = router.enhanceRequest({
+    criteriaText: savedFirstText,
+    entityMode: 'company',
+    hiring: true,
+    topic: 'SAP',
+    filters: { employeeMax: 1000 },
+    destinationSheetUrl: 'https://docs.google.com/spreadsheets/d/master123/edit',
+  }, savedFirstText, 'https://docs.google.com/spreadsheets/d/master123/edit');
+  assert.equal(router.reuseExistingEvidenceFromText(savedFirstText), true);
+  assert.equal(savedFirst.resumeExistingPool, true);
+  assert.equal(savedFirst.reuseCachedEvidence, true);
+  assert.equal(savedFirst.wantsContacts, false);
 }
 
 if (run('location')) {
