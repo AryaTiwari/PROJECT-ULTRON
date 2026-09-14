@@ -226,7 +226,7 @@ async function connectStdio() {
         timeout: START_TIMEOUT_MS,
         maxTotalTimeout: START_TIMEOUT_MS,
       });
-      const listed = await nextClient.listTools({
+      const listed = await nextClient.listTools(undefined, {
         timeout: Math.min(START_TIMEOUT_MS, 30000),
         maxTotalTimeout: Math.min(START_TIMEOUT_MS, 30000),
       });
