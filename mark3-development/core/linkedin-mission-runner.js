@@ -346,6 +346,49 @@ function cachedToolValues(mission, tool) {
     try { return JSON.parse(key)[0] === tool; } catch { return false; }
   }).map(([, cached]) => cached.value);
 }
+
+function cachedExact(tool, args, options = {}) {
+  const m = context.getStore();
+  if (!m) return { hit: false, value: null, sourceMissionId: null };
+  check();
+
+  const key = JSON.stringify([tool, args]);
+  const cacheTtl = m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  const current = m.responses?.[key];
+  if (current && Date.now() - Number(current.at || 0) < cacheTtl) {
+    if (options.recordHit !== false) {
+      m.cacheHits++;
+      m.progress = {
+        ...(m.progress || {}),
+        reusedEvidenceTool: tool,
+        reusedEvidenceMissionId: m.id,
+        reuseMode: m.progress?.reuseMode || 'saved-first',
+      };
+      save(m);
+    }
+    return { hit: true, value: current.value, sourceMissionId: m.id };
+  }
+
+  if (m.prepared?.request?.resumeExistingPool && /^(?:get_job_details|get_company_profile|get_person_profile)$/.test(tool)) {
+    for (const compatible of compatibleDiscoveryMissions(m, tool)) {
+      const cached = compatible.responses?.[key];
+      if (!cached) continue;
+      if (options.recordHit !== false) {
+        m.cacheHits++;
+        m.progress = {
+          ...(m.progress || {}),
+          reusedEvidenceTool: tool,
+          reusedEvidenceMissionId: compatible.id,
+          reuseMode: m.progress?.reuseMode || 'saved-first',
+        };
+        save(m);
+      }
+      return { hit: true, value: cached.value, sourceMissionId: compatible.id };
+    }
+  }
+
+  return { hit: false, value: null, sourceMissionId: null };
+}
 async function call(tool, args, invoke) {
   const m = context.getStore();
   if (!m) return invoke();
@@ -411,31 +454,10 @@ async function call(tool, args, invoke) {
     };
     save(m);
   }
+  const cached = cachedExact(tool, args);
+  if (cached.hit) return cached.value;
+
   const key = JSON.stringify([tool, args]);
-  const cacheTtl = m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
-  if (m.responses[key] && Date.now() - m.responses[key].at < cacheTtl) {
-    m.cacheHits++; save(m); return m.responses[key].value;
-  }
-
-  // Continuations may reuse deterministic evidence from any compatible mission,
-  // not just the original search response. Job/company/profile detail calls are
-  // expensive but their exact arguments make them safe to replay cross-mission.
-  if (m.prepared?.request?.resumeExistingPool && /^(?:get_job_details|get_company_profile|get_person_profile)$/.test(tool)) {
-    for (const compatible of compatibleDiscoveryMissions(m, tool)) {
-      const cached = compatible.responses?.[key];
-      if (!cached) continue;
-      m.cacheHits++;
-      m.progress = {
-        ...(m.progress || {}),
-        reusedEvidenceTool: tool,
-        reusedEvidenceMissionId: compatible.id,
-        reuseMode: m.progress?.reuseMode || 'saved-first',
-      };
-      save(m);
-      return cached.value;
-    }
-  }
-
   let value;
   try { value = await invoke(); }
   catch (error) { m.stopCode = String(error.code || ''); save(m); throw error; }
@@ -464,9 +486,25 @@ function currentUsage() {
 function control(id, action) {
   const m = get(id);
   if (action === 'resume') {
-    if (!['paused', 'paused_restart', 'paused_checkpoint', 'paused_rate_limit', 'failed', 'partial'].includes(m.status)) throw new Error('Mission is not resumable');
+    const cacheOnlySafetyResume = m.status === 'waiting_safety' && Boolean(m.prepared?.request?.resumeExistingPool);
+    if (!cacheOnlySafetyResume && !['paused', 'paused_restart', 'paused_checkpoint', 'paused_rate_limit', 'failed', 'partial'].includes(m.status)) {
+      throw new Error('Mission is not resumable');
+    }
     if (m.research) throw new Error('Research is preserved; inspect the existing Sheet before retrying output to avoid duplicate writes.');
-    m.control = null; m.stopCode = null; m.error = null; m.status = 'created'; save(m, false); queueOnce(id); setImmediate(pump);
+    m.control = null;
+    m.stopCode = null;
+    m.error = null;
+    m.notBefore = null;
+    m.status = 'created';
+    m.progress = {
+      ...(m.progress || {}),
+      phase: cacheOnlySafetyResume ? 'cache_recheck' : 'resuming',
+      cacheOnlySafetyResume,
+      nextEligibleAt: null,
+    };
+    save(m, false);
+    queueOnce(id);
+    setImmediate(pump);
   } else {
     m.control = action === 'cancel' ? 'cancel' : 'pause'; save(m, false);
   }
@@ -512,4 +550,4 @@ function resumeSaved(text) {
   save(m);
   return control(m.id, 'resume');
 }
-module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, resumeSaved };
+module.exports = { start, enqueue, get, list, summary, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, resumeSaved };
