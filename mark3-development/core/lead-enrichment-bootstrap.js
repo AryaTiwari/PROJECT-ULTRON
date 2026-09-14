@@ -243,7 +243,10 @@ async function handlePaidToolDecision(decision) {
       let selection = null;
       if (decision.payload?.entityMode === 'company') {
         try {
-          selection = await require('./linkedin-account-operator').prepareApolloCompanyContacts(decision.payload.missionId);
+          selection = await require('./linkedin-account-operator').prepareApolloCompanyContacts(
+            decision.payload.missionId || null,
+            decision.payload.url || null,
+          );
         } catch (error) {
           const access = error.code === 'APOLLO_PEOPLE_SEARCH_ACCESS_REQUIRED'
             ? 'Apollo People API Search is not enabled for this API key. Use a key with mixed_people_api_search access or a Master API key.'
