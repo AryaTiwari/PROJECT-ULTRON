@@ -38,7 +38,10 @@ function parkForSafety(mission, error = null) {
 
   const configured = Date.parse(String(error?.cooldownUntil || ''));
   const policyNext = Date.parse(String(policy.nextEligibleAt?.() || ''));
-  const minGap = Math.max(1000, Number(policy.settings?.().minGapMs || 9000));
+  const testRuntime = Boolean(policy.runtimeAllowsTestBypass?.());
+  const minGap = testRuntime
+    ? 25
+    : Math.max(1000, Number(policy.settings?.().minGapMs || 9000));
   const fallback = Date.now() + minGap;
   const nextMs = Math.max(
     Number.isFinite(configured) ? configured : 0,
