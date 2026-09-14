@@ -11,6 +11,7 @@ const apollo = require('./apollo-enrichment');
 const config = require('./config');
 const missionRunner = require('./linkedin-mission-runner');
 const finalMaster = require('./linkedin-final-master');
+const sheetProgress = require('./linkedin-sheet-progress');
 const missionContract = require('./linkedin-mission-contract');
 const queryStrategist = require('./linkedin-query-strategist');
 
@@ -1924,8 +1925,10 @@ async function companyMission(request) {
     // probes do not increment hit counters; consumption records the actual hit.
     const cachedDetailIds = new Set([...jobMeta.keys()].filter(jobId =>
       missionRunner.cachedExact?.('get_job_details', { job_id: jobId }, { recordHit: false })?.hit));
+    const destinationJobIds = new Set((request.existingDestinationJobIds || []).map((value) => String(value)));
+    const destinationCompanyKeys = new Set((request.existingDestinationCompanyKeys || []).map((value) => String(value)));
     const orderedJobIds = prioritizedJobIds(jobMeta, request)
-      .filter((jobId) => !previouslyChecked.has(String(jobId)))
+      .filter((jobId) => !previouslyChecked.has(String(jobId)) && !destinationJobIds.has(String(jobId)))
       .sort((left, right) =>
         Number(cachedDetailIds.has(right)) - Number(cachedDetailIds.has(left))
         || Number(request.transientJobAttempts[String(left)] || 0)
@@ -2071,9 +2074,17 @@ async function companyMission(request) {
 
       jobCandidatesPassed++;
 
-      // A mastered company cannot contribute to the new-company target.
-      // Exclude it before spending a profile-verification call.
-      if (!request.allowPreviouslySeenCompanies && finalMaster.seen(record)) continue;
+      // A company already present in the destination Sheet or canonical
+      // master cannot contribute to a new-company target. Exclude it before
+      // spending a company-profile verification call.
+      const destinationKey = finalMaster.companyKey(record);
+      if (!request.allowPreviouslySeenCompanies && (
+        finalMaster.inMaster(record)
+        || (destinationKey && destinationCompanyKeys.has(destinationKey))
+      )) {
+        record.globalSeen = true;
+        continue;
+      }
 
       const normalizedCompany = linkedinPublic.normalizeLinkedInEntityUrl(record.linkedin, 'company');
       const companyKey = normalizedCompany?.slug || String(record.company || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -2357,6 +2368,8 @@ async function companyMission(request) {
       maximum: budget.maximum,
       checkedJobIds: request.hiring ? checkedJobIds : [],
       skippedPreviouslyChecked: request.hiring && request.continueFromPrevious ? previouslyChecked.size : 0,
+      skippedDestinationJobs: request.hiring ? destinationJobIds.size : 0,
+      destinationCompaniesKnown: request.hiring ? destinationCompanyKeys.size : 0,
       globallySeenSkipped: records.filter((record) => record.globalSeen).length,
       cachedReconsidered: reconsidered.length,
       cachedJobDetailHits,
@@ -3511,13 +3524,30 @@ async function run(request, headers) {
     if (request.targetMode === 'master_total' && request.targetTotal) {
       const reconciled = await reconcileFinalMasterRegistry(request);
       const desired = Math.max(0, Number(request.targetTotal || 0));
+      const masterUrl = finalMaster.masterSheetUrl() || request.destinationSheetUrl || null;
+      const authoritative = masterUrl
+        ? await sheetProgress.snapshot(masterUrl, { requireJob: Boolean(request.hiring) })
+        : null;
+      const current = Math.max(
+        Number(reconciled.count || 0),
+        Number(authoritative?.uniqueCompanies || 0),
+      );
       const target = {
         desired,
-        current: reconciled.count,
-        remaining: Math.max(0, desired - reconciled.count),
+        current,
+        remaining: Math.max(0, desired - current),
+        source: authoritative ? 'sheet+registry' : 'registry',
       };
       request.count = target.remaining;
       request.masterTarget = target;
+      request.existingDestinationJobIds = authoritative?.jobIds || [];
+      request.existingDestinationCompanyKeys = authoritative?.companyKeys || [];
+      request.authoritativeSheetProgress = authoritative ? {
+        uniqueCompanies: authoritative.uniqueCompanies,
+        validRows: authoritative.validRows,
+        totalDataRows: authoritative.totalDataRows,
+        readAt: authoritative.readAt,
+      } : null;
     }
     if (request.useFinalMaster || request.targetMode === 'master_total') {
       request.destinationSheetUrl = finalMaster.masterSheetUrl() || request.destinationSheetUrl;
