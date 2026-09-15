@@ -23,7 +23,7 @@ function isApolloEnrichmentRequest(text) {
   const value = String(text || '');
   if (!requestedContactEnrichment(value)) return false;
   return /\b(?:apollo|enrich|enrichment)\b/i.test(value)
-    && /\b(?:lead|leads|companies|company|them|those|these|email|phone|number|contacts?)\b/i.test(value);
+    && /\b(?:lead|leads|companies|company|them|their|those|these|email|phone|mobile|number|contacts?)\b/i.test(value);
 }
 
 function reuseExistingEvidenceFromText(text) {
