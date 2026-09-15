@@ -24,6 +24,7 @@ loadEnv(path.join(root, ".runtime", "secrets.env"));
 
 const vendor = path.join(root, ".runtime", "vendor", "hermes-agent");
 const hermesHome = path.join(root, ".runtime", "hermes-home");
+const hermesNode = path.join(hermesHome, "node");
 
 if (!fs.existsSync(vendor)) {
   console.error("Mark 4 is not bootstrapped. Run: npm run bootstrap");
@@ -34,6 +35,7 @@ process.env.HERMES_HOME = hermesHome;
 process.env.API_SERVER_ENABLED = "true";
 process.env.API_SERVER_HOST = "127.0.0.1";
 process.env.API_SERVER_PORT = "8642";
+process.env.PATH = hermesNode + path.delimiter + (process.env.PATH || "");
 
 const children = [];
 let shuttingDown = false;
@@ -43,7 +45,7 @@ function run(command, args, cwd = root) {
     cwd,
     env: process.env,
     stdio: "inherit",
-    shell: process.platform === "win32"
+    shell: false
   });
   children.push(child);
   child.on("exit", code => {
@@ -54,7 +56,13 @@ function run(command, args, cwd = root) {
   return child;
 }
 
-async function waitFor(url, label, timeoutMs = 45000) {
+function runNpm(args, cwd = root) {
+  if (process.platform !== "win32") return run("npm", args, cwd);
+  const comspec = process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe";
+  return run(comspec, ["/d", "/s", "/c", ["npm", ...args].join(" ")], cwd);
+}
+
+async function waitFor(url, label, timeoutMs = 60000) {
   const started = Date.now();
   let lastError = "";
   while (Date.now() - started < timeoutMs) {
@@ -83,7 +91,7 @@ async function main() {
   await waitFor("http://127.0.0.1:8787/api/bootstrap", "ULTRON gateway");
 
   console.log("Starting cockpit...");
-  run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "dev", "-w", "apps/ui"]);
+  runNpm(["run", "dev", "-w", "apps/ui"]);
 }
 
 function stop() {

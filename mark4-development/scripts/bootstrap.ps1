@@ -32,8 +32,9 @@ $Vendor = Join-Path $Runtime "vendor\hermes-agent"
 $HermesHome = Join-Path $Runtime "hermes-home"
 $Memories = Join-Path $HermesHome "memories"
 $Skills = Join-Path $HermesHome "skills"
+$BrowserPrefix = Join-Path $HermesHome "node"
 
-New-Item -ItemType Directory -Force -Path $Runtime,$Memories,$Skills | Out-Null
+New-Item -ItemType Directory -Force -Path $Runtime,$Memories,$Skills,$BrowserPrefix | Out-Null
 
 if (-not (Test-Path (Join-Path $Vendor ".git"))) {
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Vendor) | Out-Null
@@ -43,7 +44,18 @@ if (-not (Test-Path (Join-Path $Vendor ".git"))) {
   git -C $Vendor checkout -f v2026.9.14
 }
 
+Write-Host "Installing pinned Hermes core..." -ForegroundColor DarkCyan
 uv sync --directory $Vendor
+
+$HermesPython = Join-Path $Vendor ".venv\Scripts\python.exe"
+if (-not (Test-Path $HermesPython)) {
+  throw "Hermes virtual environment was not created at $HermesPython"
+}
+
+Write-Host "Installing Hermes API-server dependency..." -ForegroundColor DarkCyan
+uv pip install --python $HermesPython "aiohttp==3.14.3"
+
+Write-Host "Installing Mark 4 JavaScript dependencies..." -ForegroundColor DarkCyan
 npm install
 
 Copy-Item (Join-Path $Root "hermes\SOUL.md") (Join-Path $HermesHome "SOUL.md") -Force
@@ -71,6 +83,38 @@ Get-Content $Secrets | ForEach-Object {
   if ($_ -match "^\s*([^#=]+)=(.*)$") { $SecretsMap[$matches[1].Trim()] = $matches[2].Trim() }
 }
 
+
+Write-Host "Preparing free local browser capability..." -ForegroundColor DarkCyan
+$AgentBrowser = Join-Path $BrowserPrefix "agent-browser.cmd"
+if (-not (Test-Path $AgentBrowser)) {
+  npm install -g --prefix $BrowserPrefix --silent --ignore-scripts "agent-browser@^0.26.0"
+}
+
+$BrowserCandidates = @()
+if ($env:LOCALAPPDATA) {
+  $BrowserCandidates += (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
+}
+if ($env:ProgramFiles) {
+  $BrowserCandidates += (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe")
+  $BrowserCandidates += (Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe")
+}
+$ProgramFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+if ($ProgramFilesX86) {
+  $BrowserCandidates += (Join-Path $ProgramFilesX86 "Google\Chrome\Application\chrome.exe")
+  $BrowserCandidates += (Join-Path $ProgramFilesX86 "Microsoft\Edge\Application\msedge.exe")
+}
+
+$SystemBrowser = $BrowserCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($SystemBrowser) {
+  Write-Host "Using installed browser: $SystemBrowser" -ForegroundColor Green
+} elseif (Test-Path $AgentBrowser) {
+  Write-Host "No Chrome/Edge detected. Installing Chromium for agent-browser..." -ForegroundColor Yellow
+  & $AgentBrowser install
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Chromium installation failed. ULTRON can still run, but browser automation will remain unavailable."
+  }
+}
+
 $HermesEnv = Join-Path $HermesHome ".env"
 @(
   "API_SERVER_ENABLED=true",
@@ -79,14 +123,45 @@ $HermesEnv = Join-Path $HermesHome ".env"
   "API_SERVER_KEY=$($SecretsMap['API_SERVER_KEY'])"
 ) | Set-Content -Path $HermesEnv -Encoding UTF8
 
+if ($SystemBrowser) {
+  Add-Content -Path $HermesEnv -Value "AGENT_BROWSER_EXECUTABLE_PATH=$SystemBrowser" -Encoding UTF8
+}
+
 $Capability = (Resolve-Path (Join-Path $Root "services\capability-host\src\server.mjs")).Path.Replace("\","/")
+$ProjectPath = (Resolve-Path $Root).Path.Replace("\","/")
 $Config = @"
+terminal:
+  backend: local
+  cwd: "$ProjectPath"
+
+browser:
+  engine: auto
+  headed: false
+  record_sessions: false
+
 gateway:
   api_server:
     enabled: true
     host: "127.0.0.1"
     port: 8642
     max_concurrent_runs: 2
+
+auxiliary:
+  vision:
+    provider: main
+    max_concurrency: 2
+  approval:
+    provider: main
+  compression:
+    provider: main
+    max_concurrency: 1
+  mcp:
+    provider: main
+  skills_hub:
+    provider: main
+  title_generation:
+    enabled: false
+    provider: main
 
 mcp_servers:
   ultron:
@@ -103,6 +178,8 @@ Set-Content -Path (Join-Path $HermesHome "config.yaml") -Value $Config -Encoding
 Write-Host ""
 Write-Host "ULTRON Mark 4 bootstrap complete." -ForegroundColor Cyan
 Write-Host "Hermes pinned: v2026.9.14"
+Write-Host "Hermes API dependency: aiohttp 3.14.3"
+Write-Host "Project cwd: $ProjectPath"
 Write-Host "Runtime home: $HermesHome"
 Write-Host "Next: npm run check"
 Write-Host "Then: npm run dev"
