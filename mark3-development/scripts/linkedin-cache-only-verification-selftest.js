@@ -155,7 +155,16 @@ async function waitFor(fn) {
   policy.nextEligibleAt = originalNextEligibleAt;
   mcp.callTool = originalCallTool;
 
-  assert.notEqual(finished.status, 'failed');
+  assert.notEqual(finished.status, 'failed', JSON.stringify({
+    error: finished.error || null,
+    progress: finished.progress || null,
+    stopCode: finished.stopCode || null,
+    captured: captured ? {
+      records: captured.records?.length || 0,
+      budgetStopped: captured.budgetStopped || null,
+      toolCalls: captured.toolCalls || null,
+    } : null,
+  }));
   assert.equal(finished.status, 'partial');
   assert(captured, 'Research result was not captured.');
   assert.equal(captured.records.length, 1);
