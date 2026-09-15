@@ -13,7 +13,7 @@ function claim(message) {
   // Apollo contact enrichment belongs to the LinkedIn lead control plane even
   // when a conversational follow-up omits the word "LinkedIn".
   const apolloEnrichment = /\bapollo\b/i.test(text)
-    && /\b(?:enrich|enrichment|email|e-?mail|phone|mobile|number|contact|lead|leads|compan(?:y|ies)|sheet|master)\b/i.test(text);
+    && /\b(?:enrich|enrichment|email|e-?mail|phone|mobile|numbers?|contacts?|leads?|compan(?:y|ies)|sheet|master)\b/i.test(text);
   const operationalDomain = linkedin || apolloEnrichment;
   // A report/status heading is not an artifact object. Require a concrete
   // format and a creation verb in the same clause, and ignore negated clauses.
@@ -21,7 +21,7 @@ function claim(message) {
   const artifact = linkedin && !operationFirst && text.split(/[.!?;\n]/).some(clause =>
     !/\b(?:no|not|never|don't|without)\b/i.test(clause) &&
     /\b(?:create|generate|export|render|produce|convert|prepare|make)\b[^\n]*\b(?:pdf|docx|word document|image|video|spreadsheet export)\b/i.test(clause));
-  const operational = operationalDomain && /\b(?:resume|continue|find|get|look|pull|search|reuse|verify|deduplicate|dedupe|fill|build|update|collect|scrape|extract|add|append|enrich|retry|sync|complete|finish|pause|cancel|stop|progress|status|health|setup|login|unlock|mission|mcp|email|phone|mobile|number|contact|search_jobs|get_job_details|get_company_profile|search_companies|search_people|get_person_profile)\b/i.test(text);
+  const operational = operationalDomain && /\b(?:resume|continue|find|get|look|pull|search|reuse|verify|deduplicate|dedupe|fill|build|update|collect|scrape|extract|add|append|enrich|retry|sync|complete|finish|pause|cancel|stop|progress|status|health|setup|login|unlock|mission|mcp|email|phone|mobile|numbers?|contacts?|search_jobs|get_job_details|get_company_profile|search_companies|search_people|get_person_profile)\b/i.test(text);
   const exclusive = operational && !artifact;
   return Object.freeze({ domain: exclusive ? 'linkedin' : artifact ? 'artifact' : 'general', claimed: exclusive || artifact, exclusive,
     controller: exclusive ? 'linkedin-domain-controller' : null,
