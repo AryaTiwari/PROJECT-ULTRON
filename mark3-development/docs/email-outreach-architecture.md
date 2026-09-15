@@ -36,7 +36,9 @@ The renderer does not use eval and cannot execute arbitrary JavaScript.
 - test email connection
 - list email templates
 - save email template "Elevate intro" subject: Creator growth for {{company_name}} body: Hi {{first_name|there}}, ...
+- add email follow-up to template "Elevate intro" after 2 days if not replied subject: Quick follow-up body: Hi {{first_name|there}}, checking back.
 - prepare email campaign from Final Master using template "Elevate intro"
+- prepare email campaign from Final Master using template "Elevate intro" schedule at 2026-09-20T10:00:00+05:30
 - prepare email campaign from a Google Sheet URL using template "Elevate intro"
 - preview email campaign email-...
 - approve email campaign email-...
