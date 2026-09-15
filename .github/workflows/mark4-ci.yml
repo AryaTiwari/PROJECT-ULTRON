@@ -1,0 +1,26 @@
+name: Mark4 CI
+
+on:
+  push:
+    branches: [mark4-development]
+    paths:
+      - "mark4-development/**"
+      - ".github/workflows/mark4-ci.yml"
+  pull_request:
+    paths:
+      - "mark4-development/**"
+      - ".github/workflows/mark4-ci.yml"
+
+jobs:
+  mark4:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mark4-development
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+      - run: npm install
+      - run: npm run check
