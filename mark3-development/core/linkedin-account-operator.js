@@ -228,7 +228,12 @@ function hiringIntentFromText(text, filters = {}) {
 
 function locationScopeFromText(text, hiring = false) {
   const value = String(text || '');
-  if (/\bcompanies?\b[\s\S]{0,45}\b(?:that\s+are\s+)?(?:based|headquartered|located)\b/i.test(value)
+  const explicitJobGeography = /\b(?:jobs?|roles?|openings?|vacancies|positions?)\b[\s\S]{0,35}\bin\s+india\b/i.test(value);
+  const explicitIndiaCompany = /\b(?:indian|india[-\s]?based)\s+companies?\b/i.test(value)
+    || /\bcompanies?\s+(?:based\s+)?(?:in|from)\s+india\b/i.test(value)
+    || /\bcompanies?\s+on\s+linkedin\s+(?:based\s+)?(?:in|from)\s+india\b/i.test(value);
+  if ((explicitIndiaCompany && !explicitJobGeography)
+      || /\bcompanies?\b[\s\S]{0,45}\b(?:that\s+are\s+)?(?:based|headquartered|located)\b/i.test(value)
       || /\b(?:company|employer)\s+(?:headquarters?|hq)\b/i.test(value)) {
     return 'company';
   }
@@ -2904,8 +2909,8 @@ async function prepareApolloSheetContacts(sheetUrl, options = {}) {
 
     const existingApolloEmail = String(row[emailIndex] || '').trim();
     const existingApolloPhone = String(row[phoneIndex] || '').trim();
-    const hasApolloEmail = Boolean(existingApolloEmail && !/^null$/i.test(existingApolloEmail));
-    const hasApolloPhone = Boolean(existingApolloPhone && !/^null$/i.test(existingApolloPhone));
+    const hasApolloEmail = Boolean(apollo.validEmail(existingApolloEmail));
+    const hasApolloPhone = Boolean(apollo.validPhone(existingApolloPhone));
     if (hasApolloEmail && hasApolloPhone) {
       skippedComplete++;
       continue;
@@ -2988,8 +2993,8 @@ function apolloValuePresent(value) {
 
 function apolloStatusForValues(personLinkedin, phone, email, existingStatus = '') {
   const person = apollo.normalizeLinkedIn(personLinkedin);
-  const hasPhone = apolloValuePresent(phone);
-  const hasEmail = apolloValuePresent(email);
+  const hasPhone = Boolean(apollo.validPhone(phone));
+  const hasEmail = Boolean(apollo.validEmail(email));
   const phoneNull = /^null$/i.test(String(phone || '').trim());
   const emailNull = /^null$/i.test(String(email || '').trim());
 
@@ -3089,17 +3094,25 @@ async function enrichFinalMasterContacts() {
     ensureContactColumns: false,
     strictApolloColumns: true,
   });
+  let phoneSync = { received: 0, resolved: 0, pending: stats.pendingPhones || 0 };
+  try { phoneSync = await leadEnrichment.syncPhoneResults({ quiet: false }); } catch {}
+  const enrichmentState = leadEnrichment.loadState();
+  const enrichmentJob = (enrichmentState.jobs || []).find((item) => item.id === stats.jobId);
+  const pendingPhones = Object.values(enrichmentJob?.rows || {}).filter((row) => row?.phonePending).length;
   const statusSummary = await finalizeApolloSheetStatuses(master.sheetUrl);
+  const fullyEnriched = Number(statusSummary.statuses?.ENRICHED || 0);
 
   return {
     selected: selection.selected,
-    enriched: Number(stats.enrichedProfiles || 0) + Number(stats.cachedProfiles || 0),
+    enriched: fullyEnriched,
+    profilesChecked: Number(stats.enrichedProfiles || 0) + Number(stats.cachedProfiles || 0),
     unresolved: Number(selection.unresolved || 0) + Number(stats.unresolvedRows || 0) + Number(stats.failedRows || 0),
     skippedComplete: Number(selection.skippedComplete || 0) + Number(stats.skippedComplete || 0),
     reusedSelectedContact: selection.reusedSelectedContact || 0,
     emailsWritten: stats.emailsWritten || 0,
     phonesWritten: stats.phonesWritten || 0,
-    pendingPhones: stats.pendingPhones || 0,
+    phonesResolvedFromWebhook: Number(phoneSync.resolved || 0),
+    pendingPhones,
     contacts: selection.contacts,
     failures: selection.failures,
     apolloColumns: selection.apolloColumns,

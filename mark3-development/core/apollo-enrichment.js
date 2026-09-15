@@ -112,7 +112,11 @@ function satisfies(record, { needEmail, needPhone }) {
   if (!record || !isFresh(record)) return false;
   if (record.noMatch || record.ambiguous) return true;
   if (needEmail && !record.emailKnown) return false;
-  if (needPhone && !['found', 'not_found', 'pending'].includes(record.phoneStatus)) return false;
+  if (needEmail && record.email != null && !validEmail(record.email)) return false;
+  if (needPhone) {
+    if (!['found', 'not_found', 'pending'].includes(record.phoneStatus)) return false;
+    if (record.phoneStatus === 'found' && !validPhone(record.phone)) return false;
+  }
   return true;
 }
 
@@ -148,6 +152,13 @@ function workerUrl(pathname) {
 function validEmail(value) {
   const text = String(value || '').trim();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text : null;
+}
+
+function validPhone(value) {
+  const text = String(value || '').trim();
+  if (!text || /^(?:null|none|n\/?a|unknown|not\s+found|unavailable|-+)$/i.test(text)) return null;
+  const digits = text.replace(/\D/g, '');
+  return digits.length >= 7 && digits.length <= 15 ? text : null;
 }
 
 function normalizedWords(value) {
@@ -487,7 +498,7 @@ function recordPhoneResult(apolloPersonId, phone) {
   const changed = [];
   for (const [linkedinUrl, record] of Object.entries(cache.people)) {
     if (String(record?.apolloPersonId || '') !== id) continue;
-    record.phone = phone ? String(phone).trim() : null;
+    record.phone = validPhone(phone);
     record.phoneStatus = record.phone ? 'found' : 'not_found';
     record.phoneResolvedAt = new Date().toISOString();
     record.checkedAt = new Date().toISOString();
@@ -515,6 +526,8 @@ function status() {
 
 module.exports = {
   setting,
+  validEmail,
+  validPhone,
   normalizeLinkedIn,
   matchDecision,
   COMPANY_DECISION_PRIORITY,

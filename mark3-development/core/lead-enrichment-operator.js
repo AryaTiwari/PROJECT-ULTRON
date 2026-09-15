@@ -217,8 +217,10 @@ async function enrichSheet(sheetUrl, options = {}) {
     if (!rawLinkedIn || !String(rawLinkedIn).trim()) continue;
     stats.scannedRows++;
 
-    let needEmail = layout.emailColumnIndex >= 0 && adapter.isBlank(row[layout.emailColumnIndex]);
-    let needPhone = layout.phoneColumnIndex >= 0 && adapter.isBlank(row[layout.phoneColumnIndex]);
+    const currentEmail = layout.emailColumnIndex >= 0 ? row[layout.emailColumnIndex] : '';
+    const currentPhone = layout.phoneColumnIndex >= 0 ? row[layout.phoneColumnIndex] : '';
+    let needEmail = layout.emailColumnIndex >= 0 && (options.strictApolloColumns ? !apollo.validEmail(currentEmail) : adapter.isBlank(currentEmail));
+    let needPhone = layout.phoneColumnIndex >= 0 && (options.strictApolloColumns ? !apollo.validPhone(currentPhone) : adapter.isBlank(currentPhone));
     if (!needEmail && !needPhone) {
       stats.skippedComplete++;
       continue;
@@ -306,8 +308,8 @@ async function enrichSheet(sheetUrl, options = {}) {
           changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: 'null' });
           stats.phonesWritten++;
           stats.nullsWritten++;
-        } else if (result.phoneStatus === 'found' && result.phone) {
-          changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: String(result.phone) });
+        } else if (result.phoneStatus === 'found' && apollo.validPhone(result.phone)) {
+          changes.push({ range: adapter.cellRange(layout.sheetName, rowNumber, layout.phoneColumnIndex), value: apollo.validPhone(result.phone) });
           stats.phonesWritten++;
         } else if (result.apolloPersonId) {
           if (isNullSentinel(row[layout.phoneColumnIndex])) {
@@ -360,7 +362,7 @@ async function syncPhoneResults(options = {}) {
   for (const result of results) {
     const apolloPersonId = String(result?.apollo_person_id || '').trim();
     if (!apolloPersonId) continue;
-    const phone = String(result?.phone || '').trim() || null;
+    const phone = apollo.validPhone(result?.phone);
     const matches = [];
     for (const job of state.jobs || []) {
       for (const [key, row] of Object.entries(job.rows || {})) {
@@ -381,7 +383,7 @@ async function syncPhoneResults(options = {}) {
         const adapter = adapterFor(match.job.sheetUrl, match.job.provider);
         const range = adapter.cellRange(match.job.sheetName, match.row.rowNumber, match.row.phoneColumnIndex);
         const current = await adapter.readCell(match.job.spreadsheetId, range);
-        if (adapter.isBlank(current)) {
+        if (!apollo.validPhone(current)) {
           await adapter.writeCells(match.job.spreadsheetId, [{ range, value: phone || 'null' }]);
         }
         match.row.phonePending = false;
