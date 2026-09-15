@@ -80,7 +80,7 @@ async function post(message, extra = {}) {
   assert.equal(oldClient.routing.domain, 'linkedin');
   assert.equal(oldClient.linkedinBackgroundMission.id, id);
   for (const key of ['assistant', 'models', 'artifacts', 'publicResearch', 'liveLinkedIn']) assert.equal(counts[key], 0, key);
-  for (const text of [prompt, 'Build my LinkedIn Final Master and report cache statistics', 'Resume LinkedIn mission and report the mission status', 'Hey Ultron, Linked in MCP status', 'Resume LinkedIn mission and then create a PDF report']) {
+  for (const text of [prompt, 'Build my LinkedIn Final Master and report cache statistics', 'Resume LinkedIn mission and report the mission status', 'Hey Ultron, Linked in MCP status', 'Resume LinkedIn mission and then create a PDF report', 'also add their numbers using Apollo']) {
     assert.equal(control.claim(text).exclusive, true, text);
     assert.equal(media.generationIntent(text), null);
   }

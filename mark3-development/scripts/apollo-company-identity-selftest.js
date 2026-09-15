@@ -30,6 +30,12 @@ assert.deepEqual(
   [1, 2, 3],
 );
 
+assert.equal(apollo.validEmail('test@example.com'), 'test@example.com');
+assert.equal(apollo.validEmail('12'), null);
+assert.equal(apollo.validPhone('+91 98765 43210'), '+91 98765 43210');
+assert.equal(apollo.validPhone('12'), null);
+assert.equal(apollo.validPhone('null'), null);
+
 (async () => {
   let searchCalls = 0;
   global.fetch = async url => {

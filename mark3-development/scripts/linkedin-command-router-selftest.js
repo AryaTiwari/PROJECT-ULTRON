@@ -10,6 +10,7 @@ if (run('intent')) {
   assert.equal(router.requestedContactEnrichment('Find 20 SAP companies on LinkedIn and get HR contact emails'), true);
   assert.equal(router.requestedContactEnrichment('now enrich those leads with email and number using Apollo'), true);
   assert.equal(router.isApolloEnrichmentRequest('now enrich those leads with email and number using Apollo'), true);
+  assert.equal(router.isApolloEnrichmentRequest('also add their numbers using apollo'), true);
 
   const savedFirstText = 'LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total. Reuse saved discovery, cached evidence and previously rejected candidates before making unnecessary fresh LinkedIn calls. Do not use Apollo yet.';
   const savedFirst = router.enhanceRequest({

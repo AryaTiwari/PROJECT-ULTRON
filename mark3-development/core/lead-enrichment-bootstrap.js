@@ -281,8 +281,13 @@ async function handlePaidToolDecision(decision) {
     return paidTools.withPermit(decision, async () => {
       try {
         const stats = await require('./linkedin-account-operator').enrichFinalMasterContacts();
+        const fullySettled = Number(stats.pendingPhones || 0) === 0 && Number(stats.unresolved || 0) === 0;
+        const stateLabel = fullySettled ? 'complete' : 'pass finished';
+        const pendingTail = stats.pendingPhones
+          ? ` ${stats.pendingPhones} phone reveal${stats.pendingPhones === 1 ? ' is' : 's are'} still pending Apollo webhook settlement and will not be reported as enriched until a valid number is written.`
+          : '';
         return responseShape(true,
-          `Apollo Final Master enrichment complete. Selected ${stats.selected} verified company contact${stats.selected === 1 ? '' : 's'}, enriched ${stats.enriched}, skipped ${stats.skippedComplete} already-complete compan${stats.skippedComplete === 1 ? 'y' : 'ies'}, and left ${stats.unresolved} unresolved. ${stats.sheetUrl}`,
+          `Apollo Final Master enrichment ${stateLabel}. Selected ${stats.selected} verified company contact${stats.selected === 1 ? '' : 's'}; ${stats.enriched} row${stats.enriched === 1 ? '' : 's'} now have both a valid Apollo email and phone; checked/enriched ${stats.profilesChecked || 0} profile${stats.profilesChecked === 1 ? '' : 's'}; skipped ${stats.skippedComplete} already-complete compan${stats.skippedComplete === 1 ? 'y' : 'ies'}; ${stats.unresolved} unresolved.${pendingTail} ${stats.sheetUrl}`,
           { apolloFinalMaster: stats, spreadsheetUrl: stats.sheetUrl }
         );
       } catch (error) {
@@ -339,7 +344,8 @@ function install() {
         );
       } else {
         const implicitLinkedInApollo = /\b(?:apollo|enrich|enrichment)\b/i.test(text)
-          && /\b(?:those|these|current|latest|master|final|the)\s+(?:leads|companies|results)|\b(?:leads|companies)\b[\s\S]{0,30}\b(?:email|phone|number|contact)\b/i.test(text)
+          && /\b(?:email|e-?mail|phone|mobile|number|contact|leads?|companies|their|them|those|these)\b/i.test(text)
+          && /\b(?:add|fill|complete|finish|retry|resume|sync|get|bring|use|using|enrich|their|them|those|these|current|latest|master|final)\b/i.test(text)
           && !spreadsheetSource(text, { attachments: options.attachments });
 
         if (implicitLinkedInApollo) {
