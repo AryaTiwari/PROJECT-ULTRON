@@ -20,6 +20,9 @@ const tools=[
 {name:"ultron_mission_get",description:"Read a mission and its evidence by mission id.",inputSchema:{type:"object",required:["missionId"],properties:{missionId:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_mission_update",description:"Update structured mission status, measurable state, strategy or next action. Never store private chain-of-thought.",inputSchema:{type:"object",required:["missionId"],properties:{missionId:{type:"string"},status:{type:"string"},state:{type:"object"},strategy:{type:"object"},nextAction:{type:["string","null"]},completionCriteria:{type:"object"},constraints:{type:"object"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_record_evidence",description:"Attach verifiable evidence to an existing mission using URLs, ids, hashes, provider receipts or readbacks.",inputSchema:{type:"object",required:["missionId","kind","source"],properties:{missionId:{type:"string"},kind:{type:"string"},source:{type:"string"},ref:{type:["string","null"]},payload:{type:"object"},verified:{type:"boolean"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:false}},
+{name:"ultron_lead_master_status",description:"Read authoritative Mark 4 lead counts and the remaining verified-company gap for an optional numerical target.",inputSchema:{type:"object",properties:{target:{type:"integer",minimum:0}},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_lead_master_search",description:"Search the native Mark 4 lead registry. Use it for dedupe and reuse before fresh company discovery.",inputSchema:{type:"object",properties:{status:{type:"string",enum:["pending","verified","rejected"]},query:{type:"string"},limit:{type:"integer",minimum:1,maximum:1000}},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_lead_master_upsert",description:"Create or update one canonical company lead. One company equals one lead. Setting verificationStatus=verified for LinkedIn requires a LinkedIn job URL plus evidence.activeJobVerified=true.",inputSchema:{type:"object",required:["companyName"],properties:{companyName:{type:"string"},companyLink:{type:"string"},jobLink:{type:"string"},jobTitle:{type:"string"},location:{type:"string"},employeeCount:{type:"integer",minimum:0},applicantCount:{type:"integer",minimum:0},source:{type:"string"},verificationStatus:{type:"string",enum:["pending","verified","rejected"]},evidence:{type:"object"},contactName:{type:"string"},contactRole:{type:"string"},contactLinkedin:{type:"string"},phone:{type:"string"},email:{type:"string"},remarks:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_apollo_find_company_contact",description:"Find the preferred decision maker for an already discovered company using Apollo. Founder/Director/Owner > Recruiting Head/Manager > HR Recruiter. Enrichment only, never company discovery.",inputSchema:{type:"object",required:["company"],properties:{company:{type:"string"},domain:{type:"string"},location:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}}
 ];
 async function callTool(name,args={}){
@@ -29,6 +32,16 @@ async function callTool(name,args={}){
   if(name==="ultron_mission_get")return text(await internal(`/internal/missions/${encodeURIComponent(args.missionId)}`));
   if(name==="ultron_mission_update"){const{missionId,...patch}=args;return text(await internal(`/internal/missions/${encodeURIComponent(missionId)}`,{method:"PATCH",body:JSON.stringify(patch)}));}
   if(name==="ultron_record_evidence"){const{missionId,...evidence}=args;return text(await internal(`/internal/missions/${encodeURIComponent(missionId)}/evidence`,{method:"POST",body:JSON.stringify(evidence)}));}
+  if(name==="ultron_lead_master_status"){
+    const target=args.target===undefined?"":String(args.target);
+    return text(await internal("/internal/leads"+(target?"?target="+encodeURIComponent(target):"")));
+  }
+  if(name==="ultron_lead_master_search"){
+    const q=new URLSearchParams();
+    if(args.status)q.set("status",args.status);if(args.query)q.set("q",args.query);if(args.limit)q.set("limit",String(args.limit));
+    return text(await internal("/internal/leads"+(q.size?"?"+q.toString():"")));
+  }
+  if(name==="ultron_lead_master_upsert")return text(await internal("/internal/leads",{method:"POST",body:JSON.stringify(args)}));
   if(name==="ultron_apollo_find_company_contact")return text(await findCompanyContact(args));
   throw new Error(`Unknown tool: ${name}`);
 }

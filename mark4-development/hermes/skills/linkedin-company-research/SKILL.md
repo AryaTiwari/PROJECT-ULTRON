@@ -18,3 +18,19 @@ When discovery is scoped to LinkedIn, use authenticated LinkedIn capabilities/br
 10. Update mission state from authoritative output after each committed batch.
 
 For SAP, useful families can include FICO, MM, SD, ABAP, Basis, HANA, S/4HANA, SuccessFactors and BW when relevant.
+
+
+## Mark 4 authoritative lead state
+The native Mark 4 lead master is the source of truth for company count, dedupe and accepted evidence. Do not infer the current total from conversation memory.
+
+Before fresh discovery:
+- call `ultron_lead_master_status` with the mission target;
+- search existing leads with `ultron_lead_master_search`;
+- calculate the verified remaining gap from the returned registry stats.
+
+When a company passes the user's hard constraints, save it with `ultron_lead_master_upsert`.
+For LinkedIn verification, only set `verificationStatus: "verified"` when an active LinkedIn job URL was actually inspected and include `evidence.activeJobVerified: true`. Store useful evidence such as observed company size, job title, location and inspection time.
+
+Use Hermes authenticated browser/tool capabilities to discover and inspect LinkedIn. The old Mark 3 LinkedIn scraper is not a default Mark 4 capability.
+
+After Apollo enrichment, update the same canonical lead record with the selected contact. Never create a duplicate company row merely because another job or contact was found.

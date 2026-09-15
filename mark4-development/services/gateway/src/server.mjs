@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, uiDist } from "./config.mjs";
 import { hermes } from "./hermes.mjs";
-import { createMission,getMission,listMissions,updateMission,addEvidence,listEvidence,addEvent,listEvents,recordModelMetric } from "./db.mjs";
+import { createMission,getMission,listMissions,updateMission,addEvidence,listEvidence,addEvent,listEvents,recordModelMetric,upsertLead,getLead,listLeads,leadStats } from "./db.mjs";
 import { rankModels,fabricStatus,classifyModelError } from "./model-fabric.mjs";
 import { subscribe,publish } from "./event-hub.mjs";
 import { unwrapList, unwrapSession } from "./hermes-contract.mjs";
@@ -123,7 +123,7 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,`http://${req.headers.host||"localhost"}`),p=parts(url.pathname);
   try{
     if(req.method==="GET"&&url.pathname==="/api/live"){res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache","Connection":"keep-alive"});return subscribe(res);}
-    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=40&include_children=true").catch(()=>[])]);return json(res,200,{health,sessions:unwrapList(sessions),missions:listMissions(),modelFabric:fabricStatus()});}
+    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=40&include_children=true").catch(()=>[])]);return json(res,200,{health,sessions:unwrapList(sessions),missions:listMissions(),leadStats:leadStats(),modelFabric:fabricStatus()});}
     if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,unwrapList(await hermes.sessions(url.searchParams.toString())));
     if(req.method==="POST"&&url.pathname==="/api/sessions")return json(res,201,unwrapSession(await hermes.createSession(await body(req))));
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="messages")return json(res,200,unwrapList(await hermes.messages(p[2])));
@@ -132,12 +132,18 @@ const server=http.createServer(async(req,res)=>{
     }
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="chat")return proxyChat(req,res,p[2],await body(req));
     if(req.method==="GET"&&url.pathname==="/api/missions")return json(res,200,listMissions());
+    if(req.method==="GET"&&url.pathname==="/api/leads")return json(res,200,{items:listLeads({status:url.searchParams.get("status"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:leadStats(url.searchParams.get("target"))});
     if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="GET"){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2])}):json(res,404,{error:"MISSION_NOT_FOUND"});}
     if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="approval"&&req.method==="POST")return json(res,200,await hermes.approval(p[2],await body(req)));
     if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="stop"&&req.method==="POST")return json(res,200,await hermes.stopRun(p[2]));
     if(p[0]==="internal"){
       if(!internal(req))return json(res,401,{error:"UNAUTHORIZED"});
-      if(req.method==="GET"&&url.pathname==="/internal/status")return json(res,200,{ok:true,missions:listMissions(5),modelFabric:fabricStatus()});
+      if(req.method==="GET"&&url.pathname==="/internal/status")return json(res,200,{ok:true,missions:listMissions(5),leadStats:leadStats(),modelFabric:fabricStatus()});
+      if(req.method==="GET"&&url.pathname==="/internal/leads")return json(res,200,{items:listLeads({status:url.searchParams.get("status"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:leadStats(url.searchParams.get("target"))});
+      if(req.method==="POST"&&url.pathname==="/internal/leads")return json(res,201,upsertLead(await body(req)));
+      if(p[1]==="leads"&&p[2]&&req.method==="GET") {
+        const lead=getLead(decodeURIComponent(p[2]));return lead?json(res,200,lead):json(res,404,{error:"LEAD_NOT_FOUND"});
+      }
       if(req.method==="POST"&&url.pathname==="/internal/missions")return json(res,201,createMission(await body(req)));
       if(p[1]==="missions"&&p[2]&&req.method==="GET"&&p.length===3){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2])}):json(res,404,{error:"MISSION_NOT_FOUND"});}
       if(p[1]==="missions"&&p[2]&&req.method==="PATCH"&&p.length===3){const m=updateMission(p[2],await body(req));return m?json(res,200,m):json(res,404,{error:"MISSION_NOT_FOUND"});}

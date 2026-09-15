@@ -57,6 +57,30 @@ CREATE TABLE IF NOT EXISTS model_route_state (
   last_success_at TEXT,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS lead_master (
+  id TEXT PRIMARY KEY,
+  company_key TEXT NOT NULL UNIQUE,
+  company_name TEXT NOT NULL,
+  company_link TEXT,
+  job_link TEXT,
+  job_title TEXT,
+  location TEXT,
+  employee_count INTEGER,
+  applicant_count INTEGER,
+  source TEXT NOT NULL DEFAULT 'linkedin',
+  verification_status TEXT NOT NULL DEFAULT 'pending',
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  contact_name TEXT,
+  contact_role TEXT,
+  contact_linkedin TEXT,
+  phone TEXT,
+  email TEXT,
+  remarks TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lead_master_status ON lead_master(verification_status);
+CREATE INDEX IF NOT EXISTS idx_lead_master_location ON lead_master(location);
 `);
 
 const parse = (value, fallback = {}) => { try { return JSON.parse(value ?? ""); } catch { return fallback; } };
@@ -185,4 +209,164 @@ export function modelRouteStates() {
     lastSuccessAt: row.last_success_at || null,
     updatedAt: row.updated_at
   }));
+}
+
+const LEGAL_SUFFIXES = /\b(?:private|pvt|limited|ltd|llp|incorporated|inc|corporation|corp|company|co|technologies|technology|solutions|services)\b/g;
+export function canonicalCompanyKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(LEGAL_SUFFIXES, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function cleanText(value) {
+  const text = value === undefined || value === null ? "" : String(value).trim();
+  return text || null;
+}
+function finiteInt(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null;
+}
+function linkedinJobEvidence(input) {
+  const job = cleanText(input.jobLink || input.job_link);
+  const evidence = input.evidence && typeof input.evidence === "object" ? input.evidence : {};
+  return Boolean(
+    job &&
+    /^https?:\/\/(?:[a-z]{2,3}\.)?linkedin\.com\/jobs\//i.test(job) &&
+    (evidence.activeJobVerified === true || evidence.active_job_verified === true)
+  );
+}
+function normalizeVerification(input) {
+  const requested = String(input.verificationStatus || input.verification_status || "pending").toLowerCase();
+  if (!["pending","verified","rejected"].includes(requested)) return "pending";
+  if (requested === "verified") {
+    if (String(input.source || "linkedin").toLowerCase() === "linkedin" && !linkedinJobEvidence(input)) {
+      throw new Error("LEAD_VERIFICATION_REQUIRES_LINKEDIN_JOB_EVIDENCE");
+    }
+  }
+  return requested;
+}
+function mapLead(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    companyKey: row.company_key,
+    companyName: row.company_name,
+    companyLink: row.company_link || null,
+    jobLink: row.job_link || null,
+    jobTitle: row.job_title || null,
+    location: row.location || null,
+    employeeCount: row.employee_count ?? null,
+    applicantCount: row.applicant_count ?? null,
+    source: row.source,
+    verificationStatus: row.verification_status,
+    evidence: parse(row.evidence_json),
+    contact: {
+      name: row.contact_name || null,
+      role: row.contact_role || null,
+      linkedin: row.contact_linkedin || null,
+      phone: row.phone || null,
+      email: row.email || null
+    },
+    remarks: row.remarks || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+export function upsertLead(input = {}) {
+  const companyName = cleanText(input.companyName || input.company_name);
+  if (!companyName) throw new Error("LEAD_COMPANY_NAME_REQUIRED");
+  const companyKey = canonicalCompanyKey(companyName);
+  if (!companyKey) throw new Error("LEAD_COMPANY_KEY_INVALID");
+  const existing = db.prepare("SELECT * FROM lead_master WHERE company_key=?").get(companyKey);
+  const verificationStatus = normalizeVerification(input);
+  const evidence = input.evidence && typeof input.evidence === "object"
+    ? { ...(existing ? parse(existing.evidence_json) : {}), ...input.evidence }
+    : (existing ? parse(existing.evidence_json) : {});
+  const at = now();
+  const next = {
+    id: existing?.id || input.id || `lead-${crypto.randomUUID()}`,
+    companyKey,
+    companyName,
+    companyLink: cleanText(input.companyLink ?? input.company_link) ?? existing?.company_link ?? null,
+    jobLink: cleanText(input.jobLink ?? input.job_link) ?? existing?.job_link ?? null,
+    jobTitle: cleanText(input.jobTitle ?? input.job_title) ?? existing?.job_title ?? null,
+    location: cleanText(input.location) ?? existing?.location ?? null,
+    employeeCount: finiteInt(input.employeeCount ?? input.employee_count) ?? existing?.employee_count ?? null,
+    applicantCount: finiteInt(input.applicantCount ?? input.applicant_count) ?? existing?.applicant_count ?? null,
+    source: cleanText(input.source) ?? existing?.source ?? "linkedin",
+    verificationStatus,
+    evidence,
+    contactName: cleanText(input.contactName ?? input.contact_name) ?? existing?.contact_name ?? null,
+    contactRole: cleanText(input.contactRole ?? input.contact_role) ?? existing?.contact_role ?? null,
+    contactLinkedin: cleanText(input.contactLinkedin ?? input.contact_linkedin) ?? existing?.contact_linkedin ?? null,
+    phone: cleanText(input.phone) ?? existing?.phone ?? null,
+    email: cleanText(input.email) ?? existing?.email ?? null,
+    remarks: cleanText(input.remarks) ?? existing?.remarks ?? null,
+    createdAt: existing?.created_at || at,
+    updatedAt: at
+  };
+  db.prepare(`INSERT INTO lead_master
+    (id,company_key,company_name,company_link,job_link,job_title,location,employee_count,applicant_count,source,
+     verification_status,evidence_json,contact_name,contact_role,contact_linkedin,phone,email,remarks,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(company_key) DO UPDATE SET
+      company_name=excluded.company_name,
+      company_link=excluded.company_link,
+      job_link=excluded.job_link,
+      job_title=excluded.job_title,
+      location=excluded.location,
+      employee_count=excluded.employee_count,
+      applicant_count=excluded.applicant_count,
+      source=excluded.source,
+      verification_status=excluded.verification_status,
+      evidence_json=excluded.evidence_json,
+      contact_name=excluded.contact_name,
+      contact_role=excluded.contact_role,
+      contact_linkedin=excluded.contact_linkedin,
+      phone=excluded.phone,
+      email=excluded.email,
+      remarks=excluded.remarks,
+      updated_at=excluded.updated_at`)
+    .run(next.id,next.companyKey,next.companyName,next.companyLink,next.jobLink,next.jobTitle,next.location,next.employeeCount,
+      next.applicantCount,next.source,next.verificationStatus,JSON.stringify(next.evidence),next.contactName,next.contactRole,
+      next.contactLinkedin,next.phone,next.email,next.remarks,next.createdAt,next.updatedAt);
+  addEvent({type: existing ? "lead.updated" : "lead.created", payload:{id:next.id,companyKey,status:next.verificationStatus}});
+  return getLead(next.id);
+}
+export function getLead(idOrKey) {
+  const raw = String(idOrKey || "").trim();
+  if (!raw) return null;
+  const row = raw.startsWith("lead-")
+    ? db.prepare("SELECT * FROM lead_master WHERE id=?").get(raw)
+    : db.prepare("SELECT * FROM lead_master WHERE company_key=?").get(canonicalCompanyKey(raw));
+  return mapLead(row);
+}
+export function listLeads({ status = null, query = null, limit = 100 } = {}) {
+  const clauses = [], args = [];
+  if (status) { clauses.push("verification_status=?"); args.push(String(status)); }
+  if (query) {
+    clauses.push("(company_name LIKE ? OR location LIKE ? OR job_title LIKE ? OR contact_name LIKE ?)");
+    const q = `%${String(query).trim()}%`;
+    args.push(q,q,q,q);
+  }
+  const sql = `SELECT * FROM lead_master${clauses.length ? " WHERE " + clauses.join(" AND ") : ""} ORDER BY updated_at DESC LIMIT ?`;
+  args.push(Math.max(1,Math.min(1000,Number(limit)||100)));
+  return db.prepare(sql).all(...args).map(mapLead);
+}
+export function leadStats(target = null) {
+  const rows = db.prepare("SELECT verification_status, COUNT(*) AS count FROM lead_master GROUP BY verification_status").all();
+  const counts = { total:0, verified:0, pending:0, rejected:0 };
+  for (const row of rows) {
+    const count = Number(row.count || 0);
+    counts.total += count;
+    if (row.verification_status in counts) counts[row.verification_status] = count;
+  }
+  const enriched = Number(db.prepare(`SELECT COUNT(*) AS count FROM lead_master
+    WHERE verification_status='verified' AND (email IS NOT NULL OR phone IS NOT NULL)`).get()?.count || 0);
+  const numericTarget = target === null || target === undefined || target === "" ? null : Math.max(0,Math.round(Number(target)||0));
+  return { ...counts, enriched, target:numericTarget, remaining:numericTarget === null ? null : Math.max(0,numericTarget-counts.verified) };
 }
