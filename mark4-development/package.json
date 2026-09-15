@@ -16,10 +16,11 @@
     "bootstrap": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1",
     "dev": "node scripts/dev.mjs",
     "build": "npm run build -w apps/ui",
-    "check": "npm run check:gateway && npm run check:media && node scripts/selftest-capabilities.mjs && npm run build -w apps/ui",
+    "check": "npm run check:syntax && npm run check:gateway && npm run check:media && node scripts/selftest-capabilities.mjs && npm run build -w apps/ui",
     "catalog:sync": "node scripts/sync-free-model-catalog.mjs",
     "start:gateway": "node services/gateway/src/server.mjs",
     "check:gateway": "node scripts/run-gateway-tests.mjs",
-    "check:media": "node scripts/run-media-tests.mjs"
+    "check:media": "node scripts/run-media-tests.mjs",
+    "check:syntax": "node --check services/gateway/src/server.mjs && node --check scripts/dev.mjs && node --check services/capability-host/src/server.mjs && node --check services/media-engine/src/engine.mjs"
   }
 }

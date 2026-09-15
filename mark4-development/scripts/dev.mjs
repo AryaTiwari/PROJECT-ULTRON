@@ -36,6 +36,7 @@ process.env.API_SERVER_HOST = "127.0.0.1";
 process.env.API_SERVER_PORT = "8642";
 
 const children = [];
+let shuttingDown = false;
 
 function run(command, args, cwd = root) {
   const child = spawn(command, args, {
@@ -46,21 +47,58 @@ function run(command, args, cwd = root) {
   });
   children.push(child);
   child.on("exit", code => {
-    if (code && code !== 0) console.error(command + " exited with code " + code);
+    if (!shuttingDown && code && code !== 0) {
+      console.error(command + " exited with code " + code);
+    }
   });
   return child;
 }
 
-run("uv", ["run", "--directory", vendor, "hermes", "gateway"]);
-setTimeout(() => run(process.execPath, ["services/gateway/src/server.mjs"]), 900);
-setTimeout(() => run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "dev", "-w", "apps/ui"]), 1500);
+async function waitFor(url, label, timeoutMs = 45000) {
+  const started = Date.now();
+  let lastError = "";
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (response.ok) {
+        console.log(label + " ready");
+        return;
+      }
+      lastError = "HTTP " + response.status;
+    } catch (error) {
+      lastError = error?.message || String(error);
+    }
+    await new Promise(resolve => setTimeout(resolve, 450));
+  }
+  throw new Error(label + " did not become ready: " + lastError);
+}
+
+async function main() {
+  console.log("Starting Hermes...");
+  run("uv", ["run", "--directory", vendor, "hermes", "gateway"]);
+  await waitFor("http://127.0.0.1:8642/health", "Hermes");
+
+  console.log("Starting ULTRON gateway...");
+  run(process.execPath, ["services/gateway/src/server.mjs"]);
+  await waitFor("http://127.0.0.1:8787/api/bootstrap", "ULTRON gateway");
+
+  console.log("Starting cockpit...");
+  run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "dev", "-w", "apps/ui"]);
+}
 
 function stop() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   for (const child of children) {
     try { child.kill("SIGTERM"); } catch {}
   }
-  setTimeout(() => process.exit(0), 300).unref();
+  setTimeout(() => process.exit(0), 400).unref();
 }
 
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
+
+main().catch(error => {
+  console.error("\nULTRON startup failed:", error.message);
+  stop();
+});

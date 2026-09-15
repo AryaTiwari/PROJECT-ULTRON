@@ -20,7 +20,8 @@ function serveStatic(pathname,res){
   if(!fs.existsSync(uiDist)) return false;
   const requested=pathname==="/"? "index.html":pathname.replace(/^\//,"");
   let target=path.resolve(uiDist,requested);
-  const root=path.resolve(uiDist);\n  if(target!==root&&!target.startsWith(root+path.sep)) return false;
+  const root=path.resolve(uiDist);
+  if(target!==root&&!target.startsWith(root+path.sep)) return false;
   if(!fs.existsSync(target)||fs.statSync(target).isDirectory()) target=path.join(uiDist,"index.html");
   if(!fs.existsSync(target)) return false;
   const ext=path.extname(target);const types={".html":"text/html; charset=utf-8",".js":"text/javascript; charset=utf-8",".css":"text/css; charset=utf-8",".svg":"image/svg+xml"};
