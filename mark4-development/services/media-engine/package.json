@@ -1,0 +1,10 @@
+{
+  "name": "@ultron-m4/media-engine",
+  "version": "4.0.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "dependencies": {
+    "sharp": "^0.34.3"
+  }
+}

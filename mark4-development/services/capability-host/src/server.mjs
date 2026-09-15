@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findCompanyContact } from "./apollo.mjs";
+import { createReelJob, getReelJob, renderReelJob, inspectReelJob, mediaEngineStatus } from "../../media-engine/src/engine.mjs";
 
 const here=path.dirname(fileURLToPath(import.meta.url)),mark4Root=path.resolve(here,"../../..");
 const gateway=String(process.env.ULTRON_M4_GATEWAY_URL||"http://127.0.0.1:8787").replace(/\/$/,"");
@@ -23,6 +24,11 @@ const tools=[
 {name:"ultron_lead_master_status",description:"Read authoritative Mark 4 lead counts and the remaining verified-company gap for an optional numerical target.",inputSchema:{type:"object",properties:{target:{type:"integer",minimum:0}},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_lead_master_search",description:"Search the native Mark 4 lead registry. Use it for dedupe and reuse before fresh company discovery.",inputSchema:{type:"object",properties:{status:{type:"string",enum:["pending","verified","rejected"]},query:{type:"string"},limit:{type:"integer",minimum:1,maximum:1000}},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_lead_master_upsert",description:"Create or update one canonical company lead. One company equals one lead. Setting verificationStatus=verified for LinkedIn requires a LinkedIn job URL plus evidence.activeJobVerified=true.",inputSchema:{type:"object",required:["companyName"],properties:{companyName:{type:"string"},companyLink:{type:"string"},jobLink:{type:"string"},jobTitle:{type:"string"},location:{type:"string"},employeeCount:{type:"integer",minimum:0},applicantCount:{type:"integer",minimum:0},source:{type:"string"},verificationStatus:{type:"string",enum:["pending","verified","rejected"]},evidence:{type:"object"},contactName:{type:"string"},contactRole:{type:"string"},contactLinkedin:{type:"string"},phone:{type:"string"},email:{type:"string"},remarks:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_reel_engine_status",description:"Read the lightweight native Mark 4 Reel renderer status and queue state.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_reel_create_job",description:"Create a deterministic Elevate OS Reel recipe job from a storyboard. The renderer locks output to 1080x1920, 30fps and the restrained black/blue/white design system.",inputSchema:{type:"object",required:["scenes"],properties:{title:{type:"string"},objective:{type:"string"},audioPath:{type:"string"},scenes:{type:"array",minItems:1,maxItems:12,items:{type:"object"}}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:false}},
+{name:"ultron_reel_job_status",description:"Read a native Reel job and its current render state.",inputSchema:{type:"object",required:["jobId"],properties:{jobId:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_reel_render_job",description:"Render a prepared Reel job locally through the queue=1 SVG + Sharp + FFmpeg pipeline. This writes only inside the Mark 4 Reel workspace.",inputSchema:{type:"object",required:["jobId"],properties:{jobId:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_reel_inspect_job",description:"Inspect the rendered MP4 with ffprobe and return dimensions, duration, codec and size.",inputSchema:{type:"object",required:["jobId"],properties:{jobId:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_apollo_find_company_contact",description:"Find the preferred decision maker for an already discovered company using Apollo. Founder/Director/Owner > Recruiting Head/Manager > HR Recruiter. Enrichment only, never company discovery.",inputSchema:{type:"object",required:["company"],properties:{company:{type:"string"},domain:{type:"string"},location:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}}
 ];
 async function callTool(name,args={}){
@@ -42,6 +48,11 @@ async function callTool(name,args={}){
     return text(await internal("/internal/leads"+(q.size?"?"+q.toString():"")));
   }
   if(name==="ultron_lead_master_upsert")return text(await internal("/internal/leads",{method:"POST",body:JSON.stringify(args)}));
+  if(name==="ultron_reel_engine_status")return text(mediaEngineStatus());
+  if(name==="ultron_reel_create_job")return text(createReelJob(args));
+  if(name==="ultron_reel_job_status")return text(getReelJob(args.jobId));
+  if(name==="ultron_reel_render_job")return text(await renderReelJob(args.jobId));
+  if(name==="ultron_reel_inspect_job")return text(await inspectReelJob(args.jobId));
   if(name==="ultron_apollo_find_company_contact")return text(await findCompanyContact(args));
   throw new Error(`Unknown tool: ${name}`);
 }
