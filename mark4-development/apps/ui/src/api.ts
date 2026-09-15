@@ -23,7 +23,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title, ...(anchorMessageId ? { anchorMessageId } : {}) })
     }),
-  mission: (id: string) => request("/api/missions/" + encodeURIComponent(id))
+  mission: (id: string) => request("/api/missions/" + encodeURIComponent(id)),
+  approve: (runId: string, requestId: string, choice: string) =>
+    request("/api/runs/" + encodeURIComponent(runId) + "/approval", {
+      method: "POST",
+      body: JSON.stringify({ request_id: requestId, choice })
+    }),
+  stopRun: (runId: string) =>
+    request("/api/runs/" + encodeURIComponent(runId) + "/stop", {
+      method: "POST",
+      body: "{}"
+    })
 };
 
 function parseBlock(block: string) {
@@ -84,7 +94,8 @@ export function liveEvents(onEvent: (type: string, data: any) => void) {
     "connected", "run.started", "run.settled", "run.failed",
     "tool.started", "tool.completed", "subagent.start", "subagent.complete",
     "assistant.delta", "assistant.completed", "message.started", "run.completed",
-    "tool.progress", "tool.failed", "approval.required",
+    "run.cancelled", "run.interrupted", "tool.progress", "tool.failed",
+    "approval.request", "model.route_failed",
     "evidence.recorded", "mission.updated", "done"
   ];
 

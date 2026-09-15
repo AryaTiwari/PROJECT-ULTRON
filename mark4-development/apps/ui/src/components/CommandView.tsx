@@ -14,6 +14,10 @@ export function CommandView(props: {
   mission?: Mission | null;
   onSend: (text: string) => Promise<void>;
   onBranch: (messageId: string) => Promise<void>;
+  runId?: string;
+  approval?: any | null;
+  onApproval: (choice: string) => Promise<void>;
+  onStop: () => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
@@ -21,7 +25,7 @@ export function CommandView(props: {
 
   React.useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [props.messages, props.streaming]);
+  }, [props.messages, props.streaming, props.approval]);
 
   const tools = useMemo(
     () => props.events.filter(event => /tool\.|subagent\./.test(event.type)).slice(-6),
@@ -65,8 +69,13 @@ export function CommandView(props: {
 
         {props.messages.map(message => (
           <article key={message.id} className={"message " + message.role}>
-            <div className="message-role">
-              {message.role === "user" ? "ARYA" : message.role === "assistant" ? "ULTRON" : message.role.toUpperCase()}
+            <div className="message-head">
+              <div className="message-role">
+                {message.role === "user" ? "ARYA" : message.role === "assistant" ? "ULTRON" : message.role.toUpperCase()}
+              </div>
+              {message.role === "assistant" && !String(message.id).startsWith("local-") && (
+                <button className="branch-action" disabled={props.busy} onClick={() => void props.onBranch(message.id)}>↳ branch</button>
+              )}
             </div>
             <div className="message-body">{message.content}</div>
           </article>
@@ -75,31 +84,40 @@ export function CommandView(props: {
         {props.streaming && (
           <article className="message assistant streaming">
             <div className="message-role">ULTRON</div>
-            <div className="message-body">
-              {props.streaming}
-              <span className="cursor" />
-            </div>
+            <div className="message-body">{props.streaming}<span className="cursor" /></div>
           </article>
+        )}
+
+        {props.approval && (
+          <div className="approval-card">
+            <div className="approval-top">
+              <span className="approval-badge">APPROVAL REQUIRED</span>
+              <span>{String(props.approval.tool_name || props.approval.tool || props.approval.kind || "external action")}</span>
+            </div>
+            <p>{String(props.approval.description || props.approval.reason || "ULTRON needs permission before continuing this action.")}</p>
+            {props.approval.command && <code>{String(props.approval.command)}</code>}
+            <div className="approval-actions">
+              {(Array.isArray(props.approval.choices) ? props.approval.choices : ["once","deny"]).map((choice: string) => (
+                <button key={choice} className={choice === "deny" ? "deny" : ""} onClick={() => void props.onApproval(choice)}>
+                  {choice === "once" ? "Allow once" : choice === "session" ? "Allow session" : choice === "always" ? "Always allow" : "Deny"}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
 
         {props.busy && tools.length > 0 && (
           <div className="tool-strip">
             {tools.map((event, index) => (
-              <span key={index} className="tool-chip">
-                <span className="pulse-dot" />
-                {toolName(event)}
-              </span>
+              <span key={index} className="tool-chip"><span className="pulse-dot" />{toolName(event)}</span>
             ))}
           </div>
         )}
-
         <div ref={endRef} />
       </div>
 
       <div className="composer-shell">
-        {props.mission && (
-          <div className="mission-context">MISSION · {props.mission.objective}</div>
-        )}
+        {props.mission && <div className="mission-context">MISSION · {props.mission.objective}</div>}
         <div className="composer">
           <textarea
             value={draft}
@@ -114,7 +132,11 @@ export function CommandView(props: {
             }}
           />
           <button className={"icon-button " + (listening ? "active" : "")} onClick={voice} title="Voice input">◉</button>
-          <button className="send-button" disabled={props.busy || !draft.trim()} onClick={() => void submit()}>↑</button>
+          {props.busy ? (
+            <button className="send-button stop" disabled={!props.runId} onClick={() => void props.onStop()} title="Stop run">■</button>
+          ) : (
+            <button className="send-button" disabled={!draft.trim()} onClick={() => void submit()}>↑</button>
+          )}
         </div>
       </div>
     </section>

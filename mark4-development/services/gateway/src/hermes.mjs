@@ -19,8 +19,17 @@ export const hermes={
   createSession:(value={})=>request("/api/sessions",{method:"POST",body:JSON.stringify(value)}),
   messages:id=>request(`/api/sessions/${encodeURIComponent(id)}/messages`),
   fork:(id,value={})=>request(`/api/sessions/${encodeURIComponent(id)}/fork`,{method:"POST",body:JSON.stringify(value)}),
+  createRun:(value={})=>request("/v1/runs",{method:"POST",body:JSON.stringify(value)}),
+  runStatus:runId=>request(`/v1/runs/${encodeURIComponent(runId)}`),
   approval:(runId,value)=>request(`/v1/runs/${encodeURIComponent(runId)}/approval`,{method:"POST",body:JSON.stringify(value)}),
   stopRun:runId=>request(`/v1/runs/${encodeURIComponent(runId)}/stop`,{method:"POST",body:"{}"}),
+  runEvents:async(runId,signal)=>{
+    const response=await fetch(`${config.hermesUrl}/v1/runs/${encodeURIComponent(runId)}/events`,{
+      method:"GET",headers:headers({Accept:"text/event-stream"}),signal
+    });
+    if(!response.ok||!response.body){const text=await response.text();throw new Error(`Hermes run events HTTP ${response.status}: ${text.slice(0,500)}`);}
+    return response;
+  },
   streamChat:async(id,value,signal)=>{
     const response=await fetch(`${config.hermesUrl}/api/sessions/${encodeURIComponent(id)}/chat/stream`,{
       method:"POST",headers:headers(),body:JSON.stringify(value),signal

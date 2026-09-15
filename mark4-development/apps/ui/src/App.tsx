@@ -71,6 +71,8 @@ export function App() {
   const [streaming, setStreaming] = useState("");
   const [health, setHealth] = useState(false);
   const [error, setError] = useState("");
+  const [activeRunId, setActiveRunId] = useState("");
+  const [pendingApproval, setPendingApproval] = useState<any | null>(null);
 
   const mission = missions[0] || null;
 
@@ -134,6 +136,8 @@ export function App() {
     setBusy(true);
     setStreaming("");
     setError("");
+    setActiveRunId("");
+    setPendingApproval(null);
 
     setMessages(previous => [
       ...previous,
@@ -147,12 +151,24 @@ export function App() {
         active,
         { input: text, missionId: mission?.id || null, role: "cognition" },
         (type, data) => {
+          if (type === "run.started") {
+            setActiveRunId(String(data?.run_id || data?.runId || ""));
+          }
+
+          if (type === "approval.request") {
+            setPendingApproval(data);
+          }
+
           if (type === "assistant.delta") {
             const delta = deltaOf(data);
             if (delta) {
               collected += delta;
               setStreaming(collected);
             }
+          }
+
+          if (["run.completed","run.failed","run.cancelled","run.interrupted"].includes(type)) {
+            setPendingApproval(null);
           }
 
           if (type === "run.completed" && !collected) {
@@ -163,10 +179,6 @@ export function App() {
             }
           }
 
-          setEvents(previous => [
-            ...previous.slice(-119),
-            { type, data, at: new Date().toISOString() }
-          ]);
         }
       );
 
@@ -185,7 +197,22 @@ export function App() {
       setStreaming("");
     } finally {
       setBusy(false);
+      setActiveRunId("");
+      setPendingApproval(null);
     }
+  }
+
+  async function resolveApproval(choice: string) {
+    if (!activeRunId || !pendingApproval) return;
+    const requestId = String(pendingApproval.request_id || pendingApproval.requestId || "");
+    if (!requestId) throw new Error("Approval request id is missing.");
+    await api.approve(activeRunId, requestId, choice);
+    setPendingApproval(null);
+  }
+
+  async function stopRun() {
+    if (!activeRunId) return;
+    await api.stopRun(activeRunId);
   }
 
   async function branch(id: string, title: string, anchorMessageId?: string) {
@@ -282,6 +309,10 @@ export function App() {
               mission={mission}
               onSend={send}
               onBranch={messageId => branch(active, "Follow-up branch", messageId)}
+              runId={activeRunId}
+              approval={pendingApproval}
+              onApproval={resolveApproval}
+              onStop={stopRun}
             />
           )}
 

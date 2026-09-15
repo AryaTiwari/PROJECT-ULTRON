@@ -352,3 +352,9 @@ button { color: inherit; }
 .message-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .branch-action{opacity:0;border:0;background:transparent;color:#527798;font:9px "JetBrains Mono";cursor:pointer;padding:3px 5px;border-radius:5px;transition:opacity .14s ease,background .14s ease,color .14s ease}
 .message:hover .branch-action,.branch-action:focus-visible{opacity:1}.branch-action:hover{background:#0b1b2b;color:#8fc2f2}.branch-action:disabled{cursor:default;opacity:.2}
+
+.approval-card{max-width:760px;margin:0 auto 18px;border:1px solid #285a8a;background:linear-gradient(180deg,#0a1a2a,#07121d);border-radius:12px;padding:14px 15px;box-shadow:0 12px 28px #0005,0 0 24px #1d78d322}
+.approval-top{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#9fc6e9;font:9px "JetBrains Mono";text-transform:uppercase}.approval-badge{color:#dcebff;letter-spacing:.12em}
+.approval-card p{margin:10px 0;color:#9db5cb;font-size:11px;line-height:1.6}.approval-card code{display:block;max-height:90px;overflow:auto;padding:9px;border:1px solid #173a5c;background:#050b12;border-radius:7px;color:#a9c8e6;font:9px "JetBrains Mono";white-space:pre-wrap}
+.approval-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}.approval-actions button{border:1px solid #235784;background:#0b2033;color:#cde4f9;border-radius:7px;padding:7px 10px;font-size:10px;cursor:pointer}.approval-actions button:hover{border-color:#4a92d0;background:#0d2943}.approval-actions button.deny{border-color:#5d2639;color:#f5b0c1;background:#1a0b11}
+.send-button.stop{background:#132131;color:#d7e9fa;border-color:#315779;font-size:12px}
