@@ -122,7 +122,12 @@ const operator = require('../core/operator');
   assert.equal(capBlocked, true);
 
   assert(bootstrap.parseSaveTemplate('save email template "Test" subject: Hello {{first_name}} body: Hi {{first_name|there}}'));
-  assert(bootstrap.parsePrepareCampaign('prepare email campaign from Final Master using template "Elevate intro"').finalMaster);
+  const followupCommand = bootstrap.parseAddFollowup('add email follow-up to template "Elevate intro" after 2 days if not replied subject: Quick follow-up body: Hi {{first_name|there}}, checking back.');
+  assert.equal(followupCommand.delayHours, 48);
+  assert.equal(followupCommand.rule, 'not_replied');
+  const scheduledCommand = bootstrap.parsePrepareCampaign('prepare email campaign from Final Master using template "Elevate intro" schedule at 2026-09-20T10:00:00+05:30');
+  assert.equal(scheduledCommand.finalMaster, true);
+  assert.equal(scheduledCommand.scheduleAt, '2026-09-20T10:00:00+05:30');
   assert.equal(operator.match('prepare a personalized email campaign for my leads').id, 'email_outreach');
 
   const fromMaster = control.claim('prepare email campaign from LinkedIn Final Master using template "Elevate intro"');
