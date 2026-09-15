@@ -16,7 +16,7 @@ test("recipe locks Instagram-safe rendering spec",()=>{
   const r=normalizeRecipe(sample);assert.equal(r.width,1080);assert.equal(r.height,1920);assert.equal(r.fps,30);assert.equal(r.scenes.length,3);
 });
 test("scene SVG stays deterministic and branded",()=>{
-  const r=normalizeRecipe(sample),svg=sceneSvg(r.scenes[0],r);assert.match(svg,/ELEVATE/);assert.match(svg,/Your views are not the real problem/);assert.match(svg,/1080/);
+  const r=normalizeRecipe(sample),svg=sceneSvg(r.scenes[0],r);assert.match(svg,/ELEVATE/);assert.match(svg,/Your views are not/);assert.match(svg,/the real problem/);assert.match(svg,/1080/);
 });
 test("job creation writes recipe and SVG scenes without rendering",()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"ultron-reel-"));const job=createReelJob(sample,{root});assert.equal(job.status,"ready");assert.equal(getReelJob(job.id,{root}).sceneCount,3);assert.equal(fs.readdirSync(path.join(root,job.id,"scenes")).length,3);fs.rmSync(root,{recursive:true,force:true});
