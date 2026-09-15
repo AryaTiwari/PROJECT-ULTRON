@@ -62,6 +62,19 @@ function runNpm(args, cwd = root) {
   return run(comspec, ["/d", "/s", "/c", ["npm", ...args].join(" ")], cwd);
 }
 
+async function isHealthy(url, timeoutMs = 1200) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { cache: "no-store", signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function waitFor(url, label, timeoutMs = 60000) {
   const started = Date.now();
   let lastError = "";
@@ -82,9 +95,14 @@ async function waitFor(url, label, timeoutMs = 60000) {
 }
 
 async function main() {
-  console.log("Starting Hermes...");
-  run("uv", ["run", "--directory", vendor, "hermes", "gateway"]);
-  await waitFor("http://127.0.0.1:8642/health", "Hermes");
+  const hermesHealth = "http://127.0.0.1:8642/health";
+  if (await isHealthy(hermesHealth)) {
+    console.log("Hermes already healthy; reusing existing gateway.");
+  } else {
+    console.log("Starting Hermes (replacing stale gateway if necessary)...");
+    run("uv", ["run", "--directory", vendor, "hermes", "gateway", "run", "--replace"]);
+    await waitFor(hermesHealth, "Hermes");
+  }
 
   console.log("Starting ULTRON gateway...");
   run(process.execPath, ["services/gateway/src/server.mjs"]);
