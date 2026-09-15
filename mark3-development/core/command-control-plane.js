@@ -14,7 +14,13 @@ function claim(message) {
   // when a conversational follow-up omits the word "LinkedIn".
   const apolloEnrichment = /\bapollo\b/i.test(text)
     && /\b(?:enrich|enrichment|email|e-?mail|phone|mobile|numbers?|contacts?|leads?|compan(?:y|ies)|sheet|master)\b/i.test(text);
-  const operationalDomain = linkedin || apolloEnrichment;
+  // A lead source may be named LinkedIn while the requested action is email delivery.
+  // Keep discovery-first compound requests in LinkedIn, but let prepared email outreach
+  // flow through the Email Outreach Operator instead of re-entering research.
+  const emailOutreach = !apolloEnrichment
+    && /\b(?:email outreach|email campaign|personalized emails?|send emails?|follow[- ]?up emails?)\b/i.test(text)
+    && !/^\s*(?:find|search|research|discover|source|get)\b[\s\S]{0,100}\blinkedin\b/i.test(text);
+  const operationalDomain = apolloEnrichment || (linkedin && !emailOutreach);
   // A report/status heading is not an artifact object. Require a concrete
   // format and a creation verb in the same clause, and ignore negated clauses.
   const operationFirst = /^(?:(?:please|can you|could you)\s+)?(?:resume|continue|find|search|reuse|verify|deduplicate|dedupe|fill|update|pause|cancel|stop)\b/i.test(text);
