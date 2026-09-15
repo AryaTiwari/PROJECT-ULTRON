@@ -42,6 +42,30 @@ function parseSaveTemplate(text) {
   return { name: name[1].trim(), subject: subject[1].trim(), body: body[1].trim() };
 }
 
+function parseAddFollowup(text) {
+  const value = String(text || '').trim();
+  if (!/\badd\b[\s\S]{0,25}\bemail\s+follow[- ]?up\b/i.test(value)) return null;
+  const template = value.match(/\btemplate\s+["“']([^"”']+)["”']/i);
+  const delay = value.match(/\bafter\s+(\d+)\s*(hours?|hrs?|days?)\b/i);
+  const subject = value.match(/\bsubject\s*:\s*([\s\S]*?)(?=\s+\bbody\s*:)/i);
+  const body = value.match(/\bbody\s*:\s*([\s\S]+)$/i);
+  if (!template || !delay || !body) return { incomplete: true };
+  const amount = Number(delay[1]);
+  const delayHours = /day/i.test(delay[2]) ? amount * 24 : amount;
+  const rule = /\b(?:if|when)\s+(?:they\s+)?(?:have\s+)?replied\b/i.test(value)
+    ? 'replied'
+    : /\b(?:if|when)\s+(?:they\s+)?(?:have\s+)?not\s+replied\b|\bno\s+reply\b/i.test(value)
+      ? 'not_replied'
+      : 'all';
+  return {
+    templateName: template[1].trim(),
+    delayHours: delayHours,
+    rule: rule,
+    subject: subject ? subject[1].trim() : '',
+    body: body[1].trim(),
+  };
+}
+
 function parsePrepareCampaign(text) {
   const value = String(text || '').trim();
   if (!/\b(?:prepare|create|build|draft|start|send)\b[\s\S]{0,35}\b(?:personalized\s+)?email\s+campaign\b/i.test(value)
@@ -52,10 +76,12 @@ function parsePrepareCampaign(text) {
     || value.match(/\btemplate\s*:\s*["“']([^"”']+)["”']/i);
   const sheet = value.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[^\s)]+/i);
   const finalMaster = /\b(?:canonical\s+)?(?:linkedin\s+)?final\s+master\b/i.test(value);
+  const schedule = value.match(/\bschedule(?:d)?\s+(?:at|for)\s+([0-9TZ:+.-]{10,35})\b/i);
   return {
     templateName: template ? template[1].trim() : '',
     sheetUrl: sheet ? sheet[0] : '',
     finalMaster: finalMaster,
+    scheduleAt: schedule ? schedule[1] : null,
     incomplete: !template || (!sheet && !finalMaster),
   };
 }
@@ -105,6 +131,27 @@ function formatCampaign(campaign) {
 }
 
 async function handle(text) {
+  const addFollowup = parseAddFollowup(text);
+  if (addFollowup) {
+    if (addFollowup.incomplete) {
+      return { ok: false, text: 'Use: add email follow-up to template "Name" after 48 hours if not replied subject: Optional subject body: Follow-up message.' };
+    }
+    const existing = email.getTemplate(addFollowup.templateName);
+    if (!existing) return { ok: false, text: 'Email template not found: ' + addFollowup.templateName, error: 'EMAIL_TEMPLATE_NOT_FOUND' };
+    const updated = email.saveTemplate({
+      name: existing.name,
+      subject: existing.subject,
+      body: existing.body,
+      followups: (existing.followups || []).concat([{
+        delayHours: addFollowup.delayHours,
+        rule: addFollowup.rule,
+        subject: addFollowup.subject,
+        body: addFollowup.body,
+      }]),
+    });
+    return { ok: true, text: 'Added follow-up ' + updated.followups.length + ' to "' + updated.name + '": after ' + addFollowup.delayHours + ' hour(s), rule ' + addFollowup.rule + '. Nothing was sent.', emailTemplate: updated };
+  }
+
   const save = parseSaveTemplate(text);
   if (save) {
     if (save.incomplete) {
@@ -223,7 +270,7 @@ async function handle(text) {
 function isHandledIntent(text) {
   return Boolean(
     isStatusRequest(text) || isConnectionTest(text) || isListTemplates(text) || isListCampaigns(text)
-    || isProcessFollowups(text) || parseSaveTemplate(text) || parsePrepareCampaign(text) || parsePreview(text)
+    || isProcessFollowups(text) || parseAddFollowup(text) || parseSaveTemplate(text) || parsePrepareCampaign(text) || parsePreview(text)
     || parseApproveOrSend(text) || parseCancel(text) || parseCampaignStatus(text)
   );
 }
@@ -273,6 +320,6 @@ function status() { return { installed: installed, outreach: email.status() }; }
 
 module.exports = {
   install, uninstall, status, handle, isHandledIntent, isStatusRequest, isConnectionTest,
-  isListTemplates, isListCampaigns, isProcessFollowups, parseSaveTemplate, parsePrepareCampaign,
+  isListTemplates, isListCampaigns, isProcessFollowups, parseSaveTemplate, parseAddFollowup, parsePrepareCampaign,
   parsePreview, parseApproveOrSend, parseCancel, parseCampaignStatus, statusText, formatCampaign,
 };
