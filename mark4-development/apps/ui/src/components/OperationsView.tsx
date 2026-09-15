@@ -39,10 +39,12 @@ export function OperationsView({
   }, [current]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const canvasCandidate = canvasRef.current;
+    if (!canvasCandidate) return;
+    const contextCandidate = canvasCandidate.getContext("2d");
+    if (!contextCandidate) return;
+    const canvas: HTMLCanvasElement = canvasCandidate;
+    const ctx: CanvasRenderingContext2D = contextCandidate;
 
     let raf = 0;
     let last = 0;
