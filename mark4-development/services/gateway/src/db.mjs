@@ -81,6 +81,29 @@ CREATE TABLE IF NOT EXISTS lead_master (
 );
 CREATE INDEX IF NOT EXISTS idx_lead_master_status ON lead_master(verification_status);
 CREATE INDEX IF NOT EXISTS idx_lead_master_location ON lead_master(location);
+CREATE TABLE IF NOT EXISTS creator_registry (
+  id TEXT PRIMARY KEY,
+  creator_key TEXT NOT NULL UNIQUE,
+  platform TEXT NOT NULL,
+  handle TEXT NOT NULL,
+  profile_url TEXT,
+  display_name TEXT,
+  niche TEXT,
+  location TEXT,
+  follower_count INTEGER,
+  avg_views INTEGER,
+  fit_score INTEGER,
+  qualification_status TEXT NOT NULL DEFAULT 'candidate',
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  email TEXT,
+  phone TEXT,
+  outreach_status TEXT NOT NULL DEFAULT 'not_contacted',
+  remarks TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creator_registry_status ON creator_registry(qualification_status);
+CREATE INDEX IF NOT EXISTS idx_creator_registry_niche ON creator_registry(niche);
 `);
 
 const parse = (value, fallback = {}) => { try { return JSON.parse(value ?? ""); } catch { return fallback; } };
@@ -369,4 +392,101 @@ export function leadStats(target = null) {
     WHERE verification_status='verified' AND (email IS NOT NULL OR phone IS NOT NULL)`).get()?.count || 0);
   const numericTarget = target === null || target === undefined || target === "" ? null : Math.max(0,Math.round(Number(target)||0));
   return { ...counts, enriched, target:numericTarget, remaining:numericTarget === null ? null : Math.max(0,numericTarget-counts.verified) };
+}
+
+export function canonicalCreatorKey(platform, handle) {
+  const p=String(platform||"instagram").toLowerCase().replace(/[^a-z0-9]+/g,"").trim()||"instagram";
+  const h=String(handle||"").trim()
+    .replace(/^https?:\/\/(?:www\.)?instagram\.com\//i,"")
+    .replace(/[/?#].*$/,"")
+    .replace(/^@/,"")
+    .toLowerCase()
+    .replace(/[^a-z0-9._]+/g,"");
+  return h ? p+":"+h : "";
+}
+function mapCreator(row) {
+  if(!row)return null;
+  return {
+    id:row.id,creatorKey:row.creator_key,platform:row.platform,handle:row.handle,
+    profileUrl:row.profile_url||null,displayName:row.display_name||null,niche:row.niche||null,location:row.location||null,
+    followerCount:row.follower_count??null,avgViews:row.avg_views??null,fitScore:row.fit_score??null,
+    qualificationStatus:row.qualification_status,evidence:parse(row.evidence_json),
+    email:row.email||null,phone:row.phone||null,outreachStatus:row.outreach_status,remarks:row.remarks||null,
+    createdAt:row.created_at,updatedAt:row.updated_at
+  };
+}
+function normalizeCreatorStatus(value) {
+  const status=String(value||"candidate").toLowerCase();
+  return ["candidate","qualified","rejected"].includes(status)?status:"candidate";
+}
+function creatorMetric(value,name,evidence) {
+  if(value===undefined||value===null||value==="")return null;
+  if(!evidence?.metricsObserved)throw new Error("CREATOR_METRIC_REQUIRES_OBSERVED_EVIDENCE:"+name);
+  return finiteInt(value);
+}
+export function upsertCreator(input={}) {
+  const platform=cleanText(input.platform)||"instagram";
+  const rawHandle=cleanText(input.handle)||cleanText(input.profileUrl||input.profile_url);
+  const creatorKey=canonicalCreatorKey(platform,rawHandle);
+  if(!creatorKey)throw new Error("CREATOR_HANDLE_REQUIRED");
+  const handle=creatorKey.split(":").slice(1).join(":");
+  const existing=db.prepare("SELECT * FROM creator_registry WHERE creator_key=?").get(creatorKey);
+  const evidence=input.evidence&&typeof input.evidence==="object"
+    ?{...(existing?parse(existing.evidence_json):{}),...input.evidence}
+    :(existing?parse(existing.evidence_json):{});
+  const requestedStatus=normalizeCreatorStatus(input.qualificationStatus||input.qualification_status||existing?.qualification_status);
+  if(requestedStatus==="qualified"&&!evidence.profileObserved)throw new Error("CREATOR_QUALIFICATION_REQUIRES_PROFILE_EVIDENCE");
+  const incomingFollower=creatorMetric(input.followerCount??input.follower_count,"followerCount",evidence);
+  const incomingViews=creatorMetric(input.avgViews??input.avg_views,"avgViews",evidence);
+  const fitRaw=input.fitScore??input.fit_score;
+  const fit=fitRaw===undefined||fitRaw===null||fitRaw===""?(existing?.fit_score??null):Math.max(0,Math.min(100,Math.round(Number(fitRaw)||0)));
+  const at=now();
+  const next={
+    id:existing?.id||input.id||`creator-${crypto.randomUUID()}`,creatorKey,platform:String(platform).toLowerCase(),handle,
+    profileUrl:cleanText(input.profileUrl??input.profile_url)??existing?.profile_url??(String(platform).toLowerCase()==="instagram"?`https://www.instagram.com/${handle}/`:null),
+    displayName:cleanText(input.displayName??input.display_name)??existing?.display_name??null,
+    niche:cleanText(input.niche)??existing?.niche??null,location:cleanText(input.location)??existing?.location??null,
+    followerCount:incomingFollower??existing?.follower_count??null,avgViews:incomingViews??existing?.avg_views??null,fitScore:fit,
+    qualificationStatus:requestedStatus,evidence,
+    email:cleanText(input.email)??existing?.email??null,phone:cleanText(input.phone)??existing?.phone??null,
+    outreachStatus:cleanText(input.outreachStatus??input.outreach_status)??existing?.outreach_status??"not_contacted",
+    remarks:cleanText(input.remarks)??existing?.remarks??null,createdAt:existing?.created_at||at,updatedAt:at
+  };
+  db.prepare(`INSERT INTO creator_registry
+    (id,creator_key,platform,handle,profile_url,display_name,niche,location,follower_count,avg_views,fit_score,
+     qualification_status,evidence_json,email,phone,outreach_status,remarks,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(creator_key) DO UPDATE SET
+      profile_url=excluded.profile_url,display_name=excluded.display_name,niche=excluded.niche,location=excluded.location,
+      follower_count=excluded.follower_count,avg_views=excluded.avg_views,fit_score=excluded.fit_score,
+      qualification_status=excluded.qualification_status,evidence_json=excluded.evidence_json,email=excluded.email,
+      phone=excluded.phone,outreach_status=excluded.outreach_status,remarks=excluded.remarks,updated_at=excluded.updated_at`)
+    .run(next.id,next.creatorKey,next.platform,next.handle,next.profileUrl,next.displayName,next.niche,next.location,
+      next.followerCount,next.avgViews,next.fitScore,next.qualificationStatus,JSON.stringify(next.evidence),next.email,next.phone,
+      next.outreachStatus,next.remarks,next.createdAt,next.updatedAt);
+  addEvent({type:existing?"creator.updated":"creator.created",payload:{id:next.id,creatorKey,status:next.qualificationStatus}});
+  return getCreator(next.id);
+}
+export function getCreator(idOrHandle,platform="instagram") {
+  const raw=String(idOrHandle||"").trim();if(!raw)return null;
+  const row=raw.startsWith("creator-")
+    ?db.prepare("SELECT * FROM creator_registry WHERE id=?").get(raw)
+    :db.prepare("SELECT * FROM creator_registry WHERE creator_key=?").get(canonicalCreatorKey(platform,raw));
+  return mapCreator(row);
+}
+export function listCreators({status=null,niche=null,query=null,limit=100}={}) {
+  const clauses=[],args=[];
+  if(status){clauses.push("qualification_status=?");args.push(String(status));}
+  if(niche){clauses.push("niche LIKE ?");args.push("%"+String(niche).trim()+"%");}
+  if(query){clauses.push("(handle LIKE ? OR display_name LIKE ? OR niche LIKE ? OR location LIKE ?)");const q="%"+String(query).trim()+"%";args.push(q,q,q,q);}
+  const sql=`SELECT * FROM creator_registry${clauses.length?" WHERE "+clauses.join(" AND "):""} ORDER BY updated_at DESC LIMIT ?`;
+  args.push(Math.max(1,Math.min(1000,Number(limit)||100)));return db.prepare(sql).all(...args).map(mapCreator);
+}
+export function creatorStats(target=null) {
+  const rows=db.prepare("SELECT qualification_status,COUNT(*) AS count FROM creator_registry GROUP BY qualification_status").all();
+  const counts={total:0,candidate:0,qualified:0,rejected:0};
+  for(const row of rows){const n=Number(row.count||0);counts.total+=n;if(row.qualification_status in counts)counts[row.qualification_status]=n;}
+  const contacted=Number(db.prepare("SELECT COUNT(*) AS count FROM creator_registry WHERE outreach_status!='not_contacted'").get()?.count||0);
+  const numericTarget=target===null||target===undefined||target===""?null:Math.max(0,Math.round(Number(target)||0));
+  return{...counts,contacted,target:numericTarget,remaining:numericTarget===null?null:Math.max(0,numericTarget-counts.qualified)};
 }
