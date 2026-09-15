@@ -348,3 +348,7 @@ button { color: inherit; }
   .composer-shell { padding: 8px 14px 18px; }
   .operations-view { height: 100%; }
 }
+
+.message-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.branch-action{opacity:0;border:0;background:transparent;color:#527798;font:9px "JetBrains Mono";cursor:pointer;padding:3px 5px;border-radius:5px;transition:opacity .14s ease,background .14s ease,color .14s ease}
+.message:hover .branch-action,.branch-action:focus-visible{opacity:1}.branch-action:hover{background:#0b1b2b;color:#8fc2f2}.branch-action:disabled{cursor:default;opacity:.2}

@@ -18,10 +18,11 @@ export const api = {
     body: JSON.stringify({ title })
   }),
   messages: (id: string) => request("/api/sessions/" + encodeURIComponent(id) + "/messages"),
-  fork: (id: string, title = "Side branch") => request("/api/sessions/" + encodeURIComponent(id) + "/fork", {
-    method: "POST",
-    body: JSON.stringify({ title })
-  }),
+  branch: (id: string, title = "Side branch", anchorMessageId?: string) =>
+    request("/api/sessions/" + encodeURIComponent(id) + "/branch", {
+      method: "POST",
+      body: JSON.stringify({ title, ...(anchorMessageId ? { anchorMessageId } : {}) })
+    }),
   mission: (id: string) => request("/api/missions/" + encodeURIComponent(id))
 };
 
@@ -82,8 +83,9 @@ export function liveEvents(onEvent: (type: string, data: any) => void) {
   const known = [
     "connected", "run.started", "run.settled", "run.failed",
     "tool.started", "tool.completed", "subagent.start", "subagent.complete",
-    "assistant.delta", "run.completed", "approval.required",
-    "evidence.recorded", "mission.updated"
+    "assistant.delta", "assistant.completed", "message.started", "run.completed",
+    "tool.progress", "tool.failed", "approval.required",
+    "evidence.recorded", "mission.updated", "done"
   ];
 
   for (const type of known) {

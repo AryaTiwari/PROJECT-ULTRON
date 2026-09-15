@@ -13,6 +13,7 @@ export function CommandView(props: {
   busy: boolean;
   mission?: Mission | null;
   onSend: (text: string) => Promise<void>;
+  onBranch: (messageId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);

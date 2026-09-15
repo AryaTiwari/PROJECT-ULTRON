@@ -6,6 +6,8 @@ import { hermes } from "./hermes.mjs";
 import { createMission,getMission,listMissions,updateMission,addEvidence,listEvidence,addEvent,listEvents,recordModelMetric } from "./db.mjs";
 import { chooseModel,fabricStatus } from "./model-fabric.mjs";
 import { subscribe,publish } from "./event-hub.mjs";
+import { unwrapList, unwrapSession } from "./hermes-contract.mjs";
+import { createNestedBranch } from "./branching.mjs";
 
 const json=(res,status,value)=>{res.writeHead(status,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});res.end(JSON.stringify(value));};
 const body=req=>new Promise((resolve,reject)=>{let raw="";req.setEncoding("utf8");req.on("data",c=>{raw+=c;if(raw.length>2_000_000)reject(new Error("REQUEST_TOO_LARGE"));});req.on("end",()=>{try{resolve(raw?JSON.parse(raw):{});}catch(e){reject(e);}});req.on("error",reject);});
@@ -56,11 +58,13 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,`http://${req.headers.host||"localhost"}`),p=parts(url.pathname);
   try{
     if(req.method==="GET"&&url.pathname==="/api/live"){res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache","Connection":"keep-alive"});return subscribe(res);}
-    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=40&include_children=true").catch(()=>[])]);return json(res,200,{health,sessions,missions:listMissions(),modelFabric:fabricStatus()});}
-    if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,await hermes.sessions(url.searchParams.toString()));
-    if(req.method==="POST"&&url.pathname==="/api/sessions")return json(res,201,await hermes.createSession(await body(req)));
-    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="messages")return json(res,200,await hermes.messages(p[2]));
-    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="fork")return json(res,201,await hermes.fork(p[2],await body(req)));
+    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=40&include_children=true").catch(()=>[])]);return json(res,200,{health,sessions:unwrapList(sessions),missions:listMissions(),modelFabric:fabricStatus()});}
+    if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,unwrapList(await hermes.sessions(url.searchParams.toString())));
+    if(req.method==="POST"&&url.pathname==="/api/sessions")return json(res,201,unwrapSession(await hermes.createSession(await body(req))));
+    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="messages")return json(res,200,unwrapList(await hermes.messages(p[2])));
+    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="branch"){
+      const input=await body(req);return json(res,201,await createNestedBranch({sourceSessionId:p[2],anchorMessageId:input.anchorMessageId||null,title:input.title||"Follow-up branch"}));
+    }
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="chat")return proxyChat(req,res,p[2],await body(req));
     if(req.method==="GET"&&url.pathname==="/api/missions")return json(res,200,listMissions());
     if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="GET"){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2])}):json(res,404,{error:"MISSION_NOT_FOUND"});}

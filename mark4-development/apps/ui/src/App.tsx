@@ -10,6 +10,7 @@ const sessionId = (session: SessionLike) => String(session.id || session.session
 
 function listFrom(value: any): SessionLike[] {
   if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.data)) return value.data;
   if (Array.isArray(value?.sessions)) return value.sessions;
   if (Array.isArray(value?.items)) return value.items;
   return [];
@@ -30,9 +31,11 @@ function normalizeMessages(value: any): ChatMessage[] {
     ? value
     : Array.isArray(value?.messages)
       ? value.messages
-      : Array.isArray(value?.items)
-        ? value.items
-        : [];
+      : Array.isArray(value?.data)
+        ? value.data
+        : Array.isArray(value?.items)
+          ? value.items
+          : [];
 
   return rows
     .map((message: any, index: number) => ({
@@ -82,7 +85,8 @@ export function App() {
       let next = active || sessionId(sessionRows[0] || {});
       if (!next) {
         const created = await api.createSession("ULTRON");
-        next = String(created.id || created.session_id || "");
+        const createdSession = created.session || created;
+        next = String(createdSession.id || createdSession.session_id || "");
         setSessions(listFrom(await api.sessions()));
       }
 
@@ -184,9 +188,10 @@ export function App() {
     }
   }
 
-  async function fork(id: string, title: string) {
-    const created = await api.fork(id, title);
-    const newId = String(created.id || created.session_id || created.session?.id || "");
+  async function branch(id: string, title: string, anchorMessageId?: string) {
+    const created = await api.branch(id, title, anchorMessageId);
+    const createdSession = created.session || created;
+    const newId = String(createdSession.id || createdSession.session_id || "");
     setSessions(listFrom(await api.sessions()));
     if (newId) {
       setActive(newId);
@@ -252,7 +257,8 @@ export function App() {
             className="new-session"
             onClick={async () => {
               const created = await api.createSession("New session");
-              const id = String(created.id || created.session_id || "");
+              const createdSession = created.session || created;
+              const id = String(createdSession.id || createdSession.session_id || "");
               setSessions(listFrom(await api.sessions()));
               if (id) setActive(id);
             }}
@@ -275,6 +281,7 @@ export function App() {
               busy={busy}
               mission={mission}
               onSend={send}
+              onBranch={messageId => branch(active, "Follow-up branch", messageId)}
             />
           )}
 
@@ -295,7 +302,7 @@ export function App() {
               sessions={sessions}
               activeId={active}
               onSelect={setActive}
-              onFork={fork}
+              onFork={(id, title) => branch(id, title)}
             />
           )}
 
