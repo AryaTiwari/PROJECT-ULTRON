@@ -1,4 +1,4 @@
-import { modelMetrics } from "./db.mjs";
+import { modelMetrics, modelRouteStates } from "./db.mjs";
 const env = name => String(process.env[name] || "").trim();
 
 const routes = [
@@ -8,19 +8,56 @@ const routes = [
   { id:"creative", role:"creative", provider:env("ULTRON_M4_CREATIVE_PROVIDER"), model:env("ULTRON_M4_CREATIVE_MODEL"), baseScore:92 },
   { id:"hermes-default", role:"*", provider:"", model:"", baseScore:80 },
 ];
-function score(route, metric) {
-  if (!metric || !metric.calls) return route.baseScore;
-  const success=metric.successes/metric.calls;
-  const latencyPenalty=Math.min(12,Number(metric.averageLatencyMs||0)/1200);
-  return route.baseScore+success*14-latencyPenalty;
+
+function configured(route) {
+  return route.id === "hermes-default" || Boolean(route.provider && route.model);
 }
-export function chooseModel(role="cognition") {
-  const metrics=new Map(modelMetrics().map(m=>[m.routeId,m]));
-  return routes.filter(r=>(r.role===role||r.role==="*")&&(r.id==="hermes-default"||(r.provider&&r.model)))
-    .map(r=>({...r,score:score(r,metrics.get(r.id))})).sort((a,b)=>b.score-a.score)[0] || routes.at(-1);
+function isCooling(state) {
+  return Boolean(state?.cooldownUntil && Date.parse(state.cooldownUntil) > Date.now());
+}
+function score(route, metric, state) {
+  if (isCooling(state)) return -Infinity;
+  let value = route.baseScore;
+  if (metric?.calls) {
+    const success = metric.successes / metric.calls;
+    value += success * 14;
+    value -= Math.min(12, Number(metric.averageLatencyMs || 0) / 1200);
+  }
+  value -= Math.min(18, Number(state?.consecutiveFailures || 0) * 6);
+  return value;
+}
+function maps() {
+  return {
+    metrics:new Map(modelMetrics().map(m=>[m.routeId,m])),
+    states:new Map(modelRouteStates().map(s=>[s.routeId,s]))
+  };
+}
+export function rankModels(role="cognition", exclude=[]) {
+  const {metrics,states}=maps(), blocked=new Set(exclude);
+  return routes.filter(r=>!blocked.has(r.id)&&(r.role===role||r.role==="*")&&configured(r))
+    .map(r=>({...r,state:states.get(r.id)||null,score:score(r,metrics.get(r.id),states.get(r.id))}))
+    .filter(r=>Number.isFinite(r.score))
+    .sort((a,b)=>b.score-a.score);
+}
+export function chooseModel(role="cognition", exclude=[]) {
+  return rankModels(role,exclude)[0] || routes.find(r=>r.id==="hermes-default");
+}
+export function classifyModelError(error) {
+  const status=Number(error?.status||0),message=String(error?.message||"").toLowerCase();
+  if(status===401||status===403||/api.?key|credential|unauthorized|forbidden/.test(message))
+    return {errorClass:"auth",cooldownMs:60*60*1000};
+  if(status===429||/rate.?limit|quota|too many requests/.test(message))
+    return {errorClass:"rate_limit",cooldownMs:10*60*1000};
+  if(status>=500||/timeout|temporar|overload|unavailable|connection/.test(message))
+    return {errorClass:"provider",cooldownMs:3*60*1000};
+  return {errorClass:"request",cooldownMs:60*1000};
 }
 export function fabricStatus() {
-  const metrics=new Map(modelMetrics().map(m=>[m.routeId,m]));
-  return routes.map(r=>({id:r.id,role:r.role,configured:r.id==="hermes-default"||Boolean(r.provider&&r.model),
-    provider:r.provider||null,model:r.model||null,score:Number(score(r,metrics.get(r.id)).toFixed(2)),metrics:metrics.get(r.id)||null}));
+  const {metrics,states}=maps();
+  return routes.map(r=>{
+    const state=states.get(r.id)||null;
+    return {id:r.id,role:r.role,configured:configured(r),provider:r.provider||null,model:r.model||null,
+      cooling:isCooling(state),score:Number.isFinite(score(r,metrics.get(r.id),state))?Number(score(r,metrics.get(r.id),state).toFixed(2)):null,
+      metrics:metrics.get(r.id)||null,state};
+  });
 }

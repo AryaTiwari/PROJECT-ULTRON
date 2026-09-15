@@ -4,7 +4,7 @@ import path from "node:path";
 import { config, uiDist } from "./config.mjs";
 import { hermes } from "./hermes.mjs";
 import { createMission,getMission,listMissions,updateMission,addEvidence,listEvidence,addEvent,listEvents,recordModelMetric } from "./db.mjs";
-import { chooseModel,fabricStatus } from "./model-fabric.mjs";
+import { rankModels,fabricStatus,classifyModelError } from "./model-fabric.mjs";
 import { subscribe,publish } from "./event-hub.mjs";
 import { unwrapList, unwrapSession } from "./hermes-contract.mjs";
 import { createNestedBranch } from "./branching.mjs";
@@ -32,23 +32,48 @@ function parseSse(block){
   if(!data.length)return null;const raw=data.join("\n");try{return{type,data:JSON.parse(raw)};}catch{return{type,data:{raw}};}
 }
 async function proxyChat(req,res,sessionId,input){
-  const role=String(input.role||"cognition"),selected=chooseModel(role),missionId=input.missionId||null;
-  const payload={input:String(input.input||"")};
-  if(Array.isArray(input.images)&&input.images.length) payload.images=input.images;
-  if(selected.provider&&selected.model){payload.provider=selected.provider;payload.model=selected.model;}
-  const started=Date.now(),controller=new AbortController();\n  res.on("close",()=>{if(!res.writableEnded)controller.abort();});
+  const role=String(input.role||"cognition"),missionId=input.missionId||null;
+  const basePayload={input:String(input.input||"")};
+  if(Array.isArray(input.images)&&input.images.length) basePayload.images=input.images;
+  const started=Date.now(),controller=new AbortController();
+  const candidates=rankModels(role).slice(0,3);
+  let selected=null,upstream=null,lastError=null;
+  for(const candidate of candidates){
+    const payload={...basePayload};
+    if(candidate.provider&&candidate.model){payload.provider=candidate.provider;payload.model=candidate.model;}
+    const attemptStarted=Date.now();
+    try{
+      upstream=await hermes.streamChat(sessionId,payload,controller.signal);
+      selected=candidate;
+      break;
+    }catch(error){
+      lastError=error;
+      const classified=classifyModelError(error);
+      recordModelMetric(candidate.id,{success:false,latencyMs:Date.now()-attemptStarted,errorClass:classified.errorClass,errorMessage:error.message,cooldownMs:classified.cooldownMs});
+      publish("model.route_failed",{sessionId,missionId,route:candidate.id,errorClass:classified.errorClass,error:error.message});
+    }
+  }
+  if(!upstream||!selected) throw lastError||new Error("NO_MODEL_ROUTE_AVAILABLE");\n  res.on("close",()=>{if(!res.writableEnded)controller.abort();});
   publish("run.started",{sessionId,missionId,route:selected.id,role});if(missionId)addEvent({missionId,type:"run.started",payload:{sessionId,route:selected.id,role}});
   try{
-    const upstream=await hermes.streamChat(sessionId,payload,controller.signal);
     res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache, no-transform","Connection":"keep-alive","X-Accel-Buffering":"no"});
-    const decoder=new TextDecoder();let buffer="";
+    const decoder=new TextDecoder();let buffer="",sawStreamError=false,streamError="";
     for await(const chunk of upstream.body){
       const text=decoder.decode(chunk,{stream:true});res.write(text);buffer+=text;
-      let split;while((split=buffer.indexOf("\n\n"))>=0){const block=buffer.slice(0,split);buffer=buffer.slice(split+2);const evt=parseSse(block);if(evt){publish(evt.type,{sessionId,missionId,...evt.data});if(missionId&&evt.type!=="assistant.delta")addEvent({missionId,type:evt.type,payload:evt.data});}}
+      let split;while((split=buffer.indexOf("\n\n"))>=0){const block=buffer.slice(0,split);buffer=buffer.slice(split+2);const evt=parseSse(block);if(evt){if(evt.type==="error"){sawStreamError=true;streamError=String(evt.data?.message||evt.data?.error||"provider stream error");}publish(evt.type,{sessionId,missionId,...evt.data});if(missionId&&evt.type!=="assistant.delta")addEvent({missionId,type:evt.type,payload:evt.data});}}
     }
-    const latencyMs=Date.now()-started;recordModelMetric(selected.id,{success:true,latencyMs});publish("run.settled",{sessionId,missionId,route:selected.id,latencyMs});res.end();
+    const latencyMs=Date.now()-started;
+    if(sawStreamError){
+      const classified=classifyModelError({message:streamError});
+      recordModelMetric(selected.id,{success:false,latencyMs,errorClass:classified.errorClass,errorMessage:streamError,cooldownMs:classified.cooldownMs});
+      publish("run.failed",{sessionId,missionId,route:selected.id,error:streamError,latencyMs});
+    }else{
+      recordModelMetric(selected.id,{success:true,latencyMs});
+      publish("run.settled",{sessionId,missionId,route:selected.id,latencyMs});
+    }
+    res.end();
   }catch(error){
-    const latencyMs=Date.now()-started;recordModelMetric(selected.id,{success:false,latencyMs});publish("run.failed",{sessionId,missionId,route:selected.id,error:error.message,latencyMs});
+    const latencyMs=Date.now()-started;const classified=classifyModelError(error);if(selected)recordModelMetric(selected.id,{success:false,latencyMs,errorClass:classified.errorClass,errorMessage:error.message,cooldownMs:classified.cooldownMs});publish("run.failed",{sessionId,missionId,route:selected?.id||null,error:error.message,latencyMs});
     if(!res.headersSent)json(res,502,{error:error.message});else{res.write(`event: error\ndata: ${JSON.stringify({error:error.message})}\n\n`);res.end();}
   }
 }

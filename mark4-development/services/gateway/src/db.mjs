@@ -48,6 +48,15 @@ CREATE TABLE IF NOT EXISTS model_metrics (
   latency_ms_total INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS model_route_state (
+  route_id TEXT PRIMARY KEY,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  cooldown_until TEXT,
+  last_error_class TEXT,
+  last_error TEXT,
+  last_success_at TEXT,
+  updated_at TEXT NOT NULL
+);
 `);
 
 const parse = (value, fallback = {}) => { try { return JSON.parse(value ?? ""); } catch { return fallback; } };
@@ -134,7 +143,7 @@ export function listEvents({ missionId = null, after = 0, limit = 200 } = {}) {
     : db.prepare("SELECT * FROM events WHERE id>? ORDER BY id ASC LIMIT ?").all(Number(after)||0, capped);
   return rows.map(r => ({ id:r.id, missionId:r.mission_id, type:r.type, payload:parse(r.payload_json), createdAt:r.created_at }));
 }
-export function recordModelMetric(routeId, { success, latencyMs = 0 }) {
+export function recordModelMetric(routeId, { success, latencyMs = 0, errorClass = null, errorMessage = null, cooldownMs = 0 }) {
   const at = now();
   db.prepare(`INSERT INTO model_metrics(route_id,calls,successes,failures,latency_ms_total,updated_at)
     VALUES(?,1,?,?,?,?)
@@ -142,10 +151,38 @@ export function recordModelMetric(routeId, { success, latencyMs = 0 }) {
       failures=failures+excluded.failures, latency_ms_total=latency_ms_total+excluded.latency_ms_total,
       updated_at=excluded.updated_at`)
     .run(routeId, success ? 1 : 0, success ? 0 : 1, Math.max(0, Math.round(latencyMs)), at);
+
+  const current = db.prepare("SELECT consecutive_failures FROM model_route_state WHERE route_id=?").get(routeId);
+  const failures = success ? 0 : Number(current?.consecutive_failures || 0) + 1;
+  const cooldownUntil = success || cooldownMs <= 0 ? null : new Date(Date.now() + cooldownMs).toISOString();
+  db.prepare(`INSERT INTO model_route_state
+    (route_id,consecutive_failures,cooldown_until,last_error_class,last_error,last_success_at,updated_at)
+    VALUES(?,?,?,?,?,?,?)
+    ON CONFLICT(route_id) DO UPDATE SET
+      consecutive_failures=excluded.consecutive_failures,
+      cooldown_until=excluded.cooldown_until,
+      last_error_class=excluded.last_error_class,
+      last_error=excluded.last_error,
+      last_success_at=excluded.last_success_at,
+      updated_at=excluded.updated_at`)
+    .run(routeId, failures, cooldownUntil, success ? null : errorClass, success ? null : String(errorMessage || "").slice(0,500),
+      success ? at : null, at);
 }
 export function modelMetrics() {
   return db.prepare("SELECT * FROM model_metrics").all().map(r => ({
     routeId:r.route_id, calls:r.calls, successes:r.successes, failures:r.failures,
     averageLatencyMs:r.calls ? Math.round(r.latency_ms_total/r.calls) : null, updatedAt:r.updated_at
+  }));
+}
+
+export function modelRouteStates() {
+  return db.prepare("SELECT * FROM model_route_state").all().map(row => ({
+    routeId: row.route_id,
+    consecutiveFailures: Number(row.consecutive_failures || 0),
+    cooldownUntil: row.cooldown_until || null,
+    lastErrorClass: row.last_error_class || null,
+    lastError: row.last_error || null,
+    lastSuccessAt: row.last_success_at || null,
+    updatedAt: row.updated_at
   }));
 }
