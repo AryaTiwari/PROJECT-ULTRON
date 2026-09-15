@@ -153,6 +153,11 @@ setImmediate(async () => {
     console.log(`[Mark 3] Lead Workspace ready; Google Sheet creation=on, public-web sourcing=on, LinkedIn public research=${leadWorkspace.status.linkedinPublicResearch?.configured ? 'ready' : 'needs SERP_API_KEY'}, remembered layouts=${leadWorkspace.status.templatesRemembered || 0}, max mission=${leadWorkspace.status.maxLeadsPerMission || 200} leads.`);
   } catch (error) { console.error(`[Mark 3] Lead Workspace bootstrap failed: ${error.message}`); }
 
+  try {
+    const emailOutreach = require('../email-outreach-bootstrap').install();
+    console.log('[Mark 3] Email Outreach Operator installed; SMTP=' + (emailOutreach.status.smtpConfigured ? 'ready' : 'needs config') + ', approval gate=on, reply-aware follow-ups=' + (emailOutreach.status.imapConfigured ? 'ready' : 'optional') + '.');
+  } catch (error) { console.error('[Mark 3] Email Outreach bootstrap failed: ' + error.message); }
+
   // HTTP domain ownership is synchronous and independent of this adapter order.
   try {
     const linkedinAccount = require('../linkedin-account-bootstrap').install();
