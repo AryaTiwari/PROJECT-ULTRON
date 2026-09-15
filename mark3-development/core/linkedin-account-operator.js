@@ -1813,6 +1813,11 @@ async function companyMission(request) {
   const profileCheckedCompanies = new Map();
   const checkedJobIds = [];
   const previouslyChecked = request.continueFromPrevious ? previousCheckedJobIds(request) : new Set();
+  // These metrics are reported after the hiring branch, so they must exist at
+  // function scope even when all verification work is cache-only.
+  const destinationJobIds = new Set((request.existingDestinationJobIds || []).map((value) => String(value)));
+  const destinationCompanyKeys = new Set((request.existingDestinationCompanyKeys || []).map((value) => String(value)));
+  let weakLiveDeferred = 0;
   const acceptedCompanies = new Set(
     reconsidered.map((record) => finalMaster.companyKey(record)).filter(Boolean)
   );
@@ -1949,8 +1954,6 @@ async function companyMission(request) {
     // probes do not increment hit counters; consumption records the actual hit.
     const cachedDetailIds = new Set([...jobMeta.keys()].filter(jobId =>
       missionRunner.cachedExact?.('get_job_details', { job_id: jobId }, { recordHit: false })?.hit));
-    const destinationJobIds = new Set((request.existingDestinationJobIds || []).map((value) => String(value)));
-    const destinationCompanyKeys = new Set((request.existingDestinationCompanyKeys || []).map((value) => String(value)));
     const availableJobIds = prioritizedJobIds(jobMeta, request)
       .filter((jobId) => !previouslyChecked.has(String(jobId)) && !destinationJobIds.has(String(jobId)));
 
@@ -1968,7 +1971,7 @@ async function companyMission(request) {
         - Number(request.transientJobAttempts[String(right)] || 0)
         || jobIdPriority(jobMeta.get(right) || {}, request) - jobIdPriority(jobMeta.get(left) || {}, request)
       );
-    const weakLiveDeferred = strongEnough ? liveWeak.length : 0;
+    weakLiveDeferred = strongEnough ? liveWeak.length : 0;
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
