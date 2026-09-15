@@ -17,7 +17,7 @@ function serveStatic(pathname,res){
   if(!fs.existsSync(uiDist)) return false;
   const requested=pathname==="/"? "index.html":pathname.replace(/^\//,"");
   let target=path.resolve(uiDist,requested);
-  if(!target.startsWith(path.resolve(uiDist))) return false;
+  const root=path.resolve(uiDist);\n  if(target!==root&&!target.startsWith(root+path.sep)) return false;
   if(!fs.existsSync(target)||fs.statSync(target).isDirectory()) target=path.join(uiDist,"index.html");
   if(!fs.existsSync(target)) return false;
   const ext=path.extname(target);const types={".html":"text/html; charset=utf-8",".js":"text/javascript; charset=utf-8",".css":"text/css; charset=utf-8",".svg":"image/svg+xml"};
@@ -34,7 +34,7 @@ async function proxyChat(req,res,sessionId,input){
   const payload={input:String(input.input||"")};
   if(Array.isArray(input.images)&&input.images.length) payload.images=input.images;
   if(selected.provider&&selected.model){payload.provider=selected.provider;payload.model=selected.model;}
-  const started=Date.now(),controller=new AbortController();req.on("close",()=>controller.abort());
+  const started=Date.now(),controller=new AbortController();\n  res.on("close",()=>{if(!res.writableEnded)controller.abort();});
   publish("run.started",{sessionId,missionId,route:selected.id,role});if(missionId)addEvent({missionId,type:"run.started",payload:{sessionId,route:selected.id,role}});
   try{
     const upstream=await hermes.streamChat(sessionId,payload,controller.signal);
