@@ -143,6 +143,9 @@ assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', 
 assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '+919876543210', 'null'), 'PHONE_ONLY');
 assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', 'null', 'null'), 'NO_CONTACT');
 assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '', ''), 'SELECTED');
+assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '12', 'a@b.com'), 'EMAIL_ONLY', 'Numeric junk must not count as an Apollo phone.');
+assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '+919876543210', '12'), 'PHONE_ONLY', 'Numeric junk must not count as an Apollo email.');
+assert.equal(operator.apolloStatusForValues('https://www.linkedin.com/in/test', '12', '12'), 'SELECTED', 'Numeric junk must never make a row enriched.');
 assert.equal(typeof operator.finalizeApolloSheetStatuses, 'function');
 
 const enrichmentSource = require('fs').readFileSync(require.resolve('../core/lead-enrichment-operator'), 'utf8');
