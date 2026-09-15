@@ -15,5 +15,5 @@ if(!files.length){
   process.exit(1);
 }
 console.log("gateway tests:",files.map(file=>path.basename(file)).join(", "));
-const result=spawnSync(process.execPath,["--test",...files],{cwd:root,stdio:"inherit",env:process.env});
+const result=spawnSync(process.execPath,["--test","--test-concurrency=1",...files],{cwd:root,stdio:"inherit",env:process.env});
 process.exit(result.status ?? 1);
