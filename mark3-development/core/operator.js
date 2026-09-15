@@ -3,6 +3,7 @@ const path = require('path');
 const config = require('./config');
 const creatorResearch = require('./creator-research');
 const instagramDm = require('./instagram-dm');
+const emailOutreach = require('./email-outreach');
 
 function hasEnv(...names) {
   return names.some((name) => Boolean(String(process.env[name] || '').trim()));
@@ -91,6 +92,17 @@ const CAPABILITIES = [
     purpose: 'Read permitted Instagram conversations, prepare context-aware replies and send approved replies/follow-ups only where the creator has already opened a conversation. Cold first-contact outreach remains a manual draft queue because Meta does not allow the Send API to initiate cold DMs.',
   },
   {
+    id: 'email_outreach',
+    title: 'Personalized Email Outreach Operator',
+    role: 'business-development-email',
+    detects: /\b(?:email outreach|email campaign|personalized emails?|send emails?|follow[- ]?up emails?)\b/i,
+    implemented: true,
+    credentials: () => emailOutreach.status().smtpConfigured,
+    missing: ['SMTP account configuration'],
+    mode: 'execute-with-approval',
+    purpose: 'Create personalized email campaigns from ULTRON lead sheets, preview them before delivery, send only after explicit approval, retain per-recipient receipts and manage reply-aware follow-ups.',
+  },
+  {
     id: 'creator_research',
     title: 'India Creator Research Operator',
     role: 'creator-growth-researcher',
@@ -162,6 +174,7 @@ const CAPABILITIES = [
 ];
 
 const SPECIFIC_MATCH_ORDER = [
+  'email_outreach',
   'lead_extraction',
   'instagram_publish',
   'instagram_dm',
