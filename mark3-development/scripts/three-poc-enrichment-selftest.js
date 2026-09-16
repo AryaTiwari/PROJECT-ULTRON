@@ -13,6 +13,7 @@ const legacyLayout = three.detectThreePocLayout(legacy);
 assert.equal(legacyLayout.first.nameIndex, 0);
 assert.equal(legacyLayout.first.phoneIndex, 5);
 assert.equal(legacyLayout.first.emailIndex, 6);
+assert.equal(legacyLayout.first.linkedinIndex, 4);
 assert.equal(legacyLayout.second.nameIndex, 7);
 assert.equal(legacyLayout.second.phoneIndex, 8);
 assert.equal(legacyLayout.second.emailIndex, 9);
@@ -24,13 +25,17 @@ const explicit = [[
   'Company Name','Post Details','LinkedIn Id',
   '1st POC Name','Phone','Email',
   '2nd POC Name','Phone','Email',
-  '3rd POC Name','Phone','Email','Remarks'
+  '3rd POC Name','Phone','Email','Remarks',
+  '1st POC LinkedIn','2nd POC LinkedIn','3rd POC LinkedIn'
 ]];
 const explicitLayout = three.detectThreePocLayout(explicit);
 assert.equal(explicitLayout.companyIndex, 0);
 assert.equal(explicitLayout.first.nameIndex, 3);
 assert.equal(explicitLayout.second.nameIndex, 6);
 assert.equal(explicitLayout.third.nameIndex, 9);
+assert.equal(explicitLayout.first.linkedinIndex, 13);
+assert.equal(explicitLayout.second.linkedinIndex, 14);
+assert.equal(explicitLayout.third.linkedinIndex, 15);
 
 const candidates = [
   { candidateKey: 'a', name: 'A' },
@@ -64,3 +69,9 @@ const request = bootstrap.isThreePocRequest(
 assert.ok(request);
 assert.equal(request.provider, 'local-excel');
 assert.equal(request.url, 'vault:file-test-1');
+
+const naturalRequest = bootstrap.isThreePocRequest(
+  'do the 2nd POC name with designation and 3rd POC name with designation, with respective LinkedIn, person phone and email in @New_Sheet_14-09-25',
+  { attachments: [{ id: 'file-test-1', name: 'New_Sheet_14-09-25.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }] }
+);
+assert.ok(naturalRequest, 'Natural 2nd/3rd POC contact wording should route to the 3-POC operator');
