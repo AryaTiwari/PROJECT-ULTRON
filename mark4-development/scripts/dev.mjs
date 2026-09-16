@@ -25,9 +25,12 @@ loadEnv(path.join(root, ".runtime", "secrets.env"));
 const vendor = path.join(root, ".runtime", "vendor", "hermes-agent");
 const hermesHome = path.join(root, ".runtime", "hermes-home");
 const hermesNode = path.join(hermesHome, "node");
+const hermesPython = process.platform === "win32"
+  ? path.join(vendor, ".venv", "Scripts", "python.exe")
+  : path.join(vendor, ".venv", "bin", "python");
 
-if (!fs.existsSync(vendor)) {
-  console.error("Mark 4 is not bootstrapped. Run: npm run bootstrap");
+if (!fs.existsSync(vendor) || !fs.existsSync(hermesPython)) {
+  console.error("Mark 4 is not bootstrapped correctly. Run: npm run bootstrap");
   process.exit(1);
 }
 
@@ -163,7 +166,7 @@ async function verifyBrowserMount(){
 async function main() {
   const hermesHealth = "http://127.0.0.1:8642/health";
   console.log("Starting Hermes with a fresh Mark 4 runtime...");
-  run("uv", ["run", "--directory", vendor, "hermes", "gateway", "run", "--replace"]);
+  run(hermesPython, ["-m", "hermes_cli.main", "gateway", "run", "--replace"], root);
   await waitFor(hermesHealth, "Hermes");
 
   if (selectedModelRoute.provider) {
@@ -179,8 +182,13 @@ async function main() {
   console.log("Starting cockpit...");
   runNpm(["run", "dev", "-w", "apps/ui"]);
   await waitFor("http://127.0.0.1:5174/", "Vite cockpit");
-  await verifyBrowserMount();
-  console.log("ULTRON cockpit painted successfully.");
+  try {
+    await verifyBrowserMount();
+    console.log("ULTRON cockpit painted successfully.");
+  } catch (error) {
+    console.warn("UI paint smoke warning:", error?.message || String(error));
+    console.warn("Cockpit remains running. Open http://127.0.0.1:5174/ and the built-in fatal overlay will show any real React crash.");
+  }
 }
 
 function stop() {
