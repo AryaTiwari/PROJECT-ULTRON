@@ -27,6 +27,10 @@ function Glyph({name}:{name:"chat"|"mission"|"branches"|"ops"|"history"|"plus"})
 }
 
 export function App(){
+  useEffect(()=>{
+    document.documentElement.dataset.ultronMounted="true";
+    return()=>{delete document.documentElement.dataset.ultronMounted;};
+  },[]);
   const[view,setView]=useState<ViewMode>("command"),[sessions,setSessions]=useState<SessionLike[]>([]),[active,setActive]=useState(""),[messages,setMessages]=useState<ChatMessage[]>([]);
   const[missions,setMissions]=useState<Mission[]>([]),[events,setEvents]=useState<LiveEvent[]>([]),[busy,setBusy]=useState(false),[streaming,setStreaming]=useState(""),[health,setHealth]=useState(false),[error,setError]=useState("");
   const[activeRunId,setActiveRunId]=useState(""),[pendingApproval,setPendingApproval]=useState<any|null>(null),[sessionsOpen,setSessionsOpen]=useState(false),[missionOpen,setMissionOpen]=useState(false),[filter,setFilter]=useState("");
@@ -45,7 +49,7 @@ export function App(){
   }
   useEffect(()=>{void refresh();const close=liveEvents((type,data)=>setEvents(prev=>[...prev.slice(-119),{type,data,at:data?.at||new Date().toISOString()}]));return close;},[]);
   useEffect(()=>{if(active)api.messages(active).then(v=>setMessages(normalizeMessages(v))).catch((e:any)=>setError(e.message));},[active]);
-  useEffect(()=>{const e=events.at(-1);if(e&&["mission.updated","evidence.recorded","run.settled"].includes(e.type))api.bootstrap().then(v=>setMissions(v.missions||[])).catch(()=>{});},[events.length]);
+  useEffect(()=>{const e=events.length?events[events.length-1]:undefined;if(e&&["mission.updated","evidence.recorded","run.settled"].includes(e.type))api.bootstrap().then(v=>setMissions(v.missions||[])).catch(()=>{});},[events.length]);
 
   async function send(text:string){
     if(!active||busy)return;setBusy(true);setStreaming("");setError("");setActiveRunId("");setPendingApproval(null);

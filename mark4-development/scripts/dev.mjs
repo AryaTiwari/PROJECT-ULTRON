@@ -126,6 +126,40 @@ async function waitFor(url, label, timeoutMs = 60000) {
   throw new Error(label + " did not become ready: " + lastError);
 }
 
+function browserCandidates(){
+  const pf=process.env.ProgramFiles||"C:\\Program Files";
+  const pfx86=process.env["ProgramFiles(x86)"]||"C:\\Program Files (x86)";
+  const local=process.env.LOCALAPPDATA||"";
+  return [
+    local&&path.join(local,"Google","Chrome","Application","chrome.exe"),
+    path.join(pf,"Google","Chrome","Application","chrome.exe"),
+    path.join(pfx86,"Google","Chrome","Application","chrome.exe"),
+    path.join(pf,"Microsoft","Edge","Application","msedge.exe"),
+    path.join(pfx86,"Microsoft","Edge","Application","msedge.exe")
+  ].filter(Boolean).filter(file=>fs.existsSync(file));
+}
+
+function dumpDom(executable,url,timeoutMs=15000){
+  return new Promise((resolve,reject)=>{
+    const profile=path.join(root,".runtime","ui-smoke-profile");
+    fs.mkdirSync(profile,{recursive:true});
+    const child=spawn(executable,["--headless=new","--disable-gpu","--no-first-run","--disable-extensions","--user-data-dir="+profile,"--virtual-time-budget=4000","--dump-dom",url],{cwd:root,env:process.env,stdio:["ignore","pipe","pipe"],shell:false});
+    let stdout="",stderr="";const timer=setTimeout(()=>{try{child.kill();}catch{}reject(new Error("browser smoke timeout"));},timeoutMs);
+    child.stdout.on("data",chunk=>stdout+=chunk.toString());
+    child.stderr.on("data",chunk=>stderr+=chunk.toString());
+    child.on("error",error=>{clearTimeout(timer);reject(error);});
+    child.on("exit",code=>{clearTimeout(timer);if(code===0)resolve(stdout);else reject(new Error("browser smoke exited "+code+": "+stderr.slice(-1200)));});
+  });
+}
+
+async function verifyBrowserMount(){
+  const browser=browserCandidates()[0];
+  if(!browser){console.warn("No Chrome/Edge found for UI paint smoke test; continuing after HTTP readiness.");return;}
+  const dom=String(await dumpDom(browser,"http://127.0.0.1:5174/?ultron-smoke="+Date.now()));
+  if(dom.includes("ULTRON UI failed to mount")&&dom.includes("visible"))throw new Error("Frontend runtime crash detected by browser smoke test.");
+  if(!dom.includes('class="u4-shell"'))throw new Error("Frontend did not mount .u4-shell. Browser DOM: "+dom.slice(0,900));
+}
+
 async function main() {
   const hermesHealth = "http://127.0.0.1:8642/health";
   if (await isHealthy(hermesHealth)) {
@@ -148,6 +182,9 @@ async function main() {
 
   console.log("Starting cockpit...");
   runNpm(["run", "dev", "-w", "apps/ui"]);
+  await waitFor("http://127.0.0.1:5174/", "Vite cockpit");
+  await verifyBrowserMount();
+  console.log("ULTRON cockpit painted successfully.");
 }
 
 function stop() {

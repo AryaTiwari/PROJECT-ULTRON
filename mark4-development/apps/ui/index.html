@@ -3,11 +3,41 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#05080d" />
+  <meta name="theme-color" content="#030405" />
   <title>ULTRON Mark 4</title>
+  <style>
+    html,body,#root{height:100%;margin:0;background:#030405;color:#f6f8fb;font-family:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}
+    #ultron-boot{height:100%;display:grid;place-items:center;background:radial-gradient(circle at 50% 35%,rgba(55,113,190,.12),transparent 28%),#030405}
+    #ultron-boot>div{text-align:center}
+    #ultron-boot b{display:inline-grid;place-items:center;width:54px;height:54px;border:1px solid #233346;border-radius:14px;background:#0a0f15;color:#eef6ff;font-size:18px;box-shadow:0 0 35px rgba(77,152,255,.12)}
+    #ultron-boot span{display:block;margin-top:14px;font:700 9px Consolas,monospace;letter-spacing:.16em;color:#66809d}
+    #ultron-fatal{display:none;position:fixed;inset:0;z-index:99999;background:#050607;color:#edf2f7;padding:56px;overflow:auto}
+    #ultron-fatal.visible{display:block}
+    #ultron-fatal h1{font-size:24px;margin:0 0 8px}
+    #ultron-fatal p{color:#8e9aa7;max-width:760px;line-height:1.6}
+    #ultron-fatal pre{margin-top:20px;padding:16px;border:1px solid #40242b;background:#120b0d;color:#ef9caf;border-radius:10px;white-space:pre-wrap}
+  </style>
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root">
+    <div id="ultron-boot"><div><b>U</b><span>MARK 4 · INITIALIZING COGNITION</span></div></div>
+  </div>
+  <div id="ultron-fatal"><h1>ULTRON UI failed to mount</h1><p>The frontend hit a runtime exception before the cockpit could render. The error below is intentionally visible so this can never degrade into a silent black screen again.</p><pre id="ultron-fatal-text">Unknown frontend error</pre></div>
+  <script>
+    window.__showUltronFatal = function(message){
+      var box=document.getElementById("ultron-fatal"), text=document.getElementById("ultron-fatal-text");
+      if(text) text.textContent=String(message||"Unknown frontend error");
+      if(box) box.classList.add("visible");
+    };
+    window.addEventListener("error", function(event){
+      var detail=event.error && event.error.stack ? event.error.stack : (event.message || "Frontend resource/runtime error");
+      window.__showUltronFatal(detail);
+    });
+    window.addEventListener("unhandledrejection", function(event){
+      var reason=event.reason;
+      window.__showUltronFatal(reason && reason.stack ? reason.stack : String(reason||"Unhandled promise rejection"));
+    });
+  </script>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

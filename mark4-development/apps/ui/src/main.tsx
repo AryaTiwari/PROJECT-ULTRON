@@ -1,10 +1,13 @@
-import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { UiErrorBoundary } from "./UiErrorBoundary";
 import "./styles.css";
 
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
+const rootElement=document.getElementById("root");
+if(!rootElement)throw new Error("ULTRON_ROOT_MISSING");
+
+createRoot(rootElement).render(
+  <UiErrorBoundary>
     <App />
-  </React.StrictMode>
+  </UiErrorBoundary>
 );
