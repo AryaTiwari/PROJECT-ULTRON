@@ -8,7 +8,8 @@ const controlPlane = require('../core/command-control-plane');
 
 const legacy = [[
   'Person or Company Name','L','Post Details','L','Linkedin Id','Phone no','Email ID',
-  '2nd POC Name','Phone no','Email ID','3rd POC','Phone no','Email ID','Call Outcome','Remarks','Demos'
+  '2nd POC Name','Phone no','Email ID','3rd POC','Phone no','Email ID','Call Outcome','Remarks','Demos',
+  'APOLLO CONTACT','APOLLO ROLE','APOLLO LINKEDIN','APOLLO PHONE','APOLLO EMAIL','APOLLO STATUS'
 ]];
 const legacyLayout = three.detectThreePocLayout(legacy);
 assert.equal(legacyLayout.schema, 'anchored_first_poc');
@@ -22,6 +23,8 @@ assert.equal(legacyLayout.second.emailIndex, 9);
 assert.equal(legacyLayout.third.nameIndex, 10);
 assert.equal(legacyLayout.third.phoneIndex, 11);
 assert.equal(legacyLayout.third.emailIndex, 12);
+assert.equal(legacyLayout.linkedinIndex, 4, 'anchored identity must stay on LinkedIn Id, never APOLLO LINKEDIN');
+assert.equal(typeof three.inspectSource, 'function');
 
 const explicit = [[
   'Company Name','Post Details','LinkedIn Id',
@@ -94,8 +97,6 @@ assert.match(source, /resolvePersonProfile/);
 assert.match(source, /Exact POC-1 LinkedIn profile -> current Apollo organization/);
 assert.match(source, /if \(layout\.schema === 'anchored_first_poc'\) return \[\];/);
 
-console.log('Agentic 3-POC enrichment self-test passed. Explicit and anchored legacy layouts are isolated; POC-1 identity/employer anchoring and POC-2/POC-3 slot ordering are protected.');
-
 const request = bootstrap.isThreePocRequest(
   'Fill 1st POC, 2nd POC and 3rd POC with the most responsible people for hiring in @New_Sheet_14-09-25',
   { attachments: [{ id: 'file-test-1', name: 'New_Sheet_14-09-25.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }] }
@@ -167,3 +168,12 @@ const threePocSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'three
 assert.match(threePocSource, /readGoogleWorkbookSheets/);
 assert.match(threePocSource, /googleSheets\.writeCells/);
 assert.match(threePocSource, /provider === 'google'/);
+assert.match(threePocSource, /async function inspectSource/);
+
+const leadBootstrapSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'lead-enrichment-bootstrap.js'), 'utf8');
+assert.match(leadBootstrapSource, /inspectThreePocTarget/);
+assert.match(leadBootstrapSource, /GENERIC_ENRICHMENT_BLOCKED_BY_THREE_POC_SCHEMA/);
+assert.match(leadBootstrapSource, /autoPromotedFrom: 'lead-enrichment'/);
+assert.match(leadBootstrapSource, /threePoc\.inspectSource/);
+
+console.log('Agentic 3-POC enrichment self-test passed. Explicit/anchored schemas, Google Sheet routing, schema promotion, POC isolation and stale generic-enrichment guards are protected.');
