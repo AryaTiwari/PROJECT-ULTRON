@@ -273,6 +273,67 @@ async function handleResearch(requestData) {
   }
 }
 
+async function handleThreePocCommand(message, options = {}) {
+  const text = String(message || '').trim();
+  let request = isThreePocRequest(text, options);
+
+  // The command-control plane may already have classified the request as 3-POC.
+  // Resolve the spreadsheet source independently so small wording differences
+  // cannot drop an owned domain command into the general model stack.
+  if (!request) {
+    const source = spreadsheetSource(text, options);
+    request = source
+      ? { invalidUrl: false, provider: source.provider, url: source.url, attachment: source.attachment || null }
+      : { invalidUrl: true, provider: null, url: null };
+  }
+
+  if (request.invalidUrl || !request.url) {
+    return responseShape(false,
+      'This 3-POC command is owned by the spreadsheet enrichment operator, but the spreadsheet source could not be resolved. Use the full Google Sheet URL or an attached Excel workbook. Apollo was not called and no general model was invoked.',
+      { error: 'INVALID_THREE_POC_SOURCE', apolloCalled: false, taskType: 'three-poc-enrichment' }
+    );
+  }
+
+  if (!['google', 'local-excel'].includes(request.provider)) {
+    return responseShape(false,
+      'The anchored 3-POC workflow supports Google Sheets and attached Excel workbooks only. Apollo was not called and no general model was invoked.',
+      { error: 'THREE_POC_SOURCE_REQUIRED', apolloCalled: false, spreadsheetProvider: request.provider, spreadsheetUrl: request.url, taskType: 'three-poc-enrichment' }
+    );
+  }
+
+  let schemaProbe;
+  try {
+    schemaProbe = await inspectThreePocTarget(request);
+  } catch (error) {
+    return responseShape(false,
+      `3-POC spreadsheet inspection stopped safely: ${error.message} Apollo was not called and no general model was invoked.`,
+      { error: error.code || error.message, apolloCalled: false, spreadsheetProvider: request.provider, spreadsheetUrl: request.url, taskType: 'three-poc-enrichment' }
+    );
+  }
+
+  if (!schemaProbe?.compatible) {
+    return responseShape(false,
+      'ULTRON claimed this as a 3-POC spreadsheet command, but no safely writable anchored/explicit 3-POC layout was detected. Apollo was not called, nothing was edited, and the request was not passed to a general model.',
+      { error: 'THREE_POC_LAYOUT_NOT_FOUND', apolloCalled: false, threePocSchemaProbe: schemaProbe || null, spreadsheetProvider: request.provider, spreadsheetUrl: request.url, taskType: 'three-poc-enrichment' }
+    );
+  }
+
+  const approval = paidTools.request(
+    'apollo',
+    'agentic-three-poc-enrichment',
+    { url: request.url, provider: request.provider },
+    threePocApprovalSummary(request.provider, true)
+  );
+
+  return approvalResponse(approval, {
+    threePocEnrichmentRequest: request,
+    threePocSchemaProbe: schemaProbe,
+    spreadsheetProvider: request.provider,
+    spreadsheetUrl: request.url,
+    domainOwner: 'three-poc-domain-controller',
+  });
+}
+
 async function handlePaidToolDecision(decision) {
   if (!decision) return null;
   if (decision.status === 'denied') {
@@ -581,6 +642,8 @@ module.exports = {
   unsupportedSpreadsheetResponse,
   inspectThreePocTarget,
   threePocApprovalSummary,
+  approvalResponse,
+  handleThreePocCommand,
   handleEnrichment,
   handleResume,
   handleResearch,
