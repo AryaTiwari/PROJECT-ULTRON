@@ -50,13 +50,13 @@ function claim(message, options = {}) {
   if (isThreePocSpreadsheetRequest(text, options)) {
     return Object.freeze({
       domain: 'three-poc-spreadsheet',
-      claimed: false,
-      exclusive: false,
-      controller: null,
-      generalModelAllowed: true,
-      artifactAllowed: true,
-      allowWebFallback: true,
-      yieldTo: 'lead-enrichment-bootstrap',
+      claimed: true,
+      exclusive: true,
+      controller: 'three-poc-domain-controller',
+      generalModelAllowed: false,
+      artifactAllowed: false,
+      allowWebFallback: false,
+      yieldTo: null,
     });
   }
   const linkedin = /\blinkedin\b|linkedin\.com\/|\b(?:search_jobs|get_job_details|get_company_profile|search_companies|search_people|get_person_profile)\b/i.test(text);
@@ -112,12 +112,27 @@ async function dispatch(message, options = {}) {
   if (process.env.ULTRON_M3_ROUTE_DEBUG === '1') console.log('[Command Control]', JSON.stringify(route));
   if (!route.exclusive) return null;
   return scope.run({ route, compiler: false }, async () => {
-    const controller = require('./linkedin-domain-controller');
+    const controller = route.controller === 'three-poc-domain-controller'
+      ? require('./three-poc-domain-controller')
+      : require('./linkedin-domain-controller');
     try {
       const result = await controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage });
       if (scope.getStore().violation) throw scope.getStore().violation;
-      return { ...result, route: 'linkedin', routing: route };
+      return { ...result, route: route.domain, routing: route };
     } catch (error) {
+      if (route.domain === 'three-poc-spreadsheet') {
+        return {
+          ok: false,
+          text: error.message,
+          response: error.message,
+          error: error.code || 'THREE_POC_CONTROLLER_FAILED',
+          model: 'mark3-three-poc-domain-controller',
+          provider: 'local-three-poc-control',
+          taskType: 'three-poc-enrichment',
+          route: route.domain,
+          routing: route,
+        };
+      }
       return { ok: false, text: error.message, response: error.message, error: error.code || 'LINKEDIN_CONTROLLER_FAILED',
         model: 'linkedin-account-operator', provider: 'linkedin-account-mcp', taskType: 'linkedin-account-research', route: 'linkedin', routing: route };
     }
