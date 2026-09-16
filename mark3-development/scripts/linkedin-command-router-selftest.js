@@ -30,7 +30,7 @@ if (run('intent')) {
   };
   assert.equal(controlPlane.isLocalThreePocWorkbookRequest(anchoredPocCommand, anchoredPocOptions), true);
   const anchoredRoute = controlPlane.claim(anchoredPocCommand, anchoredPocOptions);
-  assert.equal(anchoredRoute.domain, 'local-three-poc');
+  assert.equal(anchoredRoute.domain, 'three-poc-spreadsheet');
   assert.equal(anchoredRoute.exclusive, false);
   assert.equal(anchoredRoute.yieldTo, 'lead-enrichment-bootstrap');
 
@@ -40,8 +40,21 @@ if (run('intent')) {
     'Fill POC-2 and POC-3 with respective phone and email.',
   ].join(' ');
   const attachmentOnlyRoute = controlPlane.claim(attachmentOnlyPocCommand, anchoredPocOptions);
-  assert.equal(attachmentOnlyRoute.domain, 'local-three-poc');
+  assert.equal(attachmentOnlyRoute.domain, 'three-poc-spreadsheet');
   assert.equal(attachmentOnlyRoute.exclusive, false);
+
+  const googleThreePocCommand = [
+    'Use https://docs.google.com/spreadsheets/d/testSheet123/edit#gid=123 and perform the Mark 3 anchored 3-POC enrichment.',
+    'Person or Company Name = POC-1 name.',
+    'LinkedIn Id = POC-1 person LinkedIn profile.',
+    '2nd POC Name has its own phone and email.',
+    '3rd POC has its own phone and email.',
+  ].join(' ');
+  assert.equal(controlPlane.isThreePocSpreadsheetRequest(googleThreePocCommand), true);
+  const googleThreePocRoute = controlPlane.claim(googleThreePocCommand);
+  assert.equal(googleThreePocRoute.domain, 'three-poc-spreadsheet');
+  assert.equal(googleThreePocRoute.exclusive, false);
+  assert.equal(googleThreePocRoute.yieldTo, 'lead-enrichment-bootstrap');
 
   const normalLinkedInRoute = controlPlane.claim('Find 20 SAP companies on LinkedIn in Maharashtra with active job openings');
   assert.equal(normalLinkedInRoute.domain, 'linkedin');
