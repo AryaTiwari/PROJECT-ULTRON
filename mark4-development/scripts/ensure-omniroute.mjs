@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
@@ -66,9 +66,7 @@ function locate(){
   }
   return null;
 }
-function tail(file,lines=120){
-  try{return fs.readFileSync(file,"utf8").split(/\\r?\\n/).slice(-lines).join("\\n").trim();}catch{return "";}
-}
+function tail(file,lines=120){\n  try{return fs.readFileSync(file,"utf8").split(/\\r?\\n/).slice(-lines).join("\n").trim();}catch{return "";}\n}\nfunction stopStaleListener(){\n  if(process.platform!=="win32")return;\n  const script="$p=Get-NetTCPConnection -LocalPort "+port+" -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if($p){$p|ForEach-Object{Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue}}";\n  spawnSync("powershell.exe",["-NoProfile","-NonInteractive","-Command",script],{cwd:root,env:process.env,stdio:["ignore","ignore","ignore"],shell:false,windowsHide:true});\n}
 async function waitReady(state,timeoutMs=90000){
   const started=Date.now();
   let nextNotice=10000;
@@ -82,11 +80,7 @@ async function waitReady(state,timeoutMs=90000){
   return false;
 }
 
-if(await open()){
-  if(await models()){console.log(`OmniRoute already ready at ${baseUrl}`);process.exit(0);}
-  console.error(`OmniRoute is listening on ${host}:${port} but /models is not usable. Check OMNIROUTE_API_KEY / endpoint configuration.`);
-  process.exit(1);
-}
+if(await open()){\n  if(await models()){console.log(`OmniRoute already ready at ${baseUrl}`);process.exit(0);}\n  console.warn(`Stale OmniRoute listener detected on ${host}:${port}; replacing it silently.`);\n  stopStaleListener();\n  await new Promise(r=>setTimeout(r,500));\n}
 
 const found=locate();
 if(!found){
@@ -115,7 +109,7 @@ try{fs.closeSync(log);}catch{}
 
 if(!(await waitReady(state))){
   const output=tail(logFile);
-  if(output)console.error("\\nLast OmniRoute output:\\n"+output);
+  if(output)console.error("\nLast OmniRoute output:\n"+output);
   const detail=state.error?state.error:(state.exited?("launcher exited with "+(state.signal?("signal "+state.signal):("code "+state.code))):"startup timeout");
   console.error("OmniRoute failed to become ready: "+detail+". See "+logFile);
   process.exit(1);
