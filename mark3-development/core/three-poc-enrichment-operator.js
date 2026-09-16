@@ -686,21 +686,62 @@ function rowChanges(sheetName, rowNumber, layout, people) {
   return changes;
 }
 
-function anchoredRowChanges(sheetName, rowNumber, layout, anchor, slotPeople = [], lockedSlots = []) {
+function anchoredRowChanges(sheetName, rowNumber, layout, anchor, slotPeople = [], lockedSlots = [], existingRow = null) {
   const changes = [];
-  changes.push({ range: sourceCellRange(sheetName, rowNumber, layout.first.phoneIndex), value: anchor?.phone || '' });
-  changes.push({ range: sourceCellRange(sheetName, rowNumber, layout.first.emailIndex), value: anchor?.email || '' });
+  const hasExistingRow = Array.isArray(existingRow);
+  const current = (index) => hasExistingRow ? String(existingRow?.[index] ?? '').trim() : '';
+  const pushMissing = (index, value) => {
+    const clean = String(value || '').trim();
+    if (!clean) return;
+    if (hasExistingRow && current(index)) return;
+    changes.push({ range: sourceCellRange(sheetName, rowNumber, index), value: clean });
+  };
+
+  // Anchored POC-1 is immutable except for genuinely missing phone/email cells.
+  pushMissing(layout.first.phoneIndex, anchor?.phone);
+  pushMissing(layout.first.emailIndex, anchor?.email);
 
   const slots = [layout.second, layout.third];
   for (let i = 0; i < slots.length; i++) {
     if (lockedSlots[i]) continue;
     const person = slotPeople[i] || null;
     if (!person) continue;
-    changes.push({ range: sourceCellRange(sheetName, rowNumber, slots[i].nameIndex), value: displayName(person) });
-    changes.push({ range: sourceCellRange(sheetName, rowNumber, slots[i].phoneIndex), value: person.phone || '' });
-    changes.push({ range: sourceCellRange(sheetName, rowNumber, slots[i].emailIndex), value: person.email || '' });
+    const slot = slots[i];
+    const display = displayName(person);
+    const existingName = current(slot.nameIndex);
+
+    if (display) {
+      if (!hasExistingRow || !existingName) {
+        changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.nameIndex), value: display });
+      } else if (
+        personNameKey(existingName)
+        && personNameKey(existingName) === personNameKey(display)
+        && existingName !== display
+      ) {
+        // Same verified identity: designation completion is safe.
+        changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.nameIndex), value: display });
+      }
+    }
+
+    pushMissing(slot.phoneIndex, person.phone);
+    pushMissing(slot.emailIndex, person.email);
   }
   return changes;
+}
+
+function anchoredChangeCounts(changes, sheetName, rowNumber, layout) {
+  const ranges = new Set((changes || []).map((change) => change.range));
+  const has = (slot, field) => ranges.has(sourceCellRange(sheetName, rowNumber, slot[field]));
+  return {
+    poc1Phone: has(layout.first, 'phoneIndex') ? 1 : 0,
+    poc1Email: has(layout.first, 'emailIndex') ? 1 : 0,
+    poc2Name: has(layout.second, 'nameIndex') ? 1 : 0,
+    poc2Phone: has(layout.second, 'phoneIndex') ? 1 : 0,
+    poc2Email: has(layout.second, 'emailIndex') ? 1 : 0,
+    poc3Name: has(layout.third, 'nameIndex') ? 1 : 0,
+    poc3Phone: has(layout.third, 'phoneIndex') ? 1 : 0,
+    poc3Email: has(layout.third, 'emailIndex') ? 1 : 0,
+  };
 }
 
 function pendingRecord(source, sheetName, rowNumber, slot, person) {
@@ -910,6 +951,15 @@ async function enrichWorkbook(source, options = {}) {
     phonesWritten: 0,
     pendingPhones: 0,
     linkedInsWritten: 0,
+    poc1PhonesWritten: 0,
+    poc1EmailsWritten: 0,
+    poc2NamesWritten: 0,
+    poc2PhonesWritten: 0,
+    poc2EmailsWritten: 0,
+    poc3NamesWritten: 0,
+    poc3PhonesWritten: 0,
+    poc3EmailsWritten: 0,
+    existingPocSlotsRepaired: 0,
     createdLinkedInColumns,
     anchoredRows: 0,
     anchorsResolved: 0,
@@ -1127,13 +1177,26 @@ async function enrichWorkbook(source, options = {}) {
             }
           }
 
-          const changes = anchoredRowChanges(sheet.sheetName, rowNumber, layout, anchor, slotPeople, lockedSlots);
-          const written = await writeSourceCells(source, changes);
+          const changes = anchoredRowChanges(sheet.sheetName, rowNumber, layout, anchor, slotPeople, lockedSlots, row);
+          const counts = anchoredChangeCounts(changes, sheet.sheetName, rowNumber, layout);
+          const written = changes.length ? await writeSourceCells(source, changes) : { updatedCells: 0 };
           const writtenPeople = [anchor, ...slotPeople.filter(Boolean)];
           stats.updatedCells += written.updatedCells || 0;
-          stats.contactsWritten += writtenPeople.length;
-          stats.emailsWritten += writtenPeople.filter((person) => person.email).length;
-          stats.phonesWritten += writtenPeople.filter((person) => person.phone).length;
+          stats.contactsWritten += slotPeople.filter(Boolean).length;
+          stats.poc1PhonesWritten += counts.poc1Phone;
+          stats.poc1EmailsWritten += counts.poc1Email;
+          stats.poc2NamesWritten += counts.poc2Name;
+          stats.poc2PhonesWritten += counts.poc2Phone;
+          stats.poc2EmailsWritten += counts.poc2Email;
+          stats.poc3NamesWritten += counts.poc3Name;
+          stats.poc3PhonesWritten += counts.poc3Phone;
+          stats.poc3EmailsWritten += counts.poc3Email;
+          stats.phonesWritten += counts.poc1Phone + counts.poc2Phone + counts.poc3Phone;
+          stats.emailsWritten += counts.poc1Email + counts.poc2Email + counts.poc3Email;
+          if (
+            (String(row?.[layout.second.nameIndex] || '').trim() && (counts.poc2Phone || counts.poc2Email || counts.poc2Name))
+            || (String(row?.[layout.third.nameIndex] || '').trim() && (counts.poc3Phone || counts.poc3Email || counts.poc3Name))
+          ) stats.existingPocSlotsRepaired++;
           stats.anchorsResolved += anchor.linkedinUrl ? 1 : 0;
           stats.completedRows++; sheetStats.completedRows++;
 
@@ -1294,7 +1357,10 @@ function formatResult(result) {
     ? ` Anchored-format rows: ${result.anchoredRows}; preserved ${result.preservedExistingPocSlots || 0} already-populated/unsafe-to-reassign POC slot${Number(result.preservedExistingPocSlots || 0) === 1 ? '' : 's'}; safely verified ${result.matchedExistingPocSlots || 0} existing POC identit${Number(result.matchedExistingPocSlots || 0) === 1 ? 'y' : 'ies'}; skipped ${result.skippedNonPersonAnchorRows || 0} company/unknown LinkedIn anchor row${Number(result.skippedNonPersonAnchorRows || 0) === 1 ? '' : 's'} without changing them.`
     : '';
   const discovery = ` Candidate discovery: ${result.candidatesSeen || 0} usable Apollo ID candidates from ${result.candidateSearchCalls || 0} employer search call${Number(result.candidateSearchCalls || 0) === 1 ? '' : 's'} (${result.candidatePoolCacheHits || 0} employer-pool cache hits, ${result.candidateSearchFallbacks || 0} broad fallback searches); hydrated ${result.candidateHydrations || 0} selected candidate${Number(result.candidateHydrations || 0) === 1 ? '' : 's'} by exact Apollo ID, with ${result.candidateHydrationFailures || 0} hydration failure${Number(result.candidateHydrationFailures || 0) === 1 ? '' : 's'} and ${result.candidateHydrationFallbacks || 0} fallback attempt${Number(result.candidateHydrationFallbacks || 0) === 1 ? '' : 's'}; selector empty/failed rows ${result.selectorEmptyOrFailedRows || 0}, reviewer rescues ${result.reviewerRescuedRows || 0}. Heavy reasoning used OmniRoute-only: ${result.omniRouteSelectorCalls || 0} selector call${Number(result.omniRouteSelectorCalls || 0) === 1 ? '' : 's'}, ${result.omniRouteReviewerCalls || 0} reviewer call${Number(result.omniRouteReviewerCalls || 0) === 1 ? '' : 's'}, ${result.personalModelFallbacks || 0} personal-API fallback${Number(result.personalModelFallbacks || 0) === 1 ? '' : 's'}; ${result.locallyPrerankedCandidates || 0} locally pre-ranked candidate rows were sent in compact form. Existing-POC exact name+employer verification failures: ${result.existingPocVerificationFailures || 0}/${result.existingPocVerificationAttempts || 0}.`;
-  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; wrote ${result.linkedInsWritten || 0} LinkedIn link${Number(result.linkedInsWritten || 0) === 1 ? '' : 's'} in explicit layouts, ${result.phonesWritten} person phone${result.phonesWritten === 1 ? '' : 's'} and ${result.emailsWritten} person email${result.emailsWritten === 1 ? '' : 's'}.${anchored}${discovery}${pending}${unresolved}`;
+  const anchoredWrites = result.anchoredRows
+    ? ` Actual anchored writes: POC-1 F/G = ${result.poc1PhonesWritten || 0} phone, ${result.poc1EmailsWritten || 0} email; POC-2 H/I/J = ${result.poc2NamesWritten || 0} name/designation, ${result.poc2PhonesWritten || 0} phone, ${result.poc2EmailsWritten || 0} email; POC-3 K/L/M = ${result.poc3NamesWritten || 0} name/designation, ${result.poc3PhonesWritten || 0} phone, ${result.poc3EmailsWritten || 0} email. Existing POC slots repaired/upgraded: ${result.existingPocSlotsRepaired || 0}.`
+    : '';
+  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${pending}${unresolved}`;
 }
 
 module.exports = {
@@ -1319,6 +1385,7 @@ module.exports = {
   resolveAnchorPerson,
   anchorCompanyContext,
   anchoredRowChanges,
+  anchoredChangeCounts,
   companyContextAgent,
   selectorAgent,
   reviewerAgent,
