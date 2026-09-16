@@ -8,7 +8,7 @@ function normalize(message) {
   return String(message || '').trim().replace(/^(?:hey\s+)?ultron\b[\s,:;.!-]*/i, '').replace(/\blinked\s+in\b/ig, 'LinkedIn');
 }
 
-function isLocalThreePocWorkbookRequest(message, options = {}) {
+function isThreePocSpreadsheetRequest(message, options = {}) {
   const text = normalize(message);
   if (!text) return false;
 
@@ -21,8 +21,9 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
   });
   const hasMentionedWorkbook = /@[\w .()\-]{2,}/.test(text)
     && /\b(?:sheet|workbook|excel|3\s*[- ]?pocs?|three\s+pocs?|poc\s*[- ]?[123])\b/i.test(text);
+  const hasGoogleSheet = /https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9_-]+/i.test(text);
 
-  if (!hasExcelAttachment && !hasMentionedWorkbook) return false;
+  if (!hasExcelAttachment && !hasMentionedWorkbook && !hasGoogleSheet) return false;
 
   const slotPatterns = [
     /\b(?:1st|first)\s+poc\b|\bpoc\s*[- ]?1\b/i,
@@ -40,11 +41,15 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
   return action && (explicitThreePoc || slotCount >= 2 || anchoredContract);
 }
 
+function isLocalThreePocWorkbookRequest(message, options = {}) {
+  return isThreePocSpreadsheetRequest(message, options);
+}
+
 function claim(message, options = {}) {
   const text = normalize(message);
-  if (isLocalThreePocWorkbookRequest(text, options)) {
+  if (isThreePocSpreadsheetRequest(text, options)) {
     return Object.freeze({
-      domain: 'local-three-poc',
+      domain: 'three-poc-spreadsheet',
       claimed: false,
       exclusive: false,
       controller: null,
@@ -118,4 +123,4 @@ async function dispatch(message, options = {}) {
     }
   });
 }
-module.exports = { normalize, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, runExclusive, compileWithGemini };
+module.exports = { normalize, isThreePocSpreadsheetRequest, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, runExclusive, compileWithGemini };
