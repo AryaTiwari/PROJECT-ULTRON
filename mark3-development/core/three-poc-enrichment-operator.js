@@ -809,6 +809,8 @@ async function enrichWorkbook(source, options = {}) {
     candidatePoolCacheHits: 0,
     candidateHydrations: 0,
     candidateHydrationFailures: 0,
+    selectorEmptyOrFailedRows: 0,
+    reviewerRescuedRows: 0,
     existingPocVerificationAttempts: 0,
     existingPocVerificationFailures: 0,
     aiSelections: 0,
@@ -844,16 +846,21 @@ async function enrichWorkbook(source, options = {}) {
       return candidatePoolCache.get(key);
     }
     stats.candidateSearchCalls++;
-    let pool = await apollo.searchCompanyPeopleBroad({
-      company: companyContext.company,
-      domain: companyContext.domain,
-      limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
-      titles: hiringCandidateTitles,
-    });
+    let pool = null;
+    try {
+      pool = await apollo.searchCompanyPeopleBroad({
+        company: companyContext.company,
+        domain: companyContext.domain,
+        limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
+        titles: hiringCandidateTitles,
+      });
+    } catch {
+      stats.candidateSearchFallbacks++;
+    }
     // Smaller firms sometimes expose no HR/recruiting titles. Fall back to a broad
     // employer search and let the selector reason from company/hiring context.
-    if ((pool.people || []).length < 2) {
-      stats.candidateSearchFallbacks++;
+    if (!pool || (pool.people || []).length < 2) {
+      if (pool) stats.candidateSearchFallbacks++;
       pool = await apollo.searchCompanyPeopleBroad({
         company: companyContext.company,
         domain: companyContext.domain,
@@ -951,23 +958,30 @@ async function enrichWorkbook(source, options = {}) {
           const openSlots = slotDefs.map((_, index) => index).filter((index) => !lockedSlots[index] && !slotPeople[index]);
           const available = candidates.filter((candidate) => !usedKeys.has(candidate.candidateKey));
           if (openSlots.length && available.length) {
-            const selected = await selectorAgent(context, companyContext, available, {
-              count: openSlots.length,
-              anchorPerson: { name: anchor.name || context.anchorName, title: anchor.title || '', linkedinUrl: anchor.linkedinUrl },
-            });
-            if (selected.model) stats.agentModels.add(`${selected.provider || 'unknown'}/${selected.model}`);
+            let selected = { ranking: [], model: null, provider: null };
+            try {
+              selected = await selectorAgent(context, companyContext, available, {
+                count: openSlots.length,
+                anchorPerson: { name: anchor.name || context.anchorName, title: anchor.title || '', linkedinUrl: anchor.linkedinUrl },
+              });
+              if (selected.model) stats.agentModels.add(`${selected.provider || 'unknown'}/${selected.model}`);
+            } catch {
+              stats.selectorEmptyOrFailedRows++;
+            }
 
             let finalRanking = selected.ranking.slice(0, openSlots.length);
-            if (selected.ranking.length) {
-              try {
-                const reviewed = await reviewerAgent(context, companyContext, available, selected.ranking, {
-                  count: openSlots.length,
-                  anchorPerson: { name: anchor.name || context.anchorName, title: anchor.title || '', linkedinUrl: anchor.linkedinUrl },
-                });
-                if (reviewed.model) stats.agentModels.add(`${reviewed.provider || 'unknown'}/${reviewed.model}`);
-                if (reviewed.ranking.length) finalRanking = reviewed.ranking;
-              } catch {}
-            }
+            if (!selected.ranking.length) stats.selectorEmptyOrFailedRows++;
+            try {
+              const reviewed = await reviewerAgent(context, companyContext, available, selected.ranking, {
+                count: openSlots.length,
+                anchorPerson: { name: anchor.name || context.anchorName, title: anchor.title || '', linkedinUrl: anchor.linkedinUrl },
+              });
+              if (reviewed.model) stats.agentModels.add(`${reviewed.provider || 'unknown'}/${reviewed.model}`);
+              if (reviewed.ranking.length) {
+                if (!selected.ranking.length) stats.reviewerRescuedRows++;
+                finalRanking = reviewed.ranking;
+              }
+            } catch {}
 
             const additional = selectedPeople(available, finalRanking, openSlots.length);
             for (let i = 0; i < openSlots.length; i++) {
@@ -1031,19 +1045,29 @@ async function enrichWorkbook(source, options = {}) {
           continue;
         }
 
-        const selected = await selectorAgent(context, companyContext, candidates, { count: 3 });
-        if (selected.model) stats.agentModels.add(`${selected.provider || 'unknown'}/${selected.model}`);
-        if (!selected.ranking.length) {
-          stats.unresolvedRows++; sheetStats.unresolvedRows++;
-          continue;
+        let selected = { ranking: [], model: null, provider: null };
+        try {
+          selected = await selectorAgent(context, companyContext, candidates, { count: 3 });
+          if (selected.model) stats.agentModels.add(`${selected.provider || 'unknown'}/${selected.model}`);
+        } catch {
+          stats.selectorEmptyOrFailedRows++;
         }
+        if (!selected.ranking.length) stats.selectorEmptyOrFailedRows++;
 
         let finalRanking = selected.ranking.slice(0, 3);
         try {
           const reviewed = await reviewerAgent(context, companyContext, candidates, selected.ranking, { count: 3 });
           if (reviewed.model) stats.agentModels.add(`${reviewed.provider || 'unknown'}/${reviewed.model}`);
-          if (reviewed.ranking.length) finalRanking = reviewed.ranking;
+          if (reviewed.ranking.length) {
+            if (!selected.ranking.length) stats.reviewerRescuedRows++;
+            finalRanking = reviewed.ranking;
+          }
         } catch {}
+
+        if (!finalRanking.length) {
+          stats.unresolvedRows++; sheetStats.unresolvedRows++;
+          continue;
+        }
 
         const people = selectedPeople(candidates, finalRanking, 3);
         if (!people.length) {
@@ -1121,7 +1145,7 @@ function formatResult(result) {
   const anchored = result.anchoredRows
     ? ` Anchored-format rows: ${result.anchoredRows}; preserved ${result.preservedExistingPocSlots || 0} already-populated/unsafe-to-reassign POC slot${Number(result.preservedExistingPocSlots || 0) === 1 ? '' : 's'}; safely verified ${result.matchedExistingPocSlots || 0} existing POC identit${Number(result.matchedExistingPocSlots || 0) === 1 ? 'y' : 'ies'}; skipped ${result.skippedNonPersonAnchorRows || 0} company/unknown LinkedIn anchor row${Number(result.skippedNonPersonAnchorRows || 0) === 1 ? '' : 's'} without changing them.`
     : '';
-  const discovery = ` Candidate discovery: ${result.candidatesSeen || 0} usable Apollo ID candidates from ${result.candidateSearchCalls || 0} employer search call${Number(result.candidateSearchCalls || 0) === 1 ? '' : 's'} (${result.candidatePoolCacheHits || 0} employer-pool cache hits, ${result.candidateSearchFallbacks || 0} broad fallback searches); hydrated ${result.candidateHydrations || 0} selected candidate${Number(result.candidateHydrations || 0) === 1 ? '' : 's'} by exact Apollo ID, with ${result.candidateHydrationFailures || 0} hydration failure${Number(result.candidateHydrationFailures || 0) === 1 ? '' : 's'}. Existing-POC exact name+employer verification failures: ${result.existingPocVerificationFailures || 0}/${result.existingPocVerificationAttempts || 0}.`;
+  const discovery = ` Candidate discovery: ${result.candidatesSeen || 0} usable Apollo ID candidates from ${result.candidateSearchCalls || 0} employer search call${Number(result.candidateSearchCalls || 0) === 1 ? '' : 's'} (${result.candidatePoolCacheHits || 0} employer-pool cache hits, ${result.candidateSearchFallbacks || 0} broad fallback searches); hydrated ${result.candidateHydrations || 0} selected candidate${Number(result.candidateHydrations || 0) === 1 ? '' : 's'} by exact Apollo ID, with ${result.candidateHydrationFailures || 0} hydration failure${Number(result.candidateHydrationFailures || 0) === 1 ? '' : 's'}; selector empty/failed rows ${result.selectorEmptyOrFailedRows || 0}, reviewer rescues ${result.reviewerRescuedRows || 0}. Existing-POC exact name+employer verification failures: ${result.existingPocVerificationFailures || 0}/${result.existingPocVerificationAttempts || 0}.`;
   return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; wrote ${result.linkedInsWritten || 0} LinkedIn link${Number(result.linkedInsWritten || 0) === 1 ? '' : 's'} in explicit layouts, ${result.phonesWritten} person phone${result.phonesWritten === 1 ? '' : 's'} and ${result.emailsWritten} person email${result.emailsWritten === 1 ? '' : 's'}.${anchored}${discovery}${pending}${unresolved}`;
 }
 
