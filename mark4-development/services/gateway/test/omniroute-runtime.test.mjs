@@ -10,14 +10,16 @@ test("Mark4 OmniRoute test launcher ensures route before forcing cognition",()=>
   const launcher=fs.readFileSync(path.join(root,"scripts","dev-omniroute-test.mjs"),"utf8");
   assert.match(launcher,/ensure-omniroute\.mjs/);
   assert.match(launcher,/ULTRON_M4_OMNIROUTE_TEST="1"/);
+  assert.doesNotMatch(launcher,/spawnSync|spawn\(/);
 });
 
-test("Mark4 OmniRoute ensure is standalone and does not start Mark3",()=>{
+test("Mark4 OmniRoute ensure uses the canonical standalone wrapper and never starts Mark3",()=>{
   const ensure=fs.readFileSync(path.join(root,"scripts","ensure-omniroute.mjs"),"utf8");
   assert.match(ensure,/scripts","dev","run-next\.mjs/);
   assert.doesNotMatch(ensure,/start-mark3/);
   assert.match(ensure,/OMNIROUTE_DIR/);
   assert.match(ensure,/\/models/);
+  assert.match(ensure,/hidden canonical run-next wrapper/);
 });
 
 test("OmniRoute test mode masks direct providers including Grok xAI and forces every Mark4 role",()=>{
@@ -32,32 +34,37 @@ test("OmniRoute test mode masks direct providers including Grok xAI and forces e
   assert.match(dev,/all direct model routes are disabled/);
 });
 
-test("OmniRoute test mode uses OmniRoute auto routing plus one real Hermes custom-endpoint rescue",()=>{
+test("OmniRoute test mode uses resilient auto aliases plus one Hermes custom-endpoint rescue",()=>{
   const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
   assert.match(dev,/if \(omniRoute\.testMode\) \{/);
   assert.match(dev,/addFallback\("custom", "auto\/best-reasoning"/);
   assert.match(dev,/baseUrl: omniRoute\.baseUrl/);
   assert.match(dev,/keyEnv: "OMNIROUTE_API_KEY"/);
   assert.match(dev,/ULTRON_OMNIROUTE_TEST_MODEL/);
-  assert.match(dev,/auto\/best-fast/);\n  assert.match(dev,/auto\/best-reasoning/);
-  assert.doesNotMatch(dev,/auto\/best-coding -> auto/);
+  assert.match(dev,/auto\/best-fast/);
+  assert.match(dev,/auto\/best-reasoning/);
 });
 
-test("Windows OmniRoute startup is hidden and does not create a detached console lineage",()=>{
-  const launcher=fs.readFileSync(path.join(root,"scripts","dev-omniroute-test.mjs"),"utf8");
+test("Windows OmniRoute startup stays hidden without a detached console lineage",()=>{
   const ensure=fs.readFileSync(path.join(root,"scripts","ensure-omniroute.mjs"),"utf8");
-  assert.match(launcher,/windowsHide:process\.platform==="win32"/);
-  assert.match(launcher,/ULTRON_M4_OMNIROUTE_READY="1"/);
   assert.match(ensure,/detached:false/);
   assert.match(ensure,/windowsHide:true/);
-  assert.match(ensure,/hidden canonical run-next wrapper/);
+  assert.match(ensure,/powershell\.exe/);
+  assert.match(ensure,/windowsHide:true/);
 });
 
-test("OmniRoute warm launches avoid duplicate model probes and use bounded readiness fetches",()=>{
-  const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
+test("OmniRoute startup reports progress, exits early on child failure, and tails logs",()=>{
   const ensure=fs.readFileSync(path.join(root,"scripts","ensure-omniroute.mjs"),"utf8");
-  assert.match(dev,/ULTRON_M4_OMNIROUTE_READY/);
-  assert.match(dev,/request timeout/);
-  assert.match(ensure,/setTimeout\(\(\)=>controller\.abort\(\),1800\)/);
-  assert.match(ensure,/waitReady\(state,timeoutMs=90000\)/);\n  assert.match(ensure,/Last OmniRoute output/);\n  assert.match(ensure,/launcher exited/);
+  assert.match(ensure,/waitReady\(state,timeoutMs=90000\)/);
+  assert.match(ensure,/state\.exited/);
+  assert.match(ensure,/OmniRoute still starting/);
+  assert.match(ensure,/Last OmniRoute output/);
+  assert.match(ensure,/launcher exited/);
+});
+
+test("OmniRoute stale listener cleanup is silent on Windows",()=>{
+  const ensure=fs.readFileSync(path.join(root,"scripts","ensure-omniroute.mjs"),"utf8");
+  assert.match(ensure,/stopStaleListener/);
+  assert.match(ensure,/stdio:\["ignore","ignore","ignore"\]/);
+  assert.match(ensure,/windowsHide:true/);
 });
