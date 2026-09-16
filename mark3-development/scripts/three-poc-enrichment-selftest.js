@@ -92,6 +92,21 @@ assert.equal(limitedApolloSearchCandidate.id, '690b88979047af00018964d6');
 assert.equal(limitedApolloSearchCandidate.linkedinUrl, null, 'People Search does not need to provide LinkedIn before selection');
 assert.equal(limitedApolloSearchCandidate.searchLimitedIdentity, true);
 assert.equal(limitedApolloSearchCandidate.name, 'Leona Va***z');
+
+const preRankFixture = [
+  { candidateKey: 'recruiter', name: 'A', title: 'Technical Recruiter', seniority: 'individual_contributor', departments: ['human_resources'], functions: [] },
+  { candidateKey: 'founder', name: 'B', title: 'Founder & CEO', seniority: 'founder', departments: [], functions: [] },
+  { candidateKey: 'manager', name: 'C', title: 'Engineering Manager', seniority: 'manager', departments: ['engineering'], functions: [] },
+  { candidateKey: 'hr', name: 'D', title: 'HR Business Partner', seniority: 'manager', departments: ['human_resources'], functions: [] },
+  { candidateKey: 'sales', name: 'E', title: 'Sales Executive', seniority: 'individual_contributor', departments: ['sales'], functions: [] },
+  { candidateKey: 'ta', name: 'F', title: 'Talent Acquisition Lead', seniority: 'head', departments: ['human_resources'], functions: [] },
+];
+const preRanked = three.preRankCandidates(preRankFixture, { postDetails: 'Hiring SAP consultants' }, 6);
+assert.equal(preRanked.length, 6);
+assert.ok(preRanked.some((candidate) => candidate.candidateKey === 'founder'), 'local token filter must preserve leadership diversity');
+assert.ok(preRanked.some((candidate) => candidate.candidateKey === 'recruiter'), 'local token filter must preserve recruiting candidates');
+assert.equal(three.reviewerRequired([{ candidateKey: 'a', confidence: 0.8 }, { candidateKey: 'b', confidence: 0.7 }], 2), false);
+assert.equal(three.reviewerRequired([{ candidateKey: 'a', confidence: 0.3 }], 1), true);
 assert.equal(three.linkedInProfileKind('ID: https://www.linkedin.com/in/aashish-nimadi-2678a6413/'), 'person');
 assert.equal(three.linkedInProfileKind('https://www.linkedin.com/company/allegisit/'), 'company');
 assert.equal(three.personNameKey('Rajeev Ranjan — Recruitment Manager'), 'rajeev ranjan');
@@ -137,6 +152,13 @@ assert.match(source, /hasVerifiedPocIdentity\(enrichedPerson\)/);
 assert.match(source, /candidatePoolFor\(companyContext\)/);
 assert.doesNotMatch(source, /matchExistingCandidate\(existing\.name/);
 assert.match(source, /hasVerifiedPocIdentity\(enrichedExisting\)/);
+assert.match(source, /modelRouter\.chatOmniRouteOnly/);
+assert.doesNotMatch(source, /modelRouter\.chat\(/);
+assert.match(source, /preRankCandidates\(available/);
+assert.match(source, /reviewerRequired\(selected\.ranking/);
+assert.match(source, /candidateHydrationFallbacks/);
+assert.match(source, /personalModelFallbacks/);
+assert.match(source, /THREE_POC_NON_OMNIROUTE_SELECTOR_BLOCKED/);
 assert.ok(!source.includes("if (existing.phone && existing.email) {\n              lockedSlots[slotIndex] = true;"), 'complete existing POC slots must still be eligible for safe designation completion');
 
 const request = bootstrap.isThreePocRequest(
@@ -233,8 +255,14 @@ const threePocControllerSource = fs.readFileSync(path.join(__dirname, '..', 'cor
 assert.match(threePocControllerSource, /handleThreePocCommand/);
 assert.doesNotMatch(threePocControllerSource, /model-router|modelRouter|assistant\.handle/);
 
+const modelRouterSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'model-router.js'), 'utf8');
+assert.match(modelRouterSource, /async function chatOmniRouteOnly/);
+assert.match(modelRouterSource, /routingMode: 'omniroute-only'/);
+assert.match(modelRouterSource, /personalApiFallbackAllowed: false/);
+assert.match(modelRouterSource, /omniRouteOnly: true/);
+
 const controlPlaneSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'command-control-plane.js'), 'utf8');
 assert.match(controlPlaneSource, /controller: 'three-poc-domain-controller'/);
 assert.match(controlPlaneSource, /generalModelAllowed: false/);
 
-console.log('Agentic 3-POC enrichment self-test passed. Explicit/anchored schemas, Google Sheet routing, schema promotion, POC isolation and stale generic-enrichment guards are protected.');
+console.log('Agentic 3-POC enrichment self-test passed. Anchored/explicit schemas, exclusive routing, Apollo ID hydration, verified POC isolation, OmniRoute-only heavy reasoning, compact pre-ranking and fallback hydration are protected.');
