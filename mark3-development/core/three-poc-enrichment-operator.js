@@ -640,6 +640,55 @@ function startPhoneWatcher() {
   watcherTimer.unref?.();
 }
 
+async function inspectSource(source) {
+  const provider = sourceProvider(source);
+  if (!provider) {
+    return { compatible: false, provider: null, compatibleCount: 0, sheets: [] };
+  }
+
+  const sourceSheets = await readSourceSheets(source);
+  const sheets = [];
+  for (const sheet of sourceSheets) {
+    let layout = sheet.layout || null;
+    if (!layout) {
+      try { layout = detectThreePocLayout(sheet.rows || []); }
+      catch (error) {
+        if (error.code !== 'THREE_POC_LAYOUT_NOT_FOUND') throw error;
+      }
+    }
+    if (!layout) continue;
+    sheets.push({
+      sheetName: sheet.sheetName,
+      sheetId: sheet.sheetId ?? null,
+      schema: layout.schema,
+      headerRowNumber: layout.headerRowNumber,
+      first: {
+        nameIndex: layout.first?.nameIndex ?? -1,
+        linkedinIndex: layout.first?.linkedinIndex ?? -1,
+        phoneIndex: layout.first?.phoneIndex ?? -1,
+        emailIndex: layout.first?.emailIndex ?? -1,
+      },
+      second: {
+        nameIndex: layout.second?.nameIndex ?? -1,
+        phoneIndex: layout.second?.phoneIndex ?? -1,
+        emailIndex: layout.second?.emailIndex ?? -1,
+      },
+      third: {
+        nameIndex: layout.third?.nameIndex ?? -1,
+        phoneIndex: layout.third?.phoneIndex ?? -1,
+        emailIndex: layout.third?.emailIndex ?? -1,
+      },
+    });
+  }
+
+  return {
+    compatible: sheets.length > 0,
+    provider,
+    compatibleCount: sheets.length,
+    sheets,
+  };
+}
+
 function backupWorkbook(source) {
   const id = String(source || '').replace(/^vault:/i, '').trim();
   const entry = fileVault.get(id);
@@ -970,6 +1019,7 @@ module.exports = {
   companyContextAgent,
   selectorAgent,
   reviewerAgent,
+  inspectSource,
   enrichWorkbook,
   syncPendingPhones,
   startPhoneWatcher,
