@@ -61,13 +61,19 @@ export function App(){
     if(!active||busy)return;setBusy(true);setStreaming("");setError("");setActiveRunId("");setPendingApproval(null);
     setMessages(prev=>[...prev,{id:"local-"+Date.now(),role:"user",content:text}]);let collected="";
     try{
+      let runFailure="";
       await streamChat(active,{input:text,missionId:mission?.id||null,role:"cognition"},(type,data)=>{
         if(type==="run.started")setActiveRunId(String(data?.run_id||data?.runId||""));
         if(type==="approval.request")setPendingApproval(data);
         if(type==="assistant.delta"){const d=deltaOf(data);if(d){collected+=d;setStreaming(collected);}}
+        if(type==="run.failed"){
+          runFailure=String(data?.error||data?.message||"The active model route failed.");
+          setError("MODEL ROUTE FAILED · "+runFailure);
+        }
         if(["run.completed","run.failed","run.cancelled","run.interrupted"].includes(type))setPendingApproval(null);
       });
       setStreaming("");setMessages(normalizeMessages(await api.messages(active)));const data=await api.bootstrap();setMissions(data.missions||[]);
+      if(runFailure&&!collected)setMessages(prev=>[...prev,{id:"route-failure-"+Date.now(),role:"assistant",content:"Runtime route failed: "+runFailure}]);
     }catch(cause:any){setError(cause.message);if(collected)setMessages(prev=>[...prev,{id:"partial-"+Date.now(),role:"assistant",content:collected}]);setStreaming("");}
     finally{setBusy(false);setActiveRunId("");setPendingApproval(null);}
   }

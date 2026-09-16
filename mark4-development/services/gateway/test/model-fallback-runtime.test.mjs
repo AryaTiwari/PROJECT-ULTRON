@@ -39,3 +39,12 @@ test("OmniRoute test mode excludes Gemini and NVIDIA fallbacks",()=>{
   assert.match(dev,/if \(omniRoute\.testMode\) \{[\s\S]*provider: "omniroute"/);
 });
 
+
+test("OmniRoute test mode supplies alias failover and explicit context length",()=>{
+  assert.match(dev,/ULTRON_OMNIROUTE_TEST_MODEL/);
+  assert.match(dev,/auto\/best-fast/);
+  assert.match(dev,/auto\/best-reasoning/);
+  assert.match(dev,/auto\/best-coding/);
+  assert.match(dev,/ULTRON_OMNIROUTE_CONTEXT_LENGTH/);
+  assert.match(dev,/context_length/);
+});

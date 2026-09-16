@@ -92,7 +92,7 @@ if(!env.OMNIROUTE_API_KEY)env.OMNIROUTE_API_KEY=env.OMNIROUTE_ENDPOINT_KEY||env.
 
 console.log("Starting existing OmniRoute installation:",found.dir);
 console.log("OmniRoute log:",logFile);
-const child=spawn(process.execPath,[`--max-old-space-size=${memoryMb}`,found.entry,"dev"],{cwd:found.dir,env,detached:true,windowsHide:true,shell:false,stdio:["ignore",log,log]});
+const child=spawn(process.execPath,[`--max-old-space-size=${memoryMb}`,found.entry,"dev"],{cwd:found.dir,env,detached:process.platform!=="win32",windowsHide:true,shell:false,stdio:["ignore",log,log]});
 child.unref();
 try{fs.closeSync(log);}catch{}
 

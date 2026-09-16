@@ -47,12 +47,14 @@ function truthy(value) {
 
 function omniRouteSettings() {
   const baseUrl = String(process.env.OMNIROUTE_BASE_URL || "http://127.0.0.1:20128/v1").trim().replace(/\/+$/, "");
-  const model = String(process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL || "auto").trim() || "auto";
+  const model = String(process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL || "auto/best-reasoning").trim() || "auto/best-reasoning";
+  const testModel = String(process.env.ULTRON_OMNIROUTE_TEST_MODEL || "auto/best-fast").trim() || "auto/best-fast";
   const apiKey = String(process.env.OMNIROUTE_API_KEY || process.env.OMNIROUTE_ENDPOINT_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || "").trim();
   if (apiKey && !process.env.OMNIROUTE_API_KEY) process.env.OMNIROUTE_API_KEY = apiKey;
   return {
     baseUrl,
     model,
+    testModel,
     apiKey,
     configured: Boolean(apiKey || process.env.OMNIROUTE_DIR),
     testMode: truthy(process.env.ULTRON_M4_OMNIROUTE_TEST)
@@ -80,7 +82,7 @@ function configureModelRoutes() {
 
     for (const role of ["COGNITION","WORKER","VERIFIER","CREATIVE"]) {
       process.env[`ULTRON_M4_${role}_PROVIDER`] = "omniroute";
-      process.env[`ULTRON_M4_${role}_MODEL`] = omniRoute.model;
+      process.env[`ULTRON_M4_${role}_MODEL`] = omniRoute.testModel;
     }
     process.env.ULTRON_M4_OMNIROUTE_MASKED_KEYS = masked.join(",");
 
@@ -142,7 +144,11 @@ function syncHermesRuntimeConfig() {
     fallbacks.push({ provider, model });
   };
 
-  if (!omniRoute.testMode) {
+  if (omniRoute.testMode) {
+    addFallback("omniroute", "auto/best-reasoning");
+    addFallback("omniroute", "auto/best-coding");
+    addFallback("omniroute", "auto");
+  } else {
     if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
       addFallback("gemini", "gemini-3.7-flash");
       addFallback("gemini", "gemini-3.6-flash");
@@ -157,8 +163,9 @@ function syncHermesRuntimeConfig() {
     ? "fallback_providers:\n" + fallbacks.map(x => `  - provider: ${yamlQuote(x.provider)}\n    model: ${yamlQuote(x.model)}`).join("\n")
     : "fallback_providers: []";
 
+  const omniContext = Math.max(32768, Number(process.env.ULTRON_OMNIROUTE_CONTEXT_LENGTH || 131072));
   const modelYaml = primaryModel
-    ? `model:\n  provider: ${yamlQuote(primaryProvider)}\n  default: ${yamlQuote(primaryModel)}`
+    ? `model:\n  provider: ${yamlQuote(primaryProvider)}\n  default: ${yamlQuote(primaryModel)}${primaryProvider === "omniroute" ? `\n  context_length: ${omniContext}` : ""}`
     : 'model:\n  provider: "auto"';
 
   const omniRouteProviderYaml = `providers:
@@ -259,7 +266,8 @@ function run(command, args, cwd = root) {
     cwd,
     env: process.env,
     stdio: "inherit",
-    shell: false
+    shell: false,
+    windowsHide: process.platform === "win32"
   });
   children.push(child);
   child.on("exit", code => {
@@ -325,7 +333,7 @@ function dumpDom(executable,url,timeoutMs=15000){
   return new Promise((resolve,reject)=>{
     const profile=path.join(root,".runtime","ui-smoke-profile");
     fs.mkdirSync(profile,{recursive:true});
-    const child=spawn(executable,["--headless=new","--disable-gpu","--no-first-run","--disable-extensions","--user-data-dir="+profile,"--virtual-time-budget=4000","--dump-dom",url],{cwd:root,env:process.env,stdio:["ignore","pipe","pipe"],shell:false});
+    const child=spawn(executable,["--headless=new","--disable-gpu","--no-first-run","--disable-extensions","--user-data-dir="+profile,"--virtual-time-budget=4000","--dump-dom",url],{cwd:root,env:process.env,stdio:["ignore","pipe","pipe"],shell:false,windowsHide:process.platform==="win32"});
     let stdout="",stderr="";const timer=setTimeout(()=>{try{child.kill();}catch{}reject(new Error("browser smoke timeout"));},timeoutMs);
     child.stdout.on("data",chunk=>stdout+=chunk.toString());
     child.stderr.on("data",chunk=>stderr+=chunk.toString());
@@ -346,10 +354,11 @@ async function main() {
   const hermesHealth = "http://127.0.0.1:8642/health";
   if (omniRoute.testMode) {
     console.log("OMNIROUTE TEST MODE ACTIVE: all direct model routes are disabled for this ULTRON run.");
-    console.log("OmniRoute route:", omniRoute.baseUrl, "| model:", omniRoute.model);
+    console.log("OmniRoute route:", omniRoute.baseUrl, "| model:", omniRoute.testModel);
     const masked = String(process.env.ULTRON_M4_OMNIROUTE_MASKED_KEYS || "").split(",").filter(Boolean);
     console.log("Direct inference keys masked from Hermes:", masked.length ? masked.join(", ") : "none detected");
-    console.log("All Mark 4 cognitive roles forced to omniroute/" + omniRoute.model + ".");
+    console.log("All Mark 4 cognitive roles forced to omniroute/" + omniRoute.testModel + ".");
+    console.log("OmniRoute-only failover: auto/best-fast -> auto/best-reasoning -> auto/best-coding -> auto.");
     await probeOmniRoute();
   }
   console.log("Starting Hermes with a fresh Mark 4 runtime...");

@@ -18,3 +18,8 @@ test("browser paint probe is diagnostic and cannot tear down a healthy stack",()
   assert.match(dev,/Cockpit remains running/);
   assert.match(dev,/await verifyBrowserMount\(\)/);
 });
+
+test("all Mark4 launcher children suppress extra console windows on Windows",()=>{
+  assert.match(dev,/windowsHide: process\.platform === "win32"/);
+  assert.match(dev,/windowsHide:process\.platform==="win32"/);
+});
