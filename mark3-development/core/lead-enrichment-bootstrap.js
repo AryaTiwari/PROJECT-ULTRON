@@ -140,6 +140,28 @@ function researchResponseShape(ok, text, extra = {}) {
   };
 }
 
+function threePocApprovalSummary(provider, detectedBySchema = false) {
+  const target = provider === 'google' ? 'linked Google Sheet in place' : 'attached Excel workbook';
+  const prefix = detectedBySchema
+    ? 'ULTRON inspected the spreadsheet before Apollo approval and detected a three-POC layout, so generic Apollo-column enrichment is blocked for this run. '
+    : '';
+  return `${prefix}This run will edit the ${target} using the anchored/explicit 3-POC contract. In the anchored format, Person or Company Name + LinkedIn Id is POC-1, POC-1 is identity-matched by that exact person profile, the current employer is resolved from that profile, and POC-2/POC-3 are selected only from employees of that employer. POC-1 phone/email stay in the first phone/email pair; POC-2 and POC-3 stay in their own respective pairs. Existing populated slots are preserved. Company-profile anchor rows are left unchanged rather than guessed.`;
+}
+
+async function inspectThreePocTarget(request) {
+  if (!request || !['google', 'local-excel'].includes(request.provider) || !request.url) return null;
+  try {
+    return await threePoc.inspectSource(request.url);
+  } catch (error) {
+    // Authentication/access errors are real blockers and must not be hidden by
+    // falling through to a different enrichment engine.
+    if (/GOOGLE_SHEETS_AUTH_REQUIRED|GOOGLE_SHEETS_CREDENTIALS_MISSING|GOOGLE_SHEETS_FORBIDDEN|GOOGLE_SHEETS_NOT_FOUND|LOCAL_EXCEL_ATTACHMENT_NOT_FOUND|LOCAL_XLSX_REQUIRED/i.test(String(error.code || ''))) {
+      throw error;
+    }
+    return { compatible: false, provider: request.provider, compatibleCount: 0, sheets: [], inspectionError: error.message };
+  }
+}
+
 function approvalResponse(item, extra = {}) {
   return responseShape(true, paidTools.prompt(item), {
     model: 'apollo-approval-gate',
@@ -341,6 +363,27 @@ async function handlePaidToolDecision(decision) {
   }
 
   if (decision.tool === 'apollo' && ['lead-enrichment', 'lead-research-enrichment'].includes(decision.operation)) {
+    const genericRequest = {
+      url: decision.payload?.url || null,
+      provider: decision.payload?.provider || null,
+    };
+    const schemaProbe = await inspectThreePocTarget(genericRequest);
+    if (schemaProbe?.compatible) {
+      const replacement = paidTools.request(
+        'apollo',
+        'agentic-three-poc-enrichment',
+        { url: genericRequest.url, provider: genericRequest.provider },
+        threePocApprovalSummary(genericRequest.provider, true)
+      );
+      return approvalResponse(replacement, {
+        error: 'GENERIC_ENRICHMENT_BLOCKED_BY_THREE_POC_SCHEMA',
+        apolloCalled: false,
+        supersededApproval: decision.id,
+        threePocSchemaProbe: schemaProbe,
+        spreadsheetProvider: genericRequest.provider,
+        spreadsheetUrl: genericRequest.url,
+      });
+    }
     const ensureContactColumns = Boolean(decision.payload?.ensureContactColumns || decision.modifiers?.ensureContactColumns);
     return paidTools.withPermit(decision, () => handleEnrichment(decision.payload.url, decision.payload.provider || null, { ensureContactColumns }));
   }
@@ -427,7 +470,7 @@ function install() {
               'apollo',
               'agentic-three-poc-enrichment',
               { url: threePocRequest.url, provider: threePocRequest.provider },
-              `This run will edit the ${threePocRequest.provider === 'google' ? 'linked Google Sheet in place' : 'attached Excel workbook'} using the anchored/explicit 3-POC contract. In the anchored format, Person or Company Name + LinkedIn Id is POC-1, POC-1 is identity-matched by that exact person profile, the current employer is resolved from that profile, and POC-2/POC-3 are selected only from employees of that employer. POC-1 phone/email stay in the first phone/email pair; POC-2 and POC-3 stay in their own respective pairs. Existing populated slots are preserved. Company-profile anchor rows are left unchanged rather than guessed.`
+              threePocApprovalSummary(threePocRequest.provider, false)
             );
             result = approvalResponse(approval, { threePocEnrichmentRequest: threePocRequest });
           }
@@ -454,13 +497,30 @@ function install() {
             } else if (request.provider === 'microsoft' && microsoftSetupResponse()) {
               result = microsoftSetupResponse();
             } else {
-              const approval = paidTools.request(
-                'apollo',
-                'lead-enrichment',
-                { url: request.url, provider: request.provider, ensureContactColumns: request.ensureContactColumns },
-                `I will use local spreadsheet/post details and the Apollo cache first, then make live Apollo calls only for fields that are still missing in this ${providerDescription(request.provider)}.`
-              );
-              result = approvalResponse(approval, { leadEnrichmentRequest: request });
+              const schemaProbe = await inspectThreePocTarget(request);
+              if (schemaProbe?.compatible) {
+                const approval = paidTools.request(
+                  'apollo',
+                  'agentic-three-poc-enrichment',
+                  { url: request.url, provider: request.provider },
+                  threePocApprovalSummary(request.provider, true)
+                );
+                result = approvalResponse(approval, {
+                  threePocEnrichmentRequest: request,
+                  threePocSchemaProbe: schemaProbe,
+                  autoPromotedFrom: 'lead-enrichment',
+                  spreadsheetProvider: request.provider,
+                  spreadsheetUrl: request.url,
+                });
+              } else {
+                const approval = paidTools.request(
+                  'apollo',
+                  'lead-enrichment',
+                  { url: request.url, provider: request.provider, ensureContactColumns: request.ensureContactColumns },
+                  `I will use local spreadsheet/post details and the Apollo cache first, then make live Apollo calls only for fields that are still missing in this ${providerDescription(request.provider)}.`
+                );
+                result = approvalResponse(approval, { leadEnrichmentRequest: request });
+              }
             }
           } else if (isResumeRequest(text)) {
             conversation.append('user', text, { taskType: 'lead-enrichment-resume', inputMode });
@@ -519,6 +579,8 @@ module.exports = {
   isResumeRequest,
   microsoftSetupResponse,
   unsupportedSpreadsheetResponse,
+  inspectThreePocTarget,
+  threePocApprovalSummary,
   handleEnrichment,
   handleResume,
   handleResearch,
