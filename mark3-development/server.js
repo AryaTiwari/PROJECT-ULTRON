@@ -286,13 +286,19 @@ const server = http.createServer(async (req,res) => {
 
       // Exclusive ownership is resolved before attachments, modes, continuity,
       // artifact inference and the mutable assistant wrapper chain.
+      const routeAttachments = (Array.isArray(data.attachments) ? data.attachments : [])
+        .map((item) => {
+          if (item && typeof item === 'object') return item;
+          const entry = fileVault.get(String(item || ''));
+          return entry ? { id: entry.id, name: entry.name, mime: entry.mime, size: entry.size } : { id: String(item || '') };
+        })
+        .filter((item) => item?.id);
       const controlled = await commandControl.dispatch(data.message, {
         inputMode: data.inputMode,
         history: data.history,
-        // Ownership may use attachment metadata (name/mime/id) without reading
-        // file contents. This lets local workbook operators yield/claim before
-        // expensive multimodal parsing while keeping domain routing deterministic.
-        attachments: Array.isArray(data.attachments) ? data.attachments : [],
+        // Ownership uses attachment metadata only, not file contents. The UI
+        // sends attachment IDs, so resolve name/mime here before domain claim.
+        attachments: routeAttachments,
       });
       if (controlled) {
         const delivery = responseDelivery(controlled.response || controlled.text || '');
