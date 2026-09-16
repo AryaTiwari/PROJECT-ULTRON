@@ -4,6 +4,7 @@ const path = require('path');
 
 const three = require('../core/three-poc-enrichment-operator');
 const bootstrap = require('../core/lead-enrichment-bootstrap');
+const controlPlane = require('../core/command-control-plane');
 
 const legacy = [[
   'Person or Company Name','L','Post Details','L','Linkedin Id','Phone no','Email ID',
@@ -122,3 +123,25 @@ const anchoredNaturalRequest = bootstrap.isThreePocRequest(
 );
 assert.ok(anchoredNaturalRequest, 'Anchored POC-1/POC-2/POC-3 wording must route to the local 3-POC operator');
 assert.equal(anchoredNaturalRequest.provider, 'local-excel');
+
+const exactControlRoute = controlPlane.claim(
+  [
+    'Use @New_Sheet_14-09-25 and perform the Mark 3 anchored 3-POC enrichment.',
+    'Person or Company Name = POC-1 name.',
+    'LinkedIn Id = POC-1 person LinkedIn profile.',
+    '2nd POC Name has its own Phone no + Email ID.',
+    '3rd POC has its own Phone no + Email ID.',
+  ].join(' '),
+  { attachments: [{ id: 'file-test-1', name: 'New_Sheet_14-09-25.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }] }
+);
+assert.equal(exactControlRoute.domain, 'local-three-poc');
+assert.equal(exactControlRoute.exclusive, false);
+assert.equal(exactControlRoute.yieldTo, 'lead-enrichment-bootstrap');
+
+const paidApprovalSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'paid-tool-approval.js'), 'utf8');
+assert.match(paidApprovalSource, /RUNTIME_ID/);
+assert.match(paidApprovalSource, /retired-stale-runtime/);
+
+const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+assert.match(serverSource, /routeAttachments/);
+assert.match(serverSource, /fileVault\.get\(String\(item \|\| ''\)\)/);
