@@ -287,7 +287,12 @@ const server = http.createServer(async (req,res) => {
       // Exclusive ownership is resolved before attachments, modes, continuity,
       // artifact inference and the mutable assistant wrapper chain.
       const controlled = await commandControl.dispatch(data.message, {
-        inputMode: data.inputMode, history: data.history
+        inputMode: data.inputMode,
+        history: data.history,
+        // Ownership may use attachment metadata (name/mime/id) without reading
+        // file contents. This lets local workbook operators yield/claim before
+        // expensive multimodal parsing while keeping domain routing deterministic.
+        attachments: Array.isArray(data.attachments) ? data.attachments : [],
       });
       if (controlled) {
         const delivery = responseDelivery(controlled.response || controlled.text || '');
@@ -325,7 +330,7 @@ const server = http.createServer(async (req,res) => {
       }
 
       const routedTaskType=operatingModes.routeTask(data.message,data.taskType||'general');
-      const result=await assistant.handle(data.message,{model:data.model,history:privateHistoryWithAttachments(data,attachment),taskType:routedTaskType,inputMode:data.inputMode,codingWorkspace:data.codingWorkspace});
+      const result=await assistant.handle(data.message,{model:data.model,history:privateHistoryWithAttachments(data,attachment),taskType:routedTaskType,inputMode:data.inputMode,codingWorkspace:data.codingWorkspace,attachments:attachment.files});
       const delivery=responseDelivery(result.response||result.text||'');
       return send(res,200,{...result,response:delivery.text,text:delivery.text,attachments:attachment.files,voiceRecognition:data.voiceRecognition||null,operatingMode:operatingModes.status(),listenAfterResponseMs:delivery.listenAfterResponseMs,invitesReply:delivery.invitesReply,hasSuggestion:delivery.hasSuggestion});
     }
