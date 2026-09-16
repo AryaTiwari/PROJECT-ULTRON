@@ -34,6 +34,15 @@ if (run('intent')) {
   assert.equal(anchoredRoute.exclusive, false);
   assert.equal(anchoredRoute.yieldTo, 'lead-enrichment-bootstrap');
 
+  const attachmentOnlyPocCommand = [
+    'Perform anchored 3-POC enrichment on the attached workbook.',
+    'Person or Company Name is POC-1 and LinkedIn Id is that person profile.',
+    'Fill POC-2 and POC-3 with respective phone and email.',
+  ].join(' ');
+  const attachmentOnlyRoute = controlPlane.claim(attachmentOnlyPocCommand, anchoredPocOptions);
+  assert.equal(attachmentOnlyRoute.domain, 'local-three-poc');
+  assert.equal(attachmentOnlyRoute.exclusive, false);
+
   const normalLinkedInRoute = controlPlane.claim('Find 20 SAP companies on LinkedIn in Maharashtra with active job openings');
   assert.equal(normalLinkedInRoute.domain, 'linkedin');
   assert.equal(normalLinkedInRoute.exclusive, true);
