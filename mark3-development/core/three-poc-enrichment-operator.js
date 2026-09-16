@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const config = require('./config');
 const localExcel = require('./local-excel-operator');
+const googleSheets = require('./google-sheets-operator');
 const fileVault = require('./file-vault');
 const apollo = require('./apollo-enrichment');
 const modelRouter = require('./model-router');
@@ -10,6 +11,81 @@ const modelRouter = require('./model-router');
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'three-poc-enrichment', 'jobs.json');
 let watcherTimer = null;
 let watcherRemaining = 0;
+
+function sourceProvider(source) {
+  if (localExcel.isLocalExcelSource(source)) return 'local-excel';
+  if (googleSheets.extractSheetUrl(source) || /docs\.google\.com\/spreadsheets\/d\//i.test(String(source || ''))) return 'google';
+  return null;
+}
+
+async function readGoogleWorkbookSheets(source) {
+  const spreadsheetId = googleSheets.spreadsheetId(source);
+  const meta = await googleSheets.metadata(spreadsheetId);
+  const requestedGid = googleSheets.sheetGid(source);
+  const tabs = (meta.sheets || []).filter((sheet) => requestedGid == null || Number(sheet?.properties?.sheetId) === Number(requestedGid));
+  const out = [];
+
+  for (const sheet of tabs) {
+    const sheetName = sheet?.properties?.title;
+    if (!sheetName) continue;
+    const rows = await googleSheets.values(spreadsheetId, `${googleSheets.quoteSheet(sheetName)}!A:ZZ`);
+
+    // Preserve actual LinkedIn profile targets when a cell displays a name but
+    // stores the URL as a hyperlink. We only know the correct LinkedIn column
+    // after detecting the 3-POC schema.
+    let layout = null;
+    try { layout = detectThreePocLayout(rows); } catch (error) {
+      if (error.code !== 'THREE_POC_LAYOUT_NOT_FOUND') throw error;
+    }
+    if (layout && Number.isInteger(layout.linkedinIndex) && layout.linkedinIndex >= 0) {
+      const links = await googleSheets.linkedInHyperlinks(spreadsheetId, sheetName, layout.linkedinIndex, Math.max(rows.length, layout.headerRowNumber));
+      for (const [rowNumber, link] of links.entries()) {
+        const index = rowNumber - 1;
+        if (!rows[index]) rows[index] = [];
+        rows[index][layout.linkedinIndex] = link;
+      }
+    }
+
+    out.push({
+      sheetName,
+      sheetId: sheet.properties.sheetId,
+      spreadsheetId,
+      spreadsheetTitle: meta?.properties?.title || '',
+      rows,
+      layout,
+    });
+  }
+  return out;
+}
+
+async function readSourceSheets(source) {
+  const provider = sourceProvider(source);
+  if (provider === 'local-excel') return localExcel.readWorkbookSheets(source);
+  if (provider === 'google') return readGoogleWorkbookSheets(source);
+  const error = new Error('3-POC enrichment requires an attached Excel workbook or a valid Google Sheets URL.');
+  error.code = 'THREE_POC_SOURCE_REQUIRED';
+  throw error;
+}
+
+function sourceCellRange(sheetName, rowNumber, columnIndex) {
+  return googleSheets.cellRange(sheetName, rowNumber, columnIndex);
+}
+
+async function writeSourceCells(source, changes) {
+  const provider = sourceProvider(source);
+  if (provider === 'local-excel') return localExcel.writeCells(source, changes);
+  if (provider === 'google') return googleSheets.writeCells(googleSheets.spreadsheetId(source), changes);
+  const error = new Error('Unsupported 3-POC spreadsheet provider.');
+  error.code = 'THREE_POC_PROVIDER_UNSUPPORTED';
+  throw error;
+}
+
+async function readSourceCell(source, range) {
+  const provider = sourceProvider(source);
+  if (provider === 'local-excel') return localExcel.readCell(source, range);
+  if (provider === 'google') return googleSheets.readCell(googleSheets.spreadsheetId(source), range);
+  return '';
+}
 
 function loadState() {
   try {
