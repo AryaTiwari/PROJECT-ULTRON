@@ -216,12 +216,12 @@ async function ensurePocLinkedInColumns(source, sheet) {
     if (Number.isInteger(item.slot.linkedinIndex) && item.slot.linkedinIndex >= 0) continue;
     item.slot.linkedinIndex = nextIndex++;
     changes.push({
-      range: localExcel.cellRange(sheet.sheetName, layout.headerRowNumber, item.slot.linkedinIndex),
+      range: sourceCellRange(sheet.sheetName, layout.headerRowNumber, item.slot.linkedinIndex),
       value: item.label,
     });
     created.push(item.label);
   }
-  if (changes.length) await localExcel.writeCells(source, changes);
+  if (changes.length) await writeSourceCells(source, changes);
   return created;
 }
 
@@ -537,29 +537,29 @@ function rowChanges(sheetName, rowNumber, layout, people) {
   for (let i = 0; i < 3; i++) {
     const slot = slots[i];
     const person = people[i] || null;
-    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.nameIndex), value: person ? displayName(person) : '' });
+    changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.nameIndex), value: person ? displayName(person) : '' });
     if (Number.isInteger(slot.linkedinIndex) && slot.linkedinIndex >= 0) {
-      changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.linkedinIndex), value: person?.linkedinUrl || '' });
+      changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.linkedinIndex), value: person?.linkedinUrl || '' });
     }
-    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.phoneIndex), value: person?.phone || '' });
-    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.emailIndex), value: person?.email || '' });
+    changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.phoneIndex), value: person?.phone || '' });
+    changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.emailIndex), value: person?.email || '' });
   }
   return changes;
 }
 
 function anchoredRowChanges(sheetName, rowNumber, layout, anchor, slotPeople = [], lockedSlots = []) {
   const changes = [];
-  changes.push({ range: localExcel.cellRange(sheetName, rowNumber, layout.first.phoneIndex), value: anchor?.phone || '' });
-  changes.push({ range: localExcel.cellRange(sheetName, rowNumber, layout.first.emailIndex), value: anchor?.email || '' });
+  changes.push({ range: sourceCellRange(sheetName, rowNumber, layout.first.phoneIndex), value: anchor?.phone || '' });
+  changes.push({ range: sourceCellRange(sheetName, rowNumber, layout.first.emailIndex), value: anchor?.email || '' });
 
   const slots = [layout.second, layout.third];
   for (let i = 0; i < slots.length; i++) {
     if (lockedSlots[i]) continue;
     const person = slotPeople[i] || null;
     if (!person) continue;
-    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slots[i].nameIndex), value: displayName(person) });
-    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slots[i].phoneIndex), value: person.phone || '' });
-    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slots[i].emailIndex), value: person.email || '' });
+    changes.push({ range: sourceCellRange(sheetName, rowNumber, slots[i].nameIndex), value: displayName(person) });
+    changes.push({ range: sourceCellRange(sheetName, rowNumber, slots[i].phoneIndex), value: person.phone || '' });
+    changes.push({ range: sourceCellRange(sheetName, rowNumber, slots[i].emailIndex), value: person.email || '' });
   }
   return changes;
 }
@@ -596,8 +596,8 @@ async function syncPendingPhones(options = {}) {
     apollo.recordPhoneResult(id, phone);
     for (const match of pending.filter((item) => String(item.record.apolloPersonId) === id && item.record.pending)) {
       try {
-        await localExcel.writeCells(match.record.source, [{
-          range: localExcel.cellRange(match.record.sheetName, match.record.rowNumber, match.record.phoneColumnIndex),
+        await writeSourceCells(match.record.source, [{
+          range: sourceCellRange(match.record.sheetName, match.record.rowNumber, match.record.phoneColumnIndex),
           value: phone,
         }]);
         match.record.pending = false;
@@ -654,16 +654,17 @@ function backupWorkbook(source) {
 }
 
 async function enrichWorkbook(source, options = {}) {
-  if (!localExcel.isLocalExcelSource(source)) {
-    const error = new Error('Agentic 3-POC enrichment currently requires an attached .xlsx workbook.');
-    error.code = 'THREE_POC_LOCAL_XLSX_REQUIRED';
+  const provider = sourceProvider(source);
+  if (!provider) {
+    const error = new Error('Agentic 3-POC enrichment requires an attached .xlsx workbook or a valid Google Sheets URL.');
+    error.code = 'THREE_POC_SOURCE_REQUIRED';
     throw error;
   }
-  const backupPath = backupWorkbook(source);
-  const workbookSheets = await localExcel.readWorkbookSheets(source);
+  const backupPath = provider === 'local-excel' ? backupWorkbook(source) : null;
+  const workbookSheets = await readSourceSheets(source);
   const compatible = [];
   for (const sheet of workbookSheets) {
-    try { compatible.push({ ...sheet, layout: detectThreePocLayout(sheet.rows) }); }
+    try { compatible.push({ ...sheet, layout: sheet.layout || detectThreePocLayout(sheet.rows) }); }
     catch (error) { if (error.code !== 'THREE_POC_LAYOUT_NOT_FOUND') throw error; }
   }
   if (!compatible.length) {
@@ -680,6 +681,7 @@ async function enrichWorkbook(source, options = {}) {
   const job = {
     id: `three-poc-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
     source,
+    provider,
     status: 'running',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -692,6 +694,8 @@ async function enrichWorkbook(source, options = {}) {
 
   const stats = {
     jobId: job.id,
+    provider,
+    spreadsheetUrl: provider === 'google' ? source : null,
     compatibleSheets: compatible.map((sheet) => sheet.sheetName),
     scannedRows: 0,
     completedRows: 0,
@@ -823,7 +827,7 @@ async function enrichWorkbook(source, options = {}) {
           }
 
           const changes = anchoredRowChanges(sheet.sheetName, rowNumber, layout, anchor, slotPeople, lockedSlots);
-          const written = await localExcel.writeCells(source, changes);
+          const written = await writeSourceCells(source, changes);
           const writtenPeople = [anchor, ...slotPeople.filter(Boolean)];
           stats.updatedCells += written.updatedCells || 0;
           stats.contactsWritten += writtenPeople.length;
@@ -890,7 +894,7 @@ async function enrichWorkbook(source, options = {}) {
         const enriched = [];
         for (const person of people) enriched.push(await enrichSelectedPerson(person));
         const changes = rowChanges(sheet.sheetName, rowNumber, layout, enriched);
-        const written = await localExcel.writeCells(source, changes);
+        const written = await writeSourceCells(source, changes);
         stats.updatedCells += written.updatedCells || 0;
         stats.contactsWritten += enriched.length;
         stats.emailsWritten += enriched.filter((person) => person.email).length;
@@ -921,7 +925,13 @@ async function enrichWorkbook(source, options = {}) {
   saveState(state);
   if (stats.pendingPhones) startPhoneWatcher();
 
-  return { ...stats, artifact: localExcel.artifact(source), status: job.status, backupPath };
+  return {
+    ...stats,
+    artifact: provider === 'local-excel' ? localExcel.artifact(source) : null,
+    spreadsheetUrl: provider === 'google' ? source : null,
+    status: job.status,
+    backupPath,
+  };
 }
 
 function pendingCount() {
