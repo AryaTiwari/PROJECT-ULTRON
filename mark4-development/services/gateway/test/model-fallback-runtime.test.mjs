@@ -22,3 +22,19 @@ test("normal dev startup does not block on headless browser smoke",()=>{
   assert.match(dev,/ULTRON_M4_UI_SMOKE/);
   assert.match(dev,/Browser smoke probe skipped/);
 });
+
+test("FreeLLM is a named OpenAI-compatible fallback and has isolated test mode",()=>{
+  assert.match(dev,/providers:\\n  freellm:/);
+  assert.match(dev,/key_env: "FREELLM_API_KEY"/);
+  assert.match(dev,/FREELLM_API_BASE/);
+  assert.match(dev,/FREELLM_MODEL/);
+  assert.match(dev,/addFallback\("freellm", freeLlm\.model\)/);
+  assert.match(dev,/ULTRON_M4_FREELLM_TEST/);
+  assert.match(dev,/FREE LLM TEST MODE ACTIVE/);
+  assert.match(dev,/probeFreeLlm/);
+});
+
+test("FreeLLM test mode excludes normal Gemini and NVIDIA fallbacks",()=>{
+  assert.match(dev,/if \(!freeLlm\.testMode\) \{[\s\S]*addFallback\("gemini"/);
+  assert.match(dev,/if \(freeLlm\.testMode\) \{[\s\S]*provider: "freellm"/);
+});

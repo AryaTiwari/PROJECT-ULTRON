@@ -41,7 +41,32 @@ process.env.API_SERVER_PORT = "8642";
 process.env.PATH = hermesNode + path.delimiter + (process.env.PATH || "");
 process.env.TERMINAL_CWD = root;
 
+function truthy(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || "").trim());
+}
+
+function freeLlmSettings() {
+  const explicitBase = String(process.env.FREELLM_API_BASE || "").trim();
+  const baseUrl = (explicitBase || "http://127.0.0.1:3001/v1").replace(/\/+$/, "");
+  const apiKey = String(process.env.FREELLM_API_KEY || "").trim();
+  const model = String(process.env.FREELLM_MODEL || "auto").trim() || "auto";
+  const allowNoKey = truthy(process.env.FREELLM_ALLOW_NO_KEY);
+  return {
+    baseUrl,
+    apiKey,
+    model,
+    allowNoKey,
+    configured: Boolean(apiKey || explicitBase || allowNoKey),
+    testMode: truthy(process.env.ULTRON_M4_FREELLM_TEST)
+  };
+}
+
+const freeLlm = freeLlmSettings();
+
 function configureModelRoutes() {
+  if (freeLlm.testMode) {
+    return { provider: "freellm", model: freeLlm.model, source: "FreeLLM forced test mode" };
+  }
   const explicitProvider = String(process.env.ULTRON_M4_COGNITION_PROVIDER || "").trim();
   const explicitModel = String(process.env.ULTRON_M4_COGNITION_MODEL || "").trim();
   if (explicitProvider && explicitModel) return { provider: explicitProvider, model: explicitModel, source: "explicit" };
@@ -93,12 +118,17 @@ function syncHermesRuntimeConfig() {
     fallbacks.push({ provider, model });
   };
 
-  if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
-    addFallback("gemini", "gemini-3.7-flash");
-    addFallback("gemini", "gemini-3.6-flash");
-  }
-  if (process.env.NVIDIA_API_KEY) {
-    addFallback("nvidia", String(process.env.ULTRON_M4_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b"));
+  if (!freeLlm.testMode) {
+    if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
+      addFallback("gemini", "gemini-3.7-flash");
+      addFallback("gemini", "gemini-3.6-flash");
+    }
+    if (process.env.NVIDIA_API_KEY) {
+      addFallback("nvidia", String(process.env.ULTRON_M4_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b"));
+    }
+    if (freeLlm.configured) {
+      addFallback("freellm", freeLlm.model);
+    }
   }
 
   const fallbackYaml = fallbacks.length
@@ -109,7 +139,18 @@ function syncHermesRuntimeConfig() {
     ? `model:\n  provider: ${yamlQuote(primaryProvider)}\n  default: ${yamlQuote(primaryModel)}`
     : 'model:\n  provider: "auto"';
 
+  const freeLlmProviderYaml = `providers:
+  freellm:
+    name: "FreeLLM"
+    base_url: ${yamlQuote(freeLlm.baseUrl)}
+    key_env: "FREELLM_API_KEY"
+    default_model: ${yamlQuote(freeLlm.model)}
+    transport: "chat_completions"
+    enabled: true`;
+
   const configText = `${modelYaml}
+
+${freeLlmProviderYaml}
 
 agent:
   api_max_retries: 1
@@ -164,6 +205,32 @@ mcp_servers:
 }
 
 const runtimeModelPolicy = syncHermesRuntimeConfig();
+
+async function probeFreeLlm() {
+  if (!freeLlm.testMode) return null;
+  if (!freeLlm.apiKey && !freeLlm.allowNoKey) {
+    throw new Error("FreeLLM test mode is active but FREELLM_API_KEY is missing. Set the FreeLLM unified key, or FREELLM_ALLOW_NO_KEY=1 only for a trusted no-auth local endpoint.");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7000);
+  try {
+    const headers = { Accept: "application/json" };
+    if (freeLlm.apiKey) headers.Authorization = "Bearer " + freeLlm.apiKey;
+    const response = await fetch(freeLlm.baseUrl + "/models", { headers, signal: controller.signal, cache: "no-store" });
+    const raw = await response.text();
+    if (!response.ok) throw new Error("FreeLLM /models HTTP " + response.status + ": " + raw.slice(0, 500));
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    const rows = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : [];
+    console.log("FreeLLM preflight ready:", freeLlm.baseUrl, "| models:", rows.length || "catalog available");
+    return { ok: true, models: rows.length };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("FreeLLM preflight timed out at " + freeLlm.baseUrl + "/models");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const children = [];
 let shuttingDown = false;
@@ -258,6 +325,11 @@ async function verifyBrowserMount(){
 
 async function main() {
   const hermesHealth = "http://127.0.0.1:8642/health";
+  if (freeLlm.testMode) {
+    console.log("FREE LLM TEST MODE ACTIVE: Gemini/NVIDIA primary routes are disabled for this run.");
+    console.log("FreeLLM route:", freeLlm.baseUrl, "| model:", freeLlm.model);
+    await probeFreeLlm();
+  }
   console.log("Starting Hermes with a fresh Mark 4 runtime...");
   run(hermesPython, ["-m", "hermes_cli.main", "gateway", "run", "--replace"], root);
   await waitFor(hermesHealth, "Hermes");
@@ -268,7 +340,7 @@ async function main() {
       console.log("Fallback chain:", runtimeModelPolicy.fallbacks.map(x => x.provider + "/" + x.model).join(" -> "));
     }
   } else {
-    console.warn("No explicit free model credential detected. Add GEMINI_API_KEY/GOOGLE_API_KEY, NVIDIA_API_KEY, or ULTRON_M4_COGNITION_PROVIDER + ULTRON_M4_COGNITION_MODEL.");
+    console.warn("No primary model credential detected. Add Gemini/NVIDIA credentials, explicit ULTRON_M4 cognition routing, or configure FreeLLM.");
   }
 
   console.log("Starting ULTRON gateway...");
