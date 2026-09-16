@@ -226,6 +226,10 @@ async function probeFreeLlm() {
     return { ok: true, models: rows.length };
   } catch (error) {
     if (controller.signal.aborted) throw new Error("FreeLLM preflight timed out at " + freeLlm.baseUrl + "/models");
+    const message = error?.message || String(error);
+    if (/fetch failed|ECONNREFUSED|connection/i.test(message)) {
+      throw new Error("FreeLLMAPI is not reachable at " + freeLlm.baseUrl + ". Run 'npm run freellm:setup' first, finish the local dashboard setup, then retry 'npm run dev:freellm-test'.");
+    }
     throw error;
   } finally {
     clearTimeout(timer);

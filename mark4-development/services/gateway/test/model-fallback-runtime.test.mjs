@@ -39,3 +39,8 @@ test("FreeLLM test mode excludes normal Gemini and NVIDIA fallbacks",()=>{
   assert.match(dev,/if \(!freeLlm\.testMode\) \{[\s\S]*addFallback\("gemini"/);
   assert.match(dev,/if \(freeLlm\.testMode\) \{[\s\S]*provider: "freellm"/);
 });
+
+test("FreeLLM unreachable error points to deterministic setup command",()=>{
+  assert.match(dev,/npm run freellm:setup/);
+  assert.match(dev,/FreeLLMAPI is not reachable/);
+});
