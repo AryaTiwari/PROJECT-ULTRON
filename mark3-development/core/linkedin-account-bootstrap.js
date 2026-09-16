@@ -212,7 +212,7 @@ async function handle(message, options = {}) {
     // Attached/local 3-POC workbook enrichment is owned by lead-enrichment-bootstrap.
     // "LinkedIn Id" is a column identity signal here, not a request for the LinkedIn
     // account research/Apollo-columns workflow.
-    if (require('./command-control-plane').isLocalThreePocWorkbookRequest(text, options)) return null;
+    if (require('./command-control-plane').isThreePocSpreadsheetRequest(text, options)) return null;
 
     try {
       if (/^\s*(?:resume\b[\s\S]*\blinkedin\b|continue\b[\s\S]*[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/i.test(text)) {
