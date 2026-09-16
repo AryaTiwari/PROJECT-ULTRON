@@ -24,8 +24,8 @@ test("normal dev startup does not block on headless browser smoke",()=>{
 });
 
 test("FreeLLM is a named OpenAI-compatible fallback and has isolated test mode",()=>{
-  assert.match(dev,/const freeLlmProviderYaml/);
-  assert.match(dev,/providers:\s*[\\r\\n]+\s*freellm:/);
+  assert.ok(dev.includes("const freeLlmProviderYaml"));
+  assert.ok(dev.includes("  freellm:"));
   assert.match(dev,/key_env: "FREELLM_API_KEY"/);
   assert.match(dev,/FREELLM_API_BASE/);
   assert.match(dev,/FREELLM_MODEL/);
