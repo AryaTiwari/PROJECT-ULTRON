@@ -263,12 +263,12 @@ async function handlePaidToolDecision(decision) {
     return paidTools.withPermit(decision, async () => {
       try {
         const stats = await threePoc.enrichWorkbook(decision.payload.url, { rowLimit: decision.payload.rowLimit || undefined });
-        const extra = { threePocEnrichment: stats, spreadsheetProvider: 'local-excel' };
+        const extra = { threePocEnrichment: stats, spreadsheetProvider: stats.provider || decision.payload.provider || null, spreadsheetUrl: stats.spreadsheetUrl || null };
         if (stats.artifact) extra.artifacts = [stats.artifact];
         return responseShape(true, threePoc.formatResult(stats), {
           ...extra,
           model: 'mark3-agentic-three-poc',
-          provider: 'ai-agents+apollo+local-excel',
+          provider: stats.provider === 'google' ? 'ai-agents+apollo+google-sheets' : 'ai-agents+apollo+local-excel',
           taskType: 'three-poc-enrichment',
         });
       } catch (error) {
@@ -420,14 +420,14 @@ function install() {
           conversation.append('user', text, { taskType: 'three-poc-enrichment', inputMode, spreadsheetProvider: threePocRequest.provider });
           if (threePocRequest.invalidUrl) {
             result = responseShape(false, 'Attach the Excel workbook and reference it with @filename for this 3-POC enrichment run. Nothing was edited and Apollo was not called.', { error: 'INVALID_THREE_POC_SOURCE', apolloCalled: false });
-          } else if (threePocRequest.provider !== 'local-excel') {
-            result = responseShape(false, 'The agentic 3-POC workflow is currently enabled for attached Excel workbooks only, so I did not edit this source.', { error: 'THREE_POC_LOCAL_XLSX_REQUIRED', apolloCalled: false });
+          } else if (!['local-excel', 'google'].includes(threePocRequest.provider)) {
+            result = responseShape(false, 'The agentic 3-POC workflow requires an attached Excel workbook or a Google Sheets link, so I did not edit this source.', { error: 'THREE_POC_SOURCE_REQUIRED', apolloCalled: false });
           } else {
             const approval = paidTools.request(
               'apollo',
               'agentic-three-poc-enrichment',
-              { url: threePocRequest.url, provider: 'local-excel' },
-              'This run supports both explicit 3-POC sheets and anchored legacy sheets like New_Sheet_14-09-25. In the anchored format, Person or Company Name + LinkedIn Id is treated as POC-1, POC-1 is identity-matched by that exact person profile, the current employer is resolved from that profile, and POC-2/POC-3 are selected only from employees of that employer. POC-1 phone/email stay in the first phone/email pair; POC-2 and POC-3 stay in their own respective pairs. Existing populated slots are preserved. Company-profile anchor rows are left unchanged rather than guessed.'
+              { url: threePocRequest.url, provider: threePocRequest.provider },
+              `This run will edit the ${threePocRequest.provider === 'google' ? 'linked Google Sheet in place' : 'attached Excel workbook'} using the anchored/explicit 3-POC contract. In the anchored format, Person or Company Name + LinkedIn Id is POC-1, POC-1 is identity-matched by that exact person profile, the current employer is resolved from that profile, and POC-2/POC-3 are selected only from employees of that employer. POC-1 phone/email stay in the first phone/email pair; POC-2 and POC-3 stay in their own respective pairs. Existing populated slots are preserved. Company-profile anchor rows are left unchanged rather than guessed.`
             );
             result = approvalResponse(approval, { threePocEnrichmentRequest: threePocRequest });
           }
