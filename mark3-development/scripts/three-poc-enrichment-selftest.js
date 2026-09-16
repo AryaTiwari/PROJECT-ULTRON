@@ -146,8 +146,10 @@ const exactControlRoute = controlPlane.claim(
   { attachments: [{ id: 'file-test-1', name: 'New_Sheet_14-09-25.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }] }
 );
 assert.equal(exactControlRoute.domain, 'three-poc-spreadsheet');
-assert.equal(exactControlRoute.exclusive, false);
-assert.equal(exactControlRoute.yieldTo, 'lead-enrichment-bootstrap');
+assert.equal(exactControlRoute.exclusive, true);
+assert.equal(exactControlRoute.claimed, true);
+assert.equal(exactControlRoute.controller, 'three-poc-domain-controller');
+assert.equal(exactControlRoute.generalModelAllowed, false);
 
 const googleSheetUrl = 'https://docs.google.com/spreadsheets/d/testSheet123/edit#gid=123';
 const googleNaturalRequest = bootstrap.isThreePocRequest(
@@ -164,7 +166,9 @@ assert.equal(googleNaturalRequest.provider, 'google');
 assert.equal(googleNaturalRequest.url, googleSheetUrl);
 const googleControlRoute = controlPlane.claim(`Use ${googleSheetUrl} and perform anchored 3-POC enrichment. POC-1 uses LinkedIn Id; fill POC-2 and POC-3 phone and email.`);
 assert.equal(googleControlRoute.domain, 'three-poc-spreadsheet');
-assert.equal(googleControlRoute.exclusive, false);
+assert.equal(googleControlRoute.exclusive, true);
+assert.equal(googleControlRoute.controller, 'three-poc-domain-controller');
+assert.equal(googleControlRoute.generalModelAllowed, false);
 
 const paidApprovalSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'paid-tool-approval.js'), 'utf8');
 assert.match(paidApprovalSource, /RUNTIME_ID/);
@@ -185,5 +189,15 @@ assert.match(leadBootstrapSource, /inspectThreePocTarget/);
 assert.match(leadBootstrapSource, /GENERIC_ENRICHMENT_BLOCKED_BY_THREE_POC_SCHEMA/);
 assert.match(leadBootstrapSource, /autoPromotedFrom: 'lead-enrichment'/);
 assert.match(leadBootstrapSource, /threePoc\.inspectSource/);
+assert.match(leadBootstrapSource, /async function handleThreePocCommand/);
+assert.match(leadBootstrapSource, /domainOwner: 'three-poc-domain-controller'/);
+
+const threePocControllerSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc-domain-controller.js'), 'utf8');
+assert.match(threePocControllerSource, /handleThreePocCommand/);
+assert.doesNotMatch(threePocControllerSource, /model-router|modelRouter|assistant\.handle/);
+
+const controlPlaneSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'command-control-plane.js'), 'utf8');
+assert.match(controlPlaneSource, /controller: 'three-poc-domain-controller'/);
+assert.match(controlPlaneSource, /generalModelAllowed: false/);
 
 console.log('Agentic 3-POC enrichment self-test passed. Explicit/anchored schemas, Google Sheet routing, schema promotion, POC isolation and stale generic-enrichment guards are protected.');
