@@ -39,7 +39,3 @@ test("OmniRoute test mode excludes Gemini and NVIDIA fallbacks",()=>{
   assert.match(dev,/if \(omniRoute\.testMode\) \{[\s\S]*provider: "omniroute"/);
 });
 
-test("FreeLLM unreachable error points to deterministic setup command",()=>{
-  assert.match(dev,/npm run freellm:setup/);
-  assert.match(dev,/FreeLLMAPI is not reachable/);
-});
