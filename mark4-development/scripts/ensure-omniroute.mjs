@@ -66,7 +66,14 @@ function locate(){
   }
   return null;
 }
-function tail(file,lines=120){\n  try{return fs.readFileSync(file,"utf8").split(/\\r?\\n/).slice(-lines).join("\n").trim();}catch{return "";}\n}\nfunction stopStaleListener(){\n  if(process.platform!=="win32")return;\n  const script="$p=Get-NetTCPConnection -LocalPort "+port+" -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if($p){$p|ForEach-Object{Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue}}";\n  spawnSync("powershell.exe",["-NoProfile","-NonInteractive","-Command",script],{cwd:root,env:process.env,stdio:["ignore","ignore","ignore"],shell:false,windowsHide:true});\n}
+function tail(file,lines=120){
+  try{return fs.readFileSync(file,"utf8").split(/\r?\n/).slice(-lines).join("\n").trim();}catch{return "";}
+}
+function stopStaleListener(){
+  if(process.platform!=="win32")return;
+  const script="$p=Get-NetTCPConnection -LocalPort "+port+" -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if($p){$p|ForEach-Object{Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue}}";
+  spawnSync("powershell.exe",["-NoProfile","-NonInteractive","-Command",script],{cwd:root,env:process.env,stdio:["ignore","ignore","ignore"],shell:false,windowsHide:true});
+}
 async function waitReady(state,timeoutMs=90000){
   const started=Date.now();
   let nextNotice=10000;
@@ -80,7 +87,12 @@ async function waitReady(state,timeoutMs=90000){
   return false;
 }
 
-if(await open()){\n  if(await models()){console.log(`OmniRoute already ready at ${baseUrl}`);process.exit(0);}\n  console.warn(`Stale OmniRoute listener detected on ${host}:${port}; replacing it silently.`);\n  stopStaleListener();\n  await new Promise(r=>setTimeout(r,500));\n}
+if(await open()){
+  if(await models()){console.log(`OmniRoute already ready at ${baseUrl}`);process.exit(0);}
+  console.warn(`Stale OmniRoute listener detected on ${host}:${port}; replacing it silently.`);
+  stopStaleListener();
+  await new Promise(r=>setTimeout(r,500));
+}
 
 const found=locate();
 if(!found){
