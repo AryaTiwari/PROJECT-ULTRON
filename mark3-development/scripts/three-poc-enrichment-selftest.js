@@ -58,6 +58,12 @@ assert.deepEqual(
   ['b','a']
 );
 assert.equal(three.displayName({ name: 'Jane Doe', title: 'Head of Talent' }), 'Jane Doe — Head of Talent');
+assert.equal(three.displayName({ name: 'Jane Doe', title: '' }), 'Jane Doe');
+assert.equal(three.displayName({ name: '', title: 'Head of Talent' }), '');
+assert.equal(three.safeDesignation({ name: 'Jane Doe', title: '  Head   of Talent  ' }), 'Head of Talent');
+assert.equal(three.safeDesignation({ name: 'Jane Doe', title: 'jane@example.com' }), '');
+assert.equal(three.hasNameAndDesignation({ name: 'Jane Doe', title: 'Head of Talent' }), true);
+assert.equal(three.hasNameAndDesignation({ name: 'Jane Doe', title: '' }), false);
 assert.equal(three.linkedInProfileKind('ID: https://www.linkedin.com/in/aashish-nimadi-2678a6413/'), 'person');
 assert.equal(three.linkedInProfileKind('https://www.linkedin.com/company/allegisit/'), 'company');
 assert.equal(three.personNameKey('Rajeev Ranjan — Recruitment Manager'), 'rajeev ranjan');
@@ -96,6 +102,10 @@ assert.match(source, /anchored_first_poc/);
 assert.match(source, /resolvePersonProfile/);
 assert.match(source, /Exact POC-1 LinkedIn profile -> current Apollo organization/);
 assert.match(source, /if \(layout\.schema === 'anchored_first_poc'\) return \[\];/);
+assert.match(source, /resolvedIdentity\.title \|\| person\.title/);
+assert.match(source, /if \(!hasNameAndDesignation\(enrichedExisting\)\)/);
+assert.match(source, /if \(!hasNameAndDesignation\(enrichedPerson\)\) continue/);
+assert.ok(!source.includes("if (existing.phone && existing.email) {\n              lockedSlots[slotIndex] = true;"), 'complete existing POC slots must still be eligible for safe designation completion');
 
 const request = bootstrap.isThreePocRequest(
   'Fill 1st POC, 2nd POC and 3rd POC with the most responsible people for hiring in @New_Sheet_14-09-25',
