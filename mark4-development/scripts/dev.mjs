@@ -162,13 +162,9 @@ async function verifyBrowserMount(){
 
 async function main() {
   const hermesHealth = "http://127.0.0.1:8642/health";
-  if (await isHealthy(hermesHealth)) {
-    console.log("Hermes already healthy; reusing existing gateway.");
-  } else {
-    console.log("Starting Hermes (replacing stale gateway if necessary)...");
-    run("uv", ["run", "--directory", vendor, "hermes", "gateway", "run", "--replace"]);
-    await waitFor(hermesHealth, "Hermes");
-  }
+  console.log("Starting Hermes with a fresh Mark 4 runtime...");
+  run("uv", ["run", "--directory", vendor, "hermes", "gateway", "run", "--replace"]);
+  await waitFor(hermesHealth, "Hermes");
 
   if (selectedModelRoute.provider) {
     console.log("Model route:", selectedModelRoute.provider + " / " + selectedModelRoute.model + " (" + selectedModelRoute.source + ")");
