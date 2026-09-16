@@ -67,8 +67,11 @@ function contactSlot(row, nameIndex, nextNameIndex, explicitLinkedInPatterns = [
   return {
     nameIndex,
     phoneIndex,
-    emailIndex,
-    linkedinIndex: inlineLinkedInIndex >= 0 ? inlineLinkedInIndex : explicitLinkedInIndex,
+    emailIndex: emailIndex,
+    // A POC-specific header must win over a generic LinkedIn match. Without
+    // this, the third slot can accidentally bind to "1st POC LinkedIn"
+    // simply because it appears earlier later in the same row.
+    linkedinIndex: explicitLinkedInIndex >= 0 ? explicitLinkedInIndex : inlineLinkedInIndex,
   };
 }
 
