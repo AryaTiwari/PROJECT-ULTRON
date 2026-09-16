@@ -34,3 +34,20 @@ For LinkedIn verification, only set `verificationStatus: "verified"` when an act
 Use Hermes authenticated browser/tool capabilities to discover and inspect LinkedIn. The old Mark 3 LinkedIn scraper is not a default Mark 4 capability.
 
 After Apollo enrichment, update the same canonical lead record with the selected contact. Never create a duplicate company row merely because another job or contact was found.
+
+
+## End-to-end lead research and delivery
+
+When the user asks for jobs/leads plus decision-makers plus a spreadsheet, treat the whole request as one mission rather than returning raw search snippets.
+
+- Create or resume a persistent mission when the request spans discovery, verification, enrichment and export.
+- Discovery and enrichment are separate phases. First verify job/company evidence and save each accepted company to the canonical lead master.
+- The canonical lead can hold two ranked contacts:
+  - primary: Founder / CEO / Director / Owner;
+  - secondary: Co-Founder / Recruiting Head / Recruiting Manager / HR Manager / HR Recruiter.
+- Use `ultron_apollo_find_company_contacts` only for enrichment when Apollo is allowed and available. Do not use Apollo for company discovery.
+- Never fabricate phone or email values. Empty contact fields stay empty.
+- A request for a sheet is not complete after search. Export only after the requested research fields have been populated as far as evidence permits.
+- For Google Sheets, call `ultron_google_workspace_status` before export. If OAuth is missing, keep all gathered leads and mission progress, mark the mission blocked on Google auth, and explain the one-time connection step. Do not throw away research or pretend the sheet exists.
+- Once authenticated, use `ultron_google_sheet_from_leads` so the export comes from the canonical master rather than model-written rows.
+- If the user did not explicitly scope discovery to LinkedIn, choose the best evidence source dynamically; if they did scope to LinkedIn, obey the LinkedIn-only rule above.

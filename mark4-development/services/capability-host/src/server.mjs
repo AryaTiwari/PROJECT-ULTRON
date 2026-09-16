@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findCompanyContact } from "./apollo.mjs";
+import { findCompanyContact, findCompanyContacts } from "./apollo.mjs";
+import { googleWorkspaceStatus, googleSetClientSecret, googleAuthUrl, googleAuthCode, createGoogleSheet } from "./workspace.mjs";
 import { createReelJob, getReelJob, renderReelJob, inspectReelJob, mediaEngineStatus } from "../../media-engine/src/engine.mjs";
 
 const here=path.dirname(fileURLToPath(import.meta.url)),mark4Root=path.resolve(here,"../../..");
@@ -23,7 +24,7 @@ const tools=[
 {name:"ultron_record_evidence",description:"Attach verifiable evidence to an existing mission using URLs, ids, hashes, provider receipts or readbacks.",inputSchema:{type:"object",required:["missionId","kind","source"],properties:{missionId:{type:"string"},kind:{type:"string"},source:{type:"string"},ref:{type:["string","null"]},payload:{type:"object"},verified:{type:"boolean"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:false}},
 {name:"ultron_lead_master_status",description:"Read authoritative Mark 4 lead counts and the remaining verified-company gap for an optional numerical target.",inputSchema:{type:"object",properties:{target:{type:"integer",minimum:0}},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_lead_master_search",description:"Search the native Mark 4 lead registry. Use it for dedupe and reuse before fresh company discovery.",inputSchema:{type:"object",properties:{status:{type:"string",enum:["pending","verified","rejected"]},query:{type:"string"},limit:{type:"integer",minimum:1,maximum:1000}},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
-{name:"ultron_lead_master_upsert",description:"Create or update one canonical company lead. One company equals one lead. Setting verificationStatus=verified for LinkedIn requires a LinkedIn job URL plus evidence.activeJobVerified=true.",inputSchema:{type:"object",required:["companyName"],properties:{companyName:{type:"string"},companyLink:{type:"string"},jobLink:{type:"string"},jobTitle:{type:"string"},location:{type:"string"},employeeCount:{type:"integer",minimum:0},applicantCount:{type:"integer",minimum:0},source:{type:"string"},verificationStatus:{type:"string",enum:["pending","verified","rejected"]},evidence:{type:"object"},contactName:{type:"string"},contactRole:{type:"string"},contactLinkedin:{type:"string"},phone:{type:"string"},email:{type:"string"},remarks:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_lead_master_upsert",description:"Create or update one canonical company lead with up to two ranked decision-makers. One company equals one lead. LinkedIn verified status requires an inspected active LinkedIn job plus evidence.activeJobVerified=true.",inputSchema:{type:"object",required:["companyName"],properties:{companyName:{type:"string"},companyLink:{type:"string"},jobLink:{type:"string"},jobTitle:{type:"string"},location:{type:"string"},employeeCount:{type:"integer",minimum:0},applicantCount:{type:"integer",minimum:0},source:{type:"string"},verificationStatus:{type:"string",enum:["pending","verified","rejected"]},evidence:{type:"object"},primaryContactName:{type:"string"},primaryContactRole:{type:"string"},primaryContactLinkedin:{type:"string"},primaryPhone:{type:"string"},primaryEmail:{type:"string"},secondaryContactName:{type:"string"},secondaryContactRole:{type:"string"},secondaryContactLinkedin:{type:"string"},secondaryPhone:{type:"string"},secondaryEmail:{type:"string"},contactName:{type:"string"},contactRole:{type:"string"},contactLinkedin:{type:"string"},phone:{type:"string"},email:{type:"string"},remarks:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_creator_registry_status",description:"Read authoritative creator research counts and the remaining qualified-creator gap for an optional target.",inputSchema:{type:"object",properties:{target:{type:"integer",minimum:0}},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_creator_registry_search",description:"Search saved creator candidates before fresh discovery. Missing follower/view metrics remain null rather than guessed.",inputSchema:{type:"object",properties:{status:{type:"string",enum:["candidate","qualified","rejected"]},niche:{type:"string"},query:{type:"string"},limit:{type:"integer",minimum:1,maximum:1000}},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_creator_registry_upsert",description:"Create or update one canonical creator. Qualifying a creator requires evidence.profileObserved=true. FollowerCount or avgViews may only be written when evidence.metricsObserved=true.",inputSchema:{type:"object",required:["handle"],properties:{platform:{type:"string"},handle:{type:"string"},profileUrl:{type:"string"},displayName:{type:"string"},niche:{type:"string"},location:{type:"string"},followerCount:{type:"integer",minimum:0},avgViews:{type:"integer",minimum:0},fitScore:{type:"integer",minimum:0,maximum:100},qualificationStatus:{type:"string",enum:["candidate","qualified","rejected"]},evidence:{type:"object"},email:{type:"string"},phone:{type:"string"},outreachStatus:{type:"string"},remarks:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
@@ -32,7 +33,13 @@ const tools=[
 {name:"ultron_reel_job_status",description:"Read a native Reel job and its current render state.",inputSchema:{type:"object",required:["jobId"],properties:{jobId:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_reel_render_job",description:"Render a prepared Reel job locally through the queue=1 SVG + Sharp + FFmpeg pipeline. This writes only inside the Mark 4 Reel workspace.",inputSchema:{type:"object",required:["jobId"],properties:{jobId:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
 {name:"ultron_reel_inspect_job",description:"Inspect the rendered MP4 with ffprobe and return dimensions, duration, codec and size.",inputSchema:{type:"object",required:["jobId"],properties:{jobId:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
-{name:"ultron_apollo_find_company_contact",description:"Find the preferred decision maker for an already discovered company using Apollo. Founder/Director/Owner > Recruiting Head/Manager > HR Recruiter. Enrichment only, never company discovery.",inputSchema:{type:"object",required:["company"],properties:{company:{type:"string"},domain:{type:"string"},location:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}}
+{name:"ultron_apollo_find_company_contact",description:"Find the single preferred decision maker for an already discovered company using Apollo. Kept for compatibility.",inputSchema:{type:"object",required:["company"],properties:{company:{type:"string"},domain:{type:"string"},location:{type:"string"}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}},
+{name:"ultron_apollo_find_company_contacts",description:"Find up to two ranked company contacts for an already discovered company. Priority: Founder/CEO/Director/Owner, then Co-Founder/Recruiting Head/Manager, then HR Recruiter. Enrichment only, never company discovery.",inputSchema:{type:"object",required:["company"],properties:{company:{type:"string"},domain:{type:"string"},location:{type:"string"},limit:{type:"integer",minimum:1,maximum:2}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}},
+{name:"ultron_google_workspace_status",description:"Check whether ULTRON's isolated Google Workspace OAuth is connected for Sheets/Drive.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_google_workspace_set_client_secret",description:"Register a user-provided Google Desktop OAuth client JSON file path for ULTRON's isolated Workspace profile.",inputSchema:{type:"object",required:["path"],properties:{path:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
+{name:"ultron_google_workspace_auth_url",description:"Generate the Google OAuth authorization URL for ULTRON. Defaults to Drive + Sheets only.",inputSchema:{type:"object",properties:{services:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
+{name:"ultron_google_workspace_auth_code",description:"Finish Google OAuth using the redirected localhost URL or authorization code supplied by the user.",inputSchema:{type:"object",required:["codeOrUrl"],properties:{codeOrUrl:{type:"string"}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
+{name:"ultron_google_sheet_from_leads",description:"Create a Google Sheet directly from the canonical Mark 4 lead master. Exports verified research with primary and secondary decision-maker columns. Returns structured auth_required without losing research if Google is not connected.",inputSchema:{type:"object",properties:{title:{type:"string"},sheetName:{type:"string"},status:{type:"string",enum:["pending","verified","rejected"]},query:{type:"string"},limit:{type:"integer",minimum:1,maximum:500}}},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true}}
 ];
 async function callTool(name,args={}){
   if(name==="ultron_status")return text(await internal("/internal/status"));
@@ -60,6 +67,31 @@ async function callTool(name,args={}){
   if(name==="ultron_reel_render_job")return text(await renderReelJob(args.jobId));
   if(name==="ultron_reel_inspect_job")return text(await inspectReelJob(args.jobId));
   if(name==="ultron_apollo_find_company_contact")return text(await findCompanyContact(args));
+  if(name==="ultron_apollo_find_company_contacts")return text(await findCompanyContacts(args));
+  if(name==="ultron_google_workspace_status")return text(await googleWorkspaceStatus());
+  if(name==="ultron_google_workspace_set_client_secret")return text(await googleSetClientSecret(args.path));
+  if(name==="ultron_google_workspace_auth_url")return text(await googleAuthUrl(args.services||"drive,sheets"));
+  if(name==="ultron_google_workspace_auth_code")return text(await googleAuthCode(args.codeOrUrl));
+  if(name==="ultron_google_sheet_from_leads"){
+    const q=new URLSearchParams();
+    q.set("limit",String(Math.max(1,Math.min(500,Number(args.limit)||100))));
+    if(args.status)q.set("status",args.status);
+    if(args.query)q.set("q",args.query);
+    const data=await internal("/internal/leads?"+q.toString());
+    const leads=Array.isArray(data.items)?data.items:[];
+    const rows=[[
+      "COMPANY NAME","JOB TITLE","JOB LINK","LOCATION",
+      "PRIMARY NAME","PRIMARY ROLE","PRIMARY PHONE","PRIMARY EMAIL",
+      "SECONDARY NAME","SECONDARY ROLE","SECONDARY PHONE","SECONDARY EMAIL","REMARKS"
+    ],...leads.map(lead=>[
+      lead.companyName||"",lead.jobTitle||"",lead.jobLink||"",lead.location||"",
+      lead.primaryContact?.name||lead.contact?.name||"",lead.primaryContact?.role||lead.contact?.role||"",
+      lead.primaryContact?.phone||lead.contact?.phone||"",lead.primaryContact?.email||lead.contact?.email||"",
+      lead.secondaryContact?.name||"",lead.secondaryContact?.role||"",lead.secondaryContact?.phone||"",lead.secondaryContact?.email||"",
+      lead.remarks||""
+    ])];
+    return text(await createGoogleSheet({title:args.title||"ULTRON Lead Research",sheetName:args.sheetName||"Leads",rows}));
+  }
   throw new Error(`Unknown tool: ${name}`);
 }
 function send(id,result,error=null){process.stdout.write(JSON.stringify({jsonrpc:"2.0",id,...(error?{error:{code:-32000,message:error.message||String(error)}}:{result})})+"\n");}

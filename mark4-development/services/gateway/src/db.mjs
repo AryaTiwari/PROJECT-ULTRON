@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS lead_master (
   contact_linkedin TEXT,
   phone TEXT,
   email TEXT,
+  secondary_contact_name TEXT,
+  secondary_contact_role TEXT,
+  secondary_contact_linkedin TEXT,
+  secondary_phone TEXT,
+  secondary_email TEXT,
   remarks TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -105,6 +110,18 @@ CREATE TABLE IF NOT EXISTS creator_registry (
 CREATE INDEX IF NOT EXISTS idx_creator_registry_status ON creator_registry(qualification_status);
 CREATE INDEX IF NOT EXISTS idx_creator_registry_niche ON creator_registry(niche);
 `);
+
+function ensureColumn(table, column, type) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
+  if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+for (const [column,type] of [
+  ["secondary_contact_name","TEXT"],
+  ["secondary_contact_role","TEXT"],
+  ["secondary_contact_linkedin","TEXT"],
+  ["secondary_phone","TEXT"],
+  ["secondary_email","TEXT"]
+]) ensureColumn("lead_master",column,type);
 
 const parse = (value, fallback = {}) => { try { return JSON.parse(value ?? ""); } catch { return fallback; } };
 const now = () => new Date().toISOString();
@@ -274,6 +291,20 @@ function normalizeVerification(input) {
 }
 function mapLead(row) {
   if (!row) return null;
+  const primaryContact = {
+    name: row.contact_name || null,
+    role: row.contact_role || null,
+    linkedin: row.contact_linkedin || null,
+    phone: row.phone || null,
+    email: row.email || null
+  };
+  const secondaryContact = {
+    name: row.secondary_contact_name || null,
+    role: row.secondary_contact_role || null,
+    linkedin: row.secondary_contact_linkedin || null,
+    phone: row.secondary_phone || null,
+    email: row.secondary_email || null
+  };
   return {
     id: row.id,
     companyKey: row.company_key,
@@ -287,13 +318,9 @@ function mapLead(row) {
     source: row.source,
     verificationStatus: row.verification_status,
     evidence: parse(row.evidence_json),
-    contact: {
-      name: row.contact_name || null,
-      role: row.contact_role || null,
-      linkedin: row.contact_linkedin || null,
-      phone: row.phone || null,
-      email: row.email || null
-    },
+    contact: primaryContact,
+    primaryContact,
+    secondaryContact,
     remarks: row.remarks || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -323,19 +350,26 @@ export function upsertLead(input = {}) {
     source: cleanText(input.source) ?? existing?.source ?? "linkedin",
     verificationStatus,
     evidence,
-    contactName: cleanText(input.contactName ?? input.contact_name) ?? existing?.contact_name ?? null,
-    contactRole: cleanText(input.contactRole ?? input.contact_role) ?? existing?.contact_role ?? null,
-    contactLinkedin: cleanText(input.contactLinkedin ?? input.contact_linkedin) ?? existing?.contact_linkedin ?? null,
-    phone: cleanText(input.phone) ?? existing?.phone ?? null,
-    email: cleanText(input.email) ?? existing?.email ?? null,
+    contactName: cleanText(input.primaryContactName ?? input.contactName ?? input.contact_name) ?? existing?.contact_name ?? null,
+    contactRole: cleanText(input.primaryContactRole ?? input.contactRole ?? input.contact_role) ?? existing?.contact_role ?? null,
+    contactLinkedin: cleanText(input.primaryContactLinkedin ?? input.contactLinkedin ?? input.contact_linkedin) ?? existing?.contact_linkedin ?? null,
+    phone: cleanText(input.primaryPhone ?? input.phone) ?? existing?.phone ?? null,
+    email: cleanText(input.primaryEmail ?? input.email) ?? existing?.email ?? null,
+    secondaryContactName: cleanText(input.secondaryContactName ?? input.secondary_contact_name) ?? existing?.secondary_contact_name ?? null,
+    secondaryContactRole: cleanText(input.secondaryContactRole ?? input.secondary_contact_role) ?? existing?.secondary_contact_role ?? null,
+    secondaryContactLinkedin: cleanText(input.secondaryContactLinkedin ?? input.secondary_contact_linkedin) ?? existing?.secondary_contact_linkedin ?? null,
+    secondaryPhone: cleanText(input.secondaryPhone ?? input.secondary_phone) ?? existing?.secondary_phone ?? null,
+    secondaryEmail: cleanText(input.secondaryEmail ?? input.secondary_email) ?? existing?.secondary_email ?? null,
     remarks: cleanText(input.remarks) ?? existing?.remarks ?? null,
     createdAt: existing?.created_at || at,
     updatedAt: at
   };
   db.prepare(`INSERT INTO lead_master
     (id,company_key,company_name,company_link,job_link,job_title,location,employee_count,applicant_count,source,
-     verification_status,evidence_json,contact_name,contact_role,contact_linkedin,phone,email,remarks,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     verification_status,evidence_json,contact_name,contact_role,contact_linkedin,phone,email,
+     secondary_contact_name,secondary_contact_role,secondary_contact_linkedin,secondary_phone,secondary_email,
+     remarks,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(company_key) DO UPDATE SET
       company_name=excluded.company_name,
       company_link=excluded.company_link,
@@ -352,11 +386,17 @@ export function upsertLead(input = {}) {
       contact_linkedin=excluded.contact_linkedin,
       phone=excluded.phone,
       email=excluded.email,
+      secondary_contact_name=excluded.secondary_contact_name,
+      secondary_contact_role=excluded.secondary_contact_role,
+      secondary_contact_linkedin=excluded.secondary_contact_linkedin,
+      secondary_phone=excluded.secondary_phone,
+      secondary_email=excluded.secondary_email,
       remarks=excluded.remarks,
       updated_at=excluded.updated_at`)
     .run(next.id,next.companyKey,next.companyName,next.companyLink,next.jobLink,next.jobTitle,next.location,next.employeeCount,
       next.applicantCount,next.source,next.verificationStatus,JSON.stringify(next.evidence),next.contactName,next.contactRole,
-      next.contactLinkedin,next.phone,next.email,next.remarks,next.createdAt,next.updatedAt);
+      next.contactLinkedin,next.phone,next.email,next.secondaryContactName,next.secondaryContactRole,next.secondaryContactLinkedin,
+      next.secondaryPhone,next.secondaryEmail,next.remarks,next.createdAt,next.updatedAt);
   addEvent({type: existing ? "lead.updated" : "lead.created", payload:{id:next.id,companyKey,status:next.verificationStatus}});
   return getLead(next.id);
 }
@@ -372,9 +412,9 @@ export function listLeads({ status = null, query = null, limit = 100 } = {}) {
   const clauses = [], args = [];
   if (status) { clauses.push("verification_status=?"); args.push(String(status)); }
   if (query) {
-    clauses.push("(company_name LIKE ? OR location LIKE ? OR job_title LIKE ? OR contact_name LIKE ?)");
+    clauses.push("(company_name LIKE ? OR location LIKE ? OR job_title LIKE ? OR contact_name LIKE ? OR secondary_contact_name LIKE ?)");
     const q = `%${String(query).trim()}%`;
-    args.push(q,q,q,q);
+    args.push(q,q,q,q,q);
   }
   const sql = `SELECT * FROM lead_master${clauses.length ? " WHERE " + clauses.join(" AND ") : ""} ORDER BY updated_at DESC LIMIT ?`;
   args.push(Math.max(1,Math.min(1000,Number(limit)||100)));
@@ -389,7 +429,7 @@ export function leadStats(target = null) {
     if (row.verification_status in counts) counts[row.verification_status] = count;
   }
   const enriched = Number(db.prepare(`SELECT COUNT(*) AS count FROM lead_master
-    WHERE verification_status='verified' AND (email IS NOT NULL OR phone IS NOT NULL)`).get()?.count || 0);
+    WHERE verification_status='verified' AND (email IS NOT NULL OR phone IS NOT NULL OR secondary_email IS NOT NULL OR secondary_phone IS NOT NULL)`).get()?.count || 0);
   const numericTarget = target === null || target === undefined || target === "" ? null : Math.max(0,Math.round(Number(target)||0));
   return { ...counts, enriched, target:numericTarget, remaining:numericTarget === null ? null : Math.max(0,numericTarget-counts.verified) };
 }
