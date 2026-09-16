@@ -395,12 +395,33 @@ function localHiringScore(candidate, context = {}) {
 }
 
 function preRankCandidates(candidates, context = {}, limit = 10) {
-  const max = Math.max(4, Math.min(14, Number(limit || 10)));
-  return [...(candidates || [])]
+  const max = Math.max(6, Math.min(14, Number(limit || 10)));
+  const ranked = [...(candidates || [])]
     .map((candidate, index) => ({ candidate, index, score: localHiringScore(candidate, context) }))
-    .sort((a, b) => b.score - a.score || a.index - b.index)
-    .slice(0, max)
-    .map((item) => item.candidate);
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+
+  const chosen = [];
+  const seen = new Set();
+  const add = (entry) => {
+    if (!entry) return;
+    const key = String(entry.candidate?.candidateKey || '');
+    if (!key || seen.has(key) || chosen.length >= max) return;
+    seen.add(key);
+    chosen.push(entry.candidate);
+  };
+
+  // Keep category diversity so OmniRoute still makes the contextual decision.
+  const categoryPatterns = [
+    /talent acquisition|recruitment|recruiter|recruiting/i,
+    /human resources|\bhr\b|people operations|people partner/i,
+    /founder|co-founder|owner|managing director|director|vice president|\bvp\b/i,
+    /head|lead|manager/i,
+  ];
+  for (const pattern of categoryPatterns) {
+    add(ranked.find((entry) => pattern.test(`${entry.candidate.title || ''} ${entry.candidate.headline || ''}`)));
+  }
+  for (const entry of ranked) add(entry);
+  return chosen;
 }
 
 function compactCandidate(candidate) {
@@ -1197,17 +1218,24 @@ async function enrichWorkbook(source, options = {}) {
 
         const enriched = [];
         for (const person of people) {
+          if (enriched.length >= 3) break;
           stats.candidateHydrations++;
           try {
             const hydrated = await enrichSelectedPerson(person, {}, { company: companyContext.company, domain: companyContext.domain });
             if (!hasVerifiedPocIdentity(hydrated)) {
               stats.candidateHydrationFailures++;
+              stats.candidateHydrationFallbacks++;
               continue;
             }
             enriched.push(hydrated);
           } catch {
             stats.candidateHydrationFailures++;
+            stats.candidateHydrationFallbacks++;
           }
+        }
+        if (!enriched.length) {
+          stats.unresolvedRows++; sheetStats.unresolvedRows++;
+          continue;
         }
         const changes = rowChanges(sheet.sheetName, rowNumber, layout, enriched);
         const written = await writeSourceCells(source, changes);
