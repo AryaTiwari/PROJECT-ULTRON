@@ -47,7 +47,13 @@ export function App(){
       setError("");
     }catch(cause:any){setHealth(false);setError(cause.message||"ULTRON runtime unavailable.");}
   }
-  useEffect(()=>{void refresh();const close=liveEvents((type,data)=>setEvents(prev=>[...prev.slice(-119),{type,data,at:data?.at||new Date().toISOString()}]));return close;},[]);
+  useEffect(()=>{
+    void refresh();
+    const close=liveEvents((type,data)=>setEvents(prev=>[...prev.slice(-119),{type,data,at:data?.at||new Date().toISOString()}]));
+    return()=>{
+      if(typeof close==="function") close();
+    };
+  },[]);
   useEffect(()=>{if(active)api.messages(active).then(v=>setMessages(normalizeMessages(v))).catch((e:any)=>setError(e.message));},[active]);
   useEffect(()=>{const e=events.length?events[events.length-1]:undefined;if(e&&["mission.updated","evidence.recorded","run.settled"].includes(e.type))api.bootstrap().then(v=>setMissions(v.missions||[])).catch(()=>{});},[events.length]);
 

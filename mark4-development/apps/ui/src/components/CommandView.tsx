@@ -20,7 +20,9 @@ export function CommandView(props:{
 }){
   const[draft,setDraft]=useState(""),[listening,setListening]=useState(false);
   const endRef=useRef<HTMLDivElement|null>(null);
-  React.useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[props.messages,props.streaming,props.approval]);
+  React.useEffect(()=>{
+    endRef.current?.scrollIntoView({behavior:"smooth"});
+  },[props.messages,props.streaming,props.approval]);
 
   const tools=useMemo(()=>props.events.filter(e=>/tool\.|subagent\./.test(e.type)).slice(-4),[props.events]);
 

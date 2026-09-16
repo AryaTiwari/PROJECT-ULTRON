@@ -16,3 +16,14 @@ test("dev launcher performs a real browser paint smoke check",()=>{
   const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
   assert.match(dev,/verifyBrowserMount/);assert.match(dev,/--dump-dom/);assert.match(dev,/u4-shell/);
 });
+
+test("React passive effects never return DOM method results as cleanup values",()=>{
+  const command=fs.readFileSync(path.join(root,"apps","ui","src","components","CommandView.tsx"),"utf8");
+  assert.match(command,/React\.useEffect\(\(\)=>\{[\s\S]*scrollIntoView/);
+  assert.doesNotMatch(command,/React\.useEffect\(\(\)=>endRef\.current\?\.scrollIntoView/);
+});
+
+test("SSE effect cleanup is explicitly function-guarded",()=>{
+  const app=fs.readFileSync(path.join(root,"apps","ui","src","App.tsx"),"utf8");
+  assert.match(app,/if\(typeof close==="function"\) close\(\)/);
+});
