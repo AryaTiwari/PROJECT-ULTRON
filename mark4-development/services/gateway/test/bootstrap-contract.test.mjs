@@ -11,7 +11,8 @@ test("bootstrap provisions Hermes API and browser prerequisites", () => {
   assert.match(script, /aiohttp==3\.14\.3/);
   assert.match(script, /agent-browser@\^0\.26\.0/);
   assert.match(script, /terminal:\s*[\r\n]+\s*backend: local[\s\S]*cwd:/);
-  assert.match(script, /AGENT_BROWSER_EXECUTABLE_PATH/);
+  assert.match(script, /playwright install chromium/);
+  assert.doesNotMatch(script, /AGENT_BROWSER_EXECUTABLE_PATH/);
 });
 
 test("dev launcher uses Hermes browser prefix without shell=true", () => {
