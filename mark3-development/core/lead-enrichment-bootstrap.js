@@ -78,10 +78,13 @@ function isEnrichmentRequest(text, options = {}) {
 
 function isThreePocRequest(text, options = {}) {
   const value = String(text || '').trim();
-  const threeSlots = /\b(?:3\s*pocs?|three\s+pocs?|1st\s+poc|first\s+poc)\b/i.test(value)
-    && /\b(?:2nd\s+poc|second\s+poc|3rd\s+poc|third\s+poc)\b/i.test(value);
-  const responsibility = /\b(?:responsib(?:le|ility)|hiring|decision\s*maker|founder|director|ceo|recruiter|hr)\b/i.test(value);
-  const action = /\b(?:enrich|fill|populate|complete|build|find|update)\b/i.test(value);
+  const hasFirst = /\b(?:3\s*pocs?|three\s+pocs?|1st\s+poc|first\s+poc|poc\s*1)\b/i.test(value);
+  const hasSecond = /\b(?:2nd\s+poc|second\s+poc|poc\s*2)\b/i.test(value);
+  const hasThird = /\b(?:3rd\s+poc|third\s+poc|poc\s*3)\b/i.test(value);
+  const contactShape = /\b(?:designation|linkedin|email|e\s*mail|phone|mobile|number|contact)\b/i.test(value);
+  const threeSlots = (hasFirst && (hasSecond || hasThird)) || (hasSecond && hasThird && contactShape);
+  const responsibility = /\b(?:responsib(?:le|ility)|hiring|decision\s*maker|founder|director|ceo|recruiter|hr|designation|poc)\b/i.test(value);
+  const action = /\b(?:enrich|fill|populate|complete|build|find|update|add|get|do)\b/i.test(value);
   if (!(threeSlots && responsibility && action)) return null;
   const source = spreadsheetSource(value, options);
   if (!source) return { invalidUrl: true, provider: null, url: null };
@@ -420,7 +423,7 @@ function install() {
               'apollo',
               'agentic-three-poc-enrichment',
               { url: threePocRequest.url, provider: 'local-excel' },
-              'This run will use AI agents to infer each row\'s hiring company, gather a broad same-company Apollo candidate pool without title-priority rules, independently rank/review the three strongest hiring POCs, then enrich only those selected people with phone/email and write them into the three POC blocks.'
+              'This run will use AI agents to infer each row\'s hiring company, gather a broad same-company Apollo candidate pool without title-priority rules, independently rank/review the three strongest hiring POCs, then write each selected person as name + designation with that exact person\'s LinkedIn profile, phone and email. Missing per-POC LinkedIn columns are appended safely instead of overwriting unrelated columns.'
             );
             result = approvalResponse(approval, { threePocEnrichmentRequest: threePocRequest });
           }
