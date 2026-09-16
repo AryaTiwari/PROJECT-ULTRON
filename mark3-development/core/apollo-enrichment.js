@@ -239,6 +239,87 @@ function sameOrganization(person, company, domain = '') {
   return expected === actual || expected.includes(actual) || actual.includes(expected);
 }
 
+async function searchCompanyPeopleBroad({ company, domain = '', location = '', limit = 50 } = {}) {
+  const apiKey = setting('APOLLO_API_KEY');
+  if (!apiKey) {
+    const error = new Error('APOLLO_API_KEY is missing.');
+    error.code = 'APOLLO_NOT_CONFIGURED';
+    throw error;
+  }
+  const cleanCompany = String(company || '').trim();
+  const cleanDomain = hostname(domain);
+  if (!cleanCompany && !cleanDomain) {
+    const error = new Error('Company name or domain is required for broad Apollo people discovery.');
+    error.code = 'APOLLO_COMPANY_REQUIRED';
+    throw error;
+  }
+
+  const wanted = Math.max(5, Math.min(100, Number(limit || 50)));
+  const perPage = Math.min(50, wanted);
+  const pages = Math.min(3, Math.ceil(wanted / perPage));
+  const found = [];
+  const seen = new Set();
+
+  for (let page = 1; page <= pages && found.length < wanted; page++) {
+    const url = new URL(APOLLO_PEOPLE_SEARCH);
+    if (cleanDomain) url.searchParams.append('q_organization_domains_list[]', cleanDomain);
+    else url.searchParams.set('q_keywords', cleanCompany);
+    if (location) url.searchParams.append('person_locations[]', String(location).trim());
+    url.searchParams.set('page', String(page));
+    url.searchParams.set('per_page', String(perPage));
+
+    let data = {};
+    let completed = false;
+    let lastError = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const response = await fetch(url, { method: 'POST', headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } });
+      const raw = await response.text();
+      try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
+      if (response.ok) {
+        completed = true;
+        break;
+      }
+      const message = data?.error || data?.error_message || data?.message || `Apollo broad people search failed (${response.status}).`;
+      const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
+      error.status = response.status;
+      error.code = response.status === 403 ? 'APOLLO_PEOPLE_SEARCH_ACCESS_REQUIRED' : 'APOLLO_PEOPLE_SEARCH_FAILED';
+      lastError = error;
+      if (response.status !== 429 && response.status < 500) throw error;
+      if (attempt < 3) await sleep(retryDelay(response, attempt));
+    }
+    if (!completed) throw lastError || new Error('Apollo broad people search failed.');
+
+    const people = Array.isArray(data.people) ? data.people : Array.isArray(data.contacts) ? data.contacts : [];
+    for (const person of people) {
+      if (!sameOrganization(person, cleanCompany, cleanDomain)) continue;
+      const linkedinUrl = normalizeLinkedIn(person.linkedin_url || person.linkedin || '');
+      if (!linkedinUrl) continue;
+      const key = String(person.id || linkedinUrl).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push({
+        id: person.id || null,
+        name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || '').trim(),
+        title: String(person.title || '').trim(),
+        headline: String(person.headline || '').trim(),
+        seniority: String(person.seniority || '').trim(),
+        departments: Array.isArray(person.departments) ? person.departments.filter(Boolean) : [],
+        functions: Array.isArray(person.functions) ? person.functions.filter(Boolean) : [],
+        location: String(person.city || person.state || person.country || '').trim(),
+        linkedinUrl,
+        organizationName: String(person.organization_name || person.organization?.name || cleanCompany).trim(),
+        organizationDomain: hostname(person.organization?.website_url || person.organization?.primary_domain || person.organization?.domain || cleanDomain),
+        email: validEmail(person.email),
+        phone: validPhone(person.phone_number || person.sanitized_phone || ''),
+      });
+      if (found.length >= wanted) break;
+    }
+    if (!people.length) break;
+  }
+
+  return { ok: true, company: cleanCompany, domain: cleanDomain, people: found, candidatesChecked: found.length };
+}
+
 function rankedDecisionMakers(people, company, domain = '', priorityMode = 'general') {
   return (Array.isArray(people) ? people : [])
     .filter((person) => sameOrganization(person, company, domain))
@@ -535,6 +616,7 @@ module.exports = {
   sameOrganization,
   rankedDecisionMakers,
   searchCompanyDecisionMaker,
+  searchCompanyPeopleBroad,
   resolveDecisionMaker,
   readCache,
   saveCache,

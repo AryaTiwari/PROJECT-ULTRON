@@ -7,6 +7,7 @@ const leadResearch = require('./lead-research-operator');
 const paidTools = require('./paid-tool-approval');
 const finalMaster = require('./linkedin-final-master');
 const linkedinMissionRunner = require('./linkedin-mission-runner');
+const threePoc = require('./three-poc-enrichment-operator');
 
 let installed = false;
 let originalHandle = null;
@@ -75,6 +76,18 @@ function isEnrichmentRequest(text, options = {}) {
   };
 }
 
+function isThreePocRequest(text, options = {}) {
+  const value = String(text || '').trim();
+  const threeSlots = /\b(?:3\s*pocs?|three\s+pocs?|1st\s+poc|first\s+poc)\b/i.test(value)
+    && /\b(?:2nd\s+poc|second\s+poc|3rd\s+poc|third\s+poc)\b/i.test(value);
+  const responsibility = /\b(?:responsib(?:le|ility)|hiring|decision\s*maker|founder|director|ceo|recruiter|hr)\b/i.test(value);
+  const action = /\b(?:enrich|fill|populate|complete|build|find|update)\b/i.test(value);
+  if (!(threeSlots && responsibility && action)) return null;
+  const source = spreadsheetSource(value, options);
+  if (!source) return { invalidUrl: true, provider: null, url: null };
+  return { invalidUrl: false, provider: source.provider, url: source.url, attachment: source.attachment || null };
+}
+
 function isStatusRequest(text) {
   return /\b(?:apollo|lead)\s+enrichment\s+status\b|\benrichment\s+status\b/i.test(String(text || ''));
 }
@@ -89,7 +102,7 @@ function statusText() {
   const microsoftReady = Boolean(state.providers?.microsoft);
   const localReady = Boolean(state.providers?.localExcel);
   const apolloReady = Boolean(state.apollo?.apiKeyReady && state.apollo?.webhookReady);
-  return `Lead enrichment providers: Google Sheets ${googleReady ? 'ready' : 'not ready'}; Microsoft OneDrive/Excel ${microsoftReady ? 'ready' : 'not ready'}; attached Excel ${localReady ? 'ready' : 'not ready'}; Apollo ${apolloReady ? 'configured' : 'not fully configured'}. Pending phone checks: ${state.pendingPhones}. Explicit approval is mandatory before every new Apollo run.`;
+  return `Lead enrichment providers: Google Sheets ${googleReady ? 'ready' : 'not ready'}; Microsoft OneDrive/Excel ${microsoftReady ? 'ready' : 'not ready'}; attached Excel ${localReady ? 'ready' : 'not ready'}; Apollo ${apolloReady ? 'configured' : 'not fully configured'}. Pending normal phone checks: ${state.pendingPhones}; pending 3-POC phones: ${threePoc.pendingCount()}. Explicit approval is mandatory before every new Apollo run.`;
 }
 
 function responseShape(ok, text, extra = {}) {
@@ -192,11 +205,12 @@ async function handleEnrichment(url, provider = null, options = {}) {
 
 async function handleResume() {
   try {
+    const threePocSync = await threePoc.syncPendingPhones({ quiet: true }).catch(() => ({ received: 0, resolved: 0, pending: threePoc.pendingCount() }));
     const result = await leadEnrichment.resume();
     const text = result.resumed && result.stats
       ? leadEnrichment.formatResult(result.stats)
       : `Apollo phone sync checked, Sir. Resolved ${result.resolved || 0}; ${result.pending || 0} still pending.`;
-    const extra = { leadEnrichment: result };
+    const extra = { leadEnrichment: result, threePocPhoneSync: threePocSync };
     if (result.stats?.artifact) extra.artifacts = [result.stats.artifact];
     return responseShape(true, text, extra);
   } catch (error) {
@@ -235,6 +249,29 @@ async function handlePaidToolDecision(decision) {
   if (decision.status === 'denied') {
     return responseShape(true, `${decision.label} was not used, Sir. The pending Apollo action was cancelled.`, {
       model: 'apollo-approval-gate', taskType: 'paid-tool-approval', provider: 'local-approval-gate', paidToolApproval: decision,
+    });
+  }
+
+  if (decision.tool === 'apollo' && decision.operation === 'agentic-three-poc-enrichment') {
+    return paidTools.withPermit(decision, async () => {
+      try {
+        const stats = await threePoc.enrichWorkbook(decision.payload.url, { rowLimit: decision.payload.rowLimit || undefined });
+        const extra = { threePocEnrichment: stats, spreadsheetProvider: 'local-excel' };
+        if (stats.artifact) extra.artifacts = [stats.artifact];
+        return responseShape(true, threePoc.formatResult(stats), {
+          ...extra,
+          model: 'mark3-agentic-three-poc',
+          provider: 'ai-agents+apollo+local-excel',
+          taskType: 'three-poc-enrichment',
+        });
+      } catch (error) {
+        return responseShape(false, `Agentic 3-POC enrichment stopped safely: ${error.message}`, {
+          error: error.code || error.message,
+          model: 'mark3-agentic-three-poc',
+          provider: 'ai-agents+apollo+local-excel',
+          taskType: 'three-poc-enrichment',
+        });
+      }
     });
   }
 
@@ -371,6 +408,24 @@ function install() {
           }
         }
 
+        const threePocRequest = result ? null : isThreePocRequest(text, { attachments: options.attachments });
+        if (threePocRequest) {
+          conversation.append('user', text, { taskType: 'three-poc-enrichment', inputMode, spreadsheetProvider: threePocRequest.provider });
+          if (threePocRequest.invalidUrl) {
+            result = responseShape(false, 'Attach the Excel workbook and reference it with @filename for this 3-POC enrichment run. Nothing was edited and Apollo was not called.', { error: 'INVALID_THREE_POC_SOURCE', apolloCalled: false });
+          } else if (threePocRequest.provider !== 'local-excel') {
+            result = responseShape(false, 'The agentic 3-POC workflow is currently enabled for attached Excel workbooks only, so I did not edit this source.', { error: 'THREE_POC_LOCAL_XLSX_REQUIRED', apolloCalled: false });
+          } else {
+            const approval = paidTools.request(
+              'apollo',
+              'agentic-three-poc-enrichment',
+              { url: threePocRequest.url, provider: 'local-excel' },
+              'This run will use AI agents to infer each row\'s hiring company, gather a broad same-company Apollo candidate pool without title-priority rules, independently rank/review the three strongest hiring POCs, then enrich only those selected people with phone/email and write them into the three POC blocks.'
+            );
+            result = approvalResponse(approval, { threePocEnrichmentRequest: threePocRequest });
+          }
+        }
+
         const researchRequest = result ? null : leadResearch.parseRequest(text);
         if (researchRequest) {
           conversation.append('user', text, { taskType: 'lead-research', inputMode });
@@ -425,7 +480,8 @@ function install() {
 
   installed = true;
   if (leadEnrichment.pendingCount()) leadEnrichment.startPhoneWatcher();
-  return { installed: true, status: leadEnrichment.status(), approvals: paidTools.status() };
+  if (threePoc.pendingCount()) threePoc.startPhoneWatcher();
+  return { installed: true, status: leadEnrichment.status(), threePocPendingPhones: threePoc.pendingCount(), approvals: paidTools.status() };
 }
 
 function uninstall() {
@@ -451,6 +507,7 @@ module.exports = {
   wantsContactColumns,
   hasEnrichmentIntent,
   isEnrichmentRequest,
+  isThreePocRequest,
   isStatusRequest,
   isResumeRequest,
   microsoftSetupResponse,

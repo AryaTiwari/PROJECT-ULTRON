@@ -231,6 +231,15 @@ async function inspect(source) {
   return best;
 }
 
+async function readWorkbookSheets(source) {
+  const loaded = await loadWorkbook(source);
+  return (loaded.workbook.worksheets || []).map((worksheet) => ({
+    sheetName: worksheet.name,
+    sheetId: worksheet.id,
+    rows: rowsFromWorksheet(worksheet),
+  }));
+}
+
 async function readSheet(source, knownLayout = null) {
   if (knownLayout?._rows) return { ...knownLayout, rows: knownLayout._rows };
   const layout = knownLayout || await inspect(source);
@@ -299,6 +308,7 @@ module.exports = {
   spreadsheetLike,
   inspect,
   readSheet,
+  readWorkbookSheets,
   writeCells,
   readCell,
   ensureContactColumns,
