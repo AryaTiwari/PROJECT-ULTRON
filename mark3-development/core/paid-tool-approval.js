@@ -7,6 +7,7 @@ const config = require('./config');
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'approvals', 'paid-tools.json');
 const TTL_MS = Math.max(5 * 60_000, Number(process.env.ULTRON_M3_PAID_APPROVAL_TTL_MS || 30 * 60_000));
 const permitStore = new AsyncLocalStorage();
+const RUNTIME_ID = `runtime-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 
 const TOOLS = {
   apollo: {
@@ -51,6 +52,12 @@ function prune(state = load()) {
       retired.push({ ...item, status: 'retired-non-apollo-gate', resolvedAt: new Date().toISOString() });
       continue;
     }
+    // Approval is one-run and process-scoped. Never allow a pending paid
+    // operation from an older ULTRON process/build to execute after restart.
+    if (String(item?.runtimeId || '') !== RUNTIME_ID) {
+      retired.push({ ...item, status: 'retired-stale-runtime', resolvedAt: new Date().toISOString() });
+      continue;
+    }
     if (fresh(item)) active.push(item);
     else retired.push({ ...item, status: 'expired', resolvedAt: new Date().toISOString() });
   }
@@ -80,6 +87,7 @@ function request(tool, operation, payload = {}, summary = '') {
     label: def.label,
     reason: def.reason,
     operation: String(operation || 'run'),
+    runtimeId: RUNTIME_ID,
     payload: payload && typeof payload === 'object' ? payload : {},
     summary: String(summary || '').trim(),
     status: 'pending',
@@ -220,6 +228,7 @@ function status() {
     approvalScope: 'apollo-only',
     stateFile: STATE_FILE,
     ttlMs: TTL_MS,
+    runtimeId: RUNTIME_ID,
     tools: TOOLS,
     pending: allPending().map((item) => ({ id: item.id, tool: item.tool, operation: item.operation, requestedAt: item.requestedAt, expiresAt: item.expiresAt })),
   };
@@ -228,6 +237,7 @@ function status() {
 module.exports = {
   TOOLS,
   STATE_FILE,
+  RUNTIME_ID,
   request,
   pending,
   allPending,
