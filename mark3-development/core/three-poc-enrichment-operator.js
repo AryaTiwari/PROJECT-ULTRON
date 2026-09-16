@@ -1193,10 +1193,12 @@ async function enrichWorkbook(source, options = {}) {
           stats.poc3EmailsWritten += counts.poc3Email;
           stats.phonesWritten += counts.poc1Phone + counts.poc2Phone + counts.poc3Phone;
           stats.emailsWritten += counts.poc1Email + counts.poc2Email + counts.poc3Email;
-          if (
-            (String(row?.[layout.second.nameIndex] || '').trim() && (counts.poc2Phone || counts.poc2Email || counts.poc2Name))
-            || (String(row?.[layout.third.nameIndex] || '').trim() && (counts.poc3Phone || counts.poc3Email || counts.poc3Name))
-          ) stats.existingPocSlotsRepaired++;
+          if (String(row?.[layout.second.nameIndex] || '').trim() && (counts.poc2Phone || counts.poc2Email || counts.poc2Name)) {
+            stats.existingPocSlotsRepaired++;
+          }
+          if (String(row?.[layout.third.nameIndex] || '').trim() && (counts.poc3Phone || counts.poc3Email || counts.poc3Name)) {
+            stats.existingPocSlotsRepaired++;
+          }
           stats.anchorsResolved += anchor.linkedinUrl ? 1 : 0;
           stats.completedRows++; sheetStats.completedRows++;
 
