@@ -108,3 +108,17 @@ const naturalRequest = bootstrap.isThreePocRequest(
   { attachments: [{ id: 'file-test-1', name: 'New_Sheet_14-09-25.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }] }
 );
 assert.ok(naturalRequest, 'Natural 2nd/3rd POC contact wording should route to the 3-POC operator');
+
+const anchoredNaturalRequest = bootstrap.isThreePocRequest(
+  [
+    'Use @New_Sheet_14-09-25 and perform the Mark 3 anchored 3-POC enrichment.',
+    'Person or Company Name = POC-1 name.',
+    'LinkedIn Id = POC-1 person LinkedIn profile.',
+    '2nd POC Name has its own phone and email.',
+    '3rd POC has its own phone and email.',
+    'Resolve POC-1 current employer, preserve POC-1, and enrich POC-2 and POC-3 respectively.',
+  ].join(' '),
+  { attachments: [{ id: 'file-test-1', name: 'New_Sheet_14-09-25.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }] }
+);
+assert.ok(anchoredNaturalRequest, 'Anchored POC-1/POC-2/POC-3 wording must route to the local 3-POC operator');
+assert.equal(anchoredNaturalRequest.provider, 'local-excel');
