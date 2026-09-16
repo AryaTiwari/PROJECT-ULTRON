@@ -423,7 +423,7 @@ function install() {
               'apollo',
               'agentic-three-poc-enrichment',
               { url: threePocRequest.url, provider: 'local-excel' },
-              'This run will use AI agents to infer each row\'s hiring company, gather a broad same-company Apollo candidate pool without title-priority rules, independently rank/review the three strongest hiring POCs, then write each selected person as name + designation with that exact person\'s LinkedIn profile, phone and email. Missing per-POC LinkedIn columns are appended safely instead of overwriting unrelated columns.'
+              'This run supports both explicit 3-POC sheets and anchored legacy sheets like New_Sheet_14-09-25. In the anchored format, Person or Company Name + LinkedIn Id is treated as POC-1, POC-1 is identity-matched by that exact person profile, the current employer is resolved from that profile, and POC-2/POC-3 are selected only from employees of that employer. POC-1 phone/email stay in the first phone/email pair; POC-2 and POC-3 stay in their own respective pairs. Existing populated slots are preserved. Company-profile anchor rows are left unchanged rather than guessed.'
             );
             result = approvalResponse(approval, { threePocEnrichmentRequest: threePocRequest });
           }
