@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const config = require('./config');
 const localExcel = require('./local-excel-operator');
+const fileVault = require('./file-vault');
 const apollo = require('./apollo-enrichment');
 const modelRouter = require('./model-router');
 
@@ -391,12 +392,26 @@ function startPhoneWatcher() {
   watcherTimer.unref?.();
 }
 
+function backupWorkbook(source) {
+  const id = String(source || '').replace(/^vault:/i, '').trim();
+  const entry = fileVault.get(id);
+  if (!entry?.path || !fs.existsSync(entry.path)) return null;
+  const dir = path.join(config.projectRoot, '.ultron', 'three-poc-enrichment', 'backups');
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const safeName = path.basename(entry.name || 'workbook.xlsx').replace(/[^a-z0-9._-]+/gi, '_');
+  const target = path.join(dir, `${stamp}-${safeName}`);
+  fs.copyFileSync(entry.path, target);
+  return target;
+}
+
 async function enrichWorkbook(source, options = {}) {
   if (!localExcel.isLocalExcelSource(source)) {
     const error = new Error('Agentic 3-POC enrichment currently requires an attached .xlsx workbook.');
     error.code = 'THREE_POC_LOCAL_XLSX_REQUIRED';
     throw error;
   }
+  const backupPath = backupWorkbook(source);
   const workbookSheets = await localExcel.readWorkbookSheets(source);
   const compatible = [];
   for (const sheet of workbookSheets) {
@@ -526,7 +541,7 @@ async function enrichWorkbook(source, options = {}) {
   saveState(state);
   if (stats.pendingPhones) startPhoneWatcher();
 
-  return { ...stats, artifact: localExcel.artifact(source), status: job.status };
+  return { ...stats, artifact: localExcel.artifact(source), status: job.status, backupPath };
 }
 
 function pendingCount() {
@@ -559,4 +574,5 @@ module.exports = {
   startPhoneWatcher,
   pendingCount,
   formatResult,
+  backupWorkbook,
 };
