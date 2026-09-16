@@ -804,6 +804,13 @@ async function enrichWorkbook(source, options = {}) {
     unresolvedRows: 0,
     failedRows: 0,
     candidatesSeen: 0,
+    candidateSearchCalls: 0,
+    candidateSearchFallbacks: 0,
+    candidatePoolCacheHits: 0,
+    candidateHydrations: 0,
+    candidateHydrationFailures: 0,
+    existingPocVerificationAttempts: 0,
+    existingPocVerificationFailures: 0,
     aiSelections: 0,
     contactsWritten: 0,
     emailsWritten: 0,
@@ -822,6 +829,40 @@ async function enrichWorkbook(source, options = {}) {
   };
 
   const rowLimit = Math.max(1, Math.min(500, Number(options.rowLimit || process.env.ULTRON_M3_THREE_POC_ROW_LIMIT || 500)));
+  const candidatePoolCache = new Map();
+  const hiringCandidateTitles = [
+    'recruiter', 'technical recruiter', 'talent acquisition', 'recruitment',
+    'human resources', 'HR manager', 'HR business partner', 'people partner',
+    'people operations', 'hiring manager', 'talent partner',
+    'founder', 'co-founder', 'owner', 'managing director', 'director'
+  ];
+
+  const candidatePoolFor = async (companyContext) => {
+    const key = String(companyContext.domain || companyContext.company || '').trim().toLowerCase();
+    if (key && candidatePoolCache.has(key)) {
+      stats.candidatePoolCacheHits++;
+      return candidatePoolCache.get(key);
+    }
+    stats.candidateSearchCalls++;
+    let pool = await apollo.searchCompanyPeopleBroad({
+      company: companyContext.company,
+      domain: companyContext.domain,
+      limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
+      titles: hiringCandidateTitles,
+    });
+    // Smaller firms sometimes expose no HR/recruiting titles. Fall back to a broad
+    // employer search and let the selector reason from company/hiring context.
+    if ((pool.people || []).length < 2) {
+      stats.candidateSearchFallbacks++;
+      pool = await apollo.searchCompanyPeopleBroad({
+        company: companyContext.company,
+        domain: companyContext.domain,
+        limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
+      });
+    }
+    if (key) candidatePoolCache.set(key, pool);
+    return pool;
+  };
 
   for (const sheet of compatible) {
     const layout = sheet.layout;
@@ -851,18 +892,15 @@ async function enrichWorkbook(source, options = {}) {
           }
 
           const companyContext = anchorCompanyContext(anchor, context);
-          const pool = await apollo.searchCompanyPeopleBroad({
-            company: companyContext.company,
-            domain: companyContext.domain,
-            limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
-          });
+          const pool = await candidatePoolFor(companyContext);
 
           const anchorLinkedIn = apollo.normalizeLinkedIn(anchor.linkedinUrl);
           const anchorNameKey = personNameKey(anchor.name || context.anchorName);
           const candidates = (pool.people || []).map(candidateView).filter((candidate) => {
+            if (anchor.apolloPersonId && String(candidate.id || '') === String(anchor.apolloPersonId)) return false;
             const candidateLinkedIn = apollo.normalizeLinkedIn(candidate.linkedinUrl);
             if (anchorLinkedIn && candidateLinkedIn === anchorLinkedIn) return false;
-            if (anchorNameKey && personNameKey(candidate.name) === anchorNameKey) return false;
+            if (anchorNameKey && !candidate.searchLimitedIdentity && personNameKey(candidate.name) === anchorNameKey) return false;
             return true;
           });
           stats.candidatesSeen += candidates.length;
@@ -881,24 +919,33 @@ async function enrichWorkbook(source, options = {}) {
             }
             if (!existing.name) continue;
 
-            const matched = matchExistingCandidate(existing.name, candidates);
-            if (!matched) {
+            stats.existingPocVerificationAttempts++;
+            try {
+              const verified = await apollo.resolvePersonByNameCompany(
+                existing.name,
+                companyContext.company,
+                companyContext.domain,
+                { needEmail: !existing.email, needPhone: !existing.phone }
+              );
+              const enrichedExisting = {
+                candidateKey: String(verified.apolloPersonId || verified.id || verified.linkedinUrl),
+                id: verified.apolloPersonId || verified.id || null,
+                ...verified,
+                email: existing.email || verified.email || null,
+                phone: existing.phone || verified.phone || null,
+                phonePending: !existing.phone && verified.phoneStatus === 'pending' && Boolean(verified.apolloPersonId),
+                identityVerified: true,
+              };
+              if (!hasVerifiedPocIdentity(enrichedExisting)) throw new Error('EXISTING_POC_IDENTITY_NOT_VERIFIED');
+              slotPeople[slotIndex] = enrichedExisting;
+              usedKeys.add(enrichedExisting.candidateKey);
+              stats.matchedExistingPocSlots++;
+            } catch {
               lockedSlots[slotIndex] = true;
+              stats.existingPocVerificationFailures++;
               stats.preservedExistingPocSlots++;
               continue;
             }
-
-            const enrichedExisting = await enrichSelectedPerson(matched, existing);
-            if (!hasNameAndDesignation(enrichedExisting)) {
-              // Identity is preserved if Apollo cannot verify a proper designation.
-              // Never rewrite a POC name cell with a guessed/blank title.
-              lockedSlots[slotIndex] = true;
-              stats.preservedExistingPocSlots++;
-              continue;
-            }
-            slotPeople[slotIndex] = enrichedExisting;
-            usedKeys.add(enrichedExisting.candidateKey);
-            stats.matchedExistingPocSlots++;
           }
 
           const openSlots = slotDefs.map((_, index) => index).filter((index) => !lockedSlots[index] && !slotPeople[index]);
@@ -926,9 +973,21 @@ async function enrichWorkbook(source, options = {}) {
             for (let i = 0; i < openSlots.length; i++) {
               const person = additional[i];
               if (!person) continue;
-              const enrichedPerson = await enrichSelectedPerson(person);
-              if (!hasNameAndDesignation(enrichedPerson)) continue;
-              slotPeople[openSlots[i]] = enrichedPerson;
+              stats.candidateHydrations++;
+              try {
+                const enrichedPerson = await enrichSelectedPerson(person, {}, {
+                  company: companyContext.company,
+                  domain: companyContext.domain,
+                });
+                if (!hasVerifiedPocIdentity(enrichedPerson)) {
+                  stats.candidateHydrationFailures++;
+                  continue;
+                }
+                slotPeople[openSlots[i]] = enrichedPerson;
+                stats.aiSelections++;
+              } catch {
+                stats.candidateHydrationFailures++;
+              }
             }
           }
 
@@ -940,7 +999,6 @@ async function enrichWorkbook(source, options = {}) {
           stats.emailsWritten += writtenPeople.filter((person) => person.email).length;
           stats.phonesWritten += writtenPeople.filter((person) => person.phone).length;
           stats.anchorsResolved += anchor.linkedinUrl ? 1 : 0;
-          stats.aiSelections += slotPeople.filter(Boolean).length;
           stats.completedRows++; sheetStats.completedRows++;
 
           if (anchor.phonePending && anchor.apolloPersonId) {
@@ -965,11 +1023,7 @@ async function enrichWorkbook(source, options = {}) {
         }
         if (companyContext.model) stats.agentModels.add(`${companyContext.provider || 'unknown'}/${companyContext.model}`);
 
-        const pool = await apollo.searchCompanyPeopleBroad({
-          company: companyContext.company,
-          domain: companyContext.domain,
-          limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
-        });
+        const pool = await candidatePoolFor(companyContext);
         const candidates = (pool.people || []).map(candidateView);
         stats.candidatesSeen += candidates.length;
         if (!candidates.length) {
@@ -998,7 +1052,19 @@ async function enrichWorkbook(source, options = {}) {
         }
 
         const enriched = [];
-        for (const person of people) enriched.push(await enrichSelectedPerson(person));
+        for (const person of people) {
+          stats.candidateHydrations++;
+          try {
+            const hydrated = await enrichSelectedPerson(person, {}, { company: companyContext.company, domain: companyContext.domain });
+            if (!hasVerifiedPocIdentity(hydrated)) {
+              stats.candidateHydrationFailures++;
+              continue;
+            }
+            enriched.push(hydrated);
+          } catch {
+            stats.candidateHydrationFailures++;
+          }
+        }
         const changes = rowChanges(sheet.sheetName, rowNumber, layout, enriched);
         const written = await writeSourceCells(source, changes);
         stats.updatedCells += written.updatedCells || 0;
