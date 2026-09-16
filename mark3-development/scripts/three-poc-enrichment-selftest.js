@@ -10,6 +10,7 @@ const legacy = [[
   '2nd POC Name','Phone no','Email ID','3rd POC','Phone no','Email ID','Call Outcome','Remarks','Demos'
 ]];
 const legacyLayout = three.detectThreePocLayout(legacy);
+assert.equal(legacyLayout.schema, 'anchored_first_poc');
 assert.equal(legacyLayout.first.nameIndex, 0);
 assert.equal(legacyLayout.first.phoneIndex, 5);
 assert.equal(legacyLayout.first.emailIndex, 6);
@@ -29,6 +30,7 @@ const explicit = [[
   '1st POC LinkedIn','2nd POC LinkedIn','3rd POC LinkedIn'
 ]];
 const explicitLayout = three.detectThreePocLayout(explicit);
+assert.equal(explicitLayout.schema, 'explicit_three_poc');
 assert.equal(explicitLayout.companyIndex, 0);
 assert.equal(explicitLayout.first.nameIndex, 3);
 assert.equal(explicitLayout.second.nameIndex, 6);
@@ -52,6 +54,33 @@ assert.deepEqual(
   ['b','a']
 );
 assert.equal(three.displayName({ name: 'Jane Doe', title: 'Head of Talent' }), 'Jane Doe — Head of Talent');
+assert.equal(three.linkedInProfileKind('ID: https://www.linkedin.com/in/aashish-nimadi-2678a6413/'), 'person');
+assert.equal(three.linkedInProfileKind('https://www.linkedin.com/company/allegisit/'), 'company');
+assert.equal(three.personNameKey('Rajeev Ranjan — Recruitment Manager'), 'rajeev ranjan');
+assert.equal(three.personNameKey('Divya Pandey (Sr. IT Recruiter)'), 'divya pandey');
+
+const matchCandidates = [
+  { candidateKey: 'r', name: 'Rajeev Ranjan', title: 'Recruitment Manager' },
+  { candidateKey: 'p', name: 'Priyanka Polen', title: 'Recruiter' },
+];
+assert.equal(three.matchExistingCandidate('Rajeev Ranjan', matchCandidates).candidateKey, 'r');
+assert.equal(three.matchExistingCandidate('Unknown Human', matchCandidates), null);
+
+const anchoredChanges = three.anchoredRowChanges(
+  'Gaurav 2',
+  3,
+  legacyLayout,
+  { phone: '+911111111111', email: 'anchor@example.com' },
+  [
+    { name: 'Rajeev Ranjan', title: 'Recruitment Manager', phone: '+912222222222', email: 'rajeev@example.com' },
+    { name: 'Priyanka Polen', title: 'Recruiter', phone: '+913333333333', email: 'priyanka@example.com' },
+  ],
+  [false, false],
+);
+const anchoredCells = anchoredChanges.map((change) => change.range.split('!').pop().replace(/\$/g, ''));
+assert.deepEqual(anchoredCells, ['F3','G3','H3','I3','J3','K3','L3','M3']);
+assert.ok(!anchoredCells.includes('A3'), 'anchored flow must never overwrite POC-1 name');
+assert.ok(!anchoredCells.includes('E3'), 'anchored flow must never overwrite POC-1 LinkedIn');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc-enrichment-operator.js'), 'utf8');
 assert.ok(!source.includes('decisionPriority('), '3-POC operator must not use hardcoded decisionPriority');
@@ -59,8 +88,12 @@ assert.ok(!source.includes('COMPANY_DECISION_PRIORITY'), '3-POC operator must no
 assert.match(source, /Hiring-Authority Selector/);
 assert.match(source, /Independent Hiring-Responsibility Reviewer/);
 assert.match(source, /Contact-data availability must NOT influence responsibility ranking/);
+assert.match(source, /anchored_first_poc/);
+assert.match(source, /resolvePersonProfile/);
+assert.match(source, /Exact POC-1 LinkedIn profile -> current Apollo organization/);
+assert.match(source, /if \(layout\.schema === 'anchored_first_poc'\) return \[\];/);
 
-console.log('Agentic 3-POC enrichment self-test passed. Layout mapping is safe and hiring-responsibility ranking remains AI-agent driven.');
+console.log('Agentic 3-POC enrichment self-test passed. Explicit and anchored legacy layouts are isolated; POC-1 identity/employer anchoring and POC-2/POC-3 slot ordering are protected.');
 
 const request = bootstrap.isThreePocRequest(
   'Fill 1st POC, 2nd POC and 3rd POC with the most responsible people for hiring in @New_Sheet_14-09-25',
