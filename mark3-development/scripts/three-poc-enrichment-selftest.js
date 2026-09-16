@@ -134,9 +134,26 @@ const exactControlRoute = controlPlane.claim(
   ].join(' '),
   { attachments: [{ id: 'file-test-1', name: 'New_Sheet_14-09-25.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }] }
 );
-assert.equal(exactControlRoute.domain, 'local-three-poc');
+assert.equal(exactControlRoute.domain, 'three-poc-spreadsheet');
 assert.equal(exactControlRoute.exclusive, false);
 assert.equal(exactControlRoute.yieldTo, 'lead-enrichment-bootstrap');
+
+const googleSheetUrl = 'https://docs.google.com/spreadsheets/d/testSheet123/edit#gid=123';
+const googleNaturalRequest = bootstrap.isThreePocRequest(
+  [
+    `Use ${googleSheetUrl} and perform the Mark 3 anchored 3-POC enrichment.`,
+    'Person or Company Name = POC-1 name.',
+    'LinkedIn Id = POC-1 person LinkedIn profile.',
+    '2nd POC Name has its own phone and email.',
+    '3rd POC has its own phone and email.',
+  ].join(' ')
+);
+assert.ok(googleNaturalRequest, 'Google Sheet anchored 3-POC wording must route to the 3-POC operator');
+assert.equal(googleNaturalRequest.provider, 'google');
+assert.equal(googleNaturalRequest.url, googleSheetUrl);
+const googleControlRoute = controlPlane.claim(`Use ${googleSheetUrl} and perform anchored 3-POC enrichment. POC-1 uses LinkedIn Id; fill POC-2 and POC-3 phone and email.`);
+assert.equal(googleControlRoute.domain, 'three-poc-spreadsheet');
+assert.equal(googleControlRoute.exclusive, false);
 
 const paidApprovalSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'paid-tool-approval.js'), 'utf8');
 assert.match(paidApprovalSource, /RUNTIME_ID/);
@@ -145,3 +162,8 @@ assert.match(paidApprovalSource, /retired-stale-runtime/);
 const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 assert.match(serverSource, /routeAttachments/);
 assert.match(serverSource, /fileVault\.get\(String\(item \|\| ''\)\)/);
+
+const threePocSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc-enrichment-operator.js'), 'utf8');
+assert.match(threePocSource, /readGoogleWorkbookSheets/);
+assert.match(threePocSource, /googleSheets\.writeCells/);
+assert.match(threePocSource, /provider === 'google'/);
