@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const three = require('../core/three-poc-enrichment-operator');
+const apollo = require('../core/apollo-enrichment');
 const bootstrap = require('../core/lead-enrichment-bootstrap');
 const controlPlane = require('../core/command-control-plane');
 
@@ -64,6 +65,33 @@ assert.equal(three.safeDesignation({ name: 'Jane Doe', title: '  Head   of Talen
 assert.equal(three.safeDesignation({ name: 'Jane Doe', title: 'jane@example.com' }), '');
 assert.equal(three.hasNameAndDesignation({ name: 'Jane Doe', title: 'Head of Talent' }), true);
 assert.equal(three.hasNameAndDesignation({ name: 'Jane Doe', title: '' }), false);
+assert.equal(three.hasVerifiedPocIdentity({
+  name: 'Jane Doe',
+  title: 'Head of Talent',
+  linkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+  apolloPersonId: 'apollo-jane',
+  identityVerified: true,
+}), true);
+assert.equal(three.hasVerifiedPocIdentity({
+  name: 'Jane Doe',
+  title: 'Head of Talent',
+  linkedinUrl: '',
+  apolloPersonId: 'apollo-jane',
+  identityVerified: false,
+}), false);
+
+const limitedApolloSearchCandidate = apollo.searchCandidateFromPerson({
+  id: '690b88979047af00018964d6',
+  first_name: 'Leona',
+  last_name_obfuscated: 'Va***z',
+  title: 'Head of Talent Acquisition',
+  organization: { name: 'Northstar Labs' },
+}, 'Northstar Labs', 'northstarlabs.example');
+assert.ok(limitedApolloSearchCandidate, 'Apollo ID-only People Search result must survive candidate discovery');
+assert.equal(limitedApolloSearchCandidate.id, '690b88979047af00018964d6');
+assert.equal(limitedApolloSearchCandidate.linkedinUrl, null, 'People Search does not need to provide LinkedIn before selection');
+assert.equal(limitedApolloSearchCandidate.searchLimitedIdentity, true);
+assert.equal(limitedApolloSearchCandidate.name, 'Leona Va***z');
 assert.equal(three.linkedInProfileKind('ID: https://www.linkedin.com/in/aashish-nimadi-2678a6413/'), 'person');
 assert.equal(three.linkedInProfileKind('https://www.linkedin.com/company/allegisit/'), 'company');
 assert.equal(three.personNameKey('Rajeev Ranjan — Recruitment Manager'), 'rajeev ranjan');
@@ -104,7 +132,7 @@ assert.match(source, /Exact POC-1 LinkedIn profile -> current Apollo organizatio
 assert.match(source, /if \(layout\.schema === 'anchored_first_poc'\) return \[\];/);
 assert.match(source, /resolvedIdentity\.title \|\| person\.title/);
 assert.match(source, /if \(!hasNameAndDesignation\(enrichedExisting\)\)/);
-assert.match(source, /if \(!hasNameAndDesignation\(enrichedPerson\)\) continue/);
+assert.match(source, /hasVerifiedPocIdentity\(enrichedPerson\)/);
 assert.ok(!source.includes("if (existing.phone && existing.email) {\n              lockedSlots[slotIndex] = true;"), 'complete existing POC slots must still be eligible for safe designation completion');
 
 const request = bootstrap.isThreePocRequest(
@@ -189,6 +217,12 @@ assert.match(leadBootstrapSource, /inspectThreePocTarget/);
 assert.match(leadBootstrapSource, /GENERIC_ENRICHMENT_BLOCKED_BY_THREE_POC_SCHEMA/);
 assert.match(leadBootstrapSource, /autoPromotedFrom: 'lead-enrichment'/);
 assert.match(leadBootstrapSource, /threePoc\.inspectSource/);
+
+const apolloSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'apollo-enrichment.js'), 'utf8');
+assert.match(apolloSource, /searchCandidateFromPerson/);
+assert.match(apolloSource, /People API Search deliberately returns a limited identity record/);
+assert.doesNotMatch(apolloSource, /if \(!linkedinUrl\) continue;/);
+assert.match(apolloSource, /resolvePersonByNameCompany/);
 assert.match(leadBootstrapSource, /async function handleThreePocCommand/);
 assert.match(leadBootstrapSource, /domainOwner: 'three-poc-domain-controller'/);
 
