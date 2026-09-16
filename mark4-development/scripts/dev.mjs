@@ -47,8 +47,8 @@ function truthy(value) {
 
 function omniRouteSettings() {
   const baseUrl = String(process.env.OMNIROUTE_BASE_URL || "http://127.0.0.1:20128/v1").trim().replace(/\/+$/, "");
-  const model = String(process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL || "auto").trim() || "auto";
-  const testModel = String(process.env.ULTRON_OMNIROUTE_TEST_MODEL || "auto").trim() || "auto";
+  const model = String(process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL || "auto/best-reasoning").trim() || "auto/best-reasoning";
+  const testModel = String(process.env.ULTRON_OMNIROUTE_TEST_MODEL || "auto/best-fast").trim() || "auto/best-fast";
   const apiKey = String(process.env.OMNIROUTE_API_KEY || process.env.OMNIROUTE_ENDPOINT_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || "").trim();
   if (apiKey && !process.env.OMNIROUTE_API_KEY) process.env.OMNIROUTE_API_KEY = apiKey;
   return {
@@ -283,10 +283,18 @@ function run(command, args, cwd = root) {
   return child;
 }
 
-function runNpm(args, cwd = root) {
-  if (process.platform !== "win32") return run("npm", args, cwd);
-  const comspec = process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe";
-  return run(comspec, ["/d", "/s", "/c", ["npm", ...args].join(" ")], cwd);
+function resolveViteCli() {
+  const candidates = [
+    path.join(root,"node_modules","vite","bin","vite.js"),
+    path.join(root,"apps","ui","node_modules","vite","bin","vite.js")
+  ];
+  return candidates.find(file=>fs.existsSync(file)) || "";
+}
+
+function runVite() {
+  const viteCli=resolveViteCli();
+  if(!viteCli)throw new Error("Vite CLI not found. Run npm install.");
+  return run(process.execPath,[viteCli,"--host","127.0.0.1","--port","5174"],path.join(root,"apps","ui"));
 }
 
 async function isHealthy(url, timeoutMs = 1200) {
@@ -388,7 +396,7 @@ async function main() {
   await waitFor("http://127.0.0.1:8787/api/ready", "ULTRON deep readiness");
 
   console.log("Starting cockpit...");
-  runNpm(["run", "dev", "-w", "apps/ui"]);
+  runVite();
   await waitFor("http://127.0.0.1:5174/", "Vite cockpit");
   if (String(process.env.ULTRON_M4_UI_SMOKE || "0") === "1") {
     try {
