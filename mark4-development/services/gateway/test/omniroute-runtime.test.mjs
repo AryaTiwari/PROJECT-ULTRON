@@ -32,20 +32,32 @@ test("OmniRoute test mode masks direct providers including Grok xAI and forces e
   assert.match(dev,/all direct model routes are disabled/);
 });
 
-test("OmniRoute test mode uses only OmniRoute alias fallbacks",()=>{
+test("OmniRoute test mode uses OmniRoute auto routing plus one real Hermes custom-endpoint rescue",()=>{
   const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
   assert.match(dev,/if \(omniRoute\.testMode\) \{/);
-  assert.match(dev,/addFallback\("omniroute", "auto\/best-reasoning"\)/);
-  assert.match(dev,/addFallback\("omniroute", "auto\/best-coding"\)/);
-  assert.match(dev,/addFallback\("omniroute", "auto"\)/);
+  assert.match(dev,/addFallback\("custom", "auto\/best-reasoning"/);
+  assert.match(dev,/baseUrl: omniRoute\.baseUrl/);
+  assert.match(dev,/keyEnv: "OMNIROUTE_API_KEY"/);
   assert.match(dev,/ULTRON_OMNIROUTE_TEST_MODEL/);
-  assert.match(dev,/auto\/best-fast/);
+  assert.match(dev,/\|\| "auto"/);
+  assert.doesNotMatch(dev,/auto\/best-coding -> auto/);
 });
 
 test("Windows OmniRoute startup is hidden and does not create a detached console lineage",()=>{
   const launcher=fs.readFileSync(path.join(root,"scripts","dev-omniroute-test.mjs"),"utf8");
   const ensure=fs.readFileSync(path.join(root,"scripts","ensure-omniroute.mjs"),"utf8");
   assert.match(launcher,/windowsHide:process\.platform==="win32"/);
-  assert.match(ensure,/detached:process\.platform!=="win32"/);
+  assert.match(launcher,/ULTRON_M4_OMNIROUTE_READY="1"/);
+  assert.match(ensure,/detached:true/);
   assert.match(ensure,/windowsHide:true/);
+  assert.match(ensure,/hidden direct Next\.js/);
+});
+
+test("OmniRoute warm launches avoid duplicate model probes and use bounded readiness fetches",()=>{
+  const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
+  const ensure=fs.readFileSync(path.join(root,"scripts","ensure-omniroute.mjs"),"utf8");
+  assert.match(dev,/ULTRON_M4_OMNIROUTE_READY/);
+  assert.match(dev,/request timeout/);
+  assert.match(ensure,/setTimeout\(\(\)=>controller\.abort\(\),1800\)/);
+  assert.match(ensure,/waitReady\(timeoutMs=90000\)/);
 });

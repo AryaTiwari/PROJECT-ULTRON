@@ -47,8 +47,8 @@ function truthy(value) {
 
 function omniRouteSettings() {
   const baseUrl = String(process.env.OMNIROUTE_BASE_URL || "http://127.0.0.1:20128/v1").trim().replace(/\/+$/, "");
-  const model = String(process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL || "auto/best-reasoning").trim() || "auto/best-reasoning";
-  const testModel = String(process.env.ULTRON_OMNIROUTE_TEST_MODEL || "auto/best-fast").trim() || "auto/best-fast";
+  const model = String(process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL || "auto").trim() || "auto";
+  const testModel = String(process.env.ULTRON_OMNIROUTE_TEST_MODEL || "auto").trim() || "auto";
   const apiKey = String(process.env.OMNIROUTE_API_KEY || process.env.OMNIROUTE_ENDPOINT_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || "").trim();
   if (apiKey && !process.env.OMNIROUTE_API_KEY) process.env.OMNIROUTE_API_KEY = apiKey;
   return {
@@ -88,7 +88,7 @@ function configureModelRoutes() {
 
     return {
       provider: "omniroute",
-      model: omniRoute.model,
+      model: omniRoute.testModel,
       source: "OmniRoute isolated test mode",
       maskedDirectKeys: masked
     };
@@ -135,19 +135,19 @@ function syncHermesRuntimeConfig() {
   const primaryModel = selectedModelRoute.model || "";
 
   const fallbacks = [];
-  const addFallback = (provider, model) => {
+  const addFallback = (provider, model, extra = {}) => {
     provider = String(provider || "").trim();
     model = String(model || "").trim();
     if (!provider || !model) return;
-    if (provider === primaryProvider && model === primaryModel) return;
-    if (fallbacks.some(x => x.provider === provider && x.model === model)) return;
-    fallbacks.push({ provider, model });
+    if (provider === primaryProvider && model === primaryModel && !extra.baseUrl) return;
+    if (fallbacks.some(x => x.provider === provider && x.model === model && (x.baseUrl || "") === (extra.baseUrl || ""))) return;
+    fallbacks.push({ provider, model, ...extra });
   };
 
   if (omniRoute.testMode) {
-    addFallback("omniroute", "auto/best-reasoning");
-    addFallback("omniroute", "auto/best-coding");
-    addFallback("omniroute", "auto");
+    // Hermes can activate only one cross-provider fallback per turn in the pinned runtime.
+    // Keep OmniRoute itself as the router and reserve one alternate alias as the rescue route.
+    addFallback("custom", "auto/best-reasoning", { baseUrl: omniRoute.baseUrl, keyEnv: "OMNIROUTE_API_KEY" });
   } else {
     if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
       addFallback("gemini", "gemini-3.7-flash");
@@ -156,11 +156,16 @@ function syncHermesRuntimeConfig() {
     if (process.env.NVIDIA_API_KEY) {
       addFallback("nvidia", String(process.env.ULTRON_M4_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b"));
     }
-    addFallback("omniroute", omniRoute.model);
+    addFallback("custom", omniRoute.model, { baseUrl: omniRoute.baseUrl, keyEnv: "OMNIROUTE_API_KEY" });
   }
 
   const fallbackYaml = fallbacks.length
-    ? "fallback_providers:\n" + fallbacks.map(x => `  - provider: ${yamlQuote(x.provider)}\n    model: ${yamlQuote(x.model)}`).join("\n")
+    ? "fallback_providers:\n" + fallbacks.map(x => {
+        const lines = [`  - provider: ${yamlQuote(x.provider)}`, `    model: ${yamlQuote(x.model)}`];
+        if (x.baseUrl) lines.push(`    base_url: ${yamlQuote(x.baseUrl)}`);
+        if (x.keyEnv) lines.push(`    key_env: ${yamlQuote(x.keyEnv)}`);
+        return lines.join("\n");
+      }).join("\n")
     : "fallback_providers: []";
 
   const omniContext = Math.max(32768, Number(process.env.ULTRON_OMNIROUTE_CONTEXT_LENGTH || 131072));
@@ -301,17 +306,21 @@ async function waitFor(url, label, timeoutMs = 60000) {
   const started = Date.now();
   let lastError = "";
   while (Date.now() - started < timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1800);
     try {
-      const response = await fetch(url, { cache: "no-store" });
+      const response = await fetch(url, { cache: "no-store", signal: controller.signal });
       if (response.ok) {
         console.log(label + " ready");
         return;
       }
       lastError = "HTTP " + response.status;
     } catch (error) {
-      lastError = error?.message || String(error);
+      lastError = error?.name === "AbortError" ? "request timeout" : (error?.message || String(error));
+    } finally {
+      clearTimeout(timer);
     }
-    await new Promise(resolve => setTimeout(resolve, 450));
+    await new Promise(resolve => setTimeout(resolve, 300));
   }
   throw new Error(label + " did not become ready: " + lastError);
 }
@@ -358,8 +367,8 @@ async function main() {
     const masked = String(process.env.ULTRON_M4_OMNIROUTE_MASKED_KEYS || "").split(",").filter(Boolean);
     console.log("Direct inference keys masked from Hermes:", masked.length ? masked.join(", ") : "none detected");
     console.log("All Mark 4 cognitive roles forced to omniroute/" + omniRoute.testModel + ".");
-    console.log("OmniRoute-only failover: auto/best-fast -> auto/best-reasoning -> auto/best-coding -> auto.");
-    await probeOmniRoute();
+    console.log("OmniRoute-only routing: " + omniRoute.testModel + " with one Hermes rescue to auto/best-reasoning.");
+    if (!truthy(process.env.ULTRON_M4_OMNIROUTE_READY)) await probeOmniRoute();
   }
   console.log("Starting Hermes with a fresh Mark 4 runtime...");
   run(hermesPython, ["-m", "hermes_cli.main", "gateway", "run", "--replace"], root);

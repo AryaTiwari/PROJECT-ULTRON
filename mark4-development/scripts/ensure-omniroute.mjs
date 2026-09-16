@@ -35,15 +35,20 @@ function open(){
   return new Promise(resolve=>{
     const socket=net.createConnection({host,port});
     const done=value=>{try{socket.destroy();}catch{}resolve(value);};
-    socket.once("connect",()=>done(true));socket.once("error",()=>done(false));socket.setTimeout(900,()=>done(false));
+    socket.once("connect",()=>done(true));socket.once("error",()=>done(false));socket.setTimeout(450,()=>done(false));
   });
 }
 async function models(){
   const headers={Accept:"application/json"};
   const key=String(process.env.OMNIROUTE_API_KEY||process.env.OMNIROUTE_ENDPOINT_KEY||process.env.ULTRON_OMNIROUTE_API_KEY||"").trim();
   if(key)headers.Authorization="Bearer "+key;
-  const response=await fetch(baseUrl+"/models",{headers});
-  return response.ok;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),1800);
+  try{
+    const response=await fetch(baseUrl+"/models",{headers,signal:controller.signal,cache:"no-store"});
+    return response.ok;
+  }catch{return false;}
+  finally{clearTimeout(timer);}
 }
 function candidates(){
   const home=os.homedir();
@@ -61,11 +66,11 @@ function locate(){
   }
   return null;
 }
-async function waitReady(timeoutMs=180000){
+async function waitReady(timeoutMs=90000){
   const started=Date.now();
   while(Date.now()-started<timeoutMs){
     try{if(await open()&&await models())return true;}catch{}
-    await new Promise(r=>setTimeout(r,600));
+    await new Promise(r=>setTimeout(r,350));
   }
   return false;
 }
@@ -92,12 +97,18 @@ if(!env.OMNIROUTE_API_KEY)env.OMNIROUTE_API_KEY=env.OMNIROUTE_ENDPOINT_KEY||env.
 
 console.log("Starting existing OmniRoute installation:",found.dir);
 console.log("OmniRoute log:",logFile);
-const child=spawn(process.execPath,[`--max-old-space-size=${memoryMb}`,found.entry,"dev"],{cwd:found.dir,env,detached:process.platform!=="win32",windowsHide:true,shell:false,stdio:["ignore",log,log]});
+const nextCli=path.join(found.dir,"node_modules","next","dist","bin","next");
+const directNext=fs.existsSync(nextCli);
+const args=directNext
+  ? [`--max-old-space-size=${memoryMb}`,nextCli,"dev","-H",host,"-p",String(port)]
+  : [`--max-old-space-size=${memoryMb}`,found.entry,"dev"];
+console.log("OmniRoute launch mode:",directNext?"hidden direct Next.js":"hidden compatibility wrapper");
+const child=spawn(process.execPath,args,{cwd:found.dir,env,detached:true,windowsHide:true,shell:false,stdio:["ignore",log,log]});
 child.unref();
 try{fs.closeSync(log);}catch{}
 
 if(!(await waitReady())){
-  console.error("OmniRoute did not become ready within 180 seconds. See "+logFile);
+  console.error("OmniRoute did not become ready within 90 seconds. See "+logFile);
   process.exit(1);
 }
 console.log("OmniRoute ready at "+baseUrl);
