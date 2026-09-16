@@ -627,6 +627,7 @@ async function enrichWorkbook(source, options = {}) {
     linkedInsWritten: 0,
     createdLinkedInColumns,
     anchoredRows: 0,
+    anchorsResolved: 0,
     explicitRows: 0,
     skippedNonPersonAnchorRows: 0,
     preservedExistingPocSlots: 0,
@@ -749,7 +750,7 @@ async function enrichWorkbook(source, options = {}) {
           stats.contactsWritten += writtenPeople.length;
           stats.emailsWritten += writtenPeople.filter((person) => person.email).length;
           stats.phonesWritten += writtenPeople.filter((person) => person.phone).length;
-          stats.linkedInsWritten += anchor.linkedinUrl ? 1 : 0;
+          stats.anchorsResolved += anchor.linkedinUrl ? 1 : 0;
           stats.aiSelections += slotPeople.filter(Boolean).length;
           stats.completedRows++; sheetStats.completedRows++;
 
@@ -859,7 +860,7 @@ function formatResult(result) {
   const anchored = result.anchoredRows
     ? ` Anchored-format rows: ${result.anchoredRows}; preserved ${result.preservedExistingPocSlots || 0} already-populated/unsafe-to-reassign POC slot${Number(result.preservedExistingPocSlots || 0) === 1 ? '' : 's'}; skipped ${result.skippedNonPersonAnchorRows || 0} company/unknown LinkedIn anchor row${Number(result.skippedNonPersonAnchorRows || 0) === 1 ? '' : 's'} without changing them.`
     : '';
-  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} AI-ranked additional POCs; wrote ${result.linkedInsWritten || 0} person LinkedIn anchor/profile link${Number(result.linkedInsWritten || 0) === 1 ? '' : 's'}, ${result.phonesWritten} person phone${result.phonesWritten === 1 ? '' : 's'} and ${result.emailsWritten} person email${result.emailsWritten === 1 ? '' : 's'}.${anchored}${pending}${unresolved}`;
+  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; wrote ${result.linkedInsWritten || 0} LinkedIn link${Number(result.linkedInsWritten || 0) === 1 ? '' : 's'} in explicit layouts, ${result.phonesWritten} person phone${result.phonesWritten === 1 ? '' : 's'} and ${result.emailsWritten} person email${result.emailsWritten === 1 ? '' : 's'}.${anchored}${pending}${unresolved}`;
 }
 
 module.exports = {
