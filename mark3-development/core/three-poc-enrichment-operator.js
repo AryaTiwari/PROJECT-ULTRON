@@ -453,9 +453,23 @@ function selectedPeople(candidates, ranking, max = 3) {
   }).filter(Boolean).slice(0, Math.max(1, Math.min(3, Number(max || 3))));
 }
 
+function safeDesignation(person) {
+  const title = String(person?.title || '').replace(/\s+/g, ' ').trim();
+  if (!title || title.length > 180) return '';
+  if (/https?:\/\/|@/.test(title)) return '';
+  const name = String(person?.name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (name && title.toLowerCase() === name) return '';
+  return title;
+}
+
+function hasNameAndDesignation(person) {
+  return Boolean(String(person?.name || '').trim() && safeDesignation(person));
+}
+
 function displayName(person) {
-  const name = String(person?.name || '').trim();
-  const title = String(person?.title || '').trim();
+  const name = String(person?.name || '').replace(/\s+/g, ' ').trim();
+  if (!name) return '';
+  const title = safeDesignation(person);
   return title ? `${name} — ${title}` : name;
 }
 
@@ -477,8 +491,12 @@ async function enrichSelectedPerson(person, existing = {}) {
     needPhone: !existingPhone,
     force: false,
   });
+  const resolvedIdentity = result && !result.noMatch && !result.ambiguous ? result : {};
   return {
     ...person,
+    name: String(resolvedIdentity.name || person.name || '').trim(),
+    title: String(resolvedIdentity.title || person.title || '').trim(),
+    headline: String(resolvedIdentity.headline || person.headline || '').trim(),
     linkedinUrl: linkedIn,
     email: existingEmail || apollo.validEmail(result.email) || apollo.validEmail(person.email),
     phone: existingPhone || apollo.validPhone(result.phone) || apollo.validPhone(person.phone),
@@ -827,11 +845,6 @@ async function enrichWorkbook(source, options = {}) {
               continue;
             }
             if (!existing.name) continue;
-            if (existing.phone && existing.email) {
-              lockedSlots[slotIndex] = true;
-              stats.preservedExistingPocSlots++;
-              continue;
-            }
 
             const matched = matchExistingCandidate(existing.name, candidates);
             if (!matched) {
@@ -841,6 +854,13 @@ async function enrichWorkbook(source, options = {}) {
             }
 
             const enrichedExisting = await enrichSelectedPerson(matched, existing);
+            if (!hasNameAndDesignation(enrichedExisting)) {
+              // Identity is preserved if Apollo cannot verify a proper designation.
+              // Never rewrite a POC name cell with a guessed/blank title.
+              lockedSlots[slotIndex] = true;
+              stats.preservedExistingPocSlots++;
+              continue;
+            }
             slotPeople[slotIndex] = enrichedExisting;
             usedKeys.add(enrichedExisting.candidateKey);
             stats.matchedExistingPocSlots++;
@@ -871,7 +891,9 @@ async function enrichWorkbook(source, options = {}) {
             for (let i = 0; i < openSlots.length; i++) {
               const person = additional[i];
               if (!person) continue;
-              slotPeople[openSlots[i]] = await enrichSelectedPerson(person);
+              const enrichedPerson = await enrichSelectedPerson(person);
+              if (!hasNameAndDesignation(enrichedPerson)) continue;
+              slotPeople[openSlots[i]] = enrichedPerson;
             }
           }
 
@@ -1011,6 +1033,8 @@ module.exports = {
   matchExistingCandidate,
   validKeys,
   selectedPeople,
+  safeDesignation,
+  hasNameAndDesignation,
   displayName,
   ensurePocLinkedInColumns,
   resolveAnchorPerson,
