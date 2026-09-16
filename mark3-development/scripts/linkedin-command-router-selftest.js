@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const assert = require('assert');
 const router = require('../core/linkedin-command-router');
+const controlPlane = require('../core/command-control-plane');
 
 const group = String(process.env.ULTRON_LINKEDIN_COMMAND_TEST_GROUP || 'all').trim().toLowerCase();
 const run = (name) => group === 'all' || group === name;
@@ -11,6 +12,31 @@ if (run('intent')) {
   assert.equal(router.requestedContactEnrichment('now enrich those leads with email and number using Apollo'), true);
   assert.equal(router.isApolloEnrichmentRequest('now enrich those leads with email and number using Apollo'), true);
   assert.equal(router.isApolloEnrichmentRequest('also add their numbers using apollo'), true);
+
+  const anchoredPocCommand = [
+    'Use @New_Sheet_14-09-25 and perform the Mark 3 anchored 3-POC enrichment.',
+    'Person or Company Name = POC-1 name.',
+    'LinkedIn Id = POC-1 person LinkedIn profile.',
+    '2nd POC Name has its own phone and email.',
+    '3rd POC has its own phone and email.',
+    'Resolve POC-1 current employer and enrich the three POCs.',
+  ].join(' ');
+  const anchoredPocOptions = {
+    attachments: [{
+      id: 'file-three-poc',
+      name: 'New_Sheet_14-09-25.xlsx',
+      mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }],
+  };
+  assert.equal(controlPlane.isLocalThreePocWorkbookRequest(anchoredPocCommand, anchoredPocOptions), true);
+  const anchoredRoute = controlPlane.claim(anchoredPocCommand, anchoredPocOptions);
+  assert.equal(anchoredRoute.domain, 'local-three-poc');
+  assert.equal(anchoredRoute.exclusive, false);
+  assert.equal(anchoredRoute.yieldTo, 'lead-enrichment-bootstrap');
+
+  const normalLinkedInRoute = controlPlane.claim('Find 20 SAP companies on LinkedIn in Maharashtra with active job openings');
+  assert.equal(normalLinkedInRoute.domain, 'linkedin');
+  assert.equal(normalLinkedInRoute.exclusive, true);
 
   const savedFirstText = 'LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total. Reuse saved discovery, cached evidence and previously rejected candidates before making unnecessary fresh LinkedIn calls. Do not use Apollo yet.';
   const savedFirst = router.enhanceRequest({
