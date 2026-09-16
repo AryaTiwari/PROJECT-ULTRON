@@ -131,10 +131,10 @@ model:
   default: "gemini-3.8-flash"
 
 providers:
-  freellm:
-    name: "FreeLLM"
-    base_url: "http://127.0.0.1:3001/v1"
-    key_env: "FREELLM_API_KEY"
+  omniroute:
+    name: "OmniRoute"
+    base_url: "http://127.0.0.1:20128/v1"
+    key_env: "OMNIROUTE_API_KEY"
     default_model: "auto"
     transport: "chat_completions"
     enabled: true
@@ -147,6 +147,8 @@ fallback_providers:
     model: "gemini-3.7-flash"
   - provider: "gemini"
     model: "gemini-3.6-flash"
+  - provider: "omniroute"
+    model: "auto"
 
 terminal:
   backend: local

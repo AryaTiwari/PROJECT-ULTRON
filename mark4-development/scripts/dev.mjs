@@ -45,27 +45,25 @@ function truthy(value) {
   return /^(1|true|yes|on)$/i.test(String(value || "").trim());
 }
 
-function freeLlmSettings() {
-  const explicitBase = String(process.env.FREELLM_API_BASE || "").trim();
-  const baseUrl = (explicitBase || "http://127.0.0.1:3001/v1").replace(/\/+$/, "");
-  const apiKey = String(process.env.FREELLM_API_KEY || "").trim();
-  const model = String(process.env.FREELLM_MODEL || "auto").trim() || "auto";
-  const allowNoKey = truthy(process.env.FREELLM_ALLOW_NO_KEY);
+function omniRouteSettings() {
+  const baseUrl = String(process.env.OMNIROUTE_BASE_URL || "http://127.0.0.1:20128/v1").trim().replace(/\/+$/, "");
+  const model = String(process.env.ULTRON_OMNIROUTE_DEFAULT_MODEL || "auto").trim() || "auto";
+  const apiKey = String(process.env.OMNIROUTE_API_KEY || process.env.OMNIROUTE_ENDPOINT_KEY || process.env.ULTRON_OMNIROUTE_API_KEY || "").trim();
+  if (apiKey && !process.env.OMNIROUTE_API_KEY) process.env.OMNIROUTE_API_KEY = apiKey;
   return {
     baseUrl,
-    apiKey,
     model,
-    allowNoKey,
-    configured: Boolean(apiKey || explicitBase || allowNoKey),
-    testMode: truthy(process.env.ULTRON_M4_FREELLM_TEST)
+    apiKey,
+    configured: Boolean(apiKey || process.env.OMNIROUTE_DIR),
+    testMode: truthy(process.env.ULTRON_M4_OMNIROUTE_TEST)
   };
 }
 
-const freeLlm = freeLlmSettings();
+const omniRoute = omniRouteSettings();
 
 function configureModelRoutes() {
-  if (freeLlm.testMode) {
-    return { provider: "freellm", model: freeLlm.model, source: "FreeLLM forced test mode" };
+  if (omniRoute.testMode) {
+    return { provider: "omniroute", model: omniRoute.model, source: "OmniRoute forced test mode" };
   }
   const explicitProvider = String(process.env.ULTRON_M4_COGNITION_PROVIDER || "").trim();
   const explicitModel = String(process.env.ULTRON_M4_COGNITION_MODEL || "").trim();
@@ -118,7 +116,7 @@ function syncHermesRuntimeConfig() {
     fallbacks.push({ provider, model });
   };
 
-  if (!freeLlm.testMode) {
+  if (!omniRoute.testMode) {
     if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
       addFallback("gemini", "gemini-3.7-flash");
       addFallback("gemini", "gemini-3.6-flash");
@@ -126,9 +124,7 @@ function syncHermesRuntimeConfig() {
     if (process.env.NVIDIA_API_KEY) {
       addFallback("nvidia", String(process.env.ULTRON_M4_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b"));
     }
-    if (freeLlm.configured) {
-      addFallback("freellm", freeLlm.model);
-    }
+    addFallback("omniroute", omniRoute.model);
   }
 
   const fallbackYaml = fallbacks.length
@@ -139,18 +135,18 @@ function syncHermesRuntimeConfig() {
     ? `model:\n  provider: ${yamlQuote(primaryProvider)}\n  default: ${yamlQuote(primaryModel)}`
     : 'model:\n  provider: "auto"';
 
-  const freeLlmProviderYaml = `providers:
-  freellm:
-    name: "FreeLLM"
-    base_url: ${yamlQuote(freeLlm.baseUrl)}
-    key_env: "FREELLM_API_KEY"
-    default_model: ${yamlQuote(freeLlm.model)}
+  const omniRouteProviderYaml = `providers:
+  omniroute:
+    name: "OmniRoute"
+    base_url: ${yamlQuote(omniRoute.baseUrl)}
+    key_env: "OMNIROUTE_API_KEY"
+    default_model: ${yamlQuote(omniRoute.model)}
     transport: "chat_completions"
     enabled: true`;
 
   const configText = `${modelYaml}
 
-${freeLlmProviderYaml}
+${omniRouteProviderYaml}
 
 agent:
   api_max_retries: 1
@@ -206,30 +202,23 @@ mcp_servers:
 
 const runtimeModelPolicy = syncHermesRuntimeConfig();
 
-async function probeFreeLlm() {
-  if (!freeLlm.testMode) return null;
-  if (!freeLlm.apiKey && !freeLlm.allowNoKey) {
-    throw new Error("FreeLLM test mode is active but FREELLM_API_KEY is missing. Set the FreeLLM unified key, or FREELLM_ALLOW_NO_KEY=1 only for a trusted no-auth local endpoint.");
-  }
+async function probeOmniRoute() {
+  if (!omniRoute.testMode) return null;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 7000);
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
     const headers = { Accept: "application/json" };
-    if (freeLlm.apiKey) headers.Authorization = "Bearer " + freeLlm.apiKey;
-    const response = await fetch(freeLlm.baseUrl + "/models", { headers, signal: controller.signal, cache: "no-store" });
+    if (omniRoute.apiKey) headers.Authorization = "Bearer " + omniRoute.apiKey;
+    const response = await fetch(omniRoute.baseUrl + "/models", { headers, signal: controller.signal, cache: "no-store" });
     const raw = await response.text();
-    if (!response.ok) throw new Error("FreeLLM /models HTTP " + response.status + ": " + raw.slice(0, 500));
+    if (!response.ok) throw new Error("OmniRoute /models HTTP " + response.status + ": " + raw.slice(0, 500));
     let data = {};
     try { data = raw ? JSON.parse(raw) : {}; } catch {}
     const rows = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : [];
-    console.log("FreeLLM preflight ready:", freeLlm.baseUrl, "| models:", rows.length || "catalog available");
+    console.log("OmniRoute preflight ready:", omniRoute.baseUrl, "| models:", rows.length || "catalog available");
     return { ok: true, models: rows.length };
   } catch (error) {
-    if (controller.signal.aborted) throw new Error("FreeLLM preflight timed out at " + freeLlm.baseUrl + "/models");
-    const message = error?.message || String(error);
-    if (/fetch failed|ECONNREFUSED|connection/i.test(message)) {
-      throw new Error("FreeLLMAPI is not reachable at " + freeLlm.baseUrl + ". Run 'npm run freellm:setup' first, finish the local dashboard setup, then retry 'npm run dev:freellm-test'.");
-    }
+    if (controller.signal.aborted) throw new Error("OmniRoute preflight timed out at " + omniRoute.baseUrl + "/models");
     throw error;
   } finally {
     clearTimeout(timer);
@@ -329,10 +318,10 @@ async function verifyBrowserMount(){
 
 async function main() {
   const hermesHealth = "http://127.0.0.1:8642/health";
-  if (freeLlm.testMode) {
-    console.log("FREE LLM TEST MODE ACTIVE: Gemini/NVIDIA primary routes are disabled for this run.");
-    console.log("FreeLLM route:", freeLlm.baseUrl, "| model:", freeLlm.model);
-    await probeFreeLlm();
+  if (omniRoute.testMode) {
+    console.log("OMNIROUTE TEST MODE ACTIVE: Gemini/NVIDIA primary routes are disabled for this run.");
+    console.log("OmniRoute route:", omniRoute.baseUrl, "| model:", omniRoute.model);
+    await probeOmniRoute();
   }
   console.log("Starting Hermes with a fresh Mark 4 runtime...");
   run(hermesPython, ["-m", "hermes_cli.main", "gateway", "run", "--replace"], root);
@@ -344,7 +333,7 @@ async function main() {
       console.log("Fallback chain:", runtimeModelPolicy.fallbacks.map(x => x.provider + "/" + x.model).join(" -> "));
     }
   } else {
-    console.warn("No primary model credential detected. Add Gemini/NVIDIA credentials, explicit ULTRON_M4 cognition routing, or configure FreeLLM.");
+    console.warn("No primary model credential detected. Add Gemini/NVIDIA credentials, explicit ULTRON_M4 cognition routing, or start OmniRoute.");
   }
 
   console.log("Starting ULTRON gateway...");

@@ -23,21 +23,20 @@ test("normal dev startup does not block on headless browser smoke",()=>{
   assert.match(dev,/Browser smoke probe skipped/);
 });
 
-test("FreeLLM is a named OpenAI-compatible fallback and has isolated test mode",()=>{
-  assert.ok(dev.includes("const freeLlmProviderYaml"));
-  assert.ok(dev.includes("  freellm:"));
-  assert.match(dev,/key_env: "FREELLM_API_KEY"/);
-  assert.match(dev,/FREELLM_API_BASE/);
-  assert.match(dev,/FREELLM_MODEL/);
-  assert.match(dev,/addFallback\("freellm", freeLlm\.model\)/);
-  assert.match(dev,/ULTRON_M4_FREELLM_TEST/);
-  assert.match(dev,/FREE LLM TEST MODE ACTIVE/);
-  assert.match(dev,/probeFreeLlm/);
+test("OmniRoute is a named OpenAI-compatible final fallback and has isolated test mode",()=>{
+  assert.match(dev,/const omniRouteProviderYaml/);
+  assert.match(dev,/key_env: "OMNIROUTE_API_KEY"/);
+  assert.match(dev,/OMNIROUTE_BASE_URL/);
+  assert.match(dev,/ULTRON_OMNIROUTE_DEFAULT_MODEL/);
+  assert.match(dev,/addFallback\("omniroute", omniRoute\.model\)/);
+  assert.match(dev,/ULTRON_M4_OMNIROUTE_TEST/);
+  assert.match(dev,/OMNIROUTE TEST MODE ACTIVE/);
+  assert.match(dev,/probeOmniRoute/);
 });
 
-test("FreeLLM test mode excludes normal Gemini and NVIDIA fallbacks",()=>{
-  assert.match(dev,/if \(!freeLlm\.testMode\) \{[\s\S]*addFallback\("gemini"/);
-  assert.match(dev,/if \(freeLlm\.testMode\) \{[\s\S]*provider: "freellm"/);
+test("OmniRoute test mode excludes Gemini and NVIDIA fallbacks",()=>{
+  assert.match(dev,/if \(!omniRoute\.testMode\) \{[\s\S]*addFallback\("gemini"/);
+  assert.match(dev,/if \(omniRoute\.testMode\) \{[\s\S]*provider: "omniroute"/);
 });
 
 test("FreeLLM unreachable error points to deterministic setup command",()=>{

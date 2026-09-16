@@ -21,9 +21,8 @@
     "start:gateway": "node services/gateway/src/server.mjs",
     "check:gateway": "node scripts/run-gateway-tests.mjs",
     "check:media": "node scripts/run-media-tests.mjs",
-    "check:syntax": "node --check services/gateway/src/server.mjs && node --check scripts/dev.mjs && node --check scripts/dev-freellm-test.mjs && node --check services/capability-host/src/server.mjs && node --check services/media-engine/src/engine.mjs",
-    "dev:freellm-test": "node scripts/dev-freellm-test.mjs",
-    "freellm:setup": "powershell -ExecutionPolicy Bypass -File scripts/setup-freellm.ps1",
-    "freellm:stop": "docker compose -f .runtime/freellmapi/docker-compose.yml --env-file .runtime/freellmapi/.env down"
+    "check:syntax": "node --check services/gateway/src/server.mjs && node --check scripts/dev.mjs && node --check scripts/dev-omniroute-test.mjs && node --check scripts/ensure-omniroute.mjs && node --check services/capability-host/src/server.mjs && node --check services/media-engine/src/engine.mjs",
+    "dev:omniroute-test": "node scripts/dev-omniroute-test.mjs",
+    "omniroute:ensure": "node scripts/ensure-omniroute.mjs"
   }
 }
