@@ -12,10 +12,22 @@ Treat requests like “find SAP roles, get founder/recruiter contacts, and send 
 3. Read the native lead master before fresh discovery and reuse verified evidence.
 4. Discover jobs/companies using the user's requested source constraints. Do not confuse generic search snippets with verified final evidence.
 5. Save accepted companies to `ultron_lead_master_upsert`. One company remains one canonical lead.
-6. Enrich contacts only after company/job verification. Prefer primary executive and secondary recruiting contact. Never invent missing phone/email.
-7. If Apollo is used, call `ultron_apollo_find_company_contacts`; Apollo is enrichment, not discovery.
-8. Before Google Sheet export call `ultron_google_workspace_status`.
-9. If Google auth is unavailable, preserve the mission and lead master, set the next action to Workspace connection, and return a concise auth requirement. Do not claim completion.
-10. When connected, call `ultron_google_sheet_from_leads`. Final completion requires a real spreadsheet URL/readback, not merely loading the Google Workspace skill.
+6. Treat the existing LinkedIn profile URL as POC 1. Do not create a redundant POC 1 name column in the sheet. Store POC 1's phone/email and its CURRENT company from the profile.
+7. Search POC 2 and POC 3 inside POC 1's CURRENT company, even when that differs from the job company. Exclude POC 1 from those results. Prefer Founder/CEO/Director/Owner, then Co-Founder/Recruiting Head/Manager/HR Manager/Recruiter. Never invent missing phone/email.
+8. If Apollo is used, call `ultron_apollo_find_company_contacts` with company=POC 1 current company plus excludeLinkedin/excludeName/excludeEmail for POC 1. Apollo is enrichment, not discovery.
+9. Before Google Sheet export call `ultron_google_workspace_status`.
+10. If Google auth is unavailable, preserve the mission and lead master, set the next action to Workspace connection, and return a concise auth requirement. Do not claim completion.
+11. When connected, call `ultron_google_sheet_from_leads`. Final completion requires a real spreadsheet URL/readback, not merely loading the Google Workspace skill.
 
 The model decides search strategy and adapts when recall is poor. Deterministic tools enforce canonical state, evidence and export contracts.
+
+
+## Canonical sheet POC layout
+
+For lead exports, use this visible POC structure:
+- LINKEDIN LINK = POC 1 profile URL. Do not add a separate POC 1 name/designation column.
+- PHONE NUMBER + EMAIL immediately after LINKEDIN LINK belong to POC 1.
+- 2ND POC NAME + DESIGNATION is one cell, followed by 2ND POC PHONE and 2ND POC EMAIL.
+- 3RD POC NAME + DESIGNATION is one cell, followed by 3RD POC PHONE and 3RD POC EMAIL.
+- POC 2 and POC 3 must be searched against the CURRENT company observed on POC 1's LinkedIn profile.
+- Preserve POC 1 name/designation internally only for dedupe and enrichment exclusions when observed.

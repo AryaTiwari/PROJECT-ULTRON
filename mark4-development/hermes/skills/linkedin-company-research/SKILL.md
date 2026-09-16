@@ -42,9 +42,10 @@ When the user asks for jobs/leads plus decision-makers plus a spreadsheet, treat
 
 - Create or resume a persistent mission when the request spans discovery, verification, enrichment and export.
 - Discovery and enrichment are separate phases. First verify job/company evidence and save each accepted company to the canonical lead master.
-- The canonical lead can hold two ranked contacts:
-  - primary: Founder / CEO / Director / Owner;
-  - secondary: Co-Founder / Recruiting Head / Recruiting Manager / HR Manager / HR Recruiter.
+- The canonical lead can hold three POCs:
+  - POC 1 is the already-selected LinkedIn profile. Its visible sheet identity is the LinkedIn URL, with phone/email beside it.
+  - POC 2 and POC 3 are searched from POC 1's CURRENT employer, not automatically from the job company.
+  - POC 2/3 prioritize Founder/CEO/Director/Owner, then Co-Founder/Recruiting Head/Recruiting Manager/HR Manager/HR Recruiter.
 - Use `ultron_apollo_find_company_contacts` only for enrichment when Apollo is allowed and available. Do not use Apollo for company discovery.
 - Never fabricate phone or email values. Empty contact fields stay empty.
 - A request for a sheet is not complete after search. Export only after the requested research fields have been populated as far as evidence permits.

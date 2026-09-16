@@ -20,12 +20,19 @@ async function searchTier(key,{company,domain,location},tier){
   if(!r.ok)throw new Error(data?.message||data?.error||`Apollo HTTP ${r.status}`);
   return (data.people||data.contacts||[]).filter(x=>sameOrg(x,company)).map(p=>personOf(p,tier,company));
 }
-export async function findCompanyContacts({company,domain="",location="",limit=2}){
+export async function findCompanyContacts({company,domain="",location="",limit=2,excludeLinkedin="",excludeName="",excludeEmail=""}){
   const key=String(process.env.APOLLO_API_KEY||"").trim();if(!key)throw new Error("APOLLO_API_KEY is not configured.");if(!company)throw new Error("company is required.");
   const selected=[],seen=new Set();
+  const blockedLinkedin=String(excludeLinkedin||"").trim().toLowerCase().replace(/\/$/,"");
+  const blockedName=String(excludeName||"").trim().toLowerCase();
+  const blockedEmail=String(excludeEmail||"").trim().toLowerCase();
   for(const tier of TIERS){
     const people=await searchTier(key,{company,domain,location},tier);
     for(const person of people){
+      const linkedin=String(person.linkedin||"").trim().toLowerCase().replace(/\/$/,"");
+      const name=String(person.name||"").trim().toLowerCase();
+      const email=String(person.email||"").trim().toLowerCase();
+      if((blockedLinkedin&&linkedin===blockedLinkedin)||(blockedName&&name===blockedName)||(blockedEmail&&email===blockedEmail))continue;
       const identity=String(person.id||person.linkedin||person.email||person.name||"").toLowerCase();
       if(!identity||seen.has(identity))continue;
       seen.add(identity);selected.push(person);

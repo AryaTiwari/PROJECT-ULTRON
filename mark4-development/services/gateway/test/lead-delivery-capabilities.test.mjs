@@ -18,3 +18,19 @@ test("Google workspace wrapper preserves auth-required as structured state",()=>
   assert.match(workspace,/status:"auth_required"/);
   assert.match(workspace,/Preserve the research mission/);
 });
+
+test("Google Sheet lead export uses LinkedIn-as-POC1 and two additional POCs",()=>{
+  const server=fs.readFileSync(path.join(root,"services","capability-host","src","server.mjs"),"utf8");
+  assert.match(server,/LINKEDIN LINK/);
+  assert.match(server,/2ND POC NAME \+ DESIGNATION/);
+  assert.match(server,/3RD POC NAME \+ DESIGNATION/);
+  assert.doesNotMatch(server,/"PRIMARY NAME","PRIMARY ROLE"/);
+  assert.match(server,/tertiaryContact/);
+});
+
+test("Apollo POC enrichment can exclude POC1 identity",()=>{
+  const apollo=fs.readFileSync(path.join(root,"services","capability-host","src","apollo.mjs"),"utf8");
+  assert.match(apollo,/excludeLinkedin/);
+  assert.match(apollo,/excludeName/);
+  assert.match(apollo,/excludeEmail/);
+});

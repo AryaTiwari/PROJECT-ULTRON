@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS lead_master (
   contact_name TEXT,
   contact_role TEXT,
   contact_linkedin TEXT,
+  contact_company TEXT,
   phone TEXT,
   email TEXT,
   secondary_contact_name TEXT,
@@ -80,6 +81,11 @@ CREATE TABLE IF NOT EXISTS lead_master (
   secondary_contact_linkedin TEXT,
   secondary_phone TEXT,
   secondary_email TEXT,
+  tertiary_contact_name TEXT,
+  tertiary_contact_role TEXT,
+  tertiary_contact_linkedin TEXT,
+  tertiary_phone TEXT,
+  tertiary_email TEXT,
   remarks TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -116,11 +122,17 @@ function ensureColumn(table, column, type) {
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 for (const [column,type] of [
+  ["contact_company","TEXT"],
   ["secondary_contact_name","TEXT"],
   ["secondary_contact_role","TEXT"],
   ["secondary_contact_linkedin","TEXT"],
   ["secondary_phone","TEXT"],
-  ["secondary_email","TEXT"]
+  ["secondary_email","TEXT"],
+  ["tertiary_contact_name","TEXT"],
+  ["tertiary_contact_role","TEXT"],
+  ["tertiary_contact_linkedin","TEXT"],
+  ["tertiary_phone","TEXT"],
+  ["tertiary_email","TEXT"]
 ]) ensureColumn("lead_master",column,type);
 
 const parse = (value, fallback = {}) => { try { return JSON.parse(value ?? ""); } catch { return fallback; } };
@@ -295,6 +307,7 @@ function mapLead(row) {
     name: row.contact_name || null,
     role: row.contact_role || null,
     linkedin: row.contact_linkedin || null,
+    company: row.contact_company || null,
     phone: row.phone || null,
     email: row.email || null
   };
@@ -304,6 +317,13 @@ function mapLead(row) {
     linkedin: row.secondary_contact_linkedin || null,
     phone: row.secondary_phone || null,
     email: row.secondary_email || null
+  };
+  const tertiaryContact = {
+    name: row.tertiary_contact_name || null,
+    role: row.tertiary_contact_role || null,
+    linkedin: row.tertiary_contact_linkedin || null,
+    phone: row.tertiary_phone || null,
+    email: row.tertiary_email || null
   };
   return {
     id: row.id,
@@ -321,6 +341,7 @@ function mapLead(row) {
     contact: primaryContact,
     primaryContact,
     secondaryContact,
+    tertiaryContact,
     remarks: row.remarks || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -353,6 +374,7 @@ export function upsertLead(input = {}) {
     contactName: cleanText(input.primaryContactName ?? input.contactName ?? input.contact_name) ?? existing?.contact_name ?? null,
     contactRole: cleanText(input.primaryContactRole ?? input.contactRole ?? input.contact_role) ?? existing?.contact_role ?? null,
     contactLinkedin: cleanText(input.primaryContactLinkedin ?? input.contactLinkedin ?? input.contact_linkedin) ?? existing?.contact_linkedin ?? null,
+    contactCompany: cleanText(input.primaryContactCompany ?? input.contactCompany ?? input.contact_company) ?? existing?.contact_company ?? null,
     phone: cleanText(input.primaryPhone ?? input.phone) ?? existing?.phone ?? null,
     email: cleanText(input.primaryEmail ?? input.email) ?? existing?.email ?? null,
     secondaryContactName: cleanText(input.secondaryContactName ?? input.secondary_contact_name) ?? existing?.secondary_contact_name ?? null,
@@ -360,16 +382,22 @@ export function upsertLead(input = {}) {
     secondaryContactLinkedin: cleanText(input.secondaryContactLinkedin ?? input.secondary_contact_linkedin) ?? existing?.secondary_contact_linkedin ?? null,
     secondaryPhone: cleanText(input.secondaryPhone ?? input.secondary_phone) ?? existing?.secondary_phone ?? null,
     secondaryEmail: cleanText(input.secondaryEmail ?? input.secondary_email) ?? existing?.secondary_email ?? null,
+    tertiaryContactName: cleanText(input.tertiaryContactName ?? input.tertiary_contact_name) ?? existing?.tertiary_contact_name ?? null,
+    tertiaryContactRole: cleanText(input.tertiaryContactRole ?? input.tertiary_contact_role) ?? existing?.tertiary_contact_role ?? null,
+    tertiaryContactLinkedin: cleanText(input.tertiaryContactLinkedin ?? input.tertiary_contact_linkedin) ?? existing?.tertiary_contact_linkedin ?? null,
+    tertiaryPhone: cleanText(input.tertiaryPhone ?? input.tertiary_phone) ?? existing?.tertiary_phone ?? null,
+    tertiaryEmail: cleanText(input.tertiaryEmail ?? input.tertiary_email) ?? existing?.tertiary_email ?? null,
     remarks: cleanText(input.remarks) ?? existing?.remarks ?? null,
     createdAt: existing?.created_at || at,
     updatedAt: at
   };
   db.prepare(`INSERT INTO lead_master
     (id,company_key,company_name,company_link,job_link,job_title,location,employee_count,applicant_count,source,
-     verification_status,evidence_json,contact_name,contact_role,contact_linkedin,phone,email,
+     verification_status,evidence_json,contact_name,contact_role,contact_linkedin,contact_company,phone,email,
      secondary_contact_name,secondary_contact_role,secondary_contact_linkedin,secondary_phone,secondary_email,
+     tertiary_contact_name,tertiary_contact_role,tertiary_contact_linkedin,tertiary_phone,tertiary_email,
      remarks,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(company_key) DO UPDATE SET
       company_name=excluded.company_name,
       company_link=excluded.company_link,
@@ -384,6 +412,7 @@ export function upsertLead(input = {}) {
       contact_name=excluded.contact_name,
       contact_role=excluded.contact_role,
       contact_linkedin=excluded.contact_linkedin,
+      contact_company=excluded.contact_company,
       phone=excluded.phone,
       email=excluded.email,
       secondary_contact_name=excluded.secondary_contact_name,
@@ -391,12 +420,18 @@ export function upsertLead(input = {}) {
       secondary_contact_linkedin=excluded.secondary_contact_linkedin,
       secondary_phone=excluded.secondary_phone,
       secondary_email=excluded.secondary_email,
+      tertiary_contact_name=excluded.tertiary_contact_name,
+      tertiary_contact_role=excluded.tertiary_contact_role,
+      tertiary_contact_linkedin=excluded.tertiary_contact_linkedin,
+      tertiary_phone=excluded.tertiary_phone,
+      tertiary_email=excluded.tertiary_email,
       remarks=excluded.remarks,
       updated_at=excluded.updated_at`)
     .run(next.id,next.companyKey,next.companyName,next.companyLink,next.jobLink,next.jobTitle,next.location,next.employeeCount,
       next.applicantCount,next.source,next.verificationStatus,JSON.stringify(next.evidence),next.contactName,next.contactRole,
-      next.contactLinkedin,next.phone,next.email,next.secondaryContactName,next.secondaryContactRole,next.secondaryContactLinkedin,
-      next.secondaryPhone,next.secondaryEmail,next.remarks,next.createdAt,next.updatedAt);
+      next.contactLinkedin,next.contactCompany,next.phone,next.email,next.secondaryContactName,next.secondaryContactRole,next.secondaryContactLinkedin,
+      next.secondaryPhone,next.secondaryEmail,next.tertiaryContactName,next.tertiaryContactRole,next.tertiaryContactLinkedin,
+      next.tertiaryPhone,next.tertiaryEmail,next.remarks,next.createdAt,next.updatedAt);
   addEvent({type: existing ? "lead.updated" : "lead.created", payload:{id:next.id,companyKey,status:next.verificationStatus}});
   return getLead(next.id);
 }
@@ -412,9 +447,9 @@ export function listLeads({ status = null, query = null, limit = 100 } = {}) {
   const clauses = [], args = [];
   if (status) { clauses.push("verification_status=?"); args.push(String(status)); }
   if (query) {
-    clauses.push("(company_name LIKE ? OR location LIKE ? OR job_title LIKE ? OR contact_name LIKE ? OR secondary_contact_name LIKE ?)");
+    clauses.push("(company_name LIKE ? OR location LIKE ? OR job_title LIKE ? OR contact_name LIKE ? OR contact_company LIKE ? OR secondary_contact_name LIKE ? OR tertiary_contact_name LIKE ?)");
     const q = `%${String(query).trim()}%`;
-    args.push(q,q,q,q,q);
+    args.push(q,q,q,q,q,q,q);
   }
   const sql = `SELECT * FROM lead_master${clauses.length ? " WHERE " + clauses.join(" AND ") : ""} ORDER BY updated_at DESC LIMIT ?`;
   args.push(Math.max(1,Math.min(1000,Number(limit)||100)));
@@ -429,7 +464,7 @@ export function leadStats(target = null) {
     if (row.verification_status in counts) counts[row.verification_status] = count;
   }
   const enriched = Number(db.prepare(`SELECT COUNT(*) AS count FROM lead_master
-    WHERE verification_status='verified' AND (email IS NOT NULL OR phone IS NOT NULL OR secondary_email IS NOT NULL OR secondary_phone IS NOT NULL)`).get()?.count || 0);
+    WHERE verification_status='verified' AND (email IS NOT NULL OR phone IS NOT NULL OR secondary_email IS NOT NULL OR secondary_phone IS NOT NULL OR tertiary_email IS NOT NULL OR tertiary_phone IS NOT NULL)`).get()?.count || 0);
   const numericTarget = target === null || target === undefined || target === "" ? null : Math.max(0,Math.round(Number(target)||0));
   return { ...counts, enriched, target:numericTarget, remaining:numericTarget === null ? null : Math.max(0,numericTarget-counts.verified) };
 }
