@@ -354,6 +354,7 @@ async function companyContextAgent(context) {
 function candidateView(person, index) {
   return {
     candidateKey: String(person.id || person.linkedinUrl || `candidate-${index + 1}`),
+    id: person.id || null,
     name: person.name || '',
     title: person.title || '',
     headline: person.headline || '',
@@ -363,6 +364,9 @@ function candidateView(person, index) {
     location: person.location || '',
     linkedinUrl: person.linkedinUrl || '',
     organizationName: person.organizationName || '',
+    organizationDomain: person.organizationDomain || '',
+    searchLimitedIdentity: Boolean(person.searchLimitedIdentity),
+    lastNameObfuscated: Boolean(person.lastNameObfuscated),
   };
 }
 
@@ -466,6 +470,15 @@ function hasNameAndDesignation(person) {
   return Boolean(String(person?.name || '').trim() && safeDesignation(person));
 }
 
+function hasVerifiedPocIdentity(person) {
+  return Boolean(
+    hasNameAndDesignation(person)
+    && apollo.normalizeLinkedIn(person?.linkedinUrl)
+    && String(person?.apolloPersonId || person?.id || '').trim()
+    && person?.identityVerified !== false
+  );
+}
+
 function displayName(person) {
   const name = String(person?.name || '').replace(/\s+/g, ' ').trim();
   if (!name) return '';
@@ -473,36 +486,58 @@ function displayName(person) {
   return title ? `${name} — ${title}` : name;
 }
 
-async function enrichSelectedPerson(person, existing = {}) {
+async function enrichSelectedPerson(person, existing = {}, options = {}) {
   const existingEmail = apollo.validEmail(existing.email);
   const existingPhone = apollo.validPhone(existing.phone);
-  const linkedIn = apollo.normalizeLinkedIn(person.linkedinUrl);
-  if (!linkedIn) {
+  const company = String(options.company || person.organizationName || '').trim();
+  const domain = String(options.domain || person.organizationDomain || '').trim();
+  let linkedIn = apollo.normalizeLinkedIn(person.linkedinUrl);
+  let resolvedIdentity = null;
+
+  // People API Search intentionally returns Apollo IDs without LinkedIn URLs.
+  // Hydrate only the selected candidate by Apollo ID after AI ranking.
+  if (!linkedIn && person.id && (company || domain)) {
+    resolvedIdentity = await apollo.resolveDecisionMaker(person, company, domain, {
+      needEmail: !existingEmail,
+      needPhone: !existingPhone,
+    });
+    linkedIn = apollo.normalizeLinkedIn(resolvedIdentity.linkedinUrl);
+  } else if (linkedIn) {
+    const result = await apollo.enrich(linkedIn, {
+      needEmail: !existingEmail,
+      needPhone: !existingPhone,
+      force: false,
+    });
+    if (result && !result.noMatch && !result.ambiguous) {
+      const sameEmployer = (company || domain) ? apollo.sameOrganization(result, company, domain) : true;
+      if (sameEmployer) resolvedIdentity = { ...result, identityVerified: true };
+    }
+  }
+
+  if (!resolvedIdentity || !linkedIn) {
     return {
       ...person,
       email: existingEmail || apollo.validEmail(person.email),
       phone: existingPhone || apollo.validPhone(person.phone),
       phonePending: false,
       apolloPersonId: person.id || null,
+      identityVerified: false,
     };
   }
-  const result = await apollo.enrich(linkedIn, {
-    needEmail: !existingEmail,
-    needPhone: !existingPhone,
-    force: false,
-  });
-  const resolvedIdentity = result && !result.noMatch && !result.ambiguous ? result : {};
+
   return {
     ...person,
+    ...resolvedIdentity,
     name: String(resolvedIdentity.name || person.name || '').trim(),
     title: String(resolvedIdentity.title || person.title || '').trim(),
     headline: String(resolvedIdentity.headline || person.headline || '').trim(),
     linkedinUrl: linkedIn,
-    email: existingEmail || apollo.validEmail(result.email) || apollo.validEmail(person.email),
-    phone: existingPhone || apollo.validPhone(result.phone) || apollo.validPhone(person.phone),
-    phonePending: !existingPhone && result.phoneStatus === 'pending' && Boolean(result.apolloPersonId),
-    apolloPersonId: result.apolloPersonId || person.id || null,
-    matchConfidence: result.matchConfidence || null,
+    email: existingEmail || apollo.validEmail(resolvedIdentity.email) || apollo.validEmail(person.email),
+    phone: existingPhone || apollo.validPhone(resolvedIdentity.phone) || apollo.validPhone(person.phone),
+    phonePending: !existingPhone && resolvedIdentity.phoneStatus === 'pending' && Boolean(resolvedIdentity.apolloPersonId || person.id),
+    apolloPersonId: resolvedIdentity.apolloPersonId || person.id || null,
+    matchConfidence: resolvedIdentity.matchConfidence || null,
+    identityVerified: true,
   };
 }
 
@@ -1035,6 +1070,7 @@ module.exports = {
   selectedPeople,
   safeDesignation,
   hasNameAndDesignation,
+  hasVerifiedPocIdentity,
   displayName,
   ensurePocLinkedInColumns,
   resolveAnchorPerson,
