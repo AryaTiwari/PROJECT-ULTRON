@@ -336,18 +336,69 @@ async function chatOmniRouteOnly({ messages, model = 'auto', tools = null, taskT
   }
 
   const failures = [];
-  const native = await runNativeChat(messages, requested || 'auto', tools, taskType, failures);
-  if (native) {
-    return {
-      ...native,
-      transport: 'omniroute',
-      routingMode: 'omniroute-only',
-      personalApiFallbackAllowed: false,
-    };
+  const timeoutMs = nativeTimeout(taskType);
+  let candidateNumber = 0;
+
+  // Heavy workflows intentionally stay on OmniRoute. Try the native aliases in
+  // order, but never fall through to direct/personal provider credentials.
+  for (const alias of nativeAliases(requested || 'auto', taskType)) {
+    candidateNumber += 1;
+    const started = Date.now();
+    emit('model_candidate_started', {
+      model: alias,
+      provider: 'omniroute-auto',
+      candidateNumber,
+      timeoutMs,
+      nativeRouting: true,
+      omniRouteOnly: true,
+    });
+    try {
+      const result = await omniRoute.chat({
+        messages,
+        model: alias,
+        tools,
+        taskType,
+        timeoutMs,
+        maxAttempts: 1,
+        skipModelValidation: true,
+      });
+      const resolved = validateNativeResult(result, alias);
+      emit('model_candidate_succeeded', {
+        model: resolved.model,
+        provider: resolved.provider,
+        durationMs: Date.now() - started,
+        candidateNumber,
+        nativeRouting: true,
+        omniRouteOnly: true,
+      });
+      return {
+        ...result,
+        model: resolved.model,
+        provider: resolved.provider,
+        transport: 'omniroute',
+        routingMode: 'omniroute-only',
+        personalApiFallbackAllowed: false,
+      };
+    } catch (error) {
+      const failure = failureRow(alias, 'omniroute-auto', error, {
+        nativeRouting: true,
+        omniRouteOnly: true,
+      });
+      failures.push(failure);
+      emit('model_candidate_failed', {
+        ...failure,
+        durationMs: Date.now() - started,
+        candidateNumber,
+      });
+      // Unlike the global router, this path may try another OmniRoute alias
+      // after transient resource pressure. It still never uses personal keys.
+      if (!recoverable(error)) throw error;
+    }
   }
 
   const error = aggregateFailure(failures);
-  error.code = error.code || 'OMNIROUTE_ONLY_FAILED';
+  error.code = 'OMNIROUTE_ONLY_FAILED';
+  error.personalApiFallbackAllowed = false;
   throw error;
 }
 
