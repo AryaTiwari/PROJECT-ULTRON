@@ -46,6 +46,9 @@ jobs:
       - name: Run LinkedIn account subsystem regression
         working-directory: mark3-development
         run: npm run check:linkedin-account
+      - name: Run agentic three-POC enrichment regression
+        working-directory: mark3-development
+        run: npm run check:three-poc
       - name: Render full 30-second Elevate visual acceptance Reel
         working-directory: mark3-development
         run: node --env-file=../.env scripts/reel-visual-acceptance.js
