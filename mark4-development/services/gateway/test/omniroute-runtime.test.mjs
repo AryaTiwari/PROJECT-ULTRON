@@ -39,7 +39,7 @@ test("OmniRoute test mode uses OmniRoute auto routing plus one real Hermes custo
   assert.match(dev,/baseUrl: omniRoute\.baseUrl/);
   assert.match(dev,/keyEnv: "OMNIROUTE_API_KEY"/);
   assert.match(dev,/ULTRON_OMNIROUTE_TEST_MODEL/);
-  assert.match(dev,/\|\| "auto"/);
+  assert.match(dev,/auto\/best-fast/);\n  assert.match(dev,/auto\/best-reasoning/);
   assert.doesNotMatch(dev,/auto\/best-coding -> auto/);
 });
 
@@ -48,9 +48,9 @@ test("Windows OmniRoute startup is hidden and does not create a detached console
   const ensure=fs.readFileSync(path.join(root,"scripts","ensure-omniroute.mjs"),"utf8");
   assert.match(launcher,/windowsHide:process\.platform==="win32"/);
   assert.match(launcher,/ULTRON_M4_OMNIROUTE_READY="1"/);
-  assert.match(ensure,/detached:true/);
+  assert.match(ensure,/detached:false/);
   assert.match(ensure,/windowsHide:true/);
-  assert.match(ensure,/hidden direct Next\.js/);
+  assert.match(ensure,/hidden canonical run-next wrapper/);
 });
 
 test("OmniRoute warm launches avoid duplicate model probes and use bounded readiness fetches",()=>{
@@ -59,5 +59,5 @@ test("OmniRoute warm launches avoid duplicate model probes and use bounded readi
   assert.match(dev,/ULTRON_M4_OMNIROUTE_READY/);
   assert.match(dev,/request timeout/);
   assert.match(ensure,/setTimeout\(\(\)=>controller\.abort\(\),1800\)/);
-  assert.match(ensure,/waitReady\(timeoutMs=90000\)/);
+  assert.match(ensure,/waitReady\(state,timeoutMs=90000\)/);\n  assert.match(ensure,/Last OmniRoute output/);\n  assert.match(ensure,/launcher exited/);
 });
