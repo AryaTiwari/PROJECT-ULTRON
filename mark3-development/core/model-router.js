@@ -324,6 +324,33 @@ async function runManagedCandidate(candidate, messages, tools, taskType, timeout
   return omniRoute.chat({ messages, model: candidate, tools, taskType, timeoutMs, maxAttempts: 1, skipModelValidation: true });
 }
 
+async function chatOmniRouteOnly({ messages, model = 'auto', tools = null, taskType = 'general' } = {}) {
+  require('./command-control-plane').assertAllowed('general-model', { messages });
+
+  if (!Array.isArray(messages) || !messages.length) throw new Error('OmniRoute-only model request requires messages.');
+  const requested = normalizeModel(model);
+  if (requested && !isRoutingAlias(requested)) {
+    const error = new Error('OmniRoute-only routing requires an auto/* routing alias, not a concrete direct-provider model.');
+    error.code = 'OMNIROUTE_ALIAS_REQUIRED';
+    throw error;
+  }
+
+  const failures = [];
+  const native = await runNativeChat(messages, requested || 'auto', tools, taskType, failures);
+  if (native) {
+    return {
+      ...native,
+      transport: 'omniroute',
+      routingMode: 'omniroute-only',
+      personalApiFallbackAllowed: false,
+    };
+  }
+
+  const error = aggregateFailure(failures);
+  error.code = error.code || 'OMNIROUTE_ONLY_FAILED';
+  throw error;
+}
+
 async function chat({ messages, model = 'auto', tools = null, taskType = 'general' } = {}) {
   require('./command-control-plane').assertAllowed('general-model', { messages });
 
@@ -463,6 +490,7 @@ function resetProviderHealth() { registry.resetTransientHealth?.(); }
 
 module.exports = {
   chat,
+  chatOmniRouteOnly,
   streamChat,
   chatExact,
   streamExact,
