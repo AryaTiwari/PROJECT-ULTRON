@@ -370,6 +370,7 @@ module.exports = {
   bestHeaderIndex,
   looksLinkedInProfile,
   hyperlinkFromCell,
+  linkedInHyperlinks,
   detectLayout,
   inspect,
   readSheet,
