@@ -50,16 +50,26 @@ const PHONE = [/\bphone\b/, /\bmobile\b/, /\bcontact\s+number\b/, /\bnumber\b/];
 const EMAIL = [/\bemail\b/, /\be\s+mail\b/];
 const DETAILS = [/\bpost\s+details?\b/, /\bjob\s+details?\b/, /\bdescription\b/];
 const LINKEDIN = [/\blinkedin\b/];
+const P1_LINKEDIN = [/\b1st\s+poc\s+linkedin\b/, /\bfirst\s+poc\s+linkedin\b/, /\bpoc\s*1\s+linkedin\b/];
+const P2_LINKEDIN = [/\b2nd\s+poc\s+linkedin\b/, /\bsecond\s+poc\s+linkedin\b/, /\bpoc\s*2\s+linkedin\b/];
+const P3_LINKEDIN = [/\b3rd\s+poc\s+linkedin\b/, /\bthird\s+poc\s+linkedin\b/, /\bpoc\s*3\s+linkedin\b/];
 const COMPANY = [/^company$/, /^company\s+name$/, /^organization$/, /^organisation$/];
 const LEGACY_NAME = [/^person\s+or\s+company\s+name$/, /^person\s+name$/, /^lead\s+name$/];
 
-function contactSlot(row, nameIndex, nextNameIndex) {
+function contactSlot(row, nameIndex, nextNameIndex, explicitLinkedInPatterns = []) {
   if (nameIndex < 0) return null;
   const end = nextNameIndex >= 0 ? nextNameIndex : row.length;
   const phoneIndex = findHeader(row, PHONE, nameIndex + 1, end);
   const emailIndex = findHeader(row, EMAIL, nameIndex + 1, end);
+  const inlineLinkedInIndex = findHeader(row, LINKEDIN, nameIndex + 1, end);
+  const explicitLinkedInIndex = explicitLinkedInPatterns.length ? findHeader(row, explicitLinkedInPatterns) : -1;
   if (phoneIndex < 0 || emailIndex < 0) return null;
-  return { nameIndex, phoneIndex, emailIndex };
+  return {
+    nameIndex,
+    phoneIndex,
+    emailIndex,
+    linkedinIndex: inlineLinkedInIndex >= 0 ? inlineLinkedInIndex : explicitLinkedInIndex,
+  };
 }
 
 function legacyFirstSlot(row, secondNameIndex) {
@@ -70,7 +80,7 @@ function legacyFirstSlot(row, secondNameIndex) {
   const phoneIndex = findHeader(row, PHONE, start, secondNameIndex);
   const emailIndex = findHeader(row, EMAIL, start, secondNameIndex);
   if (phoneIndex < 0 || emailIndex < 0) return null;
-  return { nameIndex, phoneIndex, emailIndex, legacy: true };
+  return { nameIndex, phoneIndex, emailIndex, linkedinIndex, legacy: true };
 }
 
 function detectThreePocLayout(rows) {
@@ -81,9 +91,9 @@ function detectThreePocLayout(rows) {
     const thirdName = findHeader(row, P3);
     if (secondName < 0 || thirdName < 0 || thirdName <= secondName) continue;
     const explicitFirst = findHeader(row, P1);
-    const first = explicitFirst >= 0 ? contactSlot(row, explicitFirst, secondName) : legacyFirstSlot(row, secondName);
-    const second = contactSlot(row, secondName, thirdName);
-    const third = contactSlot(row, thirdName, row.length);
+    const first = explicitFirst >= 0 ? contactSlot(row, explicitFirst, secondName, P1_LINKEDIN) : legacyFirstSlot(row, secondName);
+    const second = contactSlot(row, secondName, thirdName, P2_LINKEDIN);
+    const third = contactSlot(row, thirdName, row.length, P3_LINKEDIN);
     if (!first || !second || !third) continue;
 
     const companyIndex = findHeader(row, COMPANY);
@@ -111,6 +121,29 @@ function detectThreePocLayout(rows) {
   return best;
 }
 
+async function ensurePocLinkedInColumns(source, sheet) {
+  const layout = sheet.layout;
+  const slots = [
+    { slot: layout.first, label: '1st POC LinkedIn' },
+    { slot: layout.second, label: '2nd POC LinkedIn' },
+    { slot: layout.third, label: '3rd POC LinkedIn' },
+  ];
+  let nextIndex = (sheet.rows || []).reduce((max, row) => Math.max(max, (row || []).length), 0);
+  const changes = [];
+  const created = [];
+  for (const item of slots) {
+    if (Number.isInteger(item.slot.linkedinIndex) && item.slot.linkedinIndex >= 0) continue;
+    item.slot.linkedinIndex = nextIndex++;
+    changes.push({
+      range: localExcel.cellRange(sheet.sheetName, layout.headerRowNumber, item.slot.linkedinIndex),
+      value: item.label,
+    });
+    created.push(item.label);
+  }
+  if (changes.length) await localExcel.writeCells(source, changes);
+  return created;
+}
+
 function allEmails(row) {
   const out = [];
   const seen = new Set();
@@ -136,7 +169,8 @@ function rowContext(layout, row, sheetName, rowNumber) {
       layout.first.phoneIndex, layout.first.emailIndex,
       layout.second.phoneIndex, layout.second.emailIndex,
       layout.third.phoneIndex, layout.third.emailIndex,
-    ].includes(item.index))
+      layout.first.linkedinIndex, layout.second.linkedinIndex, layout.third.linkedinIndex,
+    ].filter((index) => Number.isInteger(index) && index >= 0).includes(item.index))
     .slice(0, 30);
   return {
     sheetName,
@@ -310,6 +344,9 @@ function rowChanges(sheetName, rowNumber, layout, people) {
     const slot = slots[i];
     const person = people[i] || null;
     changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.nameIndex), value: person ? displayName(person) : '' });
+    if (Number.isInteger(slot.linkedinIndex) && slot.linkedinIndex >= 0) {
+      changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.linkedinIndex), value: person?.linkedinUrl || '' });
+    }
     changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.phoneIndex), value: person?.phone || '' });
     changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.emailIndex), value: person?.email || '' });
   }
@@ -424,6 +461,11 @@ async function enrichWorkbook(source, options = {}) {
     throw error;
   }
 
+  const createdLinkedInColumns = {};
+  for (const sheet of compatible) {
+    createdLinkedInColumns[sheet.sheetName] = await ensurePocLinkedInColumns(source, sheet);
+  }
+
   const job = {
     id: `three-poc-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
     source,
@@ -450,6 +492,8 @@ async function enrichWorkbook(source, options = {}) {
     emailsWritten: 0,
     phonesWritten: 0,
     pendingPhones: 0,
+    linkedInsWritten: 0,
+    createdLinkedInColumns,
     updatedCells: 0,
     agentModels: new Set(),
   };
@@ -516,6 +560,7 @@ async function enrichWorkbook(source, options = {}) {
         stats.contactsWritten += enriched.length;
         stats.emailsWritten += enriched.filter((person) => person.email).length;
         stats.phonesWritten += enriched.filter((person) => person.phone).length;
+        stats.linkedInsWritten += enriched.filter((person) => person.linkedinUrl).length;
         stats.aiSelections += enriched.length;
         stats.completedRows++; sheetStats.completedRows++;
 
@@ -556,7 +601,7 @@ function formatResult(result) {
   const unresolved = result.unresolvedRows
     ? ` ${result.unresolvedRows} row${result.unresolvedRows === 1 ? '' : 's'} were left unchanged because company/candidate evidence was not strong enough.`
     : '';
-  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} AI-ranked POCs; wrote ${result.phonesWritten} phone${result.phonesWritten === 1 ? '' : 's'} and ${result.emailsWritten} email${result.emailsWritten === 1 ? '' : 's'}.${pending}${unresolved}`;
+  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} AI-ranked POCs; wrote ${result.linkedInsWritten || 0} person LinkedIn link${Number(result.linkedInsWritten || 0) === 1 ? '' : 's'}, ${result.phonesWritten} person phone${result.phonesWritten === 1 ? '' : 's'} and ${result.emailsWritten} person email${result.emailsWritten === 1 ? '' : 's'}.${pending}${unresolved}`;
 }
 
 module.exports = {
@@ -566,6 +611,7 @@ module.exports = {
   validKeys,
   selectedPeople,
   displayName,
+  ensurePocLinkedInColumns,
   companyContextAgent,
   selectorAgent,
   reviewerAgent,
