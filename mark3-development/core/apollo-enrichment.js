@@ -229,6 +229,27 @@ function decisionPriority(title, mode = 'general') {
 }
 
 
+function personOrganization(person = {}) {
+  const organization = person?.organization || {};
+  const organizationName = String(
+    person?.organization_name
+    || organization?.name
+    || person?.employment_history?.find?.((item) => item?.current)?.organization_name
+    || ''
+  ).trim();
+  const organizationDomain = hostname(
+    organization?.website_url
+    || organization?.primary_domain
+    || organization?.domain
+    || ''
+  );
+  return {
+    organization: person?.organization || null,
+    organizationName,
+    organizationDomain,
+  };
+}
+
 function sameOrganization(person, company, domain = '') {
   const expectedDomain = hostname(domain);
   const actualDomain = hostname(person?.organization?.website_url || person?.organization?.primary_domain || person?.organization?.domain || '');
@@ -475,8 +496,12 @@ async function resolveDecisionMaker(candidate, company, domain) {
   if (!person || String(person.id) !== String(candidate.id) || !linkedinUrl || !sameOrganization(person, company, domain)) {
     throw new Error('APOLLO_IDENTITY_OR_COMPANY_MISMATCH');
   }
+  const organization = personOrganization(person);
   const record = { name: person.name || [person.first_name, person.last_name].filter(Boolean).join(' '),
-    title: person.title || candidate.title, organization: person.organization,
+    title: person.title || candidate.title, headline: person.headline || candidate.headline || '',
+    organization: organization.organization,
+    organizationName: organization.organizationName,
+    organizationDomain: organization.organizationDomain,
     apolloPersonId: String(person.id), noMatch: false, ambiguous: false,
     emailKnown: true, email: validEmail(person.email), phone: null, phoneStatus: 'pending',
     returnedLinkedIn: linkedinUrl, checkedAt: new Date().toISOString(), phoneRequestedAt: new Date().toISOString() };
@@ -529,11 +554,18 @@ async function enrich(input, options = {}) {
     };
   } else {
     const person = decision.person;
+    const organization = personOrganization(person);
     record = {
       ...previous,
       noMatch: false,
       ambiguous: false,
       apolloPersonId: String(person.id),
+      name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || previous.name || '').trim(),
+      title: String(person.title || previous.title || '').trim(),
+      headline: String(person.headline || previous.headline || '').trim(),
+      organization: organization.organization || previous.organization || null,
+      organizationName: organization.organizationName || previous.organizationName || '',
+      organizationDomain: organization.organizationDomain || previous.organizationDomain || '',
       emailKnown: needEmail ? true : Boolean(previous.emailKnown),
       email: needEmail ? validEmail(person.email) : (previous.email ?? null),
       phoneStatus: needPhone ? 'pending' : (previous.phoneStatus || null),
@@ -548,6 +580,37 @@ async function enrich(input, options = {}) {
   cache.people[linkedinUrl] = record;
   saveCache(cache);
   return { ok: true, cached: false, linkedinUrl, ...record };
+}
+
+async function resolvePersonProfile(input, options = {}) {
+  const linkedinUrl = normalizeLinkedIn(input);
+  if (!linkedinUrl) return { ok: false, invalidLinkedIn: true, linkedinUrl: null };
+
+  const needEmail = Boolean(options.needEmail);
+  const needPhone = Boolean(options.needPhone);
+  const cache = readCache();
+  const cached = cache.people[linkedinUrl];
+
+  if (!options.force && cached && isFresh(cached) && (cached.noMatch || cached.ambiguous)) {
+    return { ok: true, cached: true, linkedinUrl, ...cached };
+  }
+
+  const hasIdentity = Boolean(
+    cached
+    && cached.apolloPersonId
+    && cached.name
+    && (cached.organizationName || cached.organization?.name)
+  );
+
+  if (!options.force && hasIdentity && satisfies(cached, { needEmail, needPhone })) {
+    return { ok: true, cached: true, linkedinUrl, ...cached };
+  }
+
+  return enrich(linkedinUrl, {
+    needEmail,
+    needPhone,
+    force: Boolean(options.force || !hasIdentity),
+  });
 }
 
 async function fetchPhoneResults() {
@@ -610,6 +673,7 @@ module.exports = {
   validEmail,
   validPhone,
   normalizeLinkedIn,
+  personOrganization,
   matchDecision,
   COMPANY_DECISION_PRIORITY,
   decisionPriority,
@@ -623,6 +687,7 @@ module.exports = {
   cacheDays,
   status,
   enrich,
+  resolvePersonProfile,
   fetchPhoneResults,
   consumePhoneResult,
   recordPhoneResult,
