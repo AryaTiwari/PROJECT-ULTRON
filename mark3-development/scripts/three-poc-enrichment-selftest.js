@@ -136,8 +136,7 @@ assert.match(source, /apollo\.resolvePersonByNameCompany/);
 assert.match(source, /hasVerifiedPocIdentity\(enrichedPerson\)/);
 assert.match(source, /candidatePoolFor\(companyContext\)/);
 assert.doesNotMatch(source, /matchExistingCandidate\(existing\.name/);
-assert.match(source, /if \(!hasNameAndDesignation\(enrichedExisting\)\)/);
-assert.match(source, /hasVerifiedPocIdentity\(enrichedPerson\)/);
+assert.match(source, /hasVerifiedPocIdentity\(enrichedExisting\)/);
 assert.ok(!source.includes("if (existing.phone && existing.email) {\n              lockedSlots[slotIndex] = true;"), 'complete existing POC slots must still be eligible for safe designation completion');
 
 const request = bootstrap.isThreePocRequest(
