@@ -260,6 +260,38 @@ function sameOrganization(person, company, domain = '') {
   return expected === actual || expected.includes(actual) || actual.includes(expected);
 }
 
+function searchCandidateFromPerson(person, cleanCompany, cleanDomain) {
+  if (!sameOrganization(person, cleanCompany, cleanDomain)) return null;
+
+  const apolloId = String(person?.id || '').trim();
+  const linkedinUrl = normalizeLinkedIn(person?.linkedin_url || person?.linkedin || '');
+  if (!apolloId && !linkedinUrl) return null;
+
+  const limitedName = String(
+    person?.name
+    || [person?.first_name, person?.last_name || person?.last_name_obfuscated].filter(Boolean).join(' ')
+    || ''
+  ).trim();
+
+  return {
+    id: apolloId || null,
+    name: limitedName,
+    title: String(person?.title || '').trim(),
+    headline: String(person?.headline || '').trim(),
+    seniority: String(person?.seniority || '').trim(),
+    departments: Array.isArray(person?.departments) ? person.departments.filter(Boolean) : [],
+    functions: Array.isArray(person?.functions) ? person.functions.filter(Boolean) : [],
+    location: String(person?.city || person?.state || person?.country || '').trim(),
+    linkedinUrl: linkedinUrl || null,
+    organizationName: String(person?.organization_name || person?.organization?.name || cleanCompany).trim(),
+    organizationDomain: hostname(person?.organization?.website_url || person?.organization?.primary_domain || person?.organization?.domain || cleanDomain),
+    email: null,
+    phone: null,
+    searchLimitedIdentity: !linkedinUrl,
+    lastNameObfuscated: Boolean(person?.last_name_obfuscated && !person?.last_name),
+  };
+}
+
 async function searchCompanyPeopleBroad({ company, domain = '', location = '', limit = 50, titles = [] } = {}) {
   const apiKey = setting('APOLLO_API_KEY');
   if (!apiKey) {
@@ -316,42 +348,12 @@ async function searchCompanyPeopleBroad({ company, domain = '', location = '', l
 
     const people = Array.isArray(data.people) ? data.people : Array.isArray(data.contacts) ? data.contacts : [];
     for (const person of people) {
-      if (!sameOrganization(person, cleanCompany, cleanDomain)) continue;
-
-      // Apollo People API Search deliberately returns a limited identity record.
-      // In particular, it normally returns an Apollo person ID but NOT linkedin_url.
-      // Keep that ID-only candidate for ranking and hydrate only the selected people.
-      const apolloId = String(person.id || '').trim();
-      const linkedinUrl = normalizeLinkedIn(person.linkedin_url || person.linkedin || '');
-      if (!apolloId && !linkedinUrl) continue;
-
-      const key = String(apolloId || linkedinUrl).toLowerCase();
+      const candidate = searchCandidateFromPerson(person, cleanCompany, cleanDomain);
+      if (!candidate) continue;
+      const key = String(candidate.id || candidate.linkedinUrl).toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-
-      const limitedName = String(
-        person.name
-        || [person.first_name, person.last_name || person.last_name_obfuscated].filter(Boolean).join(' ')
-        || ''
-      ).trim();
-
-      found.push({
-        id: apolloId || null,
-        name: limitedName,
-        title: String(person.title || '').trim(),
-        headline: String(person.headline || '').trim(),
-        seniority: String(person.seniority || '').trim(),
-        departments: Array.isArray(person.departments) ? person.departments.filter(Boolean) : [],
-        functions: Array.isArray(person.functions) ? person.functions.filter(Boolean) : [],
-        location: String(person.city || person.state || person.country || '').trim(),
-        linkedinUrl: linkedinUrl || null,
-        organizationName: String(person.organization_name || person.organization?.name || cleanCompany).trim(),
-        organizationDomain: hostname(person.organization?.website_url || person.organization?.primary_domain || person.organization?.domain || cleanDomain),
-        email: null,
-        phone: null,
-        searchLimitedIdentity: !linkedinUrl,
-        lastNameObfuscated: Boolean(person.last_name_obfuscated && !person.last_name),
-      });
+      found.push(candidate);
       if (found.length >= wanted) break;
     }
     if (!people.length) break;
@@ -794,6 +796,7 @@ module.exports = {
   COMPANY_DECISION_PRIORITY,
   decisionPriority,
   sameOrganization,
+  searchCandidateFromPerson,
   rankedDecisionMakers,
   searchCompanyDecisionMaker,
   searchCompanyPeopleBroad,
