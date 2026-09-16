@@ -34,9 +34,11 @@ test("OmniRoute is a named OpenAI-compatible final fallback and has isolated tes
   assert.match(dev,/probeOmniRoute/);
 });
 
-test("OmniRoute test mode excludes Gemini and NVIDIA fallbacks",()=>{
-  assert.match(dev,/if \(!omniRoute\.testMode\) \{[\s\S]*addFallback\("gemini"/);
-  assert.match(dev,/if \(omniRoute\.testMode\) \{[\s\S]*provider: "omniroute"/);
+test("OmniRoute test mode excludes direct-provider fallbacks and uses OmniRoute aliases only",()=>{
+  assert.match(dev,/if \(omniRoute\.testMode\) \{[\s\S]*addFallback\("omniroute", "auto\/best-reasoning"\)/);
+  assert.match(dev,/addFallback\("omniroute", "auto\/best-coding"\)/);
+  assert.match(dev,/addFallback\("omniroute", "auto"\)/);
+  assert.match(dev,/\} else \{[\s\S]*addFallback\("gemini"/);
 });
 
 
