@@ -19,3 +19,21 @@ test("Mark4 OmniRoute ensure is standalone and does not start Mark3",()=>{
   assert.match(ensure,/OMNIROUTE_DIR/);
   assert.match(ensure,/\/models/);
 });
+
+test("OmniRoute test mode masks direct providers including Grok xAI and forces every Mark4 role",()=>{
+  const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
+  assert.match(dev,/XAI_API_KEY/);
+  assert.match(dev,/GEMINI_API_KEY/);
+  assert.match(dev,/NVIDIA_API_KEY/);
+  assert.match(dev,/delete process\.env\[key\]/);
+  assert.match(dev,/\["COGNITION","WORKER","VERIFIER","CREATIVE"\]/);
+  assert.match(dev,/ULTRON_M4_\$\{role\}_PROVIDER/);
+  assert.match(dev,/= "omniroute"/);
+  assert.match(dev,/all direct model routes are disabled/);
+});
+
+test("OmniRoute test mode has no Hermes fallback providers",()=>{
+  const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
+  assert.match(dev,/if \(!omniRoute\.testMode\) \{/);
+  assert.match(dev,/fallback_providers: \[\]/);
+});

@@ -63,7 +63,33 @@ const omniRoute = omniRouteSettings();
 
 function configureModelRoutes() {
   if (omniRoute.testMode) {
-    return { provider: "omniroute", model: omniRoute.model, source: "OmniRoute forced test mode" };
+    const directInferenceKeys = [
+      "GOOGLE_API_KEY",
+      "GEMINI_API_KEY",
+      "NVIDIA_API_KEY",
+      "XAI_API_KEY",
+      "GROQ_API_KEY",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "DEEPSEEK_API_KEY",
+      "MISTRAL_API_KEY",
+      "OPENROUTER_API_KEY"
+    ];
+    const masked = directInferenceKeys.filter(key => Boolean(process.env[key]));
+    for (const key of masked) delete process.env[key];
+
+    for (const role of ["COGNITION","WORKER","VERIFIER","CREATIVE"]) {
+      process.env[`ULTRON_M4_${role}_PROVIDER`] = "omniroute";
+      process.env[`ULTRON_M4_${role}_MODEL`] = omniRoute.model;
+    }
+    process.env.ULTRON_M4_OMNIROUTE_MASKED_KEYS = masked.join(",");
+
+    return {
+      provider: "omniroute",
+      model: omniRoute.model,
+      source: "OmniRoute isolated test mode",
+      maskedDirectKeys: masked
+    };
   }
   const explicitProvider = String(process.env.ULTRON_M4_COGNITION_PROVIDER || "").trim();
   const explicitModel = String(process.env.ULTRON_M4_COGNITION_MODEL || "").trim();
@@ -319,8 +345,11 @@ async function verifyBrowserMount(){
 async function main() {
   const hermesHealth = "http://127.0.0.1:8642/health";
   if (omniRoute.testMode) {
-    console.log("OMNIROUTE TEST MODE ACTIVE: Gemini/NVIDIA primary routes are disabled for this run.");
+    console.log("OMNIROUTE TEST MODE ACTIVE: all direct model routes are disabled for this ULTRON run.");
     console.log("OmniRoute route:", omniRoute.baseUrl, "| model:", omniRoute.model);
+    const masked = String(process.env.ULTRON_M4_OMNIROUTE_MASKED_KEYS || "").split(",").filter(Boolean);
+    console.log("Direct inference keys masked from Hermes:", masked.length ? masked.join(", ") : "none detected");
+    console.log("All Mark 4 cognitive roles forced to omniroute/" + omniRoute.model + ".");
     await probeOmniRoute();
   }
   console.log("Starting Hermes with a fresh Mark 4 runtime...");
