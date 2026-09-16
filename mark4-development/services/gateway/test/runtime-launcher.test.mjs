@@ -24,5 +24,8 @@ test("all Mark4 launcher children suppress extra console windows on Windows",()=
   assert.match(dev,/windowsHide:process\.platform==="win32"/);
 });
 
-
-test("Vite starts directly through Node without an extra cmd console",()=>{\n  assert.match(dev,/function runVite\\(\\)/);\n  assert.match(dev,/vite","bin","vite\\.js/);\n  assert.doesNotMatch(dev,/ComSpec|cmd\\.exe/);\n});\n
+test("Vite starts directly through Node without an extra cmd console",()=>{
+  assert.match(dev,/function runVite\(\)/);
+  assert.match(dev,/vite","bin","vite\.js/);
+  assert.doesNotMatch(dev,/ComSpec|cmd\.exe/);
+});
