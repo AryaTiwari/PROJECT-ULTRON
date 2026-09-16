@@ -7,6 +7,24 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
+
+function loadEnv(file){
+  if(!fs.existsSync(file))return;
+  for(const line of fs.readFileSync(file,"utf8").split(/\r?\n/)){
+    const trimmed=line.trim();
+    if(!trimmed||trimmed.startsWith("#"))continue;
+    const index=trimmed.indexOf("=");
+    if(index<1)continue;
+    const key=trimmed.slice(0,index).trim();
+    const value=trimmed.slice(index+1).trim().replace(/^[\"']|[\"']$/g,"");
+    if(process.env[key]===undefined)process.env[key]=value;
+  }
+}
+
+loadEnv(path.resolve(root,"..",".env"));
+loadEnv(path.join(root,".env"));
+loadEnv(path.join(root,".runtime","secrets.env"));
+
 const host=String(process.env.OMNIROUTE_HOST||"127.0.0.1");
 const port=Number(process.env.OMNIROUTE_PORT||20128);
 const baseUrl=String(process.env.OMNIROUTE_BASE_URL||`http://${host}:${port}/v1`).replace(/\/+$/,"");
