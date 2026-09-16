@@ -135,6 +135,40 @@ assert.deepEqual(anchoredCells, ['F3','G3','H3','I3','J3','K3','L3','M3']);
 assert.ok(!anchoredCells.includes('A3'), 'anchored flow must never overwrite POC-1 name');
 assert.ok(!anchoredCells.includes('E3'), 'anchored flow must never overwrite POC-1 LinkedIn');
 
+const existingAnchoredRow = [
+  'Aashish Nimadi','L','SAP hiring','L','https://www.linkedin.com/in/aashish-nimadi/',
+  '+911111111111','',
+  'Rajeev Ranjan','+912222222222','',
+  '','',''
+];
+const repairChanges = three.anchoredRowChanges(
+  'Gaurav 2',
+  3,
+  legacyLayout,
+  { phone: '+919999999999', email: 'anchor-new@example.com' },
+  [
+    { name: 'Rajeev Ranjan', title: 'Recruitment Manager', phone: '+918888888888', email: 'rajeev-new@example.com' },
+    { name: 'Priyanka Polen', title: 'Technical Recruiter', phone: '+917777777777', email: 'priyanka@example.com' },
+  ],
+  [false, false],
+  existingAnchoredRow,
+);
+const repairCells = repairChanges.map((change) => change.range.split('!').pop().replace(/\$/g, ''));
+assert.deepEqual(repairCells, ['G3','H3','J3','K3','L3','M3']);
+assert.ok(!repairCells.includes('F3'), 'existing POC-1 phone must never be overwritten');
+assert.ok(!repairCells.includes('I3'), 'existing POC-2 phone must never be overwritten');
+const repairCounts = three.anchoredChangeCounts(repairChanges, 'Gaurav 2', 3, legacyLayout);
+assert.deepEqual(repairCounts, {
+  poc1Phone: 0,
+  poc1Email: 1,
+  poc2Name: 1,
+  poc2Phone: 0,
+  poc2Email: 1,
+  poc3Name: 1,
+  poc3Phone: 1,
+  poc3Email: 1,
+});
+
 const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc-enrichment-operator.js'), 'utf8');
 assert.ok(!source.includes('decisionPriority('), '3-POC operator must not use hardcoded decisionPriority');
 assert.ok(!source.includes('COMPANY_DECISION_PRIORITY'), '3-POC operator must not use hardcoded COMPANY_DECISION_PRIORITY');
@@ -159,6 +193,9 @@ assert.match(source, /reviewerRequired\(selected\.ranking/);
 assert.match(source, /candidateHydrationFallbacks/);
 assert.match(source, /personalModelFallbacks/);
 assert.match(source, /THREE_POC_NON_OMNIROUTE_SELECTOR_BLOCKED/);
+assert.match(source, /function anchoredChangeCounts/);
+assert.match(source, /pushMissing\(layout\.first\.phoneIndex/);
+assert.match(source, /changes\.length \? await writeSourceCells/);
 assert.ok(!source.includes("if (existing.phone && existing.email) {\n              lockedSlots[slotIndex] = true;"), 'complete existing POC slots must still be eligible for safe designation completion');
 
 const request = bootstrap.isThreePocRequest(
