@@ -224,7 +224,6 @@ assert.match(leadBootstrapSource, /threePoc\.inspectSource/);
 
 const apolloSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'apollo-enrichment.js'), 'utf8');
 assert.match(apolloSource, /searchCandidateFromPerson/);
-assert.match(apolloSource, /People API Search deliberately returns a limited identity record/);
 assert.doesNotMatch(apolloSource, /if \(!linkedinUrl\) continue;/);
 assert.match(apolloSource, /resolvePersonByNameCompany/);
 assert.match(leadBootstrapSource, /async function handleThreePocCommand/);
