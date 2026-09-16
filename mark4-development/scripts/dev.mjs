@@ -156,7 +156,7 @@ async function verifyBrowserMount(){
   const browser=browserCandidates()[0];
   if(!browser){console.warn("No Chrome/Edge found for UI paint smoke test; continuing after HTTP readiness.");return;}
   const dom=String(await dumpDom(browser,"http://127.0.0.1:5174/?ultron-smoke="+Date.now()));
-  if(dom.includes("ULTRON UI failed to mount")&&dom.includes("visible"))throw new Error("Frontend runtime crash detected by browser smoke test.");
+  if(/id="ultron-fatal"[^>]*class="[^"]*visible/.test(dom))throw new Error("Frontend runtime crash detected by browser smoke test.");
   if(!dom.includes('class="u4-shell"'))throw new Error("Frontend did not mount .u4-shell. Browser DOM: "+dom.slice(0,900));
 }
 
