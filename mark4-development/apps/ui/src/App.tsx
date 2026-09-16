@@ -15,6 +15,16 @@ function normalizeMessages(value:any):ChatMessage[]{
     .filter((m:ChatMessage)=>Boolean(m.content)&&["user","assistant","system","tool"].includes(m.role));
 }
 const deltaOf=(data:any)=>String(data?.delta??data?.text??data?.content??data?.output_text?.delta??data?.data?.delta??"");
+const failureOf=(data:any)=>{
+  const err=data?.error;
+  if(typeof err==="string"&&err.trim())return err;
+  if(err&&typeof err==="object"){
+    const nested=err.message||err.detail||err.error||err.code;
+    if(nested)return String(nested);
+    try{return JSON.stringify(err);}catch{}
+  }
+  return String(data?.message||data?.detail||data?.reason||"The active model route failed.");
+};
 
 function Glyph({name}:{name:"chat"|"mission"|"branches"|"ops"|"history"|"plus"}){
   const p={width:19,height:19,viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:1.6,strokeLinecap:"round" as const,strokeLinejoin:"round" as const};
@@ -67,7 +77,7 @@ export function App(){
         if(type==="approval.request")setPendingApproval(data);
         if(type==="assistant.delta"){const d=deltaOf(data);if(d){collected+=d;setStreaming(collected);}}
         if(type==="run.failed"){
-          runFailure=String(data?.error||data?.message||"The active model route failed.");
+          runFailure=failureOf(data);
           setError("MODEL ROUTE FAILED · "+runFailure);
         }
         if(["run.completed","run.failed","run.cancelled","run.interrupted"].includes(type))setPendingApproval(null);
