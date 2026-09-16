@@ -36,6 +36,38 @@ process.env.API_SERVER_ENABLED = "true";
 process.env.API_SERVER_HOST = "127.0.0.1";
 process.env.API_SERVER_PORT = "8642";
 process.env.PATH = hermesNode + path.delimiter + (process.env.PATH || "");
+process.env.TERMINAL_CWD = root;
+
+function configureModelRoutes() {
+  const explicitProvider = String(process.env.ULTRON_M4_COGNITION_PROVIDER || "").trim();
+  const explicitModel = String(process.env.ULTRON_M4_COGNITION_MODEL || "").trim();
+  if (explicitProvider && explicitModel) return { provider: explicitProvider, model: explicitModel, source: "explicit" };
+
+  let provider = "", model = "", source = "";
+  if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
+    provider = "gemini";
+    model = String(process.env.ULTRON_M4_GEMINI_MODEL || "gemini-3.8-flash");
+    source = "Google AI Studio";
+  } else if (process.env.NVIDIA_API_KEY) {
+    provider = "nvidia";
+    model = String(process.env.ULTRON_M4_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b");
+    source = "NVIDIA NIM";
+  }
+
+  if (provider && model) {
+    process.env.ULTRON_M4_COGNITION_PROVIDER = provider;
+    process.env.ULTRON_M4_COGNITION_MODEL = model;
+    process.env.ULTRON_M4_WORKER_PROVIDER ||= provider;
+    process.env.ULTRON_M4_WORKER_MODEL ||= model;
+    process.env.ULTRON_M4_VERIFIER_PROVIDER ||= provider;
+    process.env.ULTRON_M4_VERIFIER_MODEL ||= model;
+    process.env.ULTRON_M4_CREATIVE_PROVIDER ||= provider;
+    process.env.ULTRON_M4_CREATIVE_MODEL ||= model;
+  }
+  return { provider, model, source };
+}
+
+const selectedModelRoute = configureModelRoutes();
 
 const children = [];
 let shuttingDown = false;
@@ -104,9 +136,15 @@ async function main() {
     await waitFor(hermesHealth, "Hermes");
   }
 
+  if (selectedModelRoute.provider) {
+    console.log("Model route:", selectedModelRoute.provider + " / " + selectedModelRoute.model + " (" + selectedModelRoute.source + ")");
+  } else {
+    console.warn("No explicit free model credential detected. Add GEMINI_API_KEY/GOOGLE_API_KEY, NVIDIA_API_KEY, or ULTRON_M4_COGNITION_PROVIDER + ULTRON_M4_COGNITION_MODEL.");
+  }
+
   console.log("Starting ULTRON gateway...");
   run(process.execPath, ["services/gateway/src/server.mjs"]);
-  await waitFor("http://127.0.0.1:8787/api/bootstrap", "ULTRON gateway");
+  await waitFor("http://127.0.0.1:8787/api/ready", "ULTRON deep readiness");
 
   console.log("Starting cockpit...");
   runNpm(["run", "dev", "-w", "apps/ui"]);

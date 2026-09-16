@@ -6,245 +6,119 @@ import { MissionPanel } from "./components/MissionPanel";
 import { BranchView } from "./components/BranchView";
 import { OperationsView } from "./components/OperationsView";
 
-const sessionId = (session: SessionLike) => String(session.id || session.session_id || "");
+const sessionId=(session:SessionLike)=>String(session.id||session.session_id||"");
+const listFrom=(value:any):SessionLike[]=>Array.isArray(value)?value:Array.isArray(value?.data)?value.data:Array.isArray(value?.sessions)?value.sessions:Array.isArray(value?.items)?value.items:[];
+const textOf=(content:any):string=>typeof content==="string"?content:Array.isArray(content)?content.map(item=>typeof item==="string"?item:item?.text||item?.content||"").join(""):String(content?.text||content?.content||"");
+function normalizeMessages(value:any):ChatMessage[]{
+  const rows=Array.isArray(value)?value:Array.isArray(value?.messages)?value.messages:Array.isArray(value?.data)?value.data:Array.isArray(value?.items)?value.items:[];
+  return rows.map((m:any,i:number)=>({id:String(m.id||m.message_id||i),role:(m.role||m.type?.split?.("/")[0]||"assistant") as ChatMessage["role"],content:textOf(m.content??m.message?.content??m.text)}))
+    .filter((m:ChatMessage)=>Boolean(m.content)&&["user","assistant","system","tool"].includes(m.role));
+}
+const deltaOf=(data:any)=>String(data?.delta??data?.text??data?.content??data?.output_text?.delta??data?.data?.delta??"");
 
-function listFrom(value: any): SessionLike[] {
-  if (Array.isArray(value)) return value;
-  if (Array.isArray(value?.data)) return value.data;
-  if (Array.isArray(value?.sessions)) return value.sessions;
-  if (Array.isArray(value?.items)) return value.items;
-  return [];
+function Glyph({name}:{name:"chat"|"mission"|"branches"|"ops"|"history"|"plus"}){
+  const p={width:19,height:19,viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:1.6,strokeLinecap:"round" as const,strokeLinejoin:"round" as const};
+  if(name==="chat")return <svg {...p}><path d="M4 5h16v11H9l-5 4V5Z"/><path d="M8 9h8M8 13h5"/></svg>;
+  if(name==="mission")return <svg {...p}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3"/></svg>;
+  if(name==="branches")return <svg {...p}><circle cx="6" cy="5" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 5h2c5 0 2 13 8 13M12 10c0-2 2-3 4-3"/></svg>;
+  if(name==="ops")return <svg {...p}><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></svg>;
+  if(name==="history")return <svg {...p}><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 8v5l3 2"/></svg>;
+  return <svg {...p}><path d="M12 5v14M5 12h14"/></svg>;
 }
 
-function textOf(content: any): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map(item => typeof item === "string" ? item : item?.text || item?.content || "").join("");
-  return String(content?.text || content?.content || "");
-}
+export function App(){
+  const[view,setView]=useState<ViewMode>("command"),[sessions,setSessions]=useState<SessionLike[]>([]),[active,setActive]=useState(""),[messages,setMessages]=useState<ChatMessage[]>([]);
+  const[missions,setMissions]=useState<Mission[]>([]),[events,setEvents]=useState<LiveEvent[]>([]),[busy,setBusy]=useState(false),[streaming,setStreaming]=useState(""),[health,setHealth]=useState(false),[error,setError]=useState("");
+  const[activeRunId,setActiveRunId]=useState(""),[pendingApproval,setPendingApproval]=useState<any|null>(null),[sessionsOpen,setSessionsOpen]=useState(false),[missionOpen,setMissionOpen]=useState(false),[filter,setFilter]=useState("");
+  const mission=missions[0]||null;
+  const activeSession=useMemo(()=>sessions.find(s=>sessionId(s)===active),[sessions,active]);
+  const filtered=useMemo(()=>{const q=filter.trim().toLowerCase();return sessions.filter(s=>!q||String(s.title||"Untitled").toLowerCase().includes(q));},[sessions,filter]);
 
-function normalizeMessages(value: any): ChatMessage[] {
-  const rows = Array.isArray(value) ? value
-    : Array.isArray(value?.messages) ? value.messages
-    : Array.isArray(value?.data) ? value.data
-    : Array.isArray(value?.items) ? value.items
-    : [];
-
-  return rows.map((message: any, index: number) => ({
-    id: String(message.id || message.message_id || index),
-    role: (message.role || message.type?.split?.("/")[0] || "assistant") as ChatMessage["role"],
-    content: textOf(message.content ?? message.message?.content ?? message.text)
-  })).filter((message: ChatMessage) => Boolean(message.content) && ["user","assistant","system","tool"].includes(message.role));
-}
-
-function deltaOf(data: any) {
-  return String(data?.delta ?? data?.text ?? data?.content ?? data?.output_text?.delta ?? data?.data?.delta ?? "");
-}
-
-function Icon({ name }: { name: ViewMode | "plus" }) {
-  const common = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
-  if (name === "command") return <svg {...common}><path d="M4 5.5h16v11H8l-4 3v-14Z"/><path d="M8 10h8M8 13h5"/></svg>;
-  if (name === "mission") return <svg {...common}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3"/></svg>;
-  if (name === "branches") return <svg {...common}><circle cx="6" cy="5" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="18" cy="17" r="2"/><path d="M8 5h2a4 4 0 0 1 4 4v4a4 4 0 0 0 4 4M14 10a4 4 0 0 0 4-3"/></svg>;
-  if (name === "operations") return <svg {...common}><path d="M4 17V7l8-4 8 4v10l-8 4-8-4Z"/><path d="m4 7 8 5 8-5M12 12v9"/></svg>;
-  return <svg {...common}><path d="M12 5v14M5 12h14"/></svg>;
-}
-
-export function App() {
-  const [view, setView] = useState<ViewMode>("command");
-  const [sessions, setSessions] = useState<SessionLike[]>([]);
-  const [active, setActive] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [missions, setMissions] = useState<Mission[]>([]);
-  const [events, setEvents] = useState<LiveEvent[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [streaming, setStreaming] = useState("");
-  const [health, setHealth] = useState(false);
-  const [error, setError] = useState("");
-  const [activeRunId, setActiveRunId] = useState("");
-  const [pendingApproval, setPendingApproval] = useState<any | null>(null);
-  const [sessionFilter, setSessionFilter] = useState("");
-
-  const mission = missions[0] || null;
-  const activeSession = useMemo(() => sessions.find(session => sessionId(session) === active), [sessions, active]);
-  const visibleSessions = useMemo(() => {
-    const q = sessionFilter.trim().toLowerCase();
-    return sessions.filter(session => !q || String(session.title || "Untitled").toLowerCase().includes(q)).slice(0, 28);
-  }, [sessions, sessionFilter]);
-
-  async function refresh() {
-    try {
-      const data = await api.bootstrap();
-      setHealth(Boolean(data.health?.ok));
-      const sessionRows = listFrom(data.sessions);
-      setSessions(sessionRows);
-      setMissions(data.missions || []);
-
-      let next = active || sessionId(sessionRows[0] || {});
-      if (!next) {
-        const created = await api.createSession("ULTRON");
-        const createdSession = created.session || created;
-        next = String(createdSession.id || createdSession.session_id || "");
-        setSessions(listFrom(await api.sessions()));
-      }
-      if (next) {
-        setActive(next);
-        setMessages(normalizeMessages(await api.messages(next)));
-      }
+  async function refresh(){
+    try{
+      const data=await api.bootstrap();setHealth(Boolean(data.health?.ok));const rows=listFrom(data.sessions);setSessions(rows);setMissions(data.missions||[]);
+      let next=active||sessionId(rows[0]||{});
+      if(!next){const created=await api.createSession("ULTRON "+new Date().toLocaleTimeString());const s=created.session||created;next=String(s.id||s.session_id||"");setSessions(listFrom(await api.sessions()));}
+      if(next){setActive(next);setMessages(normalizeMessages(await api.messages(next)));}
       setError("");
-    } catch (cause: any) {
-      setHealth(false);
-      setError(cause.message || "ULTRON gateway is unavailable.");
-    }
+    }catch(cause:any){setHealth(false);setError(cause.message||"ULTRON runtime unavailable.");}
   }
+  useEffect(()=>{void refresh();const close=liveEvents((type,data)=>setEvents(prev=>[...prev.slice(-119),{type,data,at:data?.at||new Date().toISOString()}]));return close;},[]);
+  useEffect(()=>{if(active)api.messages(active).then(v=>setMessages(normalizeMessages(v))).catch((e:any)=>setError(e.message));},[active]);
+  useEffect(()=>{const e=events.at(-1);if(e&&["mission.updated","evidence.recorded","run.settled"].includes(e.type))api.bootstrap().then(v=>setMissions(v.missions||[])).catch(()=>{});},[events.length]);
 
-  useEffect(() => {
-    void refresh();
-    const close = liveEvents((type, data) => {
-      setEvents(previous => [...previous.slice(-119), { type, data, at: data?.at || new Date().toISOString() }]);
-    });
-    return close;
-  }, []);
-
-  useEffect(() => {
-    if (!active) return;
-    api.messages(active).then(value => setMessages(normalizeMessages(value))).catch(() => {});
-  }, [active]);
-
-  useEffect(() => {
-    const latest = events.at(-1);
-    if (latest && ["mission.updated","evidence.recorded","run.settled"].includes(latest.type)) {
-      api.bootstrap().then(value => setMissions(value.missions || [])).catch(() => {});
-    }
-  }, [events.length]);
-
-  async function send(text: string) {
-    if (!active || busy) return;
-    setBusy(true); setStreaming(""); setError(""); setActiveRunId(""); setPendingApproval(null);
-    setMessages(previous => [...previous, { id: "local-" + Date.now(), role: "user", content: text }]);
-
-    let collected = "";
-    try {
-      await streamChat(active, { input: text, missionId: mission?.id || null, role: "cognition" }, (type, data) => {
-        if (type === "run.started") setActiveRunId(String(data?.run_id || data?.runId || ""));
-        if (type === "approval.request") setPendingApproval(data);
-        if (type === "assistant.delta") {
-          const delta = deltaOf(data);
-          if (delta) { collected += delta; setStreaming(collected); }
-        }
-        if (["run.completed","run.failed","run.cancelled","run.interrupted"].includes(type)) setPendingApproval(null);
-        if (type === "run.completed" && !collected) {
-          const finalText = String(data?.output || data?.response || "");
-          if (finalText) { collected = finalText; setStreaming(finalText); }
-        }
+  async function send(text:string){
+    if(!active||busy)return;setBusy(true);setStreaming("");setError("");setActiveRunId("");setPendingApproval(null);
+    setMessages(prev=>[...prev,{id:"local-"+Date.now(),role:"user",content:text}]);let collected="";
+    try{
+      await streamChat(active,{input:text,missionId:mission?.id||null,role:"cognition"},(type,data)=>{
+        if(type==="run.started")setActiveRunId(String(data?.run_id||data?.runId||""));
+        if(type==="approval.request")setPendingApproval(data);
+        if(type==="assistant.delta"){const d=deltaOf(data);if(d){collected+=d;setStreaming(collected);}}
+        if(["run.completed","run.failed","run.cancelled","run.interrupted"].includes(type))setPendingApproval(null);
       });
-      setStreaming("");
-      setMessages(normalizeMessages(await api.messages(active)));
-      const nextBootstrap = await api.bootstrap();
-      setMissions(nextBootstrap.missions || []);
-    } catch (cause: any) {
-      setError(cause.message);
-      if (collected) setMessages(previous => [...previous, { id: "partial-" + Date.now(), role: "assistant", content: collected }]);
-      setStreaming("");
-    } finally {
-      setBusy(false); setActiveRunId(""); setPendingApproval(null);
-    }
+      setStreaming("");setMessages(normalizeMessages(await api.messages(active)));const data=await api.bootstrap();setMissions(data.missions||[]);
+    }catch(cause:any){setError(cause.message);if(collected)setMessages(prev=>[...prev,{id:"partial-"+Date.now(),role:"assistant",content:collected}]);setStreaming("");}
+    finally{setBusy(false);setActiveRunId("");setPendingApproval(null);}
   }
+  async function newSession(){const created=await api.createSession("Session "+new Date().toLocaleString());const s=created.session||created,id=String(s.id||s.session_id||"");setSessions(listFrom(await api.sessions()));if(id){setActive(id);setView("command");setSessionsOpen(false);}}
+  async function branch(id:string,title:string,anchorMessageId?:string){const created=await api.branch(id,title,anchorMessageId),s=created.session||created,newId=String(s.id||s.session_id||"");setSessions(listFrom(await api.sessions()));if(newId){setActive(newId);setView("command");}}
+  async function resolveApproval(choice:string){if(!activeRunId||!pendingApproval)return;const requestId=String(pendingApproval.request_id||pendingApproval.requestId||"");if(!requestId)throw new Error("Approval request id missing.");await api.approve(activeRunId,requestId,choice);setPendingApproval(null);}
+  async function stopRun(){if(activeRunId)await api.stopRun(activeRunId);}
 
-  async function resolveApproval(choice: string) {
-    if (!activeRunId || !pendingApproval) return;
-    const requestId = String(pendingApproval.request_id || pendingApproval.requestId || "");
-    if (!requestId) throw new Error("Approval request id is missing.");
-    await api.approve(activeRunId, requestId, choice);
-    setPendingApproval(null);
-  }
+  const labels:Record<ViewMode,string>={command:"Command",mission:"Mission",branches:"Branches",operations:"Operations"};
+  return <div className="u4-shell">
+    <aside className="u4-rail">
+      <button className="u4-logo" onClick={()=>setView("command")}><span>U</span><b>04</b></button>
+      <nav>
+        <button className={view==="command"?"active":""} onClick={()=>setView("command")} title="Command"><Glyph name="chat"/></button>
+        <button className={view==="branches"?"active":""} onClick={()=>setView("branches")} title="Branches"><Glyph name="branches"/></button>
+        <button className={view==="operations"?"active":""} onClick={()=>setView("operations")} title="Operations"><Glyph name="ops"/></button>
+      </nav>
+      <div className="u4-rail-bottom">
+        <button onClick={()=>setSessionsOpen(true)} title="Sessions"><Glyph name="history"/></button>
+        <button onClick={()=>void newSession()} title="New session"><Glyph name="plus"/></button>
+        <i className={health?"online":"offline"}/>
+      </div>
+    </aside>
 
-  async function stopRun() {
-    if (activeRunId) await api.stopRun(activeRunId);
-  }
-
-  async function branch(id: string, title: string, anchorMessageId?: string) {
-    const created = await api.branch(id, title, anchorMessageId);
-    const createdSession = created.session || created;
-    const newId = String(createdSession.id || createdSession.session_id || "");
-    setSessions(listFrom(await api.sessions()));
-    if (newId) { setActive(newId); setView("command"); }
-  }
-
-  async function newSession() {
-    const created = await api.createSession("New session");
-    const createdSession = created.session || created;
-    const id = String(createdSession.id || createdSession.session_id || "");
-    setSessions(listFrom(await api.sessions()));
-    if (id) { setActive(id); setView("command"); }
-  }
-
-  const labels: Record<ViewMode,string> = { command:"Command", mission:"Mission", branches:"Branches", operations:"Operations" };
-
-  return (
-    <div className="ultron-shell">
-      <aside className="nav-rail">
-        <button className="ultron-mark" onClick={() => setView("command")} aria-label="ULTRON home"><span>U</span></button>
-        <div className="rail-nav">
-          {(Object.keys(labels) as ViewMode[]).map(key => (
-            <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={labels[key]}>
-              <Icon name={key}/><span>{labels[key]}</span>
-            </button>
-          ))}
+    <section className="u4-stage">
+      <header className="u4-topbar">
+        <button className="u4-session-trigger" onClick={()=>setSessionsOpen(true)}><span>SESSION</span><strong>{activeSession?.title||"Untitled"}</strong></button>
+        <div className="u4-top-center"><span className={health?"u4-status online":"u4-status offline"}><i/>{health?"ONLINE":"OFFLINE"}</span>{busy&&<span className="u4-working"><i/>EXECUTING</span>}</div>
+        <div className="u4-top-actions">
+          {mission&&<button className="u4-mission-pill" onClick={()=>setMissionOpen(true)}><span>MISSION</span><strong>{mission.status}</strong></button>}
+          <span className="u4-build">MARK 4 / COGNITIVE OS</span>
         </div>
-        <div className="rail-bottom">
-          <button onClick={() => void newSession()} title="New session"><Icon name="plus"/><span>New</span></button>
-          <div className={"system-light " + (health ? "online" : "offline")} title={health ? "Hermes online" : "Runtime offline"} />
-        </div>
+      </header>
+
+      <main className="u4-workspace">
+        <div className="u4-watermark">04</div>
+        {view==="command"&&<CommandView messages={messages} events={events} streaming={streaming} busy={busy} mission={mission} onSend={send}
+          onBranch={messageId=>branch(active,"Follow-up branch",messageId)} runId={activeRunId} approval={pendingApproval} onApproval={resolveApproval} onStop={stopRun}/>}
+        {view==="mission"&&<div className="mission-full"><MissionPanel mission={mission}/></div>}
+        {view==="branches"&&<BranchView sessions={sessions} activeId={active} onSelect={id=>{setActive(id);setView("command");}} onFork={(id,title)=>branch(id,title)}/>}
+        {view==="operations"&&<OperationsView events={events} mission={mission}/>}
+      </main>
+      {error&&<div className="u4-error"><div><b>RUNTIME</b><span>{error}</span></div><button onClick={()=>void refresh()}>RETRY</button></div>}
+    </section>
+
+    {sessionsOpen&&<div className="u4-overlay" onMouseDown={()=>setSessionsOpen(false)}>
+      <aside className="u4-drawer left" onMouseDown={e=>e.stopPropagation()}>
+        <div className="u4-drawer-head"><div><span>ULTRON</span><h2>Sessions</h2></div><button onClick={()=>setSessionsOpen(false)}>×</button></div>
+        <div className="u4-search"><span>⌕</span><input autoFocus value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Search conversations"/></div>
+        <button className="u4-new-session" onClick={()=>void newSession()}><Glyph name="plus"/>New session</button>
+        <div className="u4-session-list">{filtered.map(s=><button key={sessionId(s)} className={active===sessionId(s)?"active":""} onClick={()=>{setActive(sessionId(s));setView("command");setSessionsOpen(false);}}>
+          <span>{s.title||"Untitled session"}</span><small>{sessionId(s).slice(0,10)}</small>
+        </button>)}</div>
       </aside>
+    </div>}
 
-      <aside className="session-sidebar">
-        <div className="session-sidebar-head">
-          <div><span className="micro-label">WORKSPACE</span><h1>ULTRON</h1></div>
-          <button className="compact-plus" onClick={() => void newSession()} title="New session"><Icon name="plus"/></button>
-        </div>
-        <div className="session-search"><span>⌕</span><input value={sessionFilter} onChange={e => setSessionFilter(e.target.value)} placeholder="Search sessions"/></div>
-        <div className="session-caption">RECENT</div>
-        <div className="session-list">
-          {visibleSessions.map(session => (
-            <button key={sessionId(session)} className={active === sessionId(session) ? "active" : ""} onClick={() => setActive(sessionId(session))}>
-              <span className="session-title">{session.title || "Untitled"}</span>
-              <span className="session-id">{sessionId(session).slice(0,8)}</span>
-            </button>
-          ))}
-          {!visibleSessions.length && <div className="sidebar-empty">No matching sessions</div>}
-        </div>
-        <div className="session-footer">
-          <div className={"health-pill " + (health ? "online" : "offline")}><span/>{health ? "SYSTEM ONLINE" : "SYSTEM OFFLINE"}</div>
-          <small>Hermes · Mark 4</small>
-        </div>
+    {missionOpen&&<div className="u4-overlay" onMouseDown={()=>setMissionOpen(false)}>
+      <aside className="u4-drawer right" onMouseDown={e=>e.stopPropagation()}>
+        <div className="u4-drawer-head"><div><span>OBJECTIVE</span><h2>Mission control</h2></div><button onClick={()=>setMissionOpen(false)}>×</button></div>
+        <MissionPanel mission={mission}/>
       </aside>
-
-      <section className={"main-frame " + (view === "command" && mission ? "with-inspector" : "")}>
-        <header className="workspace-header">
-          <div>
-            <span className="micro-label">{labels[view].toUpperCase()}</span>
-            <h2>{view === "command" ? (activeSession?.title || "New session") : labels[view]}</h2>
-          </div>
-          <div className="header-actions">
-            {busy && <span className="thinking-state"><i/>Working</span>}
-            <span className="runtime-name">MARK 4</span>
-          </div>
-        </header>
-
-        <main className="workspace">
-          {view === "command" && (
-            <CommandView messages={messages} events={events} streaming={streaming} busy={busy} mission={mission}
-              onSend={send} onBranch={messageId => branch(active,"Follow-up branch",messageId)}
-              runId={activeRunId} approval={pendingApproval} onApproval={resolveApproval} onStop={stopRun}/>
-          )}
-          {view === "mission" && <div className="mission-full"><MissionPanel mission={mission}/></div>}
-          {view === "branches" && <BranchView sessions={sessions} activeId={active} onSelect={setActive} onFork={(id,title)=>branch(id,title)}/>}
-          {view === "operations" && <OperationsView events={events} mission={mission}/>}
-          {error && <div className="error-banner"><strong>Runtime error</strong><span>{error}</span><button onClick={() => void refresh()}>Retry</button></div>}
-        </main>
-
-        {view === "command" && mission && <MissionPanel mission={mission}/>}
-      </section>
-    </div>
-  );
+    </div>}
+  </div>;
 }

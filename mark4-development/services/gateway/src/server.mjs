@@ -57,7 +57,12 @@ async function proxyChat(req,res,sessionId,input){
       publish("model.route_failed",{sessionId,missionId,route:candidate.id,errorClass:classified.errorClass,error:error.message});
     }
   }
-  if(!accepted||!selected) throw lastError||new Error("NO_MODEL_ROUTE_AVAILABLE");
+  if(!accepted||!selected){
+    const error=lastError||new Error("NO_MODEL_ROUTE_AVAILABLE");
+    error.status=503;
+    error.message="MODEL_RUNTIME_UNAVAILABLE: "+error.message;
+    throw error;
+  }
 
   const runId=String(accepted.run_id||accepted.id||"");
   if(!runId) throw new Error("HERMES_RUN_ID_MISSING");
@@ -124,14 +129,28 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,`http://${req.headers.host||"localhost"}`),p=parts(url.pathname);
   try{
     if(req.method==="GET"&&url.pathname==="/api/live"){res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache","Connection":"keep-alive"});return subscribe(res);}
-    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=40&include_children=true").catch(()=>[])]);return json(res,200,{health,sessions:unwrapList(sessions),missions:listMissions(),leadStats:leadStats(),creatorStats:creatorStats(),modelFabric:fabricStatus()});}
+    if(req.method==="GET"&&url.pathname==="/api/ready"){
+      const health=await hermes.health();
+      if(!health.ok)return json(res,503,{ok:false,stage:"hermes-health",health});
+      let sessions=unwrapList(await hermes.sessions("limit=2&include_children=true"));
+      let session=sessions[0]||null;
+      if(!session){
+        session=unwrapSession(await hermes.createSession({title:"ULTRON "+new Date().toISOString().replace(/[:.]/g,"-")}));
+        sessions=[session];
+      }
+      const sessionId=String(session?.id||session?.session_id||"");
+      if(!sessionId)return json(res,503,{ok:false,stage:"session-create",error:"Hermes returned no session id"});
+      await hermes.messages(sessionId);
+      return json(res,200,{ok:true,health,sessionId,modelFabric:fabricStatus()});
+    }
+    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=40&include_children=true")]);return json(res,200,{health,sessions:unwrapList(sessions),missions:listMissions(),leadStats:leadStats(),creatorStats:creatorStats(),modelFabric:fabricStatus()});}
     if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,unwrapList(await hermes.sessions(url.searchParams.toString())));
     if(req.method==="POST"&&url.pathname==="/api/sessions")return json(res,201,unwrapSession(await hermes.createSession(await body(req))));
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="messages")return json(res,200,unwrapList(await hermes.messages(p[2])));
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="branch"){
       const input=await body(req);return json(res,201,await createNestedBranch({sourceSessionId:p[2],anchorMessageId:input.anchorMessageId||null,title:input.title||"Follow-up branch"}));
     }
-    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="chat")return proxyChat(req,res,p[2],await body(req));
+    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="chat")return await proxyChat(req,res,p[2],await body(req));
     if(req.method==="GET"&&url.pathname==="/api/missions")return json(res,200,listMissions());
     if(req.method==="GET"&&url.pathname==="/api/leads")return json(res,200,{items:listLeads({status:url.searchParams.get("status"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:leadStats(url.searchParams.get("target"))});
     if(req.method==="GET"&&url.pathname==="/api/creators")return json(res,200,{items:listCreators({status:url.searchParams.get("status"),niche:url.searchParams.get("niche"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:creatorStats(url.searchParams.get("target"))});
