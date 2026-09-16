@@ -7,8 +7,53 @@ const scope = new AsyncLocalStorage();
 function normalize(message) {
   return String(message || '').trim().replace(/^(?:hey\s+)?ultron\b[\s,:;.!-]*/i, '').replace(/\blinked\s+in\b/ig, 'LinkedIn');
 }
-function claim(message) {
+
+function isLocalThreePocWorkbookRequest(message, options = {}) {
   const text = normalize(message);
+  if (!text) return false;
+
+  const attachments = Array.isArray(options.attachments) ? options.attachments : [];
+  const hasExcelAttachment = attachments.some((item) => {
+    const name = String(item?.name || item?.filename || '').trim();
+    const mime = String(item?.mime || item?.mimeType || '').trim();
+    return /\.xlsx?$/i.test(name)
+      || /spreadsheetml|ms-excel/i.test(mime);
+  });
+  const hasMentionedWorkbook = /@[\w .()\-]{2,}/.test(text)
+    && /\b(?:sheet|workbook|excel|3\s*[- ]?pocs?|three\s+pocs?|poc\s*[- ]?[123])\b/i.test(text);
+
+  if (!hasExcelAttachment && !hasMentionedWorkbook) return false;
+
+  const slotPatterns = [
+    /\b(?:1st|first)\s+poc\b|\bpoc\s*[- ]?1\b/i,
+    /\b(?:2nd|second)\s+poc\b|\bpoc\s*[- ]?2\b/i,
+    /\b(?:3rd|third)\s+poc\b|\bpoc\s*[- ]?3\b/i,
+  ];
+  const slotCount = slotPatterns.filter((pattern) => pattern.test(text)).length;
+  const explicitThreePoc = /\b(?:3\s*[- ]?pocs?|three\s+pocs?)\b/i.test(text);
+  const anchoredContract = /\banchored(?:\s+legacy)?\b/i.test(text)
+    || (/\bperson\s+or\s+company\s+name\b/i.test(text)
+      && /\blinkedin\s+id\b/i.test(text)
+      && slotCount >= 2);
+  const action = /\b(?:perform|run|process|enrich|enrichment|fill|populate|complete|update|add|get|do)\b/i.test(text);
+
+  return action && (explicitThreePoc || slotCount >= 2 || anchoredContract);
+}
+
+function claim(message, options = {}) {
+  const text = normalize(message);
+  if (isLocalThreePocWorkbookRequest(text, options)) {
+    return Object.freeze({
+      domain: 'local-three-poc',
+      claimed: false,
+      exclusive: false,
+      controller: null,
+      generalModelAllowed: true,
+      artifactAllowed: true,
+      allowWebFallback: true,
+      yieldTo: 'lead-enrichment-bootstrap',
+    });
+  }
   const linkedin = /\blinkedin\b|linkedin\.com\/|\b(?:search_jobs|get_job_details|get_company_profile|search_companies|search_people|get_person_profile)\b/i.test(text);
   // Apollo contact enrichment belongs to the LinkedIn lead control plane even
   // when a conversational follow-up omits the word "LinkedIn".
@@ -57,7 +102,7 @@ function compileWithGemini(fn) {
 async function dispatch(message, options = {}) {
   const originalMessage = String(message || '');
   const resolvedMessage = normalize(originalMessage);
-  const route = claim(originalMessage);
+  const route = claim(originalMessage, options);
   require('./events').emit('command_route_decision', route);
   if (process.env.ULTRON_M3_ROUTE_DEBUG === '1') console.log('[Command Control]', JSON.stringify(route));
   if (!route.exclusive) return null;
@@ -73,4 +118,4 @@ async function dispatch(message, options = {}) {
     }
   });
 }
-module.exports = { normalize, claim, dispatch, assertAllowed, runExclusive, compileWithGemini };
+module.exports = { normalize, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, runExclusive, compileWithGemini };
