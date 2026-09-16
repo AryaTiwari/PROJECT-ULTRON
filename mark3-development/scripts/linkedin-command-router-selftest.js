@@ -31,8 +31,10 @@ if (run('intent')) {
   assert.equal(controlPlane.isLocalThreePocWorkbookRequest(anchoredPocCommand, anchoredPocOptions), true);
   const anchoredRoute = controlPlane.claim(anchoredPocCommand, anchoredPocOptions);
   assert.equal(anchoredRoute.domain, 'three-poc-spreadsheet');
-  assert.equal(anchoredRoute.exclusive, false);
-  assert.equal(anchoredRoute.yieldTo, 'lead-enrichment-bootstrap');
+  assert.equal(anchoredRoute.exclusive, true);
+  assert.equal(anchoredRoute.claimed, true);
+  assert.equal(anchoredRoute.controller, 'three-poc-domain-controller');
+  assert.equal(anchoredRoute.generalModelAllowed, false);
 
   const attachmentOnlyPocCommand = [
     'Perform anchored 3-POC enrichment on the attached workbook.',
@@ -41,7 +43,8 @@ if (run('intent')) {
   ].join(' ');
   const attachmentOnlyRoute = controlPlane.claim(attachmentOnlyPocCommand, anchoredPocOptions);
   assert.equal(attachmentOnlyRoute.domain, 'three-poc-spreadsheet');
-  assert.equal(attachmentOnlyRoute.exclusive, false);
+  assert.equal(attachmentOnlyRoute.exclusive, true);
+  assert.equal(attachmentOnlyRoute.controller, 'three-poc-domain-controller');
 
   const googleThreePocCommand = [
     'Use https://docs.google.com/spreadsheets/d/testSheet123/edit#gid=123 and perform the Mark 3 anchored 3-POC enrichment.',
@@ -53,8 +56,10 @@ if (run('intent')) {
   assert.equal(controlPlane.isThreePocSpreadsheetRequest(googleThreePocCommand), true);
   const googleThreePocRoute = controlPlane.claim(googleThreePocCommand);
   assert.equal(googleThreePocRoute.domain, 'three-poc-spreadsheet');
-  assert.equal(googleThreePocRoute.exclusive, false);
-  assert.equal(googleThreePocRoute.yieldTo, 'lead-enrichment-bootstrap');
+  assert.equal(googleThreePocRoute.exclusive, true);
+  assert.equal(googleThreePocRoute.claimed, true);
+  assert.equal(googleThreePocRoute.controller, 'three-poc-domain-controller');
+  assert.equal(googleThreePocRoute.generalModelAllowed, false);
 
   const normalLinkedInRoute = controlPlane.claim('Find 20 SAP companies on LinkedIn in Maharashtra with active job openings');
   assert.equal(normalLinkedInRoute.domain, 'linkedin');
