@@ -66,10 +66,17 @@ function locate(){
   }
   return null;
 }
-async function waitReady(timeoutMs=90000){
+function tail(file,lines=120){
+  try{return fs.readFileSync(file,"utf8").split(/\\r?\\n/).slice(-lines).join("\\n").trim();}catch{return "";}
+}
+async function waitReady(state,timeoutMs=90000){
   const started=Date.now();
+  let nextNotice=10000;
   while(Date.now()-started<timeoutMs){
+    if(state.exited)return false;
     try{if(await open()&&await models())return true;}catch{}
+    const elapsed=Date.now()-started;
+    if(elapsed>=nextNotice){console.log("OmniRoute still starting... "+Math.round(elapsed/1000)+"s");nextNotice+=10000;}
     await new Promise(r=>setTimeout(r,350));
   }
   return false;
@@ -90,6 +97,7 @@ if(!found){
 }
 
 fs.mkdirSync(runtimeDir,{recursive:true});
+try{fs.writeFileSync(logFile,"","utf8");}catch{}
 const log=fs.openSync(logFile,"a");
 const memoryMb=Number(process.env.OMNIROUTE_MEMORY_MB||2048);
 const env={...process.env,PORT:String(port),HOST:host,OMNIROUTE_USE_TURBOPACK:process.platform==="win32"?"0":String(process.env.OMNIROUTE_USE_TURBOPACK||"1"),OMNIROUTE_MEMORY_MB:String(memoryMb),OMNIROUTE_SKIP_DB_HEALTHCHECK:process.env.OMNIROUTE_SKIP_DB_HEALTHCHECK||"1",NEXT_TELEMETRY_DISABLED:"1"};
@@ -97,18 +105,19 @@ if(!env.OMNIROUTE_API_KEY)env.OMNIROUTE_API_KEY=env.OMNIROUTE_ENDPOINT_KEY||env.
 
 console.log("Starting existing OmniRoute installation:",found.dir);
 console.log("OmniRoute log:",logFile);
-const nextCli=path.join(found.dir,"node_modules","next","dist","bin","next");
-const directNext=fs.existsSync(nextCli);
-const args=directNext
-  ? [`--max-old-space-size=${memoryMb}`,nextCli,"dev","-H",host,"-p",String(port)]
-  : [`--max-old-space-size=${memoryMb}`,found.entry,"dev"];
-console.log("OmniRoute launch mode:",directNext?"hidden direct Next.js":"hidden compatibility wrapper");
-const child=spawn(process.execPath,args,{cwd:found.dir,env,detached:true,windowsHide:true,shell:false,stdio:["ignore",log,log]});
+console.log("OmniRoute launch mode: hidden canonical run-next wrapper");
+const state={exited:false,code:null,signal:null,error:null};
+const child=spawn(process.execPath,[`--max-old-space-size=${memoryMb}`,found.entry,"dev"],{cwd:found.dir,env,detached:false,windowsHide:true,shell:false,stdio:["ignore",log,log]});
+child.once("error",error=>{state.error=error?.message||String(error);state.exited=true;});
+child.once("exit",(code,signal)=>{state.code=code;state.signal=signal;state.exited=true;});
 child.unref();
 try{fs.closeSync(log);}catch{}
 
-if(!(await waitReady())){
-  console.error("OmniRoute did not become ready within 90 seconds. See "+logFile);
+if(!(await waitReady(state))){
+  const output=tail(logFile);
+  if(output)console.error("\\nLast OmniRoute output:\\n"+output);
+  const detail=state.error?state.error:(state.exited?("launcher exited with "+(state.signal?("signal "+state.signal):("code "+state.code))):"startup timeout");
+  console.error("OmniRoute failed to become ready: "+detail+". See "+logFile);
   process.exit(1);
 }
 console.log("OmniRoute ready at "+baseUrl);
