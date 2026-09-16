@@ -87,32 +87,31 @@ Get-Content $Secrets | ForEach-Object {
 Write-Host "Preparing free local browser capability..." -ForegroundColor DarkCyan
 $AgentBrowser = Join-Path $BrowserPrefix "agent-browser.cmd"
 if (-not (Test-Path $AgentBrowser)) {
-  npm install -g --prefix $BrowserPrefix --silent --ignore-scripts "agent-browser@^0.26.0"
+  npm install -g --prefix $BrowserPrefix --silent "agent-browser@^0.26.0"
 }
 
-$BrowserCandidates = @()
-if ($env:LOCALAPPDATA) {
-  $BrowserCandidates += (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
+# Hermes local browser tools require a Playwright-managed Chromium build.
+# System Chrome/Edge does not satisfy check_browser_requirements().
+$PlaywrightRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "ms-playwright" } else { $null }
+$HasChromium = $false
+if ($PlaywrightRoot -and (Test-Path $PlaywrightRoot)) {
+  $HasChromium = @(Get-ChildItem $PlaywrightRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match "^chromium-" }).Count -gt 0
 }
-if ($env:ProgramFiles) {
-  $BrowserCandidates += (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe")
-  $BrowserCandidates += (Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe")
-}
-$ProgramFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
-if ($ProgramFilesX86) {
-  $BrowserCandidates += (Join-Path $ProgramFilesX86 "Google\Chrome\Application\chrome.exe")
-  $BrowserCandidates += (Join-Path $ProgramFilesX86 "Microsoft\Edge\Application\msedge.exe")
-}
-
-$SystemBrowser = $BrowserCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-if ($SystemBrowser) {
-  Write-Host "Using installed browser: $SystemBrowser" -ForegroundColor Green
-} elseif (Test-Path $AgentBrowser) {
-  Write-Host "No Chrome/Edge detected. Installing Chromium for agent-browser..." -ForegroundColor Yellow
-  & $AgentBrowser install
-  if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Chromium installation failed. ULTRON can still run, but browser automation will remain unavailable."
+if (-not $HasChromium) {
+  Write-Host "Installing Playwright Chromium for Hermes browser tools..." -ForegroundColor DarkCyan
+  $Npx = Get-Command npx.cmd -ErrorAction SilentlyContinue
+  if (-not $Npx) { $Npx = Get-Command npx -ErrorAction SilentlyContinue }
+  if ($Npx) {
+    & $Npx.Source --yes playwright install chromium
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "Playwright Chromium installation failed. ULTRON will still run, but local browser tools will remain unavailable."
+    }
+  } else {
+    Write-Warning "npx was not found. ULTRON will still run, but local browser tools will remain unavailable."
   }
+} else {
+  Write-Host "Playwright Chromium already installed." -ForegroundColor Green
 }
 
 $HermesEnv = Join-Path $HermesHome ".env"
@@ -123,13 +122,23 @@ $HermesEnv = Join-Path $HermesHome ".env"
   "API_SERVER_KEY=$($SecretsMap['API_SERVER_KEY'])"
 ) | Set-Content -Path $HermesEnv -Encoding UTF8
 
-if ($SystemBrowser) {
-  Add-Content -Path $HermesEnv -Value "AGENT_BROWSER_EXECUTABLE_PATH=$SystemBrowser" -Encoding UTF8
-}
 
 $Capability = (Resolve-Path (Join-Path $Root "services\capability-host\src\server.mjs")).Path.Replace("\","/")
 $ProjectPath = (Resolve-Path $Root).Path.Replace("\","/")
 $Config = @"
+model:
+  provider: "gemini"
+  default: "gemini-3.8-flash"
+
+agent:
+  api_max_retries: 1
+
+fallback_providers:
+  - provider: "gemini"
+    model: "gemini-3.7-flash"
+  - provider: "gemini"
+    model: "gemini-3.6-flash"
+
 terminal:
   backend: local
   cwd: "$ProjectPath"

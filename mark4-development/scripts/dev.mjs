@@ -72,6 +72,99 @@ function configureModelRoutes() {
 
 const selectedModelRoute = configureModelRoutes();
 
+function yamlQuote(value) {
+  return JSON.stringify(String(value || ""));
+}
+
+function syncHermesRuntimeConfig() {
+  const configPath = path.join(hermesHome, "config.yaml");
+  const capability = path.join(root, "services", "capability-host", "src", "server.mjs").replaceAll("\\", "/");
+  const projectPath = root.replaceAll("\\", "/");
+  const primaryProvider = selectedModelRoute.provider || "auto";
+  const primaryModel = selectedModelRoute.model || "";
+
+  const fallbacks = [];
+  const addFallback = (provider, model) => {
+    provider = String(provider || "").trim();
+    model = String(model || "").trim();
+    if (!provider || !model) return;
+    if (provider === primaryProvider && model === primaryModel) return;
+    if (fallbacks.some(x => x.provider === provider && x.model === model)) return;
+    fallbacks.push({ provider, model });
+  };
+
+  if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
+    addFallback("gemini", "gemini-3.7-flash");
+    addFallback("gemini", "gemini-3.6-flash");
+  }
+  if (process.env.NVIDIA_API_KEY) {
+    addFallback("nvidia", String(process.env.ULTRON_M4_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b"));
+  }
+
+  const fallbackYaml = fallbacks.length
+    ? "fallback_providers:\n" + fallbacks.map(x => `  - provider: ${yamlQuote(x.provider)}\n    model: ${yamlQuote(x.model)}`).join("\n")
+    : "fallback_providers: []";
+
+  const modelYaml = primaryModel
+    ? `model:\n  provider: ${yamlQuote(primaryProvider)}\n  default: ${yamlQuote(primaryModel)}`
+    : 'model:\n  provider: "auto"';
+
+  const configText = `${modelYaml}
+
+agent:
+  api_max_retries: 1
+
+${fallbackYaml}
+
+terminal:
+  backend: local
+  cwd: ${yamlQuote(projectPath)}
+
+browser:
+  engine: auto
+  headed: false
+  record_sessions: false
+
+gateway:
+  api_server:
+    enabled: true
+    host: "127.0.0.1"
+    port: 8642
+    max_concurrent_runs: 2
+
+auxiliary:
+  vision:
+    provider: main
+    max_concurrency: 2
+  approval:
+    provider: main
+  compression:
+    provider: main
+    max_concurrency: 1
+  mcp:
+    provider: main
+  skills_hub:
+    provider: main
+  title_generation:
+    enabled: false
+    provider: main
+
+mcp_servers:
+  ultron:
+    command: "node"
+    args:
+      - ${yamlQuote(capability)}
+    trust: "full"
+    timeout: 180
+    connect_timeout: 20
+    supports_parallel_tool_calls: false
+`;
+  fs.writeFileSync(configPath, configText, "utf8");
+  return { configPath, fallbacks };
+}
+
+const runtimeModelPolicy = syncHermesRuntimeConfig();
+
 const children = [];
 let shuttingDown = false;
 
@@ -171,6 +264,9 @@ async function main() {
 
   if (selectedModelRoute.provider) {
     console.log("Model route:", selectedModelRoute.provider + " / " + selectedModelRoute.model + " (" + selectedModelRoute.source + ")");
+    if (runtimeModelPolicy.fallbacks.length) {
+      console.log("Fallback chain:", runtimeModelPolicy.fallbacks.map(x => x.provider + "/" + x.model).join(" -> "));
+    }
   } else {
     console.warn("No explicit free model credential detected. Add GEMINI_API_KEY/GOOGLE_API_KEY, NVIDIA_API_KEY, or ULTRON_M4_COGNITION_PROVIDER + ULTRON_M4_COGNITION_MODEL.");
   }
@@ -182,12 +278,16 @@ async function main() {
   console.log("Starting cockpit...");
   runNpm(["run", "dev", "-w", "apps/ui"]);
   await waitFor("http://127.0.0.1:5174/", "Vite cockpit");
-  try {
-    await verifyBrowserMount();
-    console.log("ULTRON cockpit painted successfully.");
-  } catch (error) {
-    console.warn("UI paint smoke warning:", error?.message || String(error));
-    console.warn("Cockpit remains running. Open http://127.0.0.1:5174/ and the built-in fatal overlay will show any real React crash.");
+  if (String(process.env.ULTRON_M4_UI_SMOKE || "0") === "1") {
+    try {
+      await verifyBrowserMount();
+      console.log("ULTRON cockpit painted successfully.");
+    } catch (error) {
+      console.warn("UI paint smoke warning:", error?.message || String(error));
+      console.warn("Cockpit remains running. The built-in fatal overlay will show any real React crash.");
+    }
+  } else {
+    console.log("Cockpit ready. Browser smoke probe skipped (set ULTRON_M4_UI_SMOKE=1 to enable).");
   }
 }
 
