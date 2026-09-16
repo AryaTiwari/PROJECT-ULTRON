@@ -260,7 +260,7 @@ function sameOrganization(person, company, domain = '') {
   return expected === actual || expected.includes(actual) || actual.includes(expected);
 }
 
-async function searchCompanyPeopleBroad({ company, domain = '', location = '', limit = 50 } = {}) {
+async function searchCompanyPeopleBroad({ company, domain = '', location = '', limit = 50, titles = [] } = {}) {
   const apiKey = setting('APOLLO_API_KEY');
   if (!apiKey) {
     const error = new Error('APOLLO_API_KEY is missing.');
@@ -285,6 +285,10 @@ async function searchCompanyPeopleBroad({ company, domain = '', location = '', l
     const url = new URL(APOLLO_PEOPLE_SEARCH);
     if (cleanDomain) url.searchParams.append('q_organization_domains_list[]', cleanDomain);
     else url.searchParams.set('q_keywords', cleanCompany);
+    for (const title of (Array.isArray(titles) ? titles : []).map((value) => String(value || '').trim()).filter(Boolean).slice(0, 30)) {
+      url.searchParams.append('person_titles[]', title);
+    }
+    if (Array.isArray(titles) && titles.length) url.searchParams.set('include_similar_titles', 'true');
     if (location) url.searchParams.append('person_locations[]', String(location).trim());
     url.searchParams.set('page', String(page));
     url.searchParams.set('per_page', String(perPage));
@@ -313,25 +317,40 @@ async function searchCompanyPeopleBroad({ company, domain = '', location = '', l
     const people = Array.isArray(data.people) ? data.people : Array.isArray(data.contacts) ? data.contacts : [];
     for (const person of people) {
       if (!sameOrganization(person, cleanCompany, cleanDomain)) continue;
+
+      // Apollo People API Search deliberately returns a limited identity record.
+      // In particular, it normally returns an Apollo person ID but NOT linkedin_url.
+      // Keep that ID-only candidate for ranking and hydrate only the selected people.
+      const apolloId = String(person.id || '').trim();
       const linkedinUrl = normalizeLinkedIn(person.linkedin_url || person.linkedin || '');
-      if (!linkedinUrl) continue;
-      const key = String(person.id || linkedinUrl).toLowerCase();
+      if (!apolloId && !linkedinUrl) continue;
+
+      const key = String(apolloId || linkedinUrl).toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
+
+      const limitedName = String(
+        person.name
+        || [person.first_name, person.last_name || person.last_name_obfuscated].filter(Boolean).join(' ')
+        || ''
+      ).trim();
+
       found.push({
-        id: person.id || null,
-        name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || '').trim(),
+        id: apolloId || null,
+        name: limitedName,
         title: String(person.title || '').trim(),
         headline: String(person.headline || '').trim(),
         seniority: String(person.seniority || '').trim(),
         departments: Array.isArray(person.departments) ? person.departments.filter(Boolean) : [],
         functions: Array.isArray(person.functions) ? person.functions.filter(Boolean) : [],
         location: String(person.city || person.state || person.country || '').trim(),
-        linkedinUrl,
+        linkedinUrl: linkedinUrl || null,
         organizationName: String(person.organization_name || person.organization?.name || cleanCompany).trim(),
         organizationDomain: hostname(person.organization?.website_url || person.organization?.primary_domain || person.organization?.domain || cleanDomain),
-        email: validEmail(person.email),
-        phone: validPhone(person.phone_number || person.sanitized_phone || ''),
+        email: null,
+        phone: null,
+        searchLimitedIdentity: !linkedinUrl,
+        lastNameObfuscated: Boolean(person.last_name_obfuscated && !person.last_name),
       });
       if (found.length >= wanted) break;
     }
@@ -442,8 +461,14 @@ async function apiCall(linkedinUrl, { needPhone }) {
     throw error;
   }
   const url = new URL(APOLLO_MATCH);
-  if (linkedinUrl && typeof linkedinUrl === 'object') url.searchParams.set('id', String(linkedinUrl.id));
-  else url.searchParams.set('linkedin_url', linkedinUrl);
+  if (linkedinUrl && typeof linkedinUrl === 'object') {
+    if (linkedinUrl.id) url.searchParams.set('id', String(linkedinUrl.id));
+    if (linkedinUrl.name) url.searchParams.set('name', String(linkedinUrl.name));
+    if (linkedinUrl.domain) url.searchParams.set('domain', hostname(linkedinUrl.domain));
+    if (linkedinUrl.organizationName) url.searchParams.set('organization_name', String(linkedinUrl.organizationName));
+  } else {
+    url.searchParams.set('linkedin_url', linkedinUrl);
+  }
   // Credit-saver defaults: do not run personal-email or waterfall enrichment here.
   // The office Sheet/post itself is checked first by the lead operator.
   url.searchParams.set('reveal_personal_emails', 'false');
@@ -485,29 +510,120 @@ async function apiCall(linkedinUrl, { needPhone }) {
   throw lastError || new Error('Apollo enrichment failed.');
 }
 
-async function resolveDecisionMaker(candidate, company, domain) {
-  if (!candidate.id) return candidate;
+async function resolveDecisionMaker(candidate, company, domain, options = {}) {
+  if (!candidate.id) return { ...candidate, identityVerified: Boolean(normalizeLinkedIn(candidate.linkedinUrl)) };
+
+  const needEmail = options.needEmail !== false;
+  const needPhone = options.needPhone !== false;
   const cache = readCache();
-  const cached = Object.entries(cache.people).find(([, p]) => p.apolloPersonId === String(candidate.id) && p.name && satisfies(p, { needEmail: true, needPhone: true }));
-  if (cached && sameOrganization(cached[1], company, domain)) return { ...candidate, ...cached[1], linkedinUrl: cached[0] };
-  const data = await apiCall({ id: candidate.id }, { needPhone: true });
+  const cached = Object.entries(cache.people).find(([, p]) =>
+    p.apolloPersonId === String(candidate.id)
+    && p.name
+    && satisfies(p, { needEmail, needPhone })
+  );
+
+  if (cached && sameOrganization(cached[1], company, domain)) {
+    return { ...candidate, ...cached[1], linkedinUrl: cached[0], identityVerified: true };
+  }
+
+  const data = await apiCall({ id: candidate.id }, { needPhone });
   const person = data.person;
   const linkedinUrl = normalizeLinkedIn(person?.linkedin_url);
   if (!person || String(person.id) !== String(candidate.id) || !linkedinUrl || !sameOrganization(person, company, domain)) {
-    throw new Error('APOLLO_IDENTITY_OR_COMPANY_MISMATCH');
+    const error = new Error('APOLLO_IDENTITY_OR_COMPANY_MISMATCH');
+    error.code = 'APOLLO_IDENTITY_OR_COMPANY_MISMATCH';
+    throw error;
   }
+
   const organization = personOrganization(person);
-  const record = { name: person.name || [person.first_name, person.last_name].filter(Boolean).join(' '),
-    title: person.title || candidate.title, headline: person.headline || candidate.headline || '',
+  const immediatePhone = validPhone(person.phone_number || person.sanitized_phone || '');
+  const phoneStatus = needPhone ? (immediatePhone ? 'found' : 'pending') : null;
+  const record = {
+    name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || candidate.name || '').trim(),
+    title: String(person.title || candidate.title || '').trim(),
+    headline: String(person.headline || candidate.headline || '').trim(),
     organization: organization.organization,
     organizationName: organization.organizationName,
     organizationDomain: organization.organizationDomain,
-    apolloPersonId: String(person.id), noMatch: false, ambiguous: false,
-    emailKnown: true, email: validEmail(person.email), phone: null, phoneStatus: 'pending',
-    returnedLinkedIn: linkedinUrl, checkedAt: new Date().toISOString(), phoneRequestedAt: new Date().toISOString() };
+    apolloPersonId: String(person.id),
+    noMatch: false,
+    ambiguous: false,
+    emailKnown: needEmail,
+    email: needEmail ? validEmail(person.email) : null,
+    phone: immediatePhone,
+    phoneStatus,
+    returnedLinkedIn: linkedinUrl,
+    checkedAt: new Date().toISOString(),
+    phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
+    identityVerified: true,
+  };
   cache.people[linkedinUrl] = record;
   saveCache(cache);
-  return { ...candidate, ...record, linkedinUrl };
+  return { ...candidate, ...record, linkedinUrl, identityVerified: true };
+}
+
+async function resolvePersonByNameCompany(name, company, domain, options = {}) {
+  const cleanName = String(name || '').replace(/\s+[—–]\s+.*$/, '').replace(/\s*\([^)]{2,120}\)\s*$/, '').replace(/\s+/g, ' ').trim();
+  const cleanCompany = String(company || '').trim();
+  const cleanDomain = hostname(domain);
+  if (!cleanName || (!cleanCompany && !cleanDomain)) {
+    const error = new Error('Apollo exact person verification requires a person name and employer.');
+    error.code = 'APOLLO_PERSON_COMPANY_REQUIRED';
+    throw error;
+  }
+
+  const needEmail = options.needEmail !== false;
+  const needPhone = options.needPhone !== false;
+  const data = await apiCall({
+    name: cleanName,
+    domain: cleanDomain,
+    organizationName: cleanCompany,
+  }, { needPhone });
+
+  const person = data.person;
+  const confidence = String(data?.match_confidence || person?.match_confidence || '').toLowerCase();
+  const linkedinUrl = normalizeLinkedIn(person?.linkedin_url || person?.linkedin || '');
+  const returnedName = String(person?.name || [person?.first_name, person?.last_name].filter(Boolean).join(' ') || '').trim();
+
+  if (
+    !person?.id
+    || !linkedinUrl
+    || ['none', 'low'].includes(confidence)
+    || normalizedWords(returnedName) !== normalizedWords(cleanName)
+    || !sameOrganization(person, cleanCompany, cleanDomain)
+  ) {
+    const error = new Error('APOLLO_PERSON_NAME_COMPANY_MISMATCH');
+    error.code = 'APOLLO_PERSON_NAME_COMPANY_MISMATCH';
+    throw error;
+  }
+
+  const organization = personOrganization(person);
+  const immediatePhone = validPhone(person.phone_number || person.sanitized_phone || '');
+  const record = {
+    name: returnedName,
+    title: String(person.title || '').trim(),
+    headline: String(person.headline || '').trim(),
+    organization: organization.organization,
+    organizationName: organization.organizationName,
+    organizationDomain: organization.organizationDomain,
+    apolloPersonId: String(person.id),
+    noMatch: false,
+    ambiguous: false,
+    emailKnown: needEmail,
+    email: needEmail ? validEmail(person.email) : null,
+    phone: immediatePhone,
+    phoneStatus: needPhone ? (immediatePhone ? 'found' : 'pending') : null,
+    returnedLinkedIn: linkedinUrl,
+    checkedAt: new Date().toISOString(),
+    phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
+    identityVerified: true,
+    matchConfidence: confidence || null,
+  };
+
+  const cache = readCache();
+  cache.people[linkedinUrl] = record;
+  saveCache(cache);
+  return { ...record, id: String(person.id), linkedinUrl, identityVerified: true };
 }
 
 async function enrich(input, options = {}) {
@@ -682,6 +798,7 @@ module.exports = {
   searchCompanyDecisionMaker,
   searchCompanyPeopleBroad,
   resolveDecisionMaker,
+  resolvePersonByNameCompany,
   readCache,
   saveCache,
   cacheDays,
