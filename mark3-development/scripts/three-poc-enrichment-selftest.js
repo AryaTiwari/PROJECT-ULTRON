@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const three = require('../core/three-poc-enrichment-operator');
+const bootstrap = require('../core/lead-enrichment-bootstrap');
 
 const legacy = [[
   'Person or Company Name','L','Post Details','L','Linkedin Id','Phone no','Email ID',
@@ -55,3 +56,11 @@ assert.match(source, /Independent Hiring-Responsibility Reviewer/);
 assert.match(source, /Contact-data availability must NOT influence responsibility ranking/);
 
 console.log('Agentic 3-POC enrichment self-test passed. Layout mapping is safe and hiring-responsibility ranking remains AI-agent driven.');
+
+const request = bootstrap.isThreePocRequest(
+  'Fill 1st POC, 2nd POC and 3rd POC with the most responsible people for hiring in @New_Sheet_14-09-25',
+  { attachments: [{ id: 'file-test-1', name: 'New_Sheet_14-09-25.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }] }
+);
+assert.ok(request);
+assert.equal(request.provider, 'local-excel');
+assert.equal(request.url, 'vault:file-test-1');

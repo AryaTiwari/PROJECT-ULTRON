@@ -436,7 +436,7 @@ function install() {
             result = await handleResearch(researchRequest);
             emit(result.ok ? 'lead_research_completed' : 'lead_research_failed', { inputMode, error: result.error || null });
           }
-        } else {
+        } else if (!result) {
           const request = isEnrichmentRequest(text, { attachments: options.attachments });
           if (request) {
             conversation.append('user', text, { taskType: 'lead-enrichment', inputMode, spreadsheetProvider: request.provider });
