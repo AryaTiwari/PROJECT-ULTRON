@@ -103,6 +103,7 @@ function detectThreePocLayout(rows) {
     const candidate = {
       headerRowIndex: r,
       headerRowNumber: r + 1,
+      schema: explicitFirst >= 0 ? 'explicit_three_poc' : 'anchored_first_poc',
       first,
       second,
       third,
@@ -123,6 +124,7 @@ function detectThreePocLayout(rows) {
 
 async function ensurePocLinkedInColumns(source, sheet) {
   const layout = sheet.layout;
+  if (layout.schema === 'anchored_first_poc') return [];
   const slots = [
     { slot: layout.first, label: '1st POC LinkedIn' },
     { slot: layout.second, label: '2nd POC LinkedIn' },
@@ -142,6 +144,38 @@ async function ensurePocLinkedInColumns(source, sheet) {
   }
   if (changes.length) await localExcel.writeCells(source, changes);
   return created;
+}
+
+function linkedInProfileKind(value) {
+  const raw = String(value || '').trim();
+  if (/(?:https?:\/\/)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\/in\//i.test(raw)) return 'person';
+  if (/(?:https?:\/\/)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\/company\//i.test(raw)) return 'company';
+  return 'unknown';
+}
+
+function personNameKey(value) {
+  return String(value || '')
+    .replace(/\s+[—–]\s+.*$/, '')
+    .replace(/\s*\([^)]{2,120}\)\s*$/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function slotSnapshot(row, slot) {
+  return {
+    name: String(row?.[slot?.nameIndex] || '').trim(),
+    phone: apollo.validPhone(row?.[slot?.phoneIndex]),
+    email: apollo.validEmail(row?.[slot?.emailIndex]),
+  };
+}
+
+function matchExistingCandidate(name, candidates = []) {
+  const key = personNameKey(name);
+  if (!key) return null;
+  const matches = candidates.filter((candidate) => personNameKey(candidate?.name) === key);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function allEmails(row) {
@@ -172,12 +206,16 @@ function rowContext(layout, row, sheetName, rowNumber) {
       layout.first.linkedinIndex, layout.second.linkedinIndex, layout.third.linkedinIndex,
     ].filter((index) => Number.isInteger(index) && index >= 0).includes(item.index))
     .slice(0, 30);
+  const linkedin = layout.linkedinIndex >= 0 ? String(row[layout.linkedinIndex] || '').trim() : '';
   return {
     sheetName,
     rowNumber,
+    schema: layout.schema || 'unknown',
+    anchorName: layout.first?.nameIndex >= 0 ? String(row[layout.first.nameIndex] || '').trim() : '',
     explicitCompany: layout.companyIndex >= 0 ? String(row[layout.companyIndex] || '').trim() : '',
     postDetails: layout.postDetailsIndex >= 0 ? String(row[layout.postDetailsIndex] || '').trim().slice(0, 6500) : '',
-    linkedin: layout.linkedinIndex >= 0 ? String(row[layout.linkedinIndex] || '').trim() : '',
+    linkedin,
+    linkedinProfileKind: linkedInProfileKind(linkedin),
     visibleEmails: emails,
     visibleDomains: emailDomains(emails),
     cells,
@@ -268,7 +306,8 @@ function validKeys(output, candidates, max = 8) {
   return out;
 }
 
-async function selectorAgent(context, companyContext, candidates) {
+async function selectorAgent(context, companyContext, candidates, options = {}) {
+  const requested = Math.max(1, Math.min(3, Number(options.count || 3)));
   const system = [
     'You are ULTRON Hiring-Authority Selector.',
     'Rank real people by how responsible or influential they are for hiring for THIS specific company and hiring context.',
@@ -276,45 +315,63 @@ async function selectorAgent(context, companyContext, candidates) {
     'A founder or CEO can be highly relevant in a small company but less operationally responsible than a talent/recruiting leader in a large company.',
     'Likewise a recruiter who owns the vacancy can outrank a distant executive when the evidence supports it.',
     'Contact-data availability must NOT influence responsibility ranking.',
+    options.anchorPerson ? 'The supplied anchorPerson is already POC-1. Do not select that person again; rank additional employees only.' : '',
     'Select only supplied candidateKey values. Never invent people.',
     'Return up to 8 candidates, strongest first, as strict JSON only: {"pocs":[{"candidateKey":"...","reason":"...","confidence":0.0}]}.',
-  ].join(' ');
+  ].filter(Boolean).join(' ');
   const result = await modelRouter.chat({
     taskType: 'research',
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: JSON.stringify({ company: companyContext.company, hiringContext: companyContext.hiringContext, rowEvidence: { postDetails: context.postDetails, sourceLinkedIn: context.linkedin }, candidates }) },
+      { role: 'user', content: JSON.stringify({
+        company: companyContext.company,
+        hiringContext: companyContext.hiringContext,
+        requestedAdditionalPocs: requested,
+        anchorPerson: options.anchorPerson || null,
+        rowEvidence: { postDetails: context.postDetails, sourceLinkedIn: context.linkedin },
+        candidates,
+      }) },
     ],
   });
   return { ranking: validKeys(parseJson(modelText(result)), candidates, 8), model: result?.model || null, provider: result?.provider || null };
 }
 
-async function reviewerAgent(context, companyContext, candidates, selectorRanking) {
+async function reviewerAgent(context, companyContext, candidates, selectorRanking, options = {}) {
+  const requested = Math.max(1, Math.min(3, Number(options.count || 3)));
   const system = [
     'You are ULTRON Independent Hiring-Responsibility Reviewer.',
-    'Audit another agent\'s shortlist for a 3-POC workplace enrichment task.',
-    'Choose the three supplied people most likely to have meaningful responsibility, authority, or operational ownership over hiring in this exact context.',
+    'Audit another agent\'s shortlist for a workplace POC enrichment task.',
+    `Choose the ${requested} supplied people most likely to have meaningful responsibility, authority, or operational ownership over hiring in this exact context.`,
     'Reason from company scale, function, seniority, vacancy ownership, recruiting scope and row evidence. Do not follow any fixed Founder > Manager > Recruiter rule.',
     'Do not rank by whether phone/email is available. Do not invent or alter candidate identities.',
+    options.anchorPerson ? 'The anchorPerson is already POC-1 and must never be selected again.' : '',
     'You may reorder or replace the first agent\'s choices using the supplied candidates.',
-    'Return strict JSON only: {"pocs":[{"candidateKey":"...","reason":"...","confidence":0.0}]} with at most 3 unique people.',
-  ].join(' ');
+    `Return strict JSON only: {"pocs":[{"candidateKey":"...","reason":"...","confidence":0.0}]} with at most ${requested} unique people.`,
+  ].filter(Boolean).join(' ');
   const result = await modelRouter.chat({
     taskType: 'research',
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: JSON.stringify({ company: companyContext.company, hiringContext: companyContext.hiringContext, postDetails: context.postDetails, selectorRanking, candidates }) },
+      { role: 'user', content: JSON.stringify({
+        company: companyContext.company,
+        hiringContext: companyContext.hiringContext,
+        postDetails: context.postDetails,
+        requestedAdditionalPocs: requested,
+        anchorPerson: options.anchorPerson || null,
+        selectorRanking,
+        candidates,
+      }) },
     ],
   });
-  return { ranking: validKeys(parseJson(modelText(result)), candidates, 3), model: result?.model || null, provider: result?.provider || null };
+  return { ranking: validKeys(parseJson(modelText(result)), candidates, requested), model: result?.model || null, provider: result?.provider || null };
 }
 
-function selectedPeople(candidates, ranking) {
+function selectedPeople(candidates, ranking, max = 3) {
   const byKey = new Map(candidates.map((candidate) => [candidate.candidateKey, candidate]));
   return (ranking || []).map((item) => {
     const candidate = byKey.get(item.candidateKey);
     return candidate ? { ...candidate, selectionReason: item.reason, selectionConfidence: item.confidence } : null;
-  }).filter(Boolean).slice(0, 3);
+  }).filter(Boolean).slice(0, Math.max(1, Math.min(3, Number(max || 3))));
 }
 
 function displayName(person) {
@@ -323,17 +380,75 @@ function displayName(person) {
   return title ? `${name} — ${title}` : name;
 }
 
-async function enrichSelectedPerson(person) {
+async function enrichSelectedPerson(person, existing = {}) {
+  const existingEmail = apollo.validEmail(existing.email);
+  const existingPhone = apollo.validPhone(existing.phone);
   const linkedIn = apollo.normalizeLinkedIn(person.linkedinUrl);
-  if (!linkedIn) return { ...person, email: apollo.validEmail(person.email), phone: apollo.validPhone(person.phone), phonePending: false, apolloPersonId: null };
-  const result = await apollo.enrich(linkedIn, { needEmail: true, needPhone: true, force: false });
+  if (!linkedIn) {
+    return {
+      ...person,
+      email: existingEmail || apollo.validEmail(person.email),
+      phone: existingPhone || apollo.validPhone(person.phone),
+      phonePending: false,
+      apolloPersonId: person.id || null,
+    };
+  }
+  const result = await apollo.enrich(linkedIn, {
+    needEmail: !existingEmail,
+    needPhone: !existingPhone,
+    force: false,
+  });
   return {
     ...person,
-    email: apollo.validEmail(result.email) || apollo.validEmail(person.email),
-    phone: apollo.validPhone(result.phone) || apollo.validPhone(person.phone),
-    phonePending: result.phoneStatus === 'pending' && Boolean(result.apolloPersonId),
+    linkedinUrl: linkedIn,
+    email: existingEmail || apollo.validEmail(result.email) || apollo.validEmail(person.email),
+    phone: existingPhone || apollo.validPhone(result.phone) || apollo.validPhone(person.phone),
+    phonePending: !existingPhone && result.phoneStatus === 'pending' && Boolean(result.apolloPersonId),
     apolloPersonId: result.apolloPersonId || person.id || null,
     matchConfidence: result.matchConfidence || null,
+  };
+}
+
+async function resolveAnchorPerson(context, layout, row) {
+  const linkedinUrl = apollo.normalizeLinkedIn(context.linkedin);
+  if (!linkedinUrl || context.linkedinProfileKind !== 'person') return null;
+
+  const existing = slotSnapshot(row, layout.first);
+  const profile = await apollo.resolvePersonProfile(linkedinUrl, {
+    needEmail: !existing.email,
+    needPhone: !existing.phone,
+    force: false,
+  });
+
+  if (!profile?.ok || profile.noMatch || profile.ambiguous) return null;
+  const organizationName = String(profile.organizationName || profile.organization?.name || '').trim();
+  if (!organizationName) return null;
+
+  return {
+    id: profile.apolloPersonId || null,
+    name: String(profile.name || context.anchorName || '').trim(),
+    title: String(profile.title || '').trim(),
+    headline: String(profile.headline || '').trim(),
+    linkedinUrl,
+    organizationName,
+    organizationDomain: String(profile.organizationDomain || '').trim(),
+    email: existing.email || apollo.validEmail(profile.email),
+    phone: existing.phone || apollo.validPhone(profile.phone),
+    phonePending: !existing.phone && profile.phoneStatus === 'pending' && Boolean(profile.apolloPersonId),
+    apolloPersonId: profile.apolloPersonId || null,
+    matchConfidence: profile.matchConfidence || null,
+  };
+}
+
+function anchorCompanyContext(anchor, context) {
+  return {
+    company: anchor.organizationName,
+    domain: anchor.organizationDomain || '',
+    hiringContext: String(context.postDetails || '').trim().slice(0, 1800),
+    confidence: 1,
+    evidence: ['Exact POC-1 LinkedIn profile -> current Apollo organization'],
+    model: null,
+    provider: 'apollo-exact-profile',
   };
 }
 
@@ -349,6 +464,23 @@ function rowChanges(sheetName, rowNumber, layout, people) {
     }
     changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.phoneIndex), value: person?.phone || '' });
     changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slot.emailIndex), value: person?.email || '' });
+  }
+  return changes;
+}
+
+function anchoredRowChanges(sheetName, rowNumber, layout, anchor, slotPeople = [], lockedSlots = []) {
+  const changes = [];
+  changes.push({ range: localExcel.cellRange(sheetName, rowNumber, layout.first.phoneIndex), value: anchor?.phone || '' });
+  changes.push({ range: localExcel.cellRange(sheetName, rowNumber, layout.first.emailIndex), value: anchor?.email || '' });
+
+  const slots = [layout.second, layout.third];
+  for (let i = 0; i < slots.length; i++) {
+    if (lockedSlots[i]) continue;
+    const person = slotPeople[i] || null;
+    if (!person) continue;
+    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slots[i].nameIndex), value: displayName(person) });
+    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slots[i].phoneIndex), value: person.phone || '' });
+    changes.push({ range: localExcel.cellRange(sheetName, rowNumber, slots[i].emailIndex), value: person.email || '' });
   }
   return changes;
 }
@@ -494,6 +626,11 @@ async function enrichWorkbook(source, options = {}) {
     pendingPhones: 0,
     linkedInsWritten: 0,
     createdLinkedInColumns,
+    anchoredRows: 0,
+    explicitRows: 0,
+    skippedNonPersonAnchorRows: 0,
+    preservedExistingPocSlots: 0,
+    matchedExistingPocSlots: 0,
     updatedCells: 0,
     agentModels: new Set(),
   };
@@ -513,6 +650,124 @@ async function enrichWorkbook(source, options = {}) {
       const context = rowContext(layout, row, sheet.sheetName, rowNumber);
 
       try {
+        if (layout.schema === 'anchored_first_poc') {
+          stats.anchoredRows++;
+          if (context.linkedinProfileKind !== 'person') {
+            stats.skippedNonPersonAnchorRows++;
+            stats.unresolvedRows++; sheetStats.unresolvedRows++;
+            continue;
+          }
+
+          const anchor = await resolveAnchorPerson(context, layout, row);
+          if (!anchor?.organizationName) {
+            stats.unresolvedRows++; sheetStats.unresolvedRows++;
+            continue;
+          }
+
+          const companyContext = anchorCompanyContext(anchor, context);
+          const pool = await apollo.searchCompanyPeopleBroad({
+            company: companyContext.company,
+            domain: companyContext.domain,
+            limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
+          });
+
+          const anchorLinkedIn = apollo.normalizeLinkedIn(anchor.linkedinUrl);
+          const anchorNameKey = personNameKey(anchor.name || context.anchorName);
+          const candidates = (pool.people || []).map(candidateView).filter((candidate) => {
+            const candidateLinkedIn = apollo.normalizeLinkedIn(candidate.linkedinUrl);
+            if (anchorLinkedIn && candidateLinkedIn === anchorLinkedIn) return false;
+            if (anchorNameKey && personNameKey(candidate.name) === anchorNameKey) return false;
+            return true;
+          });
+          stats.candidatesSeen += candidates.length;
+
+          const slotDefs = [layout.second, layout.third];
+          const slotPeople = [null, null];
+          const lockedSlots = [false, false];
+          const usedKeys = new Set();
+
+          for (let slotIndex = 0; slotIndex < slotDefs.length; slotIndex++) {
+            const existing = slotSnapshot(row, slotDefs[slotIndex]);
+            if (!existing.name && (existing.phone || existing.email)) {
+              lockedSlots[slotIndex] = true;
+              stats.preservedExistingPocSlots++;
+              continue;
+            }
+            if (!existing.name) continue;
+            if (existing.phone && existing.email) {
+              lockedSlots[slotIndex] = true;
+              stats.preservedExistingPocSlots++;
+              continue;
+            }
+
+            const matched = matchExistingCandidate(existing.name, candidates);
+            if (!matched) {
+              lockedSlots[slotIndex] = true;
+              stats.preservedExistingPocSlots++;
+              continue;
+            }
+
+            const enrichedExisting = await enrichSelectedPerson(matched, existing);
+            slotPeople[slotIndex] = enrichedExisting;
+            usedKeys.add(enrichedExisting.candidateKey);
+            stats.matchedExistingPocSlots++;
+          }
+
+          const openSlots = slotDefs.map((_, index) => index).filter((index) => !lockedSlots[index] && !slotPeople[index]);
+          const available = candidates.filter((candidate) => !usedKeys.has(candidate.candidateKey));
+          if (openSlots.length && available.length) {
+            const selected = await selectorAgent(context, companyContext, available, {
+              count: openSlots.length,
+              anchorPerson: { name: anchor.name || context.anchorName, title: anchor.title || '', linkedinUrl: anchor.linkedinUrl },
+            });
+            if (selected.model) stats.agentModels.add(`${selected.provider || 'unknown'}/${selected.model}`);
+
+            let finalRanking = selected.ranking.slice(0, openSlots.length);
+            if (selected.ranking.length) {
+              try {
+                const reviewed = await reviewerAgent(context, companyContext, available, selected.ranking, {
+                  count: openSlots.length,
+                  anchorPerson: { name: anchor.name || context.anchorName, title: anchor.title || '', linkedinUrl: anchor.linkedinUrl },
+                });
+                if (reviewed.model) stats.agentModels.add(`${reviewed.provider || 'unknown'}/${reviewed.model}`);
+                if (reviewed.ranking.length) finalRanking = reviewed.ranking;
+              } catch {}
+            }
+
+            const additional = selectedPeople(available, finalRanking, openSlots.length);
+            for (let i = 0; i < openSlots.length; i++) {
+              const person = additional[i];
+              if (!person) continue;
+              slotPeople[openSlots[i]] = await enrichSelectedPerson(person);
+            }
+          }
+
+          const changes = anchoredRowChanges(sheet.sheetName, rowNumber, layout, anchor, slotPeople, lockedSlots);
+          const written = await localExcel.writeCells(source, changes);
+          const writtenPeople = [anchor, ...slotPeople.filter(Boolean)];
+          stats.updatedCells += written.updatedCells || 0;
+          stats.contactsWritten += writtenPeople.length;
+          stats.emailsWritten += writtenPeople.filter((person) => person.email).length;
+          stats.phonesWritten += writtenPeople.filter((person) => person.phone).length;
+          stats.linkedInsWritten += anchor.linkedinUrl ? 1 : 0;
+          stats.aiSelections += slotPeople.filter(Boolean).length;
+          stats.completedRows++; sheetStats.completedRows++;
+
+          if (anchor.phonePending && anchor.apolloPersonId) {
+            job.pendingPhones.push(pendingRecord(source, sheet.sheetName, rowNumber, layout.first, anchor));
+            stats.pendingPhones++;
+          }
+          slotPeople.forEach((person, slotIndex) => {
+            if (!person?.phonePending || !person.apolloPersonId) return;
+            job.pendingPhones.push(pendingRecord(source, sheet.sheetName, rowNumber, slotDefs[slotIndex], person));
+            stats.pendingPhones++;
+          });
+          job.updatedAt = new Date().toISOString();
+          saveState(state);
+          continue;
+        }
+
+        stats.explicitRows++;
         const companyContext = await companyContextAgent(context);
         if (!companyContext.company || companyContext.confidence < 0.35) {
           stats.unresolvedRows++; sheetStats.unresolvedRows++;
@@ -532,7 +787,7 @@ async function enrichWorkbook(source, options = {}) {
           continue;
         }
 
-        const selected = await selectorAgent(context, companyContext, candidates);
+        const selected = await selectorAgent(context, companyContext, candidates, { count: 3 });
         if (selected.model) stats.agentModels.add(`${selected.provider || 'unknown'}/${selected.model}`);
         if (!selected.ranking.length) {
           stats.unresolvedRows++; sheetStats.unresolvedRows++;
@@ -541,12 +796,12 @@ async function enrichWorkbook(source, options = {}) {
 
         let finalRanking = selected.ranking.slice(0, 3);
         try {
-          const reviewed = await reviewerAgent(context, companyContext, candidates, selected.ranking);
+          const reviewed = await reviewerAgent(context, companyContext, candidates, selected.ranking, { count: 3 });
           if (reviewed.model) stats.agentModels.add(`${reviewed.provider || 'unknown'}/${reviewed.model}`);
           if (reviewed.ranking.length) finalRanking = reviewed.ranking;
         } catch {}
 
-        const people = selectedPeople(candidates, finalRanking);
+        const people = selectedPeople(candidates, finalRanking, 3);
         if (!people.length) {
           stats.unresolvedRows++; sheetStats.unresolvedRows++;
           continue;
@@ -601,17 +856,27 @@ function formatResult(result) {
   const unresolved = result.unresolvedRows
     ? ` ${result.unresolvedRows} row${result.unresolvedRows === 1 ? '' : 's'} were left unchanged because company/candidate evidence was not strong enough.`
     : '';
-  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} AI-ranked POCs; wrote ${result.linkedInsWritten || 0} person LinkedIn link${Number(result.linkedInsWritten || 0) === 1 ? '' : 's'}, ${result.phonesWritten} person phone${result.phonesWritten === 1 ? '' : 's'} and ${result.emailsWritten} person email${result.emailsWritten === 1 ? '' : 's'}.${pending}${unresolved}`;
+  const anchored = result.anchoredRows
+    ? ` Anchored-format rows: ${result.anchoredRows}; preserved ${result.preservedExistingPocSlots || 0} already-populated/unsafe-to-reassign POC slot${Number(result.preservedExistingPocSlots || 0) === 1 ? '' : 's'}; skipped ${result.skippedNonPersonAnchorRows || 0} company/unknown LinkedIn anchor row${Number(result.skippedNonPersonAnchorRows || 0) === 1 ? '' : 's'} without changing them.`
+    : '';
+  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} AI-ranked additional POCs; wrote ${result.linkedInsWritten || 0} person LinkedIn anchor/profile link${Number(result.linkedInsWritten || 0) === 1 ? '' : 's'}, ${result.phonesWritten} person phone${result.phonesWritten === 1 ? '' : 's'} and ${result.emailsWritten} person email${result.emailsWritten === 1 ? '' : 's'}.${anchored}${pending}${unresolved}`;
 }
 
 module.exports = {
   STATE_FILE,
   detectThreePocLayout,
   rowContext,
+  linkedInProfileKind,
+  personNameKey,
+  slotSnapshot,
+  matchExistingCandidate,
   validKeys,
   selectedPeople,
   displayName,
   ensurePocLinkedInColumns,
+  resolveAnchorPerson,
+  anchorCompanyContext,
+  anchoredRowChanges,
   companyContextAgent,
   selectorAgent,
   reviewerAgent,
