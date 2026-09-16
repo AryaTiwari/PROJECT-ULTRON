@@ -6,11 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"../../..");
 
-test("capability host exposes two-contact enrichment and canonical Google Sheet export",()=>{
+test("capability host exposes three-POC enrichment and canonical Google Sheet export",()=>{
   const server=fs.readFileSync(path.join(root,"services","capability-host","src","server.mjs"),"utf8");
   assert.match(server,/ultron_apollo_find_company_contacts/);
   assert.match(server,/ultron_google_sheet_from_leads/);
-  assert.match(server,/SECONDARY NAME/);
+  assert.match(server,/2ND POC NAME \+ DESIGNATION/);
+  assert.match(server,/3RD POC NAME \+ DESIGNATION/);
 });
 
 test("Google workspace wrapper preserves auth-required as structured state",()=>{
