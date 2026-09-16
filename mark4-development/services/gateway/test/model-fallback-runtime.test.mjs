@@ -28,25 +28,28 @@ test("OmniRoute is a named OpenAI-compatible final fallback and has isolated tes
   assert.match(dev,/key_env: "OMNIROUTE_API_KEY"/);
   assert.match(dev,/OMNIROUTE_BASE_URL/);
   assert.match(dev,/ULTRON_OMNIROUTE_DEFAULT_MODEL/);
-  assert.match(dev,/addFallback\("omniroute", omniRoute\.model\)/);
+  assert.match(dev,/addFallback\("custom", omniRoute\.model/);
+  assert.match(dev,/baseUrl: omniRoute\.baseUrl/);
+  assert.match(dev,/keyEnv: "OMNIROUTE_API_KEY"/);
   assert.match(dev,/ULTRON_M4_OMNIROUTE_TEST/);
   assert.match(dev,/OMNIROUTE TEST MODE ACTIVE/);
   assert.match(dev,/probeOmniRoute/);
 });
 
-test("OmniRoute test mode excludes direct-provider fallbacks and uses OmniRoute aliases only",()=>{
-  assert.match(dev,/if \(omniRoute\.testMode\) \{[\s\S]*addFallback\("omniroute", "auto\/best-reasoning"\)/);
-  assert.match(dev,/addFallback\("omniroute", "auto\/best-coding"\)/);
-  assert.match(dev,/addFallback\("omniroute", "auto"\)/);
+test("OmniRoute test mode excludes direct providers and uses one real custom-endpoint rescue",()=>{
+  assert.match(dev,/if \(omniRoute\.testMode\) \{/);
+  assert.match(dev,/addFallback\("custom", "auto\/best-reasoning"/);
+  assert.match(dev,/baseUrl: omniRoute\.baseUrl/);
+  assert.match(dev,/keyEnv: "OMNIROUTE_API_KEY"/);
   assert.match(dev,/\} else \{[\s\S]*addFallback\("gemini"/);
+  assert.doesNotMatch(dev,/addFallback\("omniroute", "auto\/best-coding"\)/);
 });
 
-
-test("OmniRoute test mode supplies alias failover and explicit context length",()=>{
+test("OmniRoute test mode uses auto routing and explicit context length",()=>{
   assert.match(dev,/ULTRON_OMNIROUTE_TEST_MODEL/);
-  assert.match(dev,/auto\/best-fast/);
+  assert.match(dev,/\|\| "auto"/);
   assert.match(dev,/auto\/best-reasoning/);
-  assert.match(dev,/auto\/best-coding/);
   assert.match(dev,/ULTRON_OMNIROUTE_CONTEXT_LENGTH/);
   assert.match(dev,/context_length/);
+  assert.match(dev,/ULTRON_M4_OMNIROUTE_READY/);
 });
