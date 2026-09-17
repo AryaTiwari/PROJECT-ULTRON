@@ -166,40 +166,104 @@ function detectLayout(rows) {
   return best;
 }
 
-async function request(url, options = {}) {
-  const token = await auth.accessToken();
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  const text = await response.text();
-  let data = {};
-  try { data = JSON.parse(text); } catch {}
-  if (!response.ok) {
-    const message = data?.error?.message || `Google Sheets API failed (${response.status}).`;
-    const error = new Error(message);
-    error.status = response.status;
-    error.googleStatus = data?.error?.status || null;
-    error.googleCode = data?.error?.code || response.status;
-    error.googleDetails = Array.isArray(data?.error?.details) ? data.error.details : [];
-    error.endpoint = String(url || '').replace(/([?&]key=)[^&]+/gi, '$1<redacted>');
-    error.code = response.status === 403
-      ? 'GOOGLE_SHEETS_FORBIDDEN'
-      : response.status === 404
-        ? 'GOOGLE_SHEETS_NOT_FOUND'
-        : 'GOOGLE_SHEETS_API_ERROR';
-    throw error;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function classifyApiError(status, data = {}) {
+  const googleStatus = String(data?.error?.status || '').toUpperCase();
+  const message = String(data?.error?.message || '').toLowerCase();
+  if (Number(status) === 401 || googleStatus === 'UNAUTHENTICATED') return 'GOOGLE_SHEETS_AUTH_REQUIRED';
+  if (Number(status) === 403 || googleStatus === 'PERMISSION_DENIED') return 'GOOGLE_SHEETS_FORBIDDEN';
+  if (Number(status) === 404 || googleStatus === 'NOT_FOUND') return 'GOOGLE_SHEETS_NOT_FOUND';
+  if (Number(status) === 409 || googleStatus === 'ABORTED') return 'GOOGLE_SHEETS_CONFLICT';
+  if (Number(status) === 429 || googleStatus === 'RESOURCE_EXHAUSTED') return 'GOOGLE_SHEETS_RATE_LIMITED';
+  if (Number(status) >= 500 || ['INTERNAL', 'UNAVAILABLE', 'DEADLINE_EXCEEDED'].includes(googleStatus)) return 'GOOGLE_SHEETS_UNAVAILABLE';
+  if (Number(status) === 400 || googleStatus === 'INVALID_ARGUMENT') {
+    if (/unable to parse range|range.*not found|unknown range|invalid range/.test(message)) return 'GOOGLE_SHEETS_RANGE_INVALID';
+    return 'GOOGLE_SHEETS_BAD_REQUEST';
   }
-  return data;
+  return `GOOGLE_SHEETS_HTTP_${Number(status) || 'ERROR'}`;
+}
+
+function apiError(response, data, url, rawText = '') {
+  const message = data?.error?.message || rawText || `Google Sheets API failed (${response.status}).`;
+  const error = new Error(message);
+  error.status = response.status;
+  error.googleStatus = data?.error?.status || null;
+  error.googleCode = data?.error?.code || response.status;
+  error.googleDetails = Array.isArray(data?.error?.details) ? data.error.details : [];
+  error.endpoint = String(url || '').replace(/([?&]key=)[^&]+/gi, '$1<redacted>');
+  error.code = classifyApiError(response.status, data);
+  if (error.code === 'GOOGLE_SHEETS_AUTH_REQUIRED') {
+    error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
+  }
+  return error;
+}
+
+async function request(url, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  let forceRefresh = false;
+  let transientAttempt = 0;
+
+  while (true) {
+    const token = await auth.accessToken({ forceRefresh });
+    forceRefresh = false;
+
+    let response;
+    try {
+      response = await fetch(url, {
+        ...options,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(options.headers || {}),
+        },
+      });
+    } catch (cause) {
+      const error = new Error(`Google Sheets API could not be reached: ${cause?.message || cause}`);
+      error.code = 'GOOGLE_SHEETS_NETWORK_ERROR';
+      error.cause = cause;
+      error.endpoint = String(url || '');
+      throw error;
+    }
+
+    const rawText = await response.text();
+    let data = {};
+    try { data = rawText ? JSON.parse(rawText) : {}; } catch {}
+    if (response.ok) return data;
+
+    const code = classifyApiError(response.status, data);
+
+    // A token can be invalidated server-side before its local expires_at timestamp.
+    // Force-refresh once and replay the exact request.
+    if (code === 'GOOGLE_SHEETS_AUTH_REQUIRED' && !options.__authRetried) {
+      options = { ...options, __authRetried: true };
+      forceRefresh = true;
+      continue;
+    }
+
+    // GETs are safe to retry on quota/transient server failures. 429 means Google
+    // rejected the request before execution, so retrying POST after a short backoff
+    // is also safe. Avoid replaying ambiguous 5xx writes.
+    const retryableTransient = code === 'GOOGLE_SHEETS_RATE_LIMITED' || (code === 'GOOGLE_SHEETS_UNAVAILABLE' && method === 'GET');
+    if (retryableTransient && transientAttempt < 2) {
+      await sleep(350 * (2 ** transientAttempt));
+      transientAttempt++;
+      continue;
+    }
+
+    throw apiError(response, data, url, rawText);
+  }
 }
 
 async function metadata(id) {
-  const fields = encodeURIComponent('properties.title,sheets.properties(sheetId,title,index,gridProperties(rowCount,columnCount))');
+  // Google partial-response selectors use nested parentheses, not dotted field
+  // selectors such as `sheets.properties(...)`. The dotted form can yield an
+  // INVALID_ARGUMENT/400 on the Sheets API and was previously masked as the
+  // generic GOOGLE_SHEETS_API_ERROR.
+  const fields = encodeURIComponent('properties(title),sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount)))');
   return request(`${API}/${encodeURIComponent(id)}?includeGridData=false&fields=${fields}`);
 }
 
@@ -378,4 +442,5 @@ module.exports = {
   readCell,
   cellRange,
   isBlank,
+  classifyApiError,
 };
