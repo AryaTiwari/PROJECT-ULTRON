@@ -3,8 +3,9 @@
 // Temporary exact-tab scope for legacy Google 3-POC execution. When enabled,
 // metadata is always reduced to the configured tab and sheetGid() is forced to
 // the configured gid, so stale view state in a workbook mention cannot change scope.
-// Rich LinkedIn hyperlink probing is also best-effort: a valid values/schema read
-// must not be rejected merely because optional cell-hyperlink metadata is unavailable.
+// Rich LinkedIn hyperlink probing is best-effort. Inspection itself uses a direct
+// exact-tab values preflight, so a valid anchored layout cannot be hidden by
+// legacy workbook scanning or optional metadata plumbing.
 
 const threePoc = require('./three-poc-enrichment-operator');
 const googleSheets = require('./google-sheets-operator');
@@ -19,12 +20,19 @@ const stats = {
   richLinkAttempts: 0,
   richLinkFallbacks: 0,
   valuesReads: 0,
+  directInspectionAttempts: 0,
+  directInspectionSuccesses: 0,
+  directInspectionFailures: 0,
+  enrichmentPreflightAttempts: 0,
+  enrichmentPreflightSuccesses: 0,
+  enrichmentPreflightFailures: 0,
   lastValuesRange: null,
   lastValuesRowCount: 0,
   lastHeaderPreview: [],
   lastError: null,
   lastRichLinkError: null,
   lastValuesError: null,
+  lastDirectInspection: null,
   targetSheet: null,
   targetGid: null,
 };
@@ -77,6 +85,106 @@ function compactRow(row) {
   return (Array.isArray(row) ? row : []).slice(0, 20).map((value) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 120));
 }
 
+function layoutSummary(layout) {
+  return {
+    schema: layout.schema,
+    headerRowNumber: layout.headerRowNumber,
+    linkedinIndex: layout.linkedinIndex,
+    first: {
+      nameIndex: layout.first?.nameIndex ?? -1,
+      phoneIndex: layout.first?.phoneIndex ?? -1,
+      emailIndex: layout.first?.emailIndex ?? -1,
+    },
+    second: {
+      nameIndex: layout.second?.nameIndex ?? -1,
+      phoneIndex: layout.second?.phoneIndex ?? -1,
+      emailIndex: layout.second?.emailIndex ?? -1,
+    },
+    third: {
+      nameIndex: layout.third?.nameIndex ?? -1,
+      phoneIndex: layout.third?.phoneIndex ?? -1,
+      emailIndex: layout.third?.emailIndex ?? -1,
+    },
+  };
+}
+
+async function directExactTabRead(source, mode = 'inspection') {
+  const spreadsheetId = googleSheets.spreadsheetId(source);
+  const name = targetSheet();
+  const gid = targetGid(source);
+  const range = `${googleSheets.quoteSheet(name)}!A:ZZ`;
+  const inspection = mode === 'inspection';
+  if (inspection) stats.directInspectionAttempts++;
+  else stats.enrichmentPreflightAttempts++;
+
+  let rows = [];
+  try {
+    rows = await googleSheets.values(spreadsheetId, range);
+    const layout = threePoc.detectThreePocLayout(rows);
+    const diagnostic = {
+      ok: true,
+      mode,
+      spreadsheetId,
+      sheetName: name,
+      sheetId: gid,
+      range,
+      rowCount: Array.isArray(rows) ? rows.length : 0,
+      headerPreview: Array.isArray(rows) ? rows.slice(0, 3).map(compactRow) : [],
+      layout: layoutSummary(layout),
+    };
+    stats.lastDirectInspection = diagnostic;
+    if (inspection) stats.directInspectionSuccesses++;
+    else stats.enrichmentPreflightSuccesses++;
+    return { rows, layout, diagnostic };
+  } catch (error) {
+    const diagnostic = {
+      ok: false,
+      mode,
+      spreadsheetId,
+      sheetName: name,
+      sheetId: gid,
+      range,
+      rowCount: Array.isArray(rows) ? rows.length : 0,
+      headerPreview: Array.isArray(rows) ? rows.slice(0, 3).map(compactRow) : [],
+      errorCode: error?.code || null,
+      errorMessage: String(error?.message || error || '').slice(0, 1000),
+    };
+    stats.lastDirectInspection = diagnostic;
+    if (inspection) stats.directInspectionFailures++;
+    else stats.enrichmentPreflightFailures++;
+    const wrapped = new Error(
+      `Exact-tab ${mode} failed for '${name}' (${range}). Rows=${diagnostic.rowCount}; ` +
+      `header=${JSON.stringify(diagnostic.headerPreview?.[0] || [])}; cause=${diagnostic.errorMessage}`
+    );
+    wrapped.code = error?.code === 'THREE_POC_LAYOUT_NOT_FOUND'
+      ? 'THREE_POC_EXACT_TAB_LAYOUT_NOT_FOUND'
+      : (error?.code || 'THREE_POC_EXACT_TAB_READ_FAILED');
+    wrapped.diagnostic = diagnostic;
+    throw wrapped;
+  }
+}
+
+function inspectionFromDirectRead(source, result) {
+  const layout = result.layout;
+  return {
+    compatible: true,
+    provider: 'google',
+    compatibleCount: 1,
+    exactTabDirectInspection: true,
+    readDiagnostic: result.diagnostic,
+    sheets: [{
+      sheetName: targetSheet(),
+      sheetId: targetGid(source),
+      schema: layout.schema,
+      headerRowNumber: layout.headerRowNumber,
+      linkedinIndex: layout.linkedinIndex,
+      first: { ...layoutSummary(layout).first },
+      second: { ...layoutSummary(layout).second },
+      third: { ...layoutSummary(layout).third },
+    }],
+  };
+}
+
 async function withMetadataFallback(source, fn) {
   if (!enabled() || !targetSheet()) return fn();
 
@@ -125,9 +233,7 @@ async function withMetadataFallback(source, fn) {
       try {
         const rows = await originalValues(id, range, ...rest);
         stats.lastValuesRowCount = Array.isArray(rows) ? rows.length : 0;
-        stats.lastHeaderPreview = Array.isArray(rows)
-          ? rows.slice(0, 3).map(compactRow)
-          : [];
+        stats.lastHeaderPreview = Array.isArray(rows) ? rows.slice(0, 3).map(compactRow) : [];
         stats.lastValuesError = null;
         return rows;
       } catch (error) {
@@ -143,9 +249,6 @@ async function withMetadataFallback(source, fn) {
       try {
         return await originalLinkedInHyperlinks(...args);
       } catch (error) {
-        // The visible cell value may already contain the exact LinkedIn URL. Rich
-        // hyperlink metadata is an optional enhancement and must never invalidate
-        // a layout that was already detected successfully from worksheet values.
         stats.richLinkFallbacks++;
         stats.lastRichLinkError = String(error?.message || error || '').slice(0, 500);
         return new Map();
@@ -164,7 +267,12 @@ async function withMetadataFallback(source, fn) {
 }
 
 function snapshot() {
-  return { ...stats, lastHeaderPreview: stats.lastHeaderPreview.map((row) => [...row]), enabled: enabled() };
+  return {
+    ...stats,
+    lastHeaderPreview: stats.lastHeaderPreview.map((row) => [...row]),
+    lastDirectInspection: stats.lastDirectInspection ? JSON.parse(JSON.stringify(stats.lastDirectInspection)) : null,
+    enabled: enabled(),
+  };
 }
 
 function install() {
@@ -172,17 +280,43 @@ function install() {
 
   const baseEnrich = threePoc.enrichWorkbook.bind(threePoc);
   threePoc.enrichWorkbook = async function exactTabFallbackEnrich(source, options = {}) {
-    return withMetadataFallback(source, () => baseEnrich(source, options));
+    return withMetadataFallback(source, async () => {
+      await directExactTabRead(source, 'enrichment-preflight');
+      return baseEnrich(source, options);
+    });
   };
 
-  const baseInspect = threePoc.inspectSource.bind(threePoc);
-  threePoc.inspectSource = async function exactTabFallbackInspect(source, options = {}) {
-    return withMetadataFallback(source, () => baseInspect(source, options));
+  // Approval inspection now comes directly from the exact configured worksheet.
+  // No workbook scan, no local-XLSX fallback, no rich-link dependency.
+  threePoc.inspectSource = async function exactTabFallbackInspect(source) {
+    return withMetadataFallback(source, async () => {
+      const direct = await directExactTabRead(source, 'inspection');
+      return inspectionFromDirectRead(source, direct);
+    });
   };
 
-  const api = Object.freeze({ installed: true, enabled, snapshot, targetSheet, targetGid, restrictMetadata });
+  const api = Object.freeze({
+    installed: true,
+    enabled,
+    snapshot,
+    targetSheet,
+    targetGid,
+    restrictMetadata,
+    directExactTabRead,
+    inspectionFromDirectRead,
+  });
   globalThis[INSTALL_FLAG] = api;
   return api;
 }
 
-module.exports = { install, enabled, snapshot, targetSheet, targetGid, withMetadataFallback, restrictMetadata };
+module.exports = {
+  install,
+  enabled,
+  snapshot,
+  targetSheet,
+  targetGid,
+  withMetadataFallback,
+  restrictMetadata,
+  directExactTabRead,
+  inspectionFromDirectRead,
+};
