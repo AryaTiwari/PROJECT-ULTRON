@@ -74,4 +74,24 @@ const person = {
   assert.equal(result.writes.find((write) => write.field === 'role')?.value, 'Manager HR / Talent Acquisition');
 }
 
-console.log('Universal contact display self-test passed: schemas without a role column embed verified designation in the contact name, same-person bare names can be upgraded, and dedicated role columns stay separate.');
+// Ambiguous anchor identity such as "Person or Company Name" must remain plain,
+// even when that group also owns phone/email/LinkedIn fields.
+{
+  const group = {
+    id: 'person-1-0',
+    kind: 'person',
+    ordinal: 1,
+    fields: {
+      name: { index: 0, header: 'Person or Company Name', role: 'name' },
+      linkedin: { index: 4, header: 'Linkedin Id', role: 'linkedin_person' },
+      phone: { index: 5, header: 'Phone no', role: 'phone' },
+      email: { index: 6, header: 'Email ID', role: 'email' },
+    },
+  };
+  const row = Array(7).fill('');
+  const result = planner.safeWritesForGroup(row, group, person);
+  assert.equal(result.writes.find((write) => write.field === 'name')?.value, 'Pankaj Pandey');
+  assert.equal(result.writes.find((write) => write.field === 'name')?.embeddedRole, undefined);
+}
+
+console.log('Universal contact display self-test passed: contact schemas without a role column embed verified designation, same-person bare names can be upgraded, dedicated role columns stay separate, and ambiguous anchor identity columns remain plain.');
