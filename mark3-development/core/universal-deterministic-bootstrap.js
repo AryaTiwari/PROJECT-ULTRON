@@ -1,6 +1,7 @@
 'use strict';
 
 const schemaHardening = require('./universal-schema-hardening');
+const schemaProximity = require('./universal-schema-proximity-recovery');
 const adaptiveRanking = require('./universal-adaptive-ranking-policy');
 
 const INSTALL_FLAG = Symbol.for('ultron.mark3.universalDeterministicBootstrap.installed');
@@ -8,8 +9,9 @@ const INSTALL_FLAG = Symbol.for('ultron.mark3.universalDeterministicBootstrap.in
 function install() {
   if (globalThis[INSTALL_FLAG]) return globalThis[INSTALL_FLAG];
   const schema = schemaHardening.install();
+  const proximity = schemaProximity.install();
   const ranking = adaptiveRanking.install();
-  const api = Object.freeze({ schema, ranking, deterministic: true, modelCalls: 0 });
+  const api = Object.freeze({ schema, proximity, ranking, deterministic: true, modelCalls: 0 });
   globalThis[INSTALL_FLAG] = api;
   return api;
 }
