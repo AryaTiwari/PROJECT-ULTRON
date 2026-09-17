@@ -49,7 +49,9 @@ function oauthClient() {
   const raw = readJson(file);
   const client = raw.installed || raw.web;
   if (!client?.client_id || !client?.client_secret) {
-    throw new Error('Google OAuth JSON does not contain an installed/web OAuth client.');
+    const error = new Error('Google OAuth JSON does not contain an installed/web OAuth client.');
+    error.code = 'GOOGLE_SHEETS_CREDENTIALS_INVALID';
+    throw error;
   }
   return {
     clientId: client.client_id,
@@ -72,19 +74,40 @@ function saveToken(token) {
   return file;
 }
 
+function oauthErrorCode(data = {}, status = 0) {
+  const oauth = String(data?.error || '').trim().toLowerCase();
+  const description = String(data?.error_description || '').toLowerCase();
+  if (oauth === 'invalid_grant' || /expired or revoked|token.*revoked|invalid grant/.test(description)) return 'GOOGLE_SHEETS_AUTH_REQUIRED';
+  if (oauth === 'invalid_client' || oauth === 'unauthorized_client') return 'GOOGLE_SHEETS_CREDENTIALS_INVALID';
+  if (oauth === 'access_denied') return 'GOOGLE_SHEETS_AUTH_DENIED';
+  if (Number(status) === 401) return 'GOOGLE_SHEETS_AUTH_REQUIRED';
+  return 'GOOGLE_SHEETS_OAUTH_ERROR';
+}
+
 async function tokenRequest(params) {
   const client = oauthClient();
-  const response = await fetch(client.tokenUri, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: new URLSearchParams(params),
-  });
+  let response;
+  try {
+    response = await fetch(client.tokenUri, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: new URLSearchParams(params),
+    });
+  } catch (cause) {
+    const error = new Error(`Google OAuth token endpoint could not be reached: ${cause?.message || cause}`);
+    error.code = 'GOOGLE_SHEETS_OAUTH_NETWORK_ERROR';
+    error.cause = cause;
+    throw error;
+  }
   const text = await response.text();
   let data = {};
   try { data = JSON.parse(text); } catch {}
   if (!response.ok) {
     const error = new Error(data.error_description || data.error || `Google OAuth token request failed (${response.status}).`);
     error.status = response.status;
+    error.googleOAuthError = data.error || null;
+    error.code = oauthErrorCode(data, response.status);
+    error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
   }
   return data;
@@ -94,6 +117,7 @@ async function refresh(token) {
   if (!token?.refresh_token) {
     const error = new Error('Google Sheets authorization has expired and no refresh token is available. Re-authorize once.');
     error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+    error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
   }
   const client = oauthClient();
@@ -118,10 +142,17 @@ async function accessToken() {
   if (!token) {
     const error = new Error('Google Sheets needs its one-time authorization. Run the Google Sheets auth script first.');
     error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+    error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
   }
   if (token.access_token && Number(token.expires_at || 0) > Date.now() + 60_000) return token.access_token;
   token = await refresh(token);
+  if (!token?.access_token) {
+    const error = new Error('Google OAuth refresh completed without an access token. Re-authorize Google Sheets.');
+    error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+    error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
+    throw error;
+  }
   return token.access_token;
 }
 
@@ -130,10 +161,6 @@ function base64url(buffer) {
 }
 
 function openBrowser(url) {
-  // Do not launch the OAuth URL through `cmd /c start` on Windows. OAuth URLs
-  // contain `&`; cmd.exe treats that character as a command separator and can
-  // silently truncate the query string, which makes Google report parameters
-  // such as response_type as missing. rundll32 passes the URL intact.
   const command = process.platform === 'win32'
     ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
     : process.platform === 'darwin'
@@ -218,12 +245,25 @@ async function authorizeInteractive() {
 }
 
 function status() {
+  const token = loadToken();
   return {
     credentialsReady: fs.existsSync(credentialsPath()),
-    authorized: Boolean(loadToken()?.refresh_token || loadToken()?.access_token),
+    authorized: Boolean(token?.refresh_token || token?.access_token),
+    hasRefreshToken: Boolean(token?.refresh_token),
+    tokenExpired: token ? Number(token.expires_at || 0) <= Date.now() + 60_000 : null,
+    tokenScope: String(token?.scope || ''),
     credentialsPath: credentialsPath(),
     tokenPath: tokenPath(),
   };
 }
 
-module.exports = { SCOPE, credentialsPath, tokenPath, status, accessToken, authorizeInteractive };
+module.exports = {
+  SCOPE,
+  credentialsPath,
+  tokenPath,
+  status,
+  accessToken,
+  authorizeInteractive,
+  oauthErrorCode,
+  tokenRequest,
+};
