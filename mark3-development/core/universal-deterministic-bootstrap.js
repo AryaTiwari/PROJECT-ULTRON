@@ -1,6 +1,7 @@
 'use strict';
 
 const schemaHardening = require('./universal-schema-hardening');
+const ordinalContactRecovery = require('./universal-schema-ordinal-contact-recovery');
 const schemaProximity = require('./universal-schema-proximity-recovery');
 const schemaEntityDisambiguation = require('./universal-schema-entity-disambiguation');
 const adaptiveRanking = require('./universal-adaptive-ranking-policy');
@@ -12,16 +13,19 @@ function install() {
 
   // Install order is intentional:
   // 1) recover semantically obvious but unfamiliar columns,
-  // 2) recover unlabeled identity columns by local structure/value shape,
-  // 3) resolve whether anonymous contact fields belong to a person or company,
-  // 4) replace fixed weighting with population-adaptive deterministic ranking.
+  // 2) recover ordinal entity headers such as "3rd POC" even without "Name",
+  // 3) recover unlabeled identity columns by local structure/value shape,
+  // 4) resolve whether anonymous contact fields belong to a person or company,
+  // 5) replace fixed weighting with population-adaptive deterministic ranking.
   const schema = schemaHardening.install();
+  const ordinal = ordinalContactRecovery.install();
   const proximity = schemaProximity.install();
   const ownership = schemaEntityDisambiguation.install();
   const ranking = adaptiveRanking.install();
 
   const api = Object.freeze({
     schema,
+    ordinal,
     proximity,
     ownership,
     ranking,
