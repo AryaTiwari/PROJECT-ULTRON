@@ -36,6 +36,12 @@ assert.equal(spreadsheetController.parseSheetName('Target only the `Gaurav 2` ta
 assert.equal(spreadsheetController.parseSheetName('Target only the Gaurav 2 tab.'), 'Gaurav 2');
 assert.equal(spreadsheetController.parseSheetName('Target tab: "Arya 2"'), 'Arya 2');
 
+// A validation cap must never be silent. This protects against a forgotten
+// ULTRON_M3_THREE_POC_ROW_LIMIT making a tiny validation pass look like a full run.
+assert.match(spreadsheetController.rowLimitNotice(8), /VALIDATION MODE IS ACTIVE/i);
+assert.match(spreadsheetController.rowLimitNotice(8), /first 8 non-empty data rows/i);
+assert.match(spreadsheetController.rowLimitNotice(undefined), /FULL-SHEET MODE/i);
+
 // Exact worksheet targeting regression.
 const meta = {
   sheets: [
@@ -88,4 +94,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: generic enrichment ownership, quoted tab parsing, direct URL conflict safety, and explicit-tab-over-mention-gid targeting are protected.');
+console.log('Universal spreadsheet routing self-test passed: generic enrichment ownership, quoted tab parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, and visible validation/full-sheet mode are protected.');
