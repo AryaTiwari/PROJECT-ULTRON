@@ -9,6 +9,12 @@
 // carry a stale UI-view gid. In that case callers may set explicitNameAuthoritative
 // so an explicitly named worksheet beats that incidental gid. Direct user-pasted
 // tab URLs should leave that option false and conflicts fail closed.
+//
+// IMPORTANT: Google metadata is advisory for an explicitly named worksheet.
+// Some connector/runtime paths can return incomplete or scoped metadata even
+// though an exact A1 Values read for the named tab succeeds. In authoritative
+// name mode we therefore synthesize the requested target when metadata is empty
+// or omits the name. The downstream exact Values read is the existence check.
 
 function text(value) { return String(value ?? '').trim(); }
 
@@ -43,17 +49,53 @@ function targetError(code, message, details = {}) {
   return error;
 }
 
+function syntheticNamedTarget(requestedName) {
+  return {
+    name: text(requestedName),
+    sheetId: null,
+    index: null,
+    synthetic: true,
+  };
+}
+
+function authoritativeNameResolution(tabs, requestedName, gid, reason) {
+  const target = syntheticNamedTarget(requestedName);
+  return {
+    tabs,
+    targets: [target],
+    targeted: true,
+    targetSource: reason,
+    requestedName: text(requestedName),
+    requestedGid: gid,
+    ignoredViewGid: gid,
+    metadataFallback: true,
+    target,
+  };
+}
+
 function resolveTabs(meta, sheetUrl, options = {}) {
   const tabs = tabsFromMetadata(meta);
-  if (!tabs.length) throw targetError('UNIVERSAL_SHEET_TAB_NOT_FOUND', 'Spreadsheet has no readable tabs.');
-
   const requestedName = text(options.sheetName);
   const gid = parseGid(sheetUrl);
-  const byName = requestedName ? namedTab(tabs, requestedName) : null;
-  const byGid = gid != null ? tabs.find((tab) => tab.sheetId === gid) || null : null;
   const explicitNameAuthoritative = Boolean(options.explicitNameAuthoritative && requestedName);
 
+  // In explicit-name mode metadata is not allowed to veto a real worksheet.
+  // The exact A1 Values read performed immediately downstream proves whether
+  // the named tab actually exists and is readable.
+  if (!tabs.length) {
+    if (explicitNameAuthoritative) {
+      return authoritativeNameResolution(tabs, requestedName, gid, 'explicit-name-metadata-empty-bypass');
+    }
+    throw targetError('UNIVERSAL_SHEET_TAB_NOT_FOUND', 'Spreadsheet has no readable tabs.');
+  }
+
+  const byName = requestedName ? namedTab(tabs, requestedName) : null;
+  const byGid = gid != null ? tabs.find((tab) => tab.sheetId === gid) || null : null;
+
   if (requestedName && !byName) {
+    if (explicitNameAuthoritative) {
+      return authoritativeNameResolution(tabs, requestedName, gid, 'explicit-name-metadata-miss-bypass');
+    }
     throw targetError('UNIVERSAL_SHEET_TAB_NOT_FOUND', `Google Sheet tab not found: ${requestedName}`, {
       requestedSheetName: requestedName,
       availableTabs: tabs.map((tab) => tab.name),
@@ -91,8 +133,17 @@ function resolveTabs(meta, sheetUrl, options = {}) {
     requestedName: requestedName || '',
     requestedGid: gid,
     ignoredViewGid: nameOverrodeGid ? gid : null,
+    metadataFallback: false,
     target,
   };
 }
 
-module.exports = { text, parseGid, tabsFromMetadata, namedTab, resolveTabs };
+module.exports = {
+  text,
+  parseGid,
+  tabsFromMetadata,
+  namedTab,
+  syntheticNamedTarget,
+  authoritativeNameResolution,
+  resolveTabs,
+};
