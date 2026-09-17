@@ -60,19 +60,12 @@ function claim(message, options = {}) {
     });
   }
   const linkedin = /\blinkedin\b|linkedin\.com\/|\b(?:search_jobs|get_job_details|get_company_profile|search_companies|search_people|get_person_profile)\b/i.test(text);
-  // Apollo contact enrichment belongs to the LinkedIn lead control plane even
-  // when a conversational follow-up omits the word "LinkedIn".
   const apolloEnrichment = /\bapollo\b/i.test(text)
     && /\b(?:enrich|enrichment|email|e-?mail|phone|mobile|numbers?|contacts?|leads?|compan(?:y|ies)|sheet|master)\b/i.test(text);
-  // A lead source may be named LinkedIn while the requested action is email delivery.
-  // Keep discovery-first compound requests in LinkedIn, but let prepared email outreach
-  // flow through the Email Outreach Operator instead of re-entering research.
   const emailOutreach = !apolloEnrichment
     && /\b(?:email outreach|email campaign|personalized emails?|send emails?|follow[- ]?up emails?)\b/i.test(text)
     && !/^\s*(?:find|search|research|discover|source|get)\b[\s\S]{0,100}\blinkedin\b/i.test(text);
   const operationalDomain = apolloEnrichment || (linkedin && !emailOutreach);
-  // A report/status heading is not an artifact object. Require a concrete
-  // format and a creation verb in the same clause, and ignore negated clauses.
   const operationFirst = /^(?:(?:please|can you|could you)\s+)?(?:resume|continue|find|search|reuse|verify|deduplicate|dedupe|fill|update|pause|cancel|stop)\b/i.test(text);
   const artifact = linkedin && !operationFirst && text.split(/[.!?;\n]/).some(clause =>
     !/\b(?:no|not|never|don't|without)\b/i.test(clause) &&
@@ -83,16 +76,56 @@ function claim(message, options = {}) {
     controller: exclusive ? 'linkedin-domain-controller' : null,
     generalModelAllowed: !exclusive, artifactAllowed: !exclusive, allowWebFallback: !exclusive });
 }
+
 function assertAllowed(kind, { model = '', messages = [] } = {}) {
   const current = scope.getStore();
+
+  // Domain-owned internal reasoning is not a new user command. Allow only the
+  // explicitly permitted general-model boundary; direct-provider calls remain
+  // forbidden so heavy 3-POC reasoning cannot silently use personal API keys.
+  if (
+    kind === 'general-model'
+    && current?.internalInferenceDomain
+    && current?.route?.domain === current.internalInferenceDomain
+  ) return;
+
   const lastUser = (Array.isArray(messages) ? messages : []).filter(item => item.role === 'user').at(-1)?.content;
-  if (!current?.route.exclusive && !claim(typeof lastUser === 'string' ? lastUser : '').exclusive) return;
+  const inferred = !current ? claim(typeof lastUser === 'string' ? lastUser : '') : null;
+  if (!current?.route.exclusive && !inferred?.exclusive) return;
   if (kind === 'direct-model' && current?.compiler && /^gemini\//i.test(model)) return;
-  const error = Object.assign(new Error(`LinkedIn exclusive route forbids ${kind}`), { code: 'LINKEDIN_ROUTE_INVARIANT_VIOLATION' });
+
+  const domain = current?.route?.domain || inferred?.domain || 'exclusive';
+  const error = Object.assign(new Error(`${domain} exclusive route forbids ${kind}`), { code: 'DOMAIN_ROUTE_INVARIANT_VIOLATION' });
   if (current) current.violation = error;
-  console.error(error.code, JSON.stringify({ domain: 'linkedin', attempted: kind }));
+  console.error(error.code, JSON.stringify({ domain, attempted: kind }));
   throw error;
 }
+
+function runInternalInference(domain, fn) {
+  if (typeof fn !== 'function') throw new TypeError('runInternalInference requires a function.');
+  const requestedDomain = String(domain || '').trim();
+  if (!requestedDomain) throw new Error('runInternalInference requires a domain.');
+  const current = scope.getStore();
+  const route = current?.route?.domain === requestedDomain
+    ? current.route
+    : Object.freeze({
+        domain: requestedDomain,
+        claimed: true,
+        exclusive: true,
+        controller: null,
+        generalModelAllowed: false,
+        artifactAllowed: false,
+        allowWebFallback: false,
+      });
+  return scope.run({
+    ...(current || {}),
+    route,
+    compiler: false,
+    internalInferenceDomain: requestedDomain,
+    violation: null,
+  }, fn);
+}
+
 function runExclusive(fn) {
   return scope.run({ route: claim('LinkedIn mission'), compiler: false }, async () => {
     const result = await fn();
@@ -138,4 +171,4 @@ async function dispatch(message, options = {}) {
     }
   });
 }
-module.exports = { normalize, isThreePocSpreadsheetRequest, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, runExclusive, compileWithGemini };
+module.exports = { normalize, isThreePocSpreadsheetRequest, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, runInternalInference, runExclusive, compileWithGemini };
