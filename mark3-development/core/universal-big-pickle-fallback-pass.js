@@ -39,6 +39,11 @@ function freshStats() {
     hydrationAttempts: 0,
     hydrationFailures: 0,
     newPeopleSelected: 0,
+    existingVerificationAttempts: 0,
+    existingVerificationFailures: 0,
+    existingGroupsRepaired: 0,
+    embeddedDesignationWrites: 0,
+    anchorFieldsFilled: 0,
     orphanContactTargets: 0,
     orphanContactVerified: 0,
     orphanContactBlocked: 0,
@@ -104,6 +109,11 @@ function candidateAlreadyPresent(candidate, existing) {
   return base.candidateAlreadyPresent(candidate, existing);
 }
 
+function needsExistingRepair(plan) {
+  if ((plan?.groups?.partial || []).some((item) => !item.isAnchor && item.snapshot?.hasIdentity)) return true;
+  return (plan?.groups?.existing || []).some((item) => base.needsEmbeddedDesignationRepair(item));
+}
+
 async function hydrateSelection(selection, companyContext, target, stats) {
   const raw = selection?.candidate;
   if (!raw) return null;
@@ -127,7 +137,9 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   fallback.resetRun();
   if (!fallback.enabled()) return { ...stats, enabled: false, fallback: fallback.snapshot() };
 
-  const unresolvedPrimary = Number(primaryResult?.stats?.unfilledOpenGroups || 0) + Number(primaryResult?.stats?.rowsWithoutEmployer || 0);
+  const unresolvedPrimary = Number(primaryResult?.stats?.unfilledOpenGroups || 0)
+    + Number(primaryResult?.stats?.rowsWithoutEmployer || 0)
+    + Number(primaryResult?.stats?.existingVerificationFailures || 0);
   if (unresolvedPrimary <= 0) return { ...stats, enabled: true, fallback: fallback.snapshot() };
   stats.attempted = true;
 
@@ -142,96 +154,109 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   for (const record of analysis.rowPlans) {
     stats.rowsSeen++;
     const { row, rowNumber, plan } = record;
+    if (!plan.anchor) continue;
     const targets = base.candidateFillTargets(plan);
-    if (!targets.length || !plan.anchor) continue;
+    const repairEligible = needsExistingRepair(plan);
+    if (!targets.length && !repairEligible) continue;
     stats.rowsEligible++;
 
     const companyContext = await companyContextFor(plan, row, options, stats);
     if (!companyContext?.company) {
-      stats.unresolvedTargets += targets.length;
-      continue;
-    }
-
-    const people = await base.discoverCompanyPeople(companyContext, cache, stats, {
-      ...options,
-      location: plan.context?.location || '',
-    });
-    const existing = existingKeys(plan);
-    const available = (people || []).filter((candidate) => !candidateAlreadyPresent(candidate, existing));
-    const context = {
-      ...plan.context,
-      company: companyContext.company,
-      companyDomain: companyContext.domain,
-      anchorApolloPersonId: companyContext.anchorApolloPersonId,
-      anchorLinkedin: companyContext.anchorLinkedin,
-    };
-    const ranking = ranker.rankCandidates(available, context, { minimumScore: options.minimumScore });
-    if (!ranking.ranked.length) {
-      stats.unresolvedTargets += targets.length;
+      stats.unresolvedTargets += targets.length + (repairEligible ? 1 : 0);
       continue;
     }
 
     const writes = [];
-    const excluded = new Set();
-    for (const target of targets) {
-      const orphanTarget = orphanPolicy.isOrphanContactTarget(target);
-      if (orphanTarget) stats.orphanContactTargets++;
-      let filled = false;
-      for (let attempt = 0; attempt < 3 && !filled; attempt++) {
-        stats.candidateFallbackAttempts++;
-        const selection = await fallback.chooseCandidate({
-          ranking,
-          context,
-          target,
-          minimumConfidence: Number(options.minimumConfidence ?? 0.54),
-          excludeKeys: [...excluded],
-        });
-        if (!selection) {
-          stats.candidateFallbackAbstains++;
-          break;
-        }
-        const key = fallback.candidateKey(selection.candidate);
-        if (key) excluded.add(key);
-        const person = await hydrateSelection(selection, companyContext, target, stats);
-        if (!person) continue;
 
-        const hydratedName = ranker.normalize(person.name || '');
-        const hydratedLinkedin = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
-        if ((hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) continue;
+    // A fallback-resolved employer is useful for more than brand-new contacts.
+    // Re-run the deterministic same-person repair logic against the newly verified
+    // employer context so bare names/designations and missing contact fields can be
+    // repaired without giving Big Pickle any write authority.
+    writes.push(...await base.enrichAnchorGroup(row, plan, companyContext, stats));
+    writes.push(...await base.repairExistingGroups(row, plan, companyContext, stats, options));
 
-        if (orphanTarget) {
-          const proof = orphanPolicy.verify(target.snapshot, person);
-          if (!proof.verified) continue;
-          stats.orphanContactVerified++;
-        }
+    if (targets.length) {
+      const people = await base.discoverCompanyPeople(companyContext, cache, stats, {
+        ...options,
+        location: plan.context?.location || '',
+      });
+      const existing = existingKeys(plan);
+      const available = (people || []).filter((candidate) => !candidateAlreadyPresent(candidate, existing));
+      const context = {
+        ...plan.context,
+        company: companyContext.company,
+        companyDomain: companyContext.domain,
+        anchorApolloPersonId: companyContext.anchorApolloPersonId,
+        anchorLinkedin: companyContext.anchorLinkedin,
+      };
+      const ranking = ranker.rankCandidates(available, context, { minimumScore: options.minimumScore });
 
-        const writePlan = planner.safeWritesForGroup(row, target.group, person);
-        if (!writePlan.allowed || !writePlan.writes.length) {
-          stats.identityConflicts++;
-          continue;
+      if (!ranking.ranked.length) {
+        stats.unresolvedTargets += targets.length;
+      } else {
+        const excluded = new Set();
+        for (const target of targets) {
+          const orphanTarget = orphanPolicy.isOrphanContactTarget(target);
+          if (orphanTarget) stats.orphanContactTargets++;
+          let filled = false;
+          for (let attempt = 0; attempt < 3 && !filled; attempt++) {
+            stats.candidateFallbackAttempts++;
+            const selection = await fallback.chooseCandidate({
+              ranking,
+              context,
+              target,
+              minimumConfidence: Number(options.minimumConfidence ?? 0.54),
+              excludeKeys: [...excluded],
+            });
+            if (!selection) {
+              stats.candidateFallbackAbstains++;
+              break;
+            }
+            const key = fallback.candidateKey(selection.candidate);
+            if (key) excluded.add(key);
+            const person = await hydrateSelection(selection, companyContext, target, stats);
+            if (!person) continue;
+
+            const hydratedName = ranker.normalize(person.name || '');
+            const hydratedLinkedin = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
+            if ((hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) continue;
+
+            if (orphanTarget) {
+              const proof = orphanPolicy.verify(target.snapshot, person);
+              if (!proof.verified) continue;
+              stats.orphanContactVerified++;
+            }
+
+            const writePlan = planner.safeWritesForGroup(row, target.group, person);
+            if (!writePlan.allowed || !writePlan.writes.length) {
+              stats.identityConflicts++;
+              continue;
+            }
+            writes.push(...writePlan.writes);
+            stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
+            if (hydratedName) existing.names.add(hydratedName);
+            if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
+            stats.candidateFallbackSelections++;
+            stats.newPeopleSelected++;
+            stats.audit.push({
+              rowNumber,
+              groupId: target.group.id,
+              name: person.name || '',
+              title: person.title || '',
+              candidateKey: key,
+              deterministicScore: selection.score,
+              deterministicConfidence: selection.confidence,
+              fallbackConfidence: selection.fallbackConfidence,
+              fallbackReason: selection.fallbackReason,
+              model: selection.fallbackModel,
+            });
+            filled = true;
+          }
+          if (!filled) {
+            stats.unresolvedTargets++;
+            if (orphanTarget) stats.orphanContactBlocked++;
+          }
         }
-        writes.push(...writePlan.writes);
-        if (hydratedName) existing.names.add(hydratedName);
-        if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
-        stats.candidateFallbackSelections++;
-        stats.newPeopleSelected++;
-        stats.audit.push({
-          rowNumber,
-          groupId: target.group.id,
-          name: person.name || '',
-          title: person.title || '',
-          candidateKey: key,
-          deterministicScore: selection.score,
-          deterministicConfidence: selection.confidence,
-          fallbackConfidence: selection.fallbackConfidence,
-          fallbackReason: selection.fallbackReason,
-          model: selection.fallbackModel,
-        });
-        filled = true;
-      }
-      if (!filled) {
-        stats.unresolvedTargets++;
-        if (orphanTarget) stats.orphanContactBlocked++;
       }
     }
 
@@ -253,4 +278,4 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   return { ...stats, enabled: true, fallback: fallbackStats };
 }
 
-module.exports = { run, freshStats, companyContextFor, employerFallback };
+module.exports = { run, freshStats, companyContextFor, employerFallback, needsExistingRepair };
