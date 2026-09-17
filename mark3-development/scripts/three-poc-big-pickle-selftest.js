@@ -39,6 +39,17 @@ assert.match(tabSource, /metadataFallbacks/);
 assert.match(tabSource, /googleSheets\.sheetGid = function exactConfiguredSheetGid/);
 assert.match(controllerSource, /BIG_PICKLE_TARGET_SHEET_REQUIRED/);
 
+// Pre-approval inspection and paid execution both preflight the exact configured
+// worksheet values. This means THREE_POC_LAYOUT_NOT_FOUND cannot be produced by
+// a workbook scan when the configured Arya 2 A:ZZ range itself is valid.
+assert.match(tabSource, /async function directExactTabRead/);
+assert.match(tabSource, /threePoc\.detectThreePocLayout\(rows\)/);
+assert.match(tabSource, /threePoc\.inspectSource = async function exactTabFallbackInspect/);
+assert.match(tabSource, /inspectionFromDirectRead/);
+assert.match(tabSource, /await directExactTabRead\(source, 'enrichment-preflight'\)/);
+assert.match(tabSource, /THREE_POC_EXACT_TAB_LAYOUT_NOT_FOUND/);
+assert.match(tabSource, /header=\$\{JSON\.stringify/);
+
 const directTab = require('../core/three-poc-direct-tab-fallback');
 const meta = {
   properties: { title: 'Test' },
@@ -68,4 +79,4 @@ try {
   else process.env.ULTRON_M3_THREE_POC_SOURCE_URL = oldSource;
 }
 
-console.log('Big Pickle 3-POC fallback self-test passed: the workaround is opt-in, Big Pickle-only, personal-key-free, OpenCode-policy-aware, pinned to one canonical Google source and one exact worksheet, and @mentions cannot fall back to local XLSX.');
+console.log('Big Pickle 3-POC fallback self-test passed: the workaround is opt-in, Big Pickle-only, personal-key-free, OpenCode-policy-aware, pinned to one canonical Google source and one exact worksheet, and both approval inspection and enrichment preflight validate the exact target values before legacy execution.');
