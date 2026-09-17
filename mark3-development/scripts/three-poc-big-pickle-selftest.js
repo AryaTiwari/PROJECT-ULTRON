@@ -36,7 +36,7 @@ assert.match(tabSource, /ULTRON_M3_THREE_POC_TARGET_GID/);
 assert.match(tabSource, /restrictMetadata/);
 assert.match(tabSource, /metadataScoped/);
 assert.match(tabSource, /metadataFallbacks/);
-assert.match(tabSource, /googleSheets\.sheetGid = function forcedConfiguredGid/);
+assert.match(tabSource, /googleSheets\.sheetGid = function exactConfiguredSheetGid/);
 assert.match(controllerSource, /BIG_PICKLE_TARGET_SHEET_REQUIRED/);
 
 const directTab = require('../core/three-poc-direct-tab-fallback');
