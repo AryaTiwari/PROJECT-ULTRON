@@ -5,6 +5,7 @@ const threePoc = require('./three-poc-enrichment-operator');
 const apolloQuality = require('./apollo-three-poc-quality').install();
 const candidateDiscovery = require('./three-poc-candidate-discovery-policy').install();
 require('./three-poc-linkedin-anchor-fallback').install();
+require('./three-poc-linkedin-profile-resilience').install();
 
 const REPORT_FLAG = Symbol.for('ultron.mark3.apolloThreePocQuality.reportInstalled');
 if (!globalThis[REPORT_FLAG]) {
