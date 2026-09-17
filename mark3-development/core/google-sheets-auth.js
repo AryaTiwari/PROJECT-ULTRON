@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const config = require('./config');
 
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
+let sessionValidated = false;
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -137,7 +138,7 @@ async function refresh(token) {
   return merged;
 }
 
-async function accessToken() {
+async function accessToken(options = {}) {
   let token = loadToken();
   if (!token) {
     const error = new Error('Google Sheets needs its one-time authorization. Run the Google Sheets auth script first.');
@@ -145,8 +146,30 @@ async function accessToken() {
     error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
   }
+
+  const forceRefresh = Boolean(options.forceRefresh);
+  // Validate the local credential once per ULTRON process even when expires_at says
+  // the cached access token is still alive. Google can revoke/rotate an access token
+  // before our local timestamp expires; previously that surfaced downstream as the
+  // misleading GOOGLE_SHEETS_API_ERROR. A single session-start refresh avoids that
+  // without refreshing before every Sheets request.
+  if (!sessionValidated || forceRefresh) {
+    if (token.refresh_token) {
+      token = await refresh(token);
+      sessionValidated = true;
+    } else if (token.access_token && Number(token.expires_at || 0) > Date.now() + 60_000) {
+      sessionValidated = true;
+    } else {
+      const error = new Error('Google Sheets authorization cannot be refreshed. Re-authorize Google Sheets once.');
+      error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+      error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
+      throw error;
+    }
+  }
+
   if (token.access_token && Number(token.expires_at || 0) > Date.now() + 60_000) return token.access_token;
   token = await refresh(token);
+  sessionValidated = true;
   if (!token?.access_token) {
     const error = new Error('Google OAuth refresh completed without an access token. Re-authorize Google Sheets.');
     error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
@@ -241,6 +264,7 @@ async function authorizeInteractive() {
     scope: token.scope || SCOPE,
   };
   const file = saveToken(stored);
+  sessionValidated = true;
   return { ok: true, tokenPath: file, scope: stored.scope };
 }
 
@@ -252,6 +276,7 @@ function status() {
     hasRefreshToken: Boolean(token?.refresh_token),
     tokenExpired: token ? Number(token.expires_at || 0) <= Date.now() + 60_000 : null,
     tokenScope: String(token?.scope || ''),
+    sessionValidated,
     credentialsPath: credentialsPath(),
     tokenPath: tokenPath(),
   };
