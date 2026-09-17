@@ -1,11 +1,13 @@
 const assert = require('assert/strict');
 
 // This script is already part of npm start/check. Load the universal deterministic,
-// routing and contact-display regression suites here so arbitrary-layout enrichment
-// cannot regress silently.
+// routing, contact-display, ordinal-contact and orphan-contact regression suites
+// here so arbitrary-layout enrichment cannot regress silently.
 require('./universal-deterministic-enrichment-selftest');
 require('./universal-spreadsheet-routing-selftest');
 require('./universal-contact-display-selftest');
+require('./universal-ordinal-contact-selftest');
+require('./universal-orphan-contact-selftest');
 
 const control = require('../core/command-control-plane');
 
@@ -54,7 +56,7 @@ assert.throws(
     );
   });
 
-  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, routing and contact-display regressions also ran; legacy scoped OmniRoute fallback remains isolated and direct personal-model calls stay blocked.');
+  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, routing, contact-display, ordinal-contact and orphan-contact regressions also ran; legacy scoped OmniRoute fallback remains isolated and direct personal-model calls stay blocked.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
