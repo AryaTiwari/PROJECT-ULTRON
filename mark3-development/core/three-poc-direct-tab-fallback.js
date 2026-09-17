@@ -3,6 +3,8 @@
 // Temporary exact-tab scope for legacy Google 3-POC execution. When enabled,
 // metadata is always reduced to the configured tab and sheetGid() is forced to
 // the configured gid, so stale view state in a workbook mention cannot change scope.
+// Rich LinkedIn hyperlink probing is also best-effort: a valid values/schema read
+// must not be rejected merely because optional cell-hyperlink metadata is unavailable.
 
 const threePoc = require('./three-poc-enrichment-operator');
 const googleSheets = require('./google-sheets-operator');
@@ -14,7 +16,10 @@ const stats = {
   metadataScoped: 0,
   targetMisses: 0,
   gidOverrides: 0,
+  richLinkAttempts: 0,
+  richLinkFallbacks: 0,
   lastError: null,
+  lastRichLinkError: null,
   targetSheet: null,
   targetGid: null,
 };
@@ -68,6 +73,7 @@ async function withMetadataFallback(source, fn) {
 
   const originalMetadata = googleSheets.metadata;
   const originalSheetGid = googleSheets.sheetGid;
+  const originalLinkedInHyperlinks = googleSheets.linkedInHyperlinks;
   const name = targetSheet();
   const gid = targetGid(source);
   stats.targetSheet = name;
@@ -102,11 +108,28 @@ async function withMetadataFallback(source, fn) {
     return originalSheetGid(source);
   };
 
+  if (typeof originalLinkedInHyperlinks === 'function') {
+    googleSheets.linkedInHyperlinks = async function bestEffortLinkedInHyperlinks(...args) {
+      stats.richLinkAttempts++;
+      try {
+        return await originalLinkedInHyperlinks(...args);
+      } catch (error) {
+        // The visible cell value may already contain the exact LinkedIn URL. Rich
+        // hyperlink metadata is an optional enhancement and must never invalidate
+        // a layout that was already detected successfully from worksheet values.
+        stats.richLinkFallbacks++;
+        stats.lastRichLinkError = String(error?.message || error || '').slice(0, 500);
+        return new Map();
+      }
+    };
+  }
+
   try {
     return await fn();
   } finally {
     googleSheets.metadata = originalMetadata;
     googleSheets.sheetGid = originalSheetGid;
+    googleSheets.linkedInHyperlinks = originalLinkedInHyperlinks;
   }
 }
 
