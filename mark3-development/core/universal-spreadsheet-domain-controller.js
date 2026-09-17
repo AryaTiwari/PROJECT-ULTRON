@@ -1,0 +1,205 @@
+'use strict';
+
+// First-class owner for spreadsheet contact enrichment. The normal execution
+// path is intentionally model-free: schema inference, row planning, current-
+// employer parsing, authority ranking and writes are all deterministic.
+//
+// Compatibility note: paid-tool approval resolution still enters through the
+// existing lead-enrichment bootstrap. Until that bootstrap is fully migrated,
+// this controller installs a narrow compatibility bridge over the legacy
+// threePoc export so an already-approved `agentic-three-poc-enrichment` action
+// executes the universal engine for Google Sheets. The bridge does NOT call the
+// legacy AI selector and is removable once approval dispatch has a universal
+// operation of its own.
+
+const sheets = require('./google-sheets-operator');
+const paidTools = require('./paid-tool-approval');
+const universal = require('./universal-sheet-enrichment-operator');
+const legacyThreePoc = require('./three-poc-enrichment-operator');
+
+const BRIDGE_FLAG = Symbol.for('ultron.mark3.universalSpreadsheetApprovalBridge.installed');
+const REQUEST_FLAG = Symbol.for('ultron.mark3.universalSpreadsheetApprovalBridge.request');
+
+function text(value) { return String(value == null ? '' : value).trim(); }
+
+function integer(value, fallback, min = 1, max = 100000) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function parseSheetName(message) {
+  const value = String(message || '');
+  const linePatterns = [
+    /(?:^|\n)\s*(?:target|use|sheet|tab)\s+(?:only\s+)?(?:tab|sheet)?\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})/im,
+    /(?:^|\n)\s*target\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet)\s+["'`“”]?([^\n"'`“”]{1,120})/im,
+    /\b(?:target|use)\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})/i,
+  ];
+  for (const pattern of linePatterns) {
+    const match = value.match(pattern);
+    if (!match) continue;
+    const candidate = text(match[1]).replace(/[.]+$/, '').trim();
+    if (candidate && !/^(?:only|the)$/i.test(candidate)) return candidate;
+  }
+  return '';
+}
+
+function configuredRowLimit() {
+  const universalLimit = Number(process.env.ULTRON_M3_UNIVERSAL_ENRICHMENT_ROW_LIMIT || 0);
+  if (Number.isFinite(universalLimit) && universalLimit > 0) return Math.floor(universalLimit);
+  // Preserve the old validation knob while the legacy 3-POC route is being
+  // retired, so existing local test commands remain safe.
+  const legacyLimit = Number(process.env.ULTRON_M3_THREE_POC_ROW_LIMIT || 0);
+  return Number.isFinite(legacyLimit) && legacyLimit > 0 ? Math.floor(legacyLimit) : undefined;
+}
+
+function response(ok, body, extra = {}) {
+  return {
+    ok,
+    response: body,
+    text: body,
+    model: 'mark3-universal-deterministic-enrichment',
+    provider: 'deterministic+apollo+google-sheets',
+    taskType: 'universal-sheet-enrichment',
+    mode: 'operator',
+    toolRounds: 0,
+    ...extra,
+  };
+}
+
+function schemaReadable(summary = {}) {
+  const people = Array.isArray(summary.personGroups) ? summary.personGroups.length : 0;
+  const companies = Array.isArray(summary.companyGroups) ? summary.companyGroups.length : 0;
+  const confidence = Number(summary.confidence || 0);
+  return confidence >= 0.48 && (people > 0 || companies > 0);
+}
+
+function approvalSummary(inspection) {
+  const schema = inspection?.analysis?.schema || inspection?.schema || {};
+  const summary = require('./universal-enrichment-engine').schemaSummary(schema);
+  const analysis = inspection?.analysis?.stats || {};
+  const people = summary.personGroups?.length || 0;
+  const companies = summary.companyGroups?.length || 0;
+  const header = summary.headerRowNumber || '?';
+  return [
+    `ULTRON deterministically inspected the worksheet before Apollo approval.`,
+    `It detected header row ${header}, ${people} person/contact group${people === 1 ? '' : 's'} and ${companies} company group${companies === 1 ? '' : 's'} without assuming a fixed POC count or fixed column letters.`,
+    `The planned pass contains ${analysis.openPersonSlots || 0} open and ${analysis.partialPersonSlots || 0} partial person/contact slots.`,
+    `Schema inference, employer parsing, authority ranking and column assignment use zero AI/model calls.`,
+    `Apollo will be used only after approval for exact identity/contact discovery and hydration, and existing populated identities/contacts are preserved unless an exact verified same-person repair is safe.`,
+  ].join(' ');
+}
+
+function installApprovalBridge() {
+  if (globalThis[BRIDGE_FLAG]) return;
+  const originalEnrich = legacyThreePoc.enrichWorkbook.bind(legacyThreePoc);
+  const originalFormat = legacyThreePoc.formatResult.bind(legacyThreePoc);
+
+  legacyThreePoc.enrichWorkbook = async function universalCompatibilityRun(url, options = {}) {
+    const request = globalThis[REQUEST_FLAG];
+    if (!request || request.url !== url || request.provider !== 'google') {
+      return originalEnrich(url, options);
+    }
+    try {
+      return await universal.run({
+        sheetUrl: url,
+        sheetName: request.sheetName || undefined,
+      }, {
+        apolloApproved: true,
+        rowLimit: request.rowLimit || options.rowLimit || undefined,
+        allowLinkedInEmployerFallback: true,
+      });
+    } finally {
+      globalThis[REQUEST_FLAG] = null;
+    }
+  };
+
+  legacyThreePoc.formatResult = function universalCompatibilityFormat(result) {
+    if (result?.deterministic === true && result?.modelCalls === 0 && result?.schema) {
+      return universal.formatResult(result);
+    }
+    return originalFormat(result);
+  };
+
+  globalThis[BRIDGE_FLAG] = true;
+}
+
+installApprovalBridge();
+
+async function inspect(sheetUrl, sheetName, rowLimit) {
+  return universal.run({
+    sheetUrl,
+    sheetName: sheetName || undefined,
+  }, {
+    dryRun: true,
+    rowLimit,
+  });
+}
+
+async function handle(message, context = {}) {
+  const original = String(context.originalMessage || message || '');
+  const sheetUrl = sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message);
+  if (!sheetUrl) {
+    return response(false,
+      'Universal spreadsheet enrichment owns this command, but no full Google Sheets URL could be resolved. Nothing was edited and Apollo was not called.',
+      { error: 'UNIVERSAL_SPREADSHEET_URL_REQUIRED', apolloCalled: false });
+  }
+
+  const sheetName = parseSheetName(original);
+  const rowLimit = configuredRowLimit();
+  let inspection;
+  try {
+    inspection = await inspect(sheetUrl, sheetName, rowLimit);
+  } catch (error) {
+    return response(false,
+      `Universal spreadsheet inspection stopped safely: ${error.message} Nothing was edited and Apollo was not called.`,
+      { error: error.code || 'UNIVERSAL_SPREADSHEET_INSPECTION_FAILED', apolloCalled: false, spreadsheetUrl: sheetUrl, sheetName: sheetName || null });
+  }
+
+  const summary = require('./universal-enrichment-engine').schemaSummary(inspection.schema || inspection.analysis?.schema || {});
+  if (!schemaReadable(summary)) {
+    return response(false,
+      `ULTRON could not infer a sufficiently reliable person/company enrichment schema from this worksheet, so it refused to guess column relationships. Nothing was edited and Apollo was not called.`,
+      { error: 'UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW', apolloCalled: false, spreadsheetUrl: sheetUrl, sheetName: inspection.sheetName || sheetName || null, schema: summary });
+  }
+
+  globalThis[REQUEST_FLAG] = {
+    url: sheetUrl,
+    provider: 'google',
+    sheetName: inspection.sheetName || sheetName || '',
+    rowLimit,
+    schemaFingerprint: summary.fingerprint || null,
+    requestedAt: new Date().toISOString(),
+  };
+
+  const approval = paidTools.request(
+    'apollo',
+    'agentic-three-poc-enrichment', // compatibility operation; execution is bridged to universal.run().
+    { url: sheetUrl, provider: 'google', universal: true, sheetName: inspection.sheetName || sheetName || '', rowLimit },
+    approvalSummary(inspection),
+  );
+
+  return response(true, paidTools.prompt(approval), {
+    model: 'apollo-approval-gate',
+    provider: 'local-approval-gate',
+    taskType: 'paid-tool-approval',
+    paidToolApproval: { id: approval.id, tool: approval.tool, operation: approval.operation, expiresAt: approval.expiresAt },
+    universalEnrichmentRequest: globalThis[REQUEST_FLAG],
+    universalSchema: summary,
+    universalAnalysis: inspection.analysis?.stats || null,
+    spreadsheetUrl: sheetUrl,
+    sheetName: inspection.sheetName || sheetName || null,
+    deterministic: true,
+    modelCalls: 0,
+  });
+}
+
+module.exports = {
+  handle,
+  inspect,
+  parseSheetName,
+  configuredRowLimit,
+  schemaReadable,
+  approvalSummary,
+  installApprovalBridge,
+};
