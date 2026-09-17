@@ -125,6 +125,10 @@ function schemaSummary(schema) {
       fields: Object.fromEntries(Object.entries(group.fields).map(([field, descriptor]) => [field, descriptor.index])),
     })),
     contextColumns: Object.fromEntries(Object.entries(schema.contextColumns || {}).map(([role, columns]) => [role, columns.map((column) => column.index)])),
+    structuralRecoveries: Array.isArray(schema.structuralRecoveries) ? schema.structuralRecoveries : [],
+    ordinalContactRecoveries: Array.isArray(schema.ordinalContactRecoveries) ? schema.ordinalContactRecoveries : [],
+    proximityRecoveries: Array.isArray(schema.proximityRecoveries) ? schema.proximityRecoveries : [],
+    entityOwnershipRecoveries: Array.isArray(schema.entityOwnershipRecoveries) ? schema.entityOwnershipRecoveries : [],
     fingerprint: schema.fingerprint,
   };
 }
