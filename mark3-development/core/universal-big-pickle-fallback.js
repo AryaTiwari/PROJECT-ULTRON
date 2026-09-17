@@ -87,29 +87,35 @@ async function chat(messages, purpose) {
     state.lastError = 'BIG_PICKLE_OPENCODE_DISABLED';
     return null;
   }
-  control.assertAllowed('general-model', { messages });
-  const model = await selectRoute();
-  state.calls++;
-  if (purpose === 'employer') state.employerCalls++;
-  if (purpose === 'candidate') state.candidateCalls++;
-  try {
-    const result = await omniRoute.chat({
-      messages,
-      model,
-      taskType: 'research',
-      timeoutMs: Math.max(15000, Number(process.env.ULTRON_M3_UNIVERSAL_BIG_PICKLE_TIMEOUT_MS || 55000)),
-      maxAttempts: 1,
-      skipModelValidation: true,
-    });
-    const actual = String(result?.raw?.model || result?.model || model).trim() || model;
-    state.actualModels.add(actual);
-    state.successes++;
-    return { result, model: actual };
-  } catch (error) {
-    state.failures++;
-    state.lastError = String(error?.code || error?.message || error || '').slice(0, 500);
-    return null;
-  }
+
+  // The spreadsheet domain is exclusive. Any bounded model fallback must run
+  // inside its explicit internal-inference scope rather than weakening the route
+  // invariant or escaping to a generic provider path.
+  return control.runInternalInference('spreadsheet-enrichment', async () => {
+    control.assertAllowed('general-model', { messages });
+    const model = await selectRoute();
+    state.calls++;
+    if (purpose === 'employer') state.employerCalls++;
+    if (purpose === 'candidate') state.candidateCalls++;
+    try {
+      const result = await omniRoute.chat({
+        messages,
+        model,
+        taskType: 'research',
+        timeoutMs: Math.max(15000, Number(process.env.ULTRON_M3_UNIVERSAL_BIG_PICKLE_TIMEOUT_MS || 55000)),
+        maxAttempts: 1,
+        skipModelValidation: true,
+      });
+      const actual = String(result?.raw?.model || result?.model || model).trim() || model;
+      state.actualModels.add(actual);
+      state.successes++;
+      return { result, model: actual };
+    } catch (error) {
+      state.failures++;
+      state.lastError = String(error?.code || error?.message || error || '').slice(0, 500);
+      return null;
+    }
+  });
 }
 
 function evidenceText(raw) {
