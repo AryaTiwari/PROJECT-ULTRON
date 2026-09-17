@@ -3,6 +3,7 @@
 const enrichment = require('./lead-enrichment-bootstrap');
 const threePoc = require('./three-poc-enrichment-operator');
 const apolloQuality = require('./apollo-three-poc-quality').install();
+require('./three-poc-linkedin-anchor-fallback').install();
 
 const REPORT_FLAG = Symbol.for('ultron.mark3.apolloThreePocQuality.reportInstalled');
 if (!globalThis[REPORT_FLAG]) {
