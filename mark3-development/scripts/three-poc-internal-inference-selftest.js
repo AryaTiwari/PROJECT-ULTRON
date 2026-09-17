@@ -1,14 +1,15 @@
 const assert = require('assert/strict');
 
 // This script is already part of npm start/check. Load the universal deterministic,
-// routing, approval, contact-display, ordinal-contact and orphan-contact regression
-// suites here so arbitrary-layout enrichment cannot regress silently.
+// routing, approval, contact-display, ordinal-contact, orphan-contact and scoped
+// Big Pickle regressions here so spreadsheet enrichment cannot regress silently.
 require('./universal-deterministic-enrichment-selftest');
 require('./universal-spreadsheet-routing-selftest');
 require('./universal-approval-routing-selftest');
 require('./universal-contact-display-selftest');
 require('./universal-ordinal-contact-selftest');
 require('./universal-orphan-contact-selftest');
+require('./three-poc-big-pickle-selftest');
 
 const control = require('../core/command-control-plane');
 
@@ -57,7 +58,7 @@ assert.throws(
     );
   });
 
-  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, routing, approval, contact-display, ordinal-contact and orphan-contact regressions also ran; legacy scoped OmniRoute fallback remains isolated and direct personal-model calls stay blocked.');
+  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, routing, approval, contact-display, ordinal-contact, orphan-contact and scoped Big Pickle regressions also ran; personal direct-model calls stay blocked.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
