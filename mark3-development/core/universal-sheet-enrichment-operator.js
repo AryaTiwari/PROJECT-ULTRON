@@ -10,6 +10,7 @@ const schemaTools = require('./universal-sheet-schema');
 const planner = require('./universal-enrichment-planner');
 const ranker = require('./universal-authority-ranker');
 const profileParser = require('./universal-linkedin-profile-parser');
+const orphanPolicy = require('./universal-orphan-contact-policy');
 const engine = require('./universal-enrichment-engine');
 
 function text(value) { return String(value ?? '').trim(); }
@@ -190,6 +191,17 @@ function needsEmbeddedDesignationRepair(item) {
   );
 }
 
+function candidateFillTargets(plan) {
+  const targets = new Map();
+  for (const item of plan.groups?.open || []) {
+    if (!item.isAnchor) targets.set(item.group.id, item);
+  }
+  for (const item of plan.groups?.partial || []) {
+    if (orphanPolicy.isOrphanContactTarget(item)) targets.set(item.group.id, item);
+  }
+  return [...targets.values()].sort((a, b) => (a.group.ordinal || 999) - (b.group.ordinal || 999));
+}
+
 async function repairExistingGroups(row, plan, companyContext, stats, options = {}) {
   const writes = [];
   const targets = new Map();
@@ -261,7 +273,7 @@ function rowCompanyMetadata(plan) {
 }
 
 async function fillOpenGroups(row, plan, companyContext, candidates, stats, options = {}) {
-  const targets = (plan.groups?.open || []).filter((item) => !item.isAnchor);
+  const targets = candidateFillTargets(plan);
   if (!targets.length) return [];
   const existing = existingIdentityKeys(plan);
   const available = candidates.filter((candidate) => !candidateAlreadyPresent(candidate, existing));
@@ -276,44 +288,90 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
   const ranking = ranker.rankCandidates(available, context, { minimumScore: options.minimumScore });
   stats.candidatesRanked += ranking.ranked.length;
   stats.rankingThresholds.push(Number(ranking.threshold || 0));
-  const queue = [...ranking.ranked];
   const writes = [];
   const claimed = new Set();
+  const hydratedCache = new Map();
 
   for (const target of targets) {
+    const orphanTarget = orphanPolicy.isOrphanContactTarget(target);
+    if (orphanTarget) stats.orphanContactTargets++;
     let filled = false;
-    while (queue.length && !filled) {
-      const selection = queue.shift();
-      if (selection.confidence < Number(options.minimumConfidence ?? 0.54)) { stats.lowConfidenceCandidates++; continue; }
+
+    for (const selection of ranking.ranked) {
+      if (filled) break;
+      if (selection.confidence < Number(options.minimumConfidence ?? 0.54)) {
+        stats.lowConfidenceCandidates++;
+        continue;
+      }
+
       const raw = selection.candidate;
       const rawKey = String(raw.apolloPersonId || raw.id || raw.linkedinUrl || raw.linkedin_url || '');
       if (!rawKey || claimed.has(rawKey)) continue;
-      claimed.add(rawKey);
-      stats.hydrationAttempts++;
-      let person = null;
-      try {
-        person = await apollo.resolveDecisionMaker(raw, companyContext.company, companyContext.domain, {
-          needEmail: Boolean(target.group.fields.email),
-          needPhone: Boolean(target.group.fields.phone),
-        });
-      } catch {}
+
+      let person;
+      if (hydratedCache.has(rawKey)) {
+        person = hydratedCache.get(rawKey);
+      } else {
+        stats.hydrationAttempts++;
+        try {
+          person = await apollo.resolveDecisionMaker(raw, companyContext.company, companyContext.domain, {
+            needEmail: Boolean(target.group.fields.email),
+            needPhone: Boolean(target.group.fields.phone),
+          });
+        } catch {
+          person = null;
+        }
+        hydratedCache.set(rawKey, person || null);
+        if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) {
+          stats.hydrationFailures++;
+        }
+      }
+
+      if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) continue;
       const hydratedName = ranker.normalize(person?.name || '');
       const hydratedLinkedin = ranker.linkedinKey(person?.linkedinUrl || person?.returnedLinkedIn || '');
-      if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext) || (hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) {
-        stats.hydrationFailures++;
+      if ((hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) continue;
+
+      if (orphanTarget) {
+        const contactProof = orphanPolicy.verify(target.snapshot, person);
+        if (!contactProof.verified) {
+          stats.orphanContactMismatches++;
+          continue;
+        }
+        stats.orphanContactVerified++;
+      }
+
+      const writePlan = planner.safeWritesForGroup(row, target.group, person);
+      if (!writePlan.allowed || !writePlan.writes.length) {
+        stats.identityConflicts++;
         continue;
       }
-      const writePlan = planner.safeWritesForGroup(row, target.group, person);
-      if (!writePlan.allowed || !writePlan.writes.length) { stats.identityConflicts++; continue; }
+
       writes.push(...writePlan.writes);
       stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
       if (hydratedName) existing.names.add(hydratedName);
       if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
+      claimed.add(rawKey);
       stats.newPeopleSelected++;
-      stats.selectionAudit.push({ groupId: target.group.id, apolloPersonId: text(person.apolloPersonId || person.id), name: person.name || '', title: person.title || '', score: selection.score, confidence: selection.confidence, proof: selection.proof || [] });
+      stats.selectionAudit.push({
+        groupId: target.group.id,
+        apolloPersonId: text(person.apolloPersonId || person.id),
+        name: person.name || '',
+        title: person.title || '',
+        score: selection.score,
+        confidence: selection.confidence,
+        proof: [
+          ...(selection.proof || []),
+          ...(orphanTarget ? orphanPolicy.verify(target.snapshot, person).proof.map((proof) => `orphan-${proof}`) : []),
+        ],
+      });
       filled = true;
     }
-    if (!filled) stats.unfilledOpenGroups++;
+
+    if (!filled) {
+      stats.unfilledOpenGroups++;
+      if (orphanTarget) stats.orphanContactBlocked++;
+    }
   }
   return writes;
 }
@@ -345,6 +403,10 @@ function freshStats() {
     hydrationFailures: 0,
     lowConfidenceCandidates: 0,
     unfilledOpenGroups: 0,
+    orphanContactTargets: 0,
+    orphanContactVerified: 0,
+    orphanContactBlocked: 0,
+    orphanContactMismatches: 0,
     identityConflicts: 0,
     rankingThresholds: [],
     selectionAudit: [],
@@ -371,15 +433,15 @@ async function run(request = {}, options = {}) {
     stats.rowsSeen++;
     const { row, rowNumber, plan } = record;
     if (!plan.anchor) { stats.rowsWithoutAnchor++; continue; }
-    let companyContext = plan.anchor.type === 'company' ? companyFromCompanyAnchor(plan.anchor) : await resolvePersonAnchor(plan, row, options);
+    const companyContext = plan.anchor.type === 'company' ? companyFromCompanyAnchor(plan.anchor) : await resolvePersonAnchor(plan, row, options);
     if (!companyContext || companyContext.unresolved || !companyContext.company) { stats.rowsWithoutEmployer++; continue; }
     stats.anchorsResolved++;
 
     const writes = [];
     writes.push(...await enrichAnchorGroup(row, plan, companyContext, stats));
     writes.push(...await repairExistingGroups(row, plan, companyContext, stats, options));
-    const open = (plan.groups?.open || []).filter((item) => !item.isAnchor);
-    if (open.length) {
+    const fillTargets = candidateFillTargets(plan);
+    if (fillTargets.length) {
       const people = await discoverCompanyPeople(companyContext, cache, stats, { ...options, location: plan.context?.location || '' });
       writes.push(...await fillOpenGroups(row, plan, companyContext, people, stats, options));
     }
@@ -413,7 +475,8 @@ function formatResult(result) {
   const schema = result?.schema || {};
   const groups = Array.isArray(schema.personGroups) ? schema.personGroups.length : 0;
   const companies = Array.isArray(schema.companyGroups) ? schema.companyGroups.length : 0;
-  return `Universal deterministic enrichment finished on ${result.sheetName}. Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} candidates from ${s.candidateSearches} employer searches (${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic adaptive ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures. Unfilled open groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}. AI/model calls: 0.`;
+  const ordinalRecovered = Array.isArray(schema.ordinalContactRecoveries) ? schema.ordinalContactRecoveries.length : 0;
+  return `Universal deterministic enrichment finished on ${result.sheetName}. Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} candidates from ${s.candidateSearches} employer searches (${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic adaptive ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}. AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -425,9 +488,11 @@ module.exports = {
   existingIdentityKeys,
   candidateAlreadyPresent,
   needsEmbeddedDesignationRepair,
+  candidateFillTargets,
   repairExistingGroups,
   discoverCompanyPeople,
   fillOpenGroups,
+  freshStats,
   run,
   formatResult,
 };
