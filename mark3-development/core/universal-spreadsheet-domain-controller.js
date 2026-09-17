@@ -1,34 +1,23 @@
 'use strict';
 
-// First-class owner for spreadsheet contact enrichment. The normal execution
-// path is intentionally model-free: schema inference, row planning, current-
-// employer parsing, authority ranking and writes are all deterministic.
-//
-// Compatibility note: paid-tool approval resolution still enters through the
-// existing lead-enrichment bootstrap. Until that bootstrap is fully migrated,
-// this controller installs a narrow compatibility bridge over the legacy
-// threePoc export so an already-approved `agentic-three-poc-enrichment` action
-// executes the universal engine for Google Sheets. The bridge does NOT call the
-// legacy AI selector and is removable once approval dispatch has a universal
-// operation of its own.
+// First-class owner for deterministic spreadsheet contact enrichment.
+// Pre-approval inspection is local/schema-only; Apollo executes only after the
+// dedicated universal-spreadsheet-enrichment approval operation is approved.
 
 const sheets = require('./google-sheets-operator');
 const paidTools = require('./paid-tool-approval');
-const universal = require('./universal-sheet-enrichment-targeted');
-const legacyThreePoc = require('./three-poc-enrichment-operator');
 const targetResolver = require('./universal-sheet-target-resolver');
+const inspector = require('./universal-sheet-inspector');
+const approvalHandler = require('./universal-paid-approval-handler');
 
-const BRIDGE_FLAG = Symbol.for('ultron.mark3.universalSpreadsheetApprovalBridge.installed');
-const REQUEST_FLAG = Symbol.for('ultron.mark3.universalSpreadsheetApprovalBridge.request');
+approvalHandler.install();
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 
 function parseSheetName(message) {
   const value = String(message || '');
   const linePatterns = [
-    // Target only the `Gaurav 2` tab.
     /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet)\b/im,
-    // Target only the Gaurav 2 tab.
     /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet)\b/im,
     /(?:^|\n)\s*(?:target|use|sheet|tab)\s+(?:only\s+)?(?:tab|sheet)?\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})/im,
     /(?:^|\n)\s*target\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet)\s+["'`“”]?([^\n"'`“”]{1,120})/im,
@@ -83,8 +72,7 @@ function schemaReadable(summary = {}) {
 }
 
 function approvalSummary(inspection) {
-  const schema = inspection?.analysis?.schema || inspection?.schema || {};
-  const summary = require('./universal-enrichment-engine').schemaSummary(schema);
+  const summary = inspection?.schema || {};
   const analysis = inspection?.analysis?.stats || {};
   const people = summary.personGroups?.length || 0;
   const companies = summary.companyGroups?.length || 0;
@@ -94,66 +82,29 @@ function approvalSummary(inspection) {
     rowLimitNotice(inspection?.rowLimitApplied),
     `It detected header row ${header}, ${people} person/contact group${people === 1 ? '' : 's'} and ${companies} company group${companies === 1 ? '' : 's'} without assuming a fixed POC count or fixed column letters.`,
     `The planned pass contains ${analysis.openPersonSlots || 0} open and ${analysis.partialPersonSlots || 0} partial person/contact slots within the currently eligible row range.`,
-    `Schema inference, employer parsing, authority ranking and column assignment use zero AI/model calls.`,
-    `Apollo will be used only after approval for exact identity/contact discovery and hydration, and existing populated identities/contacts are preserved unless an exact verified same-person repair is safe.`,
+    'Pre-approval inspection uses worksheet values only: no Apollo, LinkedIn profile fetch, rich-link probe or AI/model call occurs.',
+    'Schema inference, employer parsing, authority ranking and column assignment use zero AI/model calls.',
+    'Apollo will be used only after approval for exact identity/contact discovery and hydration, and existing populated identities/contacts are preserved unless an exact verified same-person repair is safe.',
   ].join(' ');
 }
 
-function installApprovalBridge() {
-  if (globalThis[BRIDGE_FLAG]) return;
-  const originalEnrich = legacyThreePoc.enrichWorkbook.bind(legacyThreePoc);
-  const originalFormat = legacyThreePoc.formatResult.bind(legacyThreePoc);
-
-  legacyThreePoc.enrichWorkbook = async function universalCompatibilityRun(url, options = {}) {
-    const request = globalThis[REQUEST_FLAG];
-    if (!request || request.url !== url || request.provider !== 'google') {
-      return originalEnrich(url, options);
-    }
-    try {
-      const result = await universal.run({
-        sheetUrl: url,
-        sheetName: request.sheetName || undefined,
-        explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative),
-      }, {
-        apolloApproved: true,
-        rowLimit: request.rowLimit || options.rowLimit || undefined,
-        allowLinkedInEmployerFallback: true,
-      });
-      return {
-        ...result,
-        rowLimitApplied: request.rowLimit || null,
-        validationMode: Boolean(request.rowLimit),
-      };
-    } finally {
-      globalThis[REQUEST_FLAG] = null;
-    }
-  };
-
-  legacyThreePoc.formatResult = function universalCompatibilityFormat(result) {
-    if (result?.deterministic === true && result?.modelCalls === 0 && result?.schema) {
-      const formatted = universal.formatResult(result);
-      if (Number(result?.rowLimitApplied || 0) > 0) {
-        return `VALIDATION MODE: capped to the first ${Math.floor(Number(result.rowLimitApplied))} non-empty data rows. This was not a full-sheet run. ${formatted}`;
-      }
-      return `FULL-SHEET MODE: no row cap was active. ${formatted}`;
-    }
-    return originalFormat(result);
-  };
-
-  globalThis[BRIDGE_FLAG] = true;
-}
-
-installApprovalBridge();
-
 async function resolveRequestedTarget(sheetUrl, requestedSheetName = '', options = {}) {
   const spreadsheetId = sheets.spreadsheetId(sheetUrl);
-  const meta = await sheets.metadata(spreadsheetId);
+  let meta;
+  try {
+    meta = await sheets.metadata(spreadsheetId);
+  } catch (error) {
+    if (!error.code) error.code = 'UNIVERSAL_SHEET_METADATA_FAILED';
+    error.stage = error.stage || 'sheet-metadata-read';
+    throw error;
+  }
   const resolution = targetResolver.resolveTabs(meta, sheetUrl, {
     sheetName: requestedSheetName || undefined,
     explicitNameAuthoritative: Boolean(options.explicitNameAuthoritative),
   });
   return {
     spreadsheetId,
+    spreadsheetTitle: meta?.properties?.title || '',
     resolution,
     sheetName: resolution.target?.name || '',
     sheetId: resolution.target?.sheetId ?? null,
@@ -163,13 +114,13 @@ async function resolveRequestedTarget(sheetUrl, requestedSheetName = '', options
 
 async function inspect(sheetUrl, sheetName, rowLimit, options = {}) {
   const target = await resolveRequestedTarget(sheetUrl, sheetName, options);
-  const inspection = await universal.run({
-    sheetUrl,
-    sheetName: target.sheetName || undefined,
-    explicitNameAuthoritative: Boolean(options.explicitNameAuthoritative),
-  }, {
-    dryRun: true,
+  const inspection = await inspector.inspectExact({
+    spreadsheetId: target.spreadsheetId,
+    spreadsheetTitle: target.spreadsheetTitle,
+    sheetName: target.sheetName,
+    sheetId: target.sheetId,
     rowLimit,
+    schemaOptions: options.schema || {},
   });
   return {
     ...inspection,
@@ -188,8 +139,7 @@ async function inspect(sheetUrl, sheetName, rowLimit, options = {}) {
 
 async function handle(message, context = {}) {
   const original = String(context.originalMessage || message || '');
-  const directSheetUrl = sheets.extractSheetUrl(original);
-  const sheetUrl = directSheetUrl || sheets.extractSheetUrl(message);
+  const sheetUrl = sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message);
   if (!sheetUrl) {
     return response(false,
       'Universal spreadsheet enrichment owns this command, but no full Google Sheets URL could be resolved. Nothing was edited and Apollo was not called.',
@@ -197,11 +147,6 @@ async function handle(message, context = {}) {
   }
 
   const requestedSheetName = parseSheetName(original);
-  // A worksheet name explicitly stated in the user's command is the strongest
-  // target signal. Connector/file mentions can materialize as a full URL inside
-  // originalMessage, so "URL present in originalMessage" cannot reliably mean
-  // "the user manually pasted a tab-specific URL". The requested tab name wins
-  // over any stale/current-view gid bundled with the workbook reference.
   const explicitNameAuthoritative = Boolean(requestedSheetName);
   const rowLimit = configuredRowLimit();
   let inspection;
@@ -209,12 +154,14 @@ async function handle(message, context = {}) {
     inspection = await inspect(sheetUrl, requestedSheetName, rowLimit, { explicitNameAuthoritative });
   } catch (error) {
     const code = error.code || 'UNIVERSAL_SPREADSHEET_INSPECTION_FAILED';
-    const detail = `${code}: ${error.message || 'unknown inspection failure'}`;
+    const stage = error.stage || 'unknown-inspection-stage';
+    const detail = `${code} [${stage}]: ${error.message || 'unknown inspection failure'}`;
     return response(false,
       `Universal spreadsheet inspection stopped safely: ${detail}. Nothing was edited and Apollo was not called.`,
       {
         error: code,
         errorCode: code,
+        errorStage: stage,
         errorMessage: error.message || '',
         diagnostic: detail,
         apolloCalled: false,
@@ -225,29 +172,30 @@ async function handle(message, context = {}) {
   }
 
   const exactSheetName = inspection.sheetName || inspection.requestedTarget?.sheetName || requestedSheetName || '';
-  const summary = require('./universal-enrichment-engine').schemaSummary(inspection.schema || inspection.analysis?.schema || {});
+  const summary = inspection.schema || {};
   if (!schemaReadable(summary)) {
     return response(false,
       `ULTRON could not infer a sufficiently reliable person/company enrichment schema from worksheet "${exactSheetName || '?'}", so it refused to guess column relationships. Nothing was edited and Apollo was not called.`,
       { error: 'UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW', apolloCalled: false, spreadsheetUrl: sheetUrl, sheetName: exactSheetName || null, schema: summary });
   }
 
-  globalThis[REQUEST_FLAG] = {
+  const request = {
     url: sheetUrl,
     provider: 'google',
+    universal: true,
     sheetName: exactSheetName,
     sheetId: inspection.requestedTarget?.sheetId ?? null,
     targetSource: inspection.requestedTarget?.source || 'none',
     explicitNameAuthoritative,
-    rowLimit,
+    rowLimit: rowLimit || null,
     schemaFingerprint: summary.fingerprint || null,
     requestedAt: new Date().toISOString(),
   };
 
   const approval = paidTools.request(
     'apollo',
-    'agentic-three-poc-enrichment',
-    { url: sheetUrl, provider: 'google', universal: true, sheetName: exactSheetName, rowLimit },
+    approvalHandler.OPERATION,
+    request,
     approvalSummary(inspection),
   );
 
@@ -256,7 +204,7 @@ async function handle(message, context = {}) {
     provider: 'local-approval-gate',
     taskType: 'paid-tool-approval',
     paidToolApproval: { id: approval.id, tool: approval.tool, operation: approval.operation, expiresAt: approval.expiresAt },
-    universalEnrichmentRequest: globalThis[REQUEST_FLAG],
+    universalEnrichmentRequest: request,
     universalSchema: summary,
     universalAnalysis: inspection.analysis?.stats || null,
     spreadsheetUrl: sheetUrl,
@@ -264,6 +212,7 @@ async function handle(message, context = {}) {
     requestedTarget: inspection.requestedTarget || null,
     rowLimitApplied: rowLimit || null,
     validationMode: Boolean(rowLimit),
+    inspectionMode: inspection.inspectionMode,
     deterministic: true,
     modelCalls: 0,
   });
@@ -278,5 +227,5 @@ module.exports = {
   rowLimitNotice,
   schemaReadable,
   approvalSummary,
-  installApprovalBridge,
+  installApprovalHandler: approvalHandler.install,
 };
