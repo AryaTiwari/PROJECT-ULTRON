@@ -88,6 +88,36 @@ assert.equal(mentionOverride.target.sheetId, 333);
 assert.equal(mentionOverride.targetSource, 'explicit-name-over-mention-gid');
 assert.equal(mentionOverride.ignoredViewGid, 222);
 
+// Explicit worksheet names are authoritative even when Google metadata is
+// incomplete/scoped. The downstream exact A1 Values read is the real existence
+// check, so metadata omission must not produce UNIVERSAL_SHEET_TAB_NOT_FOUND.
+const incompleteMeta = {
+  sheets: [
+    { properties: { title: 'Divya', sheetId: 111, index: 0 } },
+  ],
+};
+const metadataMissBypass = targetResolver.resolveTabs(incompleteMeta, aryaUrl, {
+  sheetName: 'Arya 2',
+  explicitNameAuthoritative: true,
+});
+assert.equal(metadataMissBypass.targeted, true);
+assert.equal(metadataMissBypass.target.name, 'Arya 2');
+assert.equal(metadataMissBypass.target.sheetId, null);
+assert.equal(metadataMissBypass.target.synthetic, true);
+assert.equal(metadataMissBypass.metadataFallback, true);
+assert.equal(metadataMissBypass.targetSource, 'explicit-name-metadata-miss-bypass');
+assert.equal(metadataMissBypass.ignoredViewGid, 222);
+
+const emptyMetadataBypass = targetResolver.resolveTabs({ sheets: [] }, aryaUrl, {
+  sheetName: 'Arya 2',
+  explicitNameAuthoritative: true,
+});
+assert.equal(emptyMetadataBypass.targeted, true);
+assert.equal(emptyMetadataBypass.target.name, 'Arya 2');
+assert.equal(emptyMetadataBypass.target.synthetic, true);
+assert.equal(emptyMetadataBypass.metadataFallback, true);
+assert.equal(emptyMetadataBypass.targetSource, 'explicit-name-metadata-empty-bypass');
+
 assert.throws(
   () => targetResolver.resolveTabs(meta, `${url}#gid=999`, {}),
   (error) => error && error.code === 'UNIVERSAL_SHEET_GID_NOT_FOUND'
@@ -98,4 +128,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: first-class generic Google enrichment ownership, isolated explicit 3-POC compatibility, quoted tab parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, and visible validation/full-sheet mode are protected.');
+console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, isolated 3-POC compatibility, quoted tab parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, and visible validation/full-sheet mode are protected.');
