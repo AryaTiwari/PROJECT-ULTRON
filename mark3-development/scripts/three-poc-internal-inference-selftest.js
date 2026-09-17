@@ -1,8 +1,10 @@
 const assert = require('assert/strict');
 
 // This script is already part of npm start/check. Load the universal deterministic
-// regression suite here so arbitrary-layout enrichment cannot regress silently.
+// and first-class routing regression suites here so arbitrary-layout enrichment
+// cannot regress silently.
 require('./universal-deterministic-enrichment-selftest');
+require('./universal-spreadsheet-routing-selftest');
 
 const control = require('../core/command-control-plane');
 
@@ -51,7 +53,7 @@ assert.throws(
     );
   });
 
-  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet regressions also ran; legacy scoped OmniRoute fallback remains isolated and direct personal-model calls stay blocked.');
+  console.log('3-POC internal inference self-test passed. Universal deterministic schema/ranking/routing regressions also ran; legacy scoped OmniRoute fallback remains isolated and direct personal-model calls stay blocked.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
