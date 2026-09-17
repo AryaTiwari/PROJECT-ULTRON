@@ -173,11 +173,12 @@ function personValues(person = {}) {
 function shouldEmbedRoleInName(group) {
   if (!group?.fields?.name || group?.fields?.role) return false;
   const header = schemaTools.normalizeHeader(group.fields.name.header || '');
-  if (/\b(?:poc|contact|decision maker|candidate|recruiter|employee|representative|rep|lead|person)\b/.test(header)) return true;
-  // Structurally recovered person groups may have unfamiliar identity headers.
-  // If the group owns contact coordinates but has no role destination, the name
-  // cell is the only safe place to preserve a verified designation.
-  return Boolean(group.fields.phone || group.fields.email || group.fields.linkedin);
+  if (/\bperson\s+or\s+company\b|\bcompany\s+or\s+person\b/.test(header)) return false;
+  if (/\b(?:poc|contact|decision maker|candidate|recruiter|employee|representative|rep|lead)\b/.test(header)) return true;
+  // Structurally recovered secondary/later person groups may have unfamiliar
+  // identity headers. If they own contact coordinates but have no role destination,
+  // the name cell is the only safe place to preserve the verified designation.
+  return Number(group.ordinal || 0) > 1 && Boolean(group.fields.phone || group.fields.email || group.fields.linkedin);
 }
 
 function displayNameForGroup(group, values) {
@@ -215,8 +216,6 @@ function safeWritesForGroup(row, group, person, options = {}) {
       });
       continue;
     }
-    // When there is no role column, safely upgrade a verified same-person bare
-    // name to "Name — Designation". Never replace an already decorated identity.
     if (
       field === 'name'
       && shouldEmbedRoleInName(group)
@@ -229,8 +228,6 @@ function safeWritesForGroup(row, group, person, options = {}) {
       writes.push({ field, columnIndex: descriptor.index, value: next, groupId: group.id, replaces: current, embeddedRole: true });
       continue;
     }
-    // Existing data is immutable by default. A caller may explicitly allow a verified
-    // same-person role normalization, but phones/emails are never silently replaced.
     if (field === 'role' && options.allowRoleNormalization && samePerson(snapshot.values, person) && ranker.normalize(current) !== ranker.normalize(next)) {
       writes.push({ field, columnIndex: descriptor.index, value: next, groupId: group.id, replaces: current });
     }
@@ -269,6 +266,7 @@ module.exports = {
   personValues,
   shouldEmbedRoleInName,
   displayNameForGroup,
+  hasEmbeddedDesignation,
   safeWritesForGroup,
   assignmentPlan,
 };
