@@ -40,8 +40,6 @@ assert.match(inspectorSource, /inspectionMode: 'values-only-preapproval'/);
 assert.match(inspectorSource, /UNIVERSAL_SHEET_VALUES_READ_FAILED/);
 assert.match(inspectorSource, /UNIVERSAL_SHEET_PLANNING_FAILED/);
 
-// Inspection failures must expose a stable stage rather than collapsing into a
-// single generic tombstone.
 assert.match(controllerSource, /errorStage: stage/);
 assert.match(controllerSource, /unknown-inspection-stage/);
 
@@ -62,11 +60,13 @@ assert.equal(universalRoute.controller, 'universal-spreadsheet-domain-controller
 assert.equal(universalRoute.exclusive, true);
 assert.equal(universalRoute.generalModelAllowed, false);
 
+// Explicit historical 3-POC wording deliberately keeps its compatibility owner;
+// that owner delegates Google execution to the universal deterministic engine.
 const googleThreePocRoute = control.claim(
   'Use https://docs.google.com/spreadsheets/d/example123/edit and run 3 POCs: first POC, second POC, third POC enrichment.',
   {}
 );
-assert.equal(googleThreePocRoute.domain, 'spreadsheet-enrichment');
-assert.equal(googleThreePocRoute.controller, 'universal-spreadsheet-domain-controller');
+assert.equal(googleThreePocRoute.domain, 'three-poc-spreadsheet');
+assert.equal(googleThreePocRoute.controller, 'three-poc-domain-controller');
 
-console.log('Universal approval routing self-test passed: Google-Sheet enrichment is first-class, approval re-entry is command-control owned, pre-approval inspection is values/schema-only, legacy 3-POC approval is isolated, and inspection errors are stage-specific.');
+console.log('Universal approval routing self-test passed: generic Google-Sheet enrichment is first-class, approval re-entry is command-control owned, pre-approval inspection is values/schema-only, explicit legacy 3-POC compatibility stays isolated, and inspection errors are stage-specific.');
