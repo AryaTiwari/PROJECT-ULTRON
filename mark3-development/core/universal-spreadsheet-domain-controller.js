@@ -1,8 +1,8 @@
 'use strict';
 
-// First-class owner for deterministic spreadsheet contact enrichment.
-// Pre-approval inspection is local/schema-only; Apollo executes only after the
-// dedicated universal-spreadsheet-enrichment approval operation is approved.
+// First-class owner for universal spreadsheet contact enrichment.
+// Pre-approval inspection is deterministic/schema-only. Approved execution stays
+// deterministic-first; Big Pickle may be consulted only for bounded ambiguity.
 
 const sheets = require('./google-sheets-operator');
 const paidTools = require('./paid-tool-approval');
@@ -55,8 +55,8 @@ function response(ok, body, extra = {}) {
     ok,
     response: body,
     text: body,
-    model: 'mark3-universal-deterministic-enrichment',
-    provider: 'deterministic+apollo+google-sheets',
+    model: 'mark3-universal-hybrid-enrichment',
+    provider: 'deterministic+apollo+google-sheets+big-pickle-fallback',
     taskType: 'universal-sheet-enrichment',
     mode: 'operator',
     toolRounds: 0,
@@ -82,10 +82,25 @@ function approvalSummary(inspection) {
     rowLimitNotice(inspection?.rowLimitApplied),
     `It detected header row ${header}, ${people} person/contact group${people === 1 ? '' : 's'} and ${companies} company group${companies === 1 ? '' : 's'} without assuming a fixed POC count or fixed column letters.`,
     `The planned pass contains ${analysis.openPersonSlots || 0} open and ${analysis.partialPersonSlots || 0} partial person/contact slots within the currently eligible row range.`,
-    'Pre-approval inspection uses worksheet values only: no Apollo, LinkedIn profile fetch, rich-link probe or AI/model call occurs.',
-    'Schema inference, employer parsing, authority ranking and column assignment use zero AI/model calls.',
+    'Pre-approval inspection uses worksheet values only: no Apollo, LinkedIn profile fetch, Big Pickle or other AI/model call occurs.',
+    'During approved execution, schema inference, ownership, row planning, normal employer parsing, normal authority ranking and writes remain deterministic-first.',
+    'Big Pickle is available only as a bounded fallback after deterministic evidence is insufficient: it may resolve a current-employer ambiguity from exact profile evidence or break a low-confidence/tied eligible candidate shortlist. It cannot invent candidates, choose worksheets, bypass Apollo identity hydration or write directly.',
     'Apollo will be used only after approval for exact identity/contact discovery and hydration, and existing populated identities/contacts are preserved unless an exact verified same-person repair is safe.',
   ].join(' ');
+}
+
+function metadataFallbackTarget(sheetUrl, requestedSheetName) {
+  const requestedGid = targetResolver.parseGid(sheetUrl);
+  const sheetId = Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null;
+  return {
+    targeted: true,
+    targetSource: 'explicit-name-metadata-fallback',
+    requestedName: requestedSheetName,
+    requestedGid,
+    ignoredViewGid: false,
+    metadataFallback: true,
+    target: { name: requestedSheetName, sheetId },
+  };
 }
 
 async function resolveRequestedTarget(sheetUrl, requestedSheetName = '', options = {}) {
@@ -94,9 +109,22 @@ async function resolveRequestedTarget(sheetUrl, requestedSheetName = '', options
   try {
     meta = await sheets.metadata(spreadsheetId);
   } catch (error) {
-    if (!error.code) error.code = 'UNIVERSAL_SHEET_METADATA_FAILED';
-    error.stage = error.stage || 'sheet-metadata-read';
-    throw error;
+    // Exact explicit tab names are sufficient for safe A1-range reads. Do not let
+    // workbook metadata become a single point of failure when the target is named.
+    if (!requestedSheetName || !options.explicitNameAuthoritative) {
+      if (!error.code) error.code = 'UNIVERSAL_SHEET_METADATA_FAILED';
+      error.stage = error.stage || 'sheet-metadata-read';
+      throw error;
+    }
+    const resolution = metadataFallbackTarget(sheetUrl, requestedSheetName);
+    return {
+      spreadsheetId,
+      spreadsheetTitle: '',
+      resolution,
+      sheetName: requestedSheetName,
+      sheetId: resolution.target.sheetId,
+      targetSource: resolution.targetSource,
+    };
   }
   const resolution = targetResolver.resolveTabs(meta, sheetUrl, {
     sheetName: requestedSheetName || undefined,
@@ -133,6 +161,7 @@ async function inspect(sheetUrl, sheetName, rowLimit, options = {}) {
       requestedGid: target.resolution.requestedGid,
       ignoredViewGid: target.resolution.ignoredViewGid,
       requestedName: target.resolution.requestedName || null,
+      metadataFallback: Boolean(target.resolution.metadataFallback),
     },
   };
 }
@@ -213,7 +242,8 @@ async function handle(message, context = {}) {
     rowLimitApplied: rowLimit || null,
     validationMode: Boolean(rowLimit),
     inspectionMode: inspection.inspectionMode,
-    deterministic: true,
+    deterministicPrimary: true,
+    fallbackModelAvailable: true,
     modelCalls: 0,
   });
 }
@@ -227,5 +257,6 @@ module.exports = {
   rowLimitNotice,
   schemaReadable,
   approvalSummary,
+  metadataFallbackTarget,
   installApprovalHandler: approvalHandler.install,
 };
