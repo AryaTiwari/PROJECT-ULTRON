@@ -179,10 +179,26 @@ function candidateAlreadyPresent(candidate, existing) {
   return Boolean((name && existing.names.has(name)) || (linkedin && existing.linkedins.has(linkedin)));
 }
 
+function needsEmbeddedDesignationRepair(item) {
+  if (!item || item.isAnchor) return false;
+  const name = text(item.snapshot?.values?.name);
+  return Boolean(
+    item.snapshot?.hasIdentity
+    && name
+    && planner.shouldEmbedRoleInName(item.group)
+    && !planner.hasEmbeddedDesignation(name)
+  );
+}
+
 async function repairExistingGroups(row, plan, companyContext, stats, options = {}) {
   const writes = [];
-  for (const item of plan.groups?.partial || []) {
-    if (item.isAnchor) continue;
+  const targets = new Map();
+  for (const item of plan.groups?.partial || []) if (!item.isAnchor) targets.set(item.group.id, item);
+  for (const item of plan.groups?.existing || []) {
+    if (needsEmbeddedDesignationRepair(item)) targets.set(item.group.id, item);
+  }
+
+  for (const item of targets.values()) {
     const group = item.group;
     const snapshot = item.snapshot;
     if (!snapshot.hasIdentity) continue;
@@ -204,6 +220,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     const planWrite = planner.safeWritesForGroup(row, group, resolved, { allowRoleNormalization: Boolean(options.allowRoleNormalization) });
     if (!planWrite.allowed) { stats.identityConflicts++; continue; }
     writes.push(...planWrite.writes);
+    stats.embeddedDesignationWrites += planWrite.writes.filter((write) => write.embeddedRole).length;
     if (planWrite.writes.length) stats.existingGroupsRepaired++;
   }
   return writes;
@@ -214,6 +231,7 @@ async function enrichAnchorGroup(row, plan, companyContext, stats) {
   const writePlan = planner.safeWritesForGroup(row, plan.anchor.group, companyContext.anchorPerson);
   if (!writePlan.allowed) { stats.identityConflicts++; return []; }
   stats.anchorFieldsFilled += writePlan.writes.length;
+  stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
   return writePlan.writes;
 }
 
@@ -288,6 +306,7 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
       const writePlan = planner.safeWritesForGroup(row, target.group, person);
       if (!writePlan.allowed || !writePlan.writes.length) { stats.identityConflicts++; continue; }
       writes.push(...writePlan.writes);
+      stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
       if (hydratedName) existing.names.add(hydratedName);
       if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
       stats.newPeopleSelected++;
@@ -320,6 +339,7 @@ function freshStats() {
     existingVerificationAttempts: 0,
     existingVerificationFailures: 0,
     existingGroupsRepaired: 0,
+    embeddedDesignationWrites: 0,
     newPeopleSelected: 0,
     hydrationAttempts: 0,
     hydrationFailures: 0,
@@ -393,7 +413,7 @@ function formatResult(result) {
   const schema = result?.schema || {};
   const groups = Array.isArray(schema.personGroups) ? schema.personGroups.length : 0;
   const companies = Array.isArray(schema.companyGroups) ? schema.companyGroups.length : 0;
-  return `Universal deterministic enrichment finished on ${result.sheetName}. Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Discovery: ${s.candidatesDiscovered} candidates from ${s.candidateSearches} employer searches (${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic adaptive ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures. Unfilled open groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}. AI/model calls: 0.`;
+  return `Universal deterministic enrichment finished on ${result.sheetName}. Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} candidates from ${s.candidateSearches} employer searches (${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic adaptive ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures. Unfilled open groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}. AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -404,6 +424,7 @@ module.exports = {
   resolvePersonAnchor,
   existingIdentityKeys,
   candidateAlreadyPresent,
+  needsEmbeddedDesignationRepair,
   repairExistingGroups,
   discoverCompanyPeople,
   fillOpenGroups,
