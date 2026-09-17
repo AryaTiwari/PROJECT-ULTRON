@@ -6,6 +6,7 @@
 
 const paidTools = require('./paid-tool-approval');
 const universal = require('./universal-sheet-enrichment-targeted');
+const typedErrors = require('./spreadsheet-enrichment-errors');
 
 const OPERATION = 'universal-spreadsheet-enrichment';
 
@@ -46,8 +47,21 @@ async function execute(decision) {
 
   const payload = decision.payload || {};
   if (payload.provider !== 'google' || !payload.url || !payload.sheetName) {
-    return response(false, 'Universal spreadsheet approval could not resolve its exact Google Sheet source, so Apollo was not called and nothing was edited.', {
-      error: 'INVALID_UNIVERSAL_SPREADSHEET_SOURCE',
+    const typed = typedErrors.normalize(Object.assign(new Error('Universal spreadsheet approval could not resolve its exact Google Sheet source.'), {
+      code: 'INVALID_UNIVERSAL_SPREADSHEET_SOURCE',
+      subsystem: 'TARGETING',
+      errorType: 'CONFIG',
+      stage: 'approved-source-validation',
+    }));
+    return response(false, `Universal spreadsheet enrichment stopped safely: ${typedErrors.format(typed)}. ${typed.hint}`, {
+      error: typed.code,
+      errorCode: typed.code,
+      errorSubsystem: typed.subsystem,
+      errorType: typed.type,
+      errorStage: typed.stage,
+      errorHint: typed.hint,
+      errorMessage: typed.message,
+      diagnostic: typedErrors.format(typed),
       paidToolApproval: decision,
       apolloCalled: false,
     });
@@ -86,12 +100,18 @@ async function execute(decision) {
       provider: fallbackUsed ? 'deterministic+apollo+google-sheets+omniroute/opencode' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
-    const code = error.code || 'UNIVERSAL_SPREADSHEET_EXECUTION_FAILED';
-    return response(false, `Universal spreadsheet enrichment stopped safely: ${code}: ${error.message || 'unknown execution failure'}.`, {
-      error: code,
-      errorCode: code,
-      errorMessage: error.message || '',
-      diagnostic: `${code}: ${error.message || 'unknown execution failure'}`,
+    const typed = typedErrors.normalize(error, { stage: error?.stage || 'approved-enrichment-execution' });
+    const diagnostic = typedErrors.format(typed);
+    return response(false, `Universal spreadsheet enrichment stopped safely: ${diagnostic}. ${typed.hint}`, {
+      error: typed.code,
+      errorCode: typed.code,
+      errorSubsystem: typed.subsystem,
+      errorType: typed.type,
+      errorStage: typed.stage,
+      errorHint: typed.hint,
+      errorMessage: typed.message,
+      diagnostic,
+      retryAttempts: typed.retryAttempts,
       spreadsheetProvider: 'google',
       spreadsheetUrl: payload.url,
       sheetName: payload.sheetName,
