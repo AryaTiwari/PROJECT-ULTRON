@@ -170,6 +170,26 @@ function personValues(person = {}) {
   };
 }
 
+function shouldEmbedRoleInName(group) {
+  if (!group?.fields?.name || group?.fields?.role) return false;
+  const header = schemaTools.normalizeHeader(group.fields.name.header || '');
+  if (/\b(?:poc|contact|decision maker|candidate|recruiter|employee|representative|rep|lead|person)\b/.test(header)) return true;
+  // Structurally recovered person groups may have unfamiliar identity headers.
+  // If the group owns contact coordinates but has no role destination, the name
+  // cell is the only safe place to preserve a verified designation.
+  return Boolean(group.fields.phone || group.fields.email || group.fields.linkedin);
+}
+
+function displayNameForGroup(group, values) {
+  if (!values.name) return '';
+  if (!shouldEmbedRoleInName(group) || !values.role) return values.name;
+  return `${values.name} — ${values.role}`;
+}
+
+function hasEmbeddedDesignation(value) {
+  return /\s+[—–]\s+\S/.test(String(value || '').trim());
+}
+
 function safeWritesForGroup(row, group, person, options = {}) {
   const snapshot = groupSnapshot(row, group);
   const values = personValues(person);
@@ -183,10 +203,30 @@ function safeWritesForGroup(row, group, person, options = {}) {
   for (const field of expectedPersonFields(group)) {
     const descriptor = group.fields[field];
     const current = snapshot.values[field];
-    const next = values[field];
+    const next = field === 'name' ? displayNameForGroup(group, values) : values[field];
     if (!next) continue;
     if (!current) {
-      writes.push({ field, columnIndex: descriptor.index, value: next, groupId: group.id });
+      writes.push({
+        field,
+        columnIndex: descriptor.index,
+        value: next,
+        groupId: group.id,
+        ...(field === 'name' && next !== values.name ? { embeddedRole: true } : {}),
+      });
+      continue;
+    }
+    // When there is no role column, safely upgrade a verified same-person bare
+    // name to "Name — Designation". Never replace an already decorated identity.
+    if (
+      field === 'name'
+      && shouldEmbedRoleInName(group)
+      && values.role
+      && !hasEmbeddedDesignation(current)
+      && samePerson(snapshot.values, person)
+      && normalizeName(current) === normalizeName(values.name)
+      && ranker.normalize(current) !== ranker.normalize(next)
+    ) {
+      writes.push({ field, columnIndex: descriptor.index, value: next, groupId: group.id, replaces: current, embeddedRole: true });
       continue;
     }
     // Existing data is immutable by default. A caller may explicitly allow a verified
@@ -227,6 +267,8 @@ module.exports = {
   normalizeName,
   samePerson,
   personValues,
+  shouldEmbedRoleInName,
+  displayNameForGroup,
   safeWritesForGroup,
   assignmentPlan,
 };
