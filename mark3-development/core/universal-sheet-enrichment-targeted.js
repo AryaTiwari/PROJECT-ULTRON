@@ -16,6 +16,7 @@ async function resolveExactRequest(request = {}) {
   const meta = await sheets.metadata(spreadsheetId);
   const resolution = targetResolver.resolveTabs(meta, sheetUrl, {
     sheetName: request.sheetName || undefined,
+    explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative),
   });
   const target = resolution.target;
   return {
@@ -39,6 +40,7 @@ async function run(request = {}, options = {}) {
       source: exact.resolution.targetSource,
       requestedName: exact.resolution.requestedName || null,
       requestedGid: exact.resolution.requestedGid,
+      ignoredViewGid: exact.resolution.ignoredViewGid,
       sheetName: exact.resolution.target?.name || result.sheetName || null,
       sheetId: exact.resolution.target?.sheetId ?? null,
     },
