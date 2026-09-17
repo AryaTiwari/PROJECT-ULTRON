@@ -42,8 +42,6 @@ async function resolveExactRequest(request = {}) {
       explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative),
     });
   } catch (error) {
-    // An explicit tab name is enough to read an exact A1 range safely. Metadata is
-    // not allowed to become a single point of failure for a user-named worksheet.
     if (!text(request.sheetName)) throw error;
     resolution = syntheticResolution(request, sheetUrl);
   }
@@ -128,6 +126,7 @@ async function run(request = {}, options = {}) {
   const exact = await resolveExactRequest(request);
   return withExactTargetGuards(exact.request, async () => {
     const primary = await base.run(exact.request, options);
+    const primaryStats = { ...(primary.stats || {}) };
     let result = primary;
     let fb = null;
 
@@ -139,6 +138,7 @@ async function run(request = {}, options = {}) {
     const modelCalls = Number(fb?.modelCalls || 0);
     const decorated = {
       ...result,
+      primaryStats,
       deterministicPrimary: true,
       deterministic: modelCalls === 0,
       fallbackModelUsed: modelCalls > 0,
@@ -163,13 +163,16 @@ async function run(request = {}, options = {}) {
 }
 
 function formatResult(result) {
-  const primary = base.formatResult(result).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
+  const primaryView = result?.primaryStats ? { ...result, stats: result.primaryStats } : result;
+  const primary = base.formatResult(primaryView).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
   const fb = result?.bigPickleFallback;
   if (!fb?.enabled) return `${primary} Primary execution remained fully deterministic; Big Pickle fallback was disabled. AI/model calls: 0.`;
   const model = fb.fallback || {};
-  const fallbackText = fb.attempted
-    ? `Big Pickle fallback: ${fb.modelCalls || 0} model call${Number(fb.modelCalls || 0) === 1 ? '' : 's'}; ${fb.candidateFallbackSelections || 0} ambiguous candidate selection${Number(fb.candidateFallbackSelections || 0) === 1 ? '' : 's'} recovered; ${fb.employerFallbackSuccesses || 0}/${fb.employerFallbackAttempts || 0} employer ambiguities resolved; ${fb.existingGroupsRepaired || 0} existing group${Number(fb.existingGroupsRepaired || 0) === 1 ? '' : 's'} repaired after fallback employer verification; ${fb.embeddedDesignationWrites || 0} designation upgrade${Number(fb.embeddedDesignationWrites || 0) === 1 ? '' : 's'}; ${fb.cellsChanged || 0} additional cell${Number(fb.cellsChanged || 0) === 1 ? '' : 's'} written; ${fb.candidateFallbackAbstains || 0} abstain${Number(fb.candidateFallbackAbstains || 0) === 1 ? '' : 's'}; models [${(model.actualModels || []).join(', ') || 'none'}]; personal API fallbacks 0.`
-    : 'Big Pickle fallback was available but not needed because the deterministic pass left no eligible ambiguity to resolve. AI/model calls: 0.';
+  if (!fb.attempted) {
+    return `${primary} Primary engine: deterministic. Big Pickle fallback was available but not needed because the deterministic pass left no eligible ambiguity to resolve. AI/model calls: 0.`;
+  }
+  const combinedCells = Number(result?.primaryStats?.cellsChanged || 0) + Number(fb.cellsChanged || 0);
+  const fallbackText = `Big Pickle fallback: ${fb.modelCalls || 0} model call${Number(fb.modelCalls || 0) === 1 ? '' : 's'}; ${fb.candidateFallbackSelections || 0} ambiguous candidate selection${Number(fb.candidateFallbackSelections || 0) === 1 ? '' : 's'} recovered; ${fb.employerFallbackSuccesses || 0}/${fb.employerFallbackAttempts || 0} employer ambiguities resolved; ${fb.existingGroupsRepaired || 0} existing group${Number(fb.existingGroupsRepaired || 0) === 1 ? '' : 's'} repaired after fallback employer verification; ${fb.embeddedDesignationWrites || 0} designation upgrade${Number(fb.embeddedDesignationWrites || 0) === 1 ? '' : 's'}; fallback changed ${fb.cellsChanged || 0} cells across ${fb.rowsChanged || 0} rows; combined cells changed ${combinedCells}; ${fb.candidateFallbackAbstains || 0} abstain${Number(fb.candidateFallbackAbstains || 0) === 1 ? '' : 's'}; models [${(model.actualModels || []).join(', ') || 'none'}]; personal API fallbacks 0.`;
   return `${primary} Primary engine: deterministic. ${fallbackText}`;
 }
 
