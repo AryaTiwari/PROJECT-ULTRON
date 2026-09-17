@@ -4,8 +4,17 @@ const enrichment = require('./lead-enrichment-bootstrap');
 const threePoc = require('./three-poc-enrichment-operator');
 const apolloQuality = require('./apollo-three-poc-quality').install();
 const candidateDiscovery = require('./three-poc-candidate-discovery-policy').install();
+
+// Wrapper order is deliberate. The exact-employer fallback owns Apollo POC-1
+// resolution. Profile resilience makes exact LinkedIn reads recoverable. The
+// raw-section normalizer then converts linkedin-mcp-server's published
+// {sections:{main_profile,experience,...}} contract into the structured current
+// employer fields the fallback consumes. Provider diversity is installed last
+// so its OmniRoute-only gateway policy surrounds every internal reasoning lane.
 require('./three-poc-linkedin-anchor-fallback').install();
 require('./three-poc-linkedin-profile-resilience').install();
+require('./three-poc-linkedin-profile-normalizer').install();
+require('./three-poc-omniroute-diversity').install();
 
 const REPORT_FLAG = Symbol.for('ultron.mark3.apolloThreePocQuality.reportInstalled');
 if (!globalThis[REPORT_FLAG]) {
