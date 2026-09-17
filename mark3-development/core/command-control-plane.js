@@ -77,6 +77,18 @@ function claim(message, options = {}) {
     generalModelAllowed: !exclusive, artifactAllowed: !exclusive, allowWebFallback: !exclusive });
 }
 
+function isInternalModelPayload(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (!/^[\[{]/.test(text)) return false;
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function assertAllowed(kind, { model = '', messages = [] } = {}) {
   const current = scope.getStore();
 
@@ -90,7 +102,12 @@ function assertAllowed(kind, { model = '', messages = [] } = {}) {
   ) return;
 
   const lastUser = (Array.isArray(messages) ? messages : []).filter(item => item.role === 'user').at(-1)?.content;
-  const inferred = !current ? claim(typeof lastUser === 'string' ? lastUser : '') : null;
+  // The fallback classifier exists only as defense-in-depth for natural user
+  // commands that somehow bypass HTTP ownership. Internal agent payloads are
+  // serialized JSON and must never be reinterpreted as fresh LinkedIn commands.
+  const inferred = !current && !isInternalModelPayload(lastUser)
+    ? claim(typeof lastUser === 'string' ? lastUser : '')
+    : null;
   if (!current?.route.exclusive && !inferred?.exclusive) return;
   if (kind === 'direct-model' && current?.compiler && /^gemini\//i.test(model)) return;
 
@@ -171,4 +188,4 @@ async function dispatch(message, options = {}) {
     }
   });
 }
-module.exports = { normalize, isThreePocSpreadsheetRequest, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, runInternalInference, runExclusive, compileWithGemini };
+module.exports = { normalize, isThreePocSpreadsheetRequest, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, isInternalModelPayload, runInternalInference, runExclusive, compileWithGemini };
