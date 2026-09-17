@@ -59,18 +59,7 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
 
 function claim(message, options = {}) {
   const text = normalize(message);
-  const source = spreadsheetSourceSignals(text, options);
-
   if (isThreePocSpreadsheetRequest(text, options)) {
-    // Google-Sheet 3-POC wording is just one schema shape inside the universal
-    // deterministic engine. Local/attached Excel remains the legacy compatibility path.
-    if (source.hasGoogleSheet) {
-      return Object.freeze({
-        domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
-        controller: 'universal-spreadsheet-domain-controller', generalModelAllowed: false,
-        artifactAllowed: false, allowWebFallback: false, yieldTo: null,
-      });
-    }
     return Object.freeze({
       domain: 'three-poc-spreadsheet', claimed: true, exclusive: true,
       controller: 'three-poc-domain-controller', generalModelAllowed: false,
