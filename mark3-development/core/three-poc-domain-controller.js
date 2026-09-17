@@ -24,6 +24,20 @@ function bigPickleMode() {
   return bigPickle.enabled();
 }
 
+function bigPickleSourceUrl() {
+  const configured = String(process.env.ULTRON_M3_THREE_POC_SOURCE_URL || '').trim();
+  return sheets.extractSheetUrl(configured) || null;
+}
+
+function sourcePinnedMessage(message) {
+  const source = bigPickleSourceUrl();
+  if (!source) return String(message || '');
+  // spreadsheetSource() always prefers an explicit Google URL over @mentions or
+  // local attachment resolution. Put the configured canonical source first so
+  // the temporary compatibility path cannot reinterpret an @mention as XLSX.
+  return `${source}\n${String(message || '')}`;
+}
+
 const LEGACY_WRAPPERS_FLAG = Symbol.for('ultron.mark3.legacyThreePocAiWrappers.installed');
 function installLegacyExcelWrappers() {
   if (globalThis[LEGACY_WRAPPERS_FLAG]) return;
@@ -64,8 +78,9 @@ if (!globalThis[REPORT_FLAG]) {
     const discovery = candidateDiscovery.stats();
     const pickle = bigPickle.snapshot();
     const tab = directTab.snapshot();
+    const source = bigPickleSourceUrl();
     const pickleText = pickle.enabled
-      ? ` Temporary Big Pickle mode: requested ${pickle.requestedModel || 'oc/big-pickle'}, ${pickle.successes}/${pickle.calls} reasoning calls succeeded, ${pickle.failures} failed; actual models [${pickle.actualModels.join(', ') || 'none'}]; personal API fallbacks 0. Exact-tab scope: ${tab.targetSheet || 'unset'}${tab.targetGid != null ? ` (gid ${tab.targetGid})` : ''}; metadata scoped ${tab.metadataScoped}, metadata fallbacks ${tab.metadataFallbacks}, target misses ${tab.targetMisses}.`
+      ? ` Temporary Big Pickle mode: requested ${pickle.requestedModel || 'oc/big-pickle'}, ${pickle.successes}/${pickle.calls} reasoning calls succeeded, ${pickle.failures} failed; actual models [${pickle.actualModels.join(', ') || 'none'}]; personal API fallbacks 0. Exact Google source: ${source ? 'configured' : 'missing'}. Exact-tab scope: ${tab.targetSheet || 'unset'}${tab.targetGid != null ? ` (gid ${tab.targetGid})` : ''}; metadata scoped ${tab.metadataScoped}, metadata fallbacks ${tab.metadataFallbacks}, target misses ${tab.targetMisses}.`
       : '';
     return `${base} Balanced Apollo email quality: ${quality.waterfallStarted}/${quality.maxWaterfalls} final-person waterfall requests started; ${quality.waterfallSucceeded} succeeded, ${quality.waterfallPending} pending, ${quality.waterfallNotFound} not found, ${quality.waterfallCacheHits} reused from cache, ${quality.waterfallCooldownSkips} cooldown skips, ${quality.waterfallBudgetSkips} budget-cap skips, ${quality.waterfallErrors} errors. Personal-email reveal: off. Phone waterfall: off. Zero-credit discovery rescue: ${discovery.domainPrimaryCalls} primary domain searches, ${discovery.domainBroadCalls} broad-domain searches, ${discovery.companyNameTargetedCalls} employer-name targeted searches, ${discovery.companyNameBroadCalls} employer-name broad searches, ${discovery.companyNameRescues} employer-name rescues, ${discovery.emptySearches} exhausted searches.${pickleText}`;
   };
@@ -89,35 +104,63 @@ async function handleLegacy(message, context = {}) {
   };
 }
 
+function bigPickleConfigError() {
+  if (!directTab.targetSheet()) {
+    return {
+      ok: false,
+      text: 'Big Pickle spreadsheet mode requires ULTRON_M3_THREE_POC_TARGET_SHEET so it cannot scan or write the wrong tab.',
+      response: 'Big Pickle spreadsheet mode requires ULTRON_M3_THREE_POC_TARGET_SHEET so it cannot scan or write the wrong tab.',
+      error: 'BIG_PICKLE_TARGET_SHEET_REQUIRED',
+      apolloCalled: false,
+      model: 'mark3-three-poc-big-pickle',
+      provider: 'local-three-poc-control',
+      taskType: 'three-poc-enrichment',
+    };
+  }
+  if (!bigPickleSourceUrl()) {
+    return {
+      ok: false,
+      text: 'Big Pickle spreadsheet mode requires ULTRON_M3_THREE_POC_SOURCE_URL with the exact Google Sheets URL. This prevents @mentions from being reinterpreted as local XLSX files.',
+      response: 'Big Pickle spreadsheet mode requires ULTRON_M3_THREE_POC_SOURCE_URL with the exact Google Sheets URL. This prevents @mentions from being reinterpreted as local XLSX files.',
+      error: 'BIG_PICKLE_SOURCE_URL_REQUIRED',
+      apolloCalled: false,
+      model: 'mark3-three-poc-big-pickle',
+      provider: 'local-three-poc-control',
+      taskType: 'three-poc-enrichment',
+    };
+  }
+  return null;
+}
+
 async function handle(message, context = {}) {
   const original = String(context.originalMessage || message || '');
   const googleUrl = sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message);
 
-  // Normal Google Sheet enrichment remains universal/deterministic. The legacy
-  // Google path is re-enabled only when the user explicitly starts temporary
-  // Big Pickle mode. This keeps the workaround tightly scoped.
-  if (googleUrl && !bigPickleMode()) {
-    return defaultUniversalGoogleDispatch(original, message, context);
+  // Temporary Big Pickle mode is source-pinned before any legacy source parser
+  // sees the command. This is intentionally evaluated even when the chat message
+  // contains only an @mention and no visible Google URL.
+  if (bigPickleMode()) {
+    const configError = bigPickleConfigError();
+    if (configError) return configError;
+    return handleLegacy(sourcePinnedMessage(message), { ...context, originalMessage: sourcePinnedMessage(original) });
   }
 
-  if (googleUrl && bigPickleMode()) {
-    if (!directTab.targetSheet()) {
-      return {
-        ok: false,
-        text: 'Big Pickle spreadsheet mode requires ULTRON_M3_THREE_POC_TARGET_SHEET so it cannot scan or write the wrong tab.',
-        response: 'Big Pickle spreadsheet mode requires ULTRON_M3_THREE_POC_TARGET_SHEET so it cannot scan or write the wrong tab.',
-        error: 'BIG_PICKLE_TARGET_SHEET_REQUIRED',
-        apolloCalled: false,
-        model: 'mark3-three-poc-big-pickle',
-        provider: 'local-three-poc-control',
-        taskType: 'three-poc-enrichment',
-      };
-    }
-    return handleLegacy(message, context);
+  // Normal Google Sheet enrichment remains universal/deterministic.
+  if (googleUrl) {
+    return defaultUniversalGoogleDispatch(original, message, context);
   }
 
   // Attached/local Excel remains on the compatibility path.
   return handleLegacy(message, context);
 }
 
-module.exports = { handle, handleLegacy, defaultUniversalGoogleDispatch, installLegacyExcelWrappers, bigPickleMode };
+module.exports = {
+  handle,
+  handleLegacy,
+  defaultUniversalGoogleDispatch,
+  installLegacyExcelWrappers,
+  bigPickleMode,
+  bigPickleSourceUrl,
+  sourcePinnedMessage,
+  bigPickleConfigError,
+};
