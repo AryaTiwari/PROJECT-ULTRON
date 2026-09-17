@@ -1,8 +1,8 @@
 'use strict';
 
-// Temporary exact-tab fallback for legacy Google 3-POC execution. If the normal
-// Sheets metadata call fails, an explicitly configured sheet name/gid is used to
-// synthesize only that one tab. Values/writes still go through the real Sheets API.
+// Temporary exact-tab scope for legacy Google 3-POC execution. When enabled,
+// metadata is always reduced to the configured tab. If metadata itself fails,
+// that exact tab is synthesized so values/writes can continue by A1 range.
 
 const threePoc = require('./three-poc-enrichment-operator');
 const googleSheets = require('./google-sheets-operator');
@@ -11,6 +11,8 @@ const INSTALL_FLAG = Symbol.for('ultron.mark3.threePocDirectTabFallback.installe
 const stats = {
   metadataAttempts: 0,
   metadataFallbacks: 0,
+  metadataScoped: 0,
+  targetMisses: 0,
   lastError: null,
   targetSheet: null,
   targetGid: null,
@@ -31,6 +33,35 @@ function targetGid(source) {
   return Number.isFinite(fromUrl) && fromUrl >= 0 ? fromUrl : null;
 }
 
+function syntheticMetadata(id, name, gid) {
+  return {
+    spreadsheetId: id,
+    properties: { title: '' },
+    sheets: [{
+      properties: {
+        title: name,
+        sheetId: gid == null ? 0 : Number(gid),
+        index: 0,
+        gridProperties: { rowCount: 1000, columnCount: 100 },
+      },
+    }],
+    __ultronExactTabMetadataFallback: true,
+  };
+}
+
+function restrictMetadata(meta, name, gid) {
+  const sheets = Array.isArray(meta?.sheets) ? meta.sheets : [];
+  const byName = sheets.find((sheet) => String(sheet?.properties?.title || '').trim().toLowerCase() === name.toLowerCase());
+  const byGid = gid == null ? null : sheets.find((sheet) => Number(sheet?.properties?.sheetId) === Number(gid));
+  const chosen = byName || byGid || null;
+  if (!chosen) return null;
+  return {
+    ...meta,
+    sheets: [chosen],
+    __ultronExactTabScoped: true,
+  };
+}
+
 async function withMetadataFallback(source, fn) {
   if (!enabled() || !targetSheet()) return fn();
 
@@ -43,23 +74,21 @@ async function withMetadataFallback(source, fn) {
   googleSheets.metadata = async function metadataWithExactTabFallback(id) {
     stats.metadataAttempts++;
     try {
-      return await original(id);
+      const meta = await original(id);
+      const scoped = restrictMetadata(meta, name, gid);
+      if (!scoped) {
+        stats.targetMisses++;
+        const error = new Error(`Configured target worksheet '${name}' was not present in Google Sheets metadata.`);
+        error.code = 'THREE_POC_TARGET_TAB_NOT_FOUND';
+        throw error;
+      }
+      stats.metadataScoped++;
+      return scoped;
     } catch (error) {
+      if (error?.code === 'THREE_POC_TARGET_TAB_NOT_FOUND') throw error;
       stats.metadataFallbacks++;
       stats.lastError = String(error?.message || error || '').slice(0, 500);
-      return {
-        spreadsheetId: id,
-        properties: { title: '' },
-        sheets: [{
-          properties: {
-            title: name,
-            sheetId: gid == null ? 0 : Number(gid),
-            index: 0,
-            gridProperties: { rowCount: 1000, columnCount: 100 },
-          },
-        }],
-        __ultronExactTabMetadataFallback: true,
-      };
+      return syntheticMetadata(id, name, gid);
     }
   };
 
@@ -87,9 +116,9 @@ function install() {
     return withMetadataFallback(source, () => baseInspect(source, options));
   };
 
-  const api = Object.freeze({ installed: true, enabled, snapshot, targetSheet, targetGid });
+  const api = Object.freeze({ installed: true, enabled, snapshot, targetSheet, targetGid, restrictMetadata });
   globalThis[INSTALL_FLAG] = api;
   return api;
 }
 
-module.exports = { install, enabled, snapshot, targetSheet, targetGid, withMetadataFallback };
+module.exports = { install, enabled, snapshot, targetSheet, targetGid, withMetadataFallback, restrictMetadata };
