@@ -57,6 +57,7 @@ async function execute(decision) {
     const result = await paidTools.withPermit(decision, async () => universal.run({
       sheetUrl: payload.url,
       sheetName: payload.sheetName,
+      sheetId: payload.sheetId ?? null,
       explicitNameAuthoritative: payload.explicitNameAuthoritative !== false,
     }, {
       apolloApproved: true,
@@ -70,14 +71,19 @@ async function execute(decision) {
       validationMode: Boolean(payload.rowLimit),
     };
     const body = `${modePrefix(payload.rowLimit)} ${universal.formatResult(enriched)}`;
+    const modelCalls = Number(result?.modelCalls || 0);
+    const fallbackUsed = modelCalls > 0;
     return response(true, body, {
       universalEnrichment: enriched,
       spreadsheetProvider: 'google',
       spreadsheetUrl: payload.url,
       sheetName: result.sheetName || payload.sheetName,
       paidToolApproval: decision,
-      deterministic: true,
-      modelCalls: 0,
+      deterministicPrimary: true,
+      deterministic: !fallbackUsed,
+      fallbackModelUsed: fallbackUsed,
+      modelCalls,
+      provider: fallbackUsed ? 'deterministic+apollo+google-sheets+omniroute/opencode' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
     const code = error.code || 'UNIVERSAL_SPREADSHEET_EXECUTION_FAILED';
