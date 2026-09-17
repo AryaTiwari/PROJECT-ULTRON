@@ -27,7 +27,8 @@ const controller = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc
 
 assert.match(source, /omniRoute\.listModels/);
 assert.match(source, /omniRoute\.chat/);
-assert.doesNotMatch(source, /direct-provider-router/);
+assert.doesNotMatch(source, /require\(['"]\.\/direct-provider-router['"]\)/);
+assert.doesNotMatch(source, /direct\.chat\s*\(/);
 assert.match(source, /personalApiFallbackAllowed: false/);
 assert.match(source, /Personal-API fallbacks: 0/);
 assert.match(source, /providerCounts/);
