@@ -1,9 +1,10 @@
 const assert = require('assert/strict');
 
 // This script is already part of npm start/check. Load the universal deterministic,
-// routing, approval, Google-values range hardening, contact-display, ordinal-contact,
-// orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions here
-// so spreadsheet enrichment cannot regress silently.
+// Google core-API, routing, approval, Google-values range hardening, contact-display,
+// ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback
+// regressions here so spreadsheet enrichment cannot regress silently.
+require('./google-sheets-core-api-selftest');
 require('./google-sheets-values-range-hardening-selftest');
 require('./universal-deterministic-enrichment-selftest');
 require('./universal-spreadsheet-routing-selftest');
@@ -61,7 +62,7 @@ assert.throws(
     );
   });
 
-  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, Google-values range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; personal direct-model calls stay blocked.');
+  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; personal direct-model calls stay blocked.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
