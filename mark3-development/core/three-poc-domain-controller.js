@@ -6,6 +6,12 @@
 // path until the universal source adapter has equivalent workbook guarantees.
 
 const sheets = require('./google-sheets-operator');
+
+// Install universal schema/ranking policies BEFORE the universal controller and
+// operator are required. This guarantees every Google-Sheet run sees the hardened
+// structural schema inference and population-adaptive deterministic ranker.
+require('./universal-deterministic-bootstrap').install();
+
 const universalController = require('./universal-spreadsheet-domain-controller');
 const enrichment = require('./lead-enrichment-bootstrap');
 const threePoc = require('./three-poc-enrichment-operator');
