@@ -89,6 +89,12 @@ function isInternalModelPayload(value) {
   }
 }
 
+function invariantCodeForDomain(domain) {
+  if (domain === 'linkedin') return 'LINKEDIN_ROUTE_INVARIANT_VIOLATION';
+  if (domain === 'three-poc-spreadsheet') return 'THREE_POC_ROUTE_INVARIANT_VIOLATION';
+  return 'DOMAIN_ROUTE_INVARIANT_VIOLATION';
+}
+
 function assertAllowed(kind, { model = '', messages = [] } = {}) {
   const current = scope.getStore();
 
@@ -112,7 +118,7 @@ function assertAllowed(kind, { model = '', messages = [] } = {}) {
   if (kind === 'direct-model' && current?.compiler && /^gemini\//i.test(model)) return;
 
   const domain = current?.route?.domain || inferred?.domain || 'exclusive';
-  const error = Object.assign(new Error(`${domain} exclusive route forbids ${kind}`), { code: 'DOMAIN_ROUTE_INVARIANT_VIOLATION' });
+  const error = Object.assign(new Error(`${domain} exclusive route forbids ${kind}`), { code: invariantCodeForDomain(domain) });
   if (current) current.violation = error;
   console.error(error.code, JSON.stringify({ domain, attempted: kind }));
   throw error;
@@ -188,4 +194,4 @@ async function dispatch(message, options = {}) {
     }
   });
 }
-module.exports = { normalize, isThreePocSpreadsheetRequest, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, isInternalModelPayload, runInternalInference, runExclusive, compileWithGemini };
+module.exports = { normalize, isThreePocSpreadsheetRequest, isLocalThreePocWorkbookRequest, claim, dispatch, assertAllowed, isInternalModelPayload, invariantCodeForDomain, runInternalInference, runExclusive, compileWithGemini };
