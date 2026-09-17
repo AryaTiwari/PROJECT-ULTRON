@@ -12,7 +12,7 @@ const providerSource = fs.readFileSync(path.join(root, 'provider-registry.js'), 
 
 // Big Pickle remains globally blocked from ordinary auto-routing. This temporary
 // path must be an explicit scoped exception, not a new global default.
-assert.match(providerSource, /big\[-_ \]\?pickle|big\[-_ \]\?pickle/i);
+assert.ok(providerSource.includes('/big[-_ ]?pickle/i'), 'Big Pickle must remain blocked from ordinary auto-routing');
 assert.match(pickleSource, /ULTRON_M3_THREE_POC_BIG_PICKLE/);
 assert.match(pickleSource, /oc\/big-pickle/);
 assert.match(pickleSource, /skipModelValidation: true/);
