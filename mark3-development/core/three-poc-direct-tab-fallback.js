@@ -18,8 +18,13 @@ const stats = {
   gidOverrides: 0,
   richLinkAttempts: 0,
   richLinkFallbacks: 0,
+  valuesReads: 0,
+  lastValuesRange: null,
+  lastValuesRowCount: 0,
+  lastHeaderPreview: [],
   lastError: null,
   lastRichLinkError: null,
+  lastValuesError: null,
   targetSheet: null,
   targetGid: null,
 };
@@ -68,12 +73,17 @@ function restrictMetadata(meta, name, gid) {
   };
 }
 
+function compactRow(row) {
+  return (Array.isArray(row) ? row : []).slice(0, 20).map((value) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 120));
+}
+
 async function withMetadataFallback(source, fn) {
   if (!enabled() || !targetSheet()) return fn();
 
   const originalMetadata = googleSheets.metadata;
   const originalSheetGid = googleSheets.sheetGid;
   const originalLinkedInHyperlinks = googleSheets.linkedInHyperlinks;
+  const originalValues = googleSheets.values;
   const name = targetSheet();
   const gid = targetGid(source);
   stats.targetSheet = name;
@@ -108,6 +118,25 @@ async function withMetadataFallback(source, fn) {
     return originalSheetGid(source);
   };
 
+  if (typeof originalValues === 'function') {
+    googleSheets.values = async function diagnosticValues(id, range, ...rest) {
+      stats.valuesReads++;
+      stats.lastValuesRange = String(range || '');
+      try {
+        const rows = await originalValues(id, range, ...rest);
+        stats.lastValuesRowCount = Array.isArray(rows) ? rows.length : 0;
+        stats.lastHeaderPreview = Array.isArray(rows)
+          ? rows.slice(0, 3).map(compactRow)
+          : [];
+        stats.lastValuesError = null;
+        return rows;
+      } catch (error) {
+        stats.lastValuesError = String(error?.message || error || '').slice(0, 500);
+        throw error;
+      }
+    };
+  }
+
   if (typeof originalLinkedInHyperlinks === 'function') {
     googleSheets.linkedInHyperlinks = async function bestEffortLinkedInHyperlinks(...args) {
       stats.richLinkAttempts++;
@@ -129,12 +158,13 @@ async function withMetadataFallback(source, fn) {
   } finally {
     googleSheets.metadata = originalMetadata;
     googleSheets.sheetGid = originalSheetGid;
+    googleSheets.values = originalValues;
     googleSheets.linkedInHyperlinks = originalLinkedInHyperlinks;
   }
 }
 
 function snapshot() {
-  return { ...stats, enabled: enabled() };
+  return { ...stats, lastHeaderPreview: stats.lastHeaderPreview.map((row) => [...row]), enabled: enabled() };
 }
 
 function install() {
