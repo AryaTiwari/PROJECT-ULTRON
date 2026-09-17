@@ -166,8 +166,16 @@ for (const filename of [
   assert.doesNotMatch(source, /chatOmniRouteOnly|modelRouter\.chat|omniRoute\.chat/, `${filename} must not invoke an AI model`);
 }
 
+// Controller invariants must be structural, not tied to comments/prose.
 const controllerSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc-domain-controller.js'), 'utf8');
-assert.match(controllerSource, /universal-spreadsheet-domain-controller/);
-assert.match(controllerSource, /Google Sheets now go through the deterministic/);
+assert.match(controllerSource, /require\(['"]\.\/universal-deterministic-bootstrap['"]\)\.install\(\)/, 'deterministic policies must install before Google Sheet dispatch');
+assert.match(controllerSource, /const universalController = require\(['"]\.\/universal-spreadsheet-domain-controller['"]\)/, 'controller must load universal spreadsheet owner');
+assert.match(controllerSource, /if \(sheets\.extractSheetUrl\(original\) \|\| sheets\.extractSheetUrl\(message\)\) \{\s*return universalController\.handle\(message, context\);\s*\}/, 'Google Sheet requests must dispatch directly to the universal controller');
+assert.match(controllerSource, /function installLegacyExcelWrappers\(\)/, 'legacy AI wrappers must remain isolated behind a lazy compatibility installer');
+const googleDispatchIndex = controllerSource.indexOf('return universalController.handle(message, context);');
+const legacyInstallIndex = controllerSource.indexOf('installLegacyExcelWrappers();');
+assert.ok(googleDispatchIndex >= 0, 'universal Google dispatch must exist');
+assert.ok(legacyInstallIndex > googleDispatchIndex, 'legacy AI wrappers must install only after the Google Sheet early-return path');
+assert.doesNotMatch(controllerSource.slice(0, googleDispatchIndex), /three-poc-(?:linkedin-anchor-fallback|linkedin-profile-resilience|linkedin-profile-normalizer|omniroute-diversity)['"]\)\.install\(\)/, 'legacy AI wrappers must not install before Google Sheet dispatch');
 
 console.log('Universal deterministic enrichment self-test passed: arbitrary contact counts, reordered fields, unfamiliar repeated blocks, company-vs-person ownership, deterministic employer parsing, context-adaptive ranking and zero-model Google-Sheet execution are protected.');
