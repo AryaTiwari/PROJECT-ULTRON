@@ -10,16 +10,22 @@ assert.equal(sheets.classifyApiError(400, { error: { status: 'INVALID_ARGUMENT',
 assert.equal(sheets.classifyApiError(401, { error: { status: 'UNAUTHENTICATED' } }), 'GOOGLE_SHEETS_AUTH_REQUIRED');
 assert.equal(sheets.classifyApiError(403, { error: { status: 'PERMISSION_DENIED' } }), 'GOOGLE_SHEETS_FORBIDDEN');
 assert.equal(sheets.classifyApiError(404, { error: { status: 'NOT_FOUND' } }), 'GOOGLE_SHEETS_NOT_FOUND');
+assert.equal(sheets.classifyApiError(409, { error: { status: 'ABORTED' } }), 'GOOGLE_SHEETS_CONFLICT');
 assert.equal(sheets.classifyApiError(429, { error: { status: 'RESOURCE_EXHAUSTED' } }), 'GOOGLE_SHEETS_RATE_LIMITED');
 assert.equal(sheets.classifyApiError(503, { error: { status: 'UNAVAILABLE' } }), 'GOOGLE_SHEETS_UNAVAILABLE');
+assert.equal(
+  sheets.classifyApiError(418, { error: { status: 'TEAPOT', message: 'Unexpected status' } }),
+  'GOOGLE_SHEETS_HTTP_418',
+  'unknown HTTP responses must retain a specific status code instead of collapsing into GOOGLE_SHEETS_API_ERROR',
+);
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'google-sheets-operator.js'), 'utf8');
+const metadataFunction = source.match(/async function metadata\(id\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+assert.ok(metadataFunction, 'metadata() implementation must be present');
 assert.match(
-  source,
+  metadataFunction,
   /properties\(title\),sheets\(properties\(sheetId,title,index,gridProperties\(rowCount,columnCount\)\)\)/,
-  'metadata fields selector must use valid nested Google partial-response syntax',
+  'metadata() must request title, tab ids/names and grid dimensions',
 );
-assert.doesNotMatch(source, /sheets\.properties\(/, 'legacy dotted metadata selector must not return');
-assert.doesNotMatch(source, /:\s*'GOOGLE_SHEETS_API_ERROR'/, 'core request path must not collapse unknown HTTP responses into the old generic API error');
 
-console.log('Google Sheets core API self-test passed: metadata selector syntax is valid and HTTP failures retain specific auth/range/quota/server error classes.');
+console.log('Google Sheets core API self-test passed: HTTP failures keep specific auth/range/quota/server codes and metadata() exposes the required workbook/tab/grid fields.');
