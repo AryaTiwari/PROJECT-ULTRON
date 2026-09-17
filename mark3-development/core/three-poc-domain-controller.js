@@ -1,16 +1,19 @@
-// First-class command owner for anchored/explicit 3-POC spreadsheet enrichment.
-// This controller intentionally never invokes the general assistant/model router.
+'use strict';
+
+// Compatibility domain owner while universal spreadsheet enrichment replaces
+// the legacy 3-POC executor. Google Sheets now go through the deterministic
+// universal schema/planning/ranking engine. Attached Excel remains on the legacy
+// path until the universal source adapter has equivalent workbook guarantees.
+
+const sheets = require('./google-sheets-operator');
+const universalController = require('./universal-spreadsheet-domain-controller');
 const enrichment = require('./lead-enrichment-bootstrap');
 const threePoc = require('./three-poc-enrichment-operator');
 const apolloQuality = require('./apollo-three-poc-quality').install();
 const candidateDiscovery = require('./three-poc-candidate-discovery-policy').install();
 
-// Wrapper order is deliberate. The exact-employer fallback owns Apollo POC-1
-// resolution. Profile resilience makes exact LinkedIn reads recoverable. The
-// raw-section normalizer then converts linkedin-mcp-server's published
-// {sections:{main_profile,experience,...}} contract into the structured current
-// employer fields the fallback consumes. Provider diversity is installed last
-// so its OmniRoute-only gateway policy surrounds every internal reasoning lane.
+// Legacy wrappers remain installed ONLY for attached/local Excel compatibility.
+// The universal Google path never calls these AI/model wrappers.
 require('./three-poc-linkedin-anchor-fallback').install();
 require('./three-poc-linkedin-profile-resilience').install();
 require('./three-poc-linkedin-profile-normalizer').install();
@@ -20,6 +23,11 @@ const REPORT_FLAG = Symbol.for('ultron.mark3.apolloThreePocQuality.reportInstall
 if (!globalThis[REPORT_FLAG]) {
   const baseFormatResult = threePoc.formatResult.bind(threePoc);
   threePoc.formatResult = function formatThreePocWithQuality(stats) {
+    // Universal deterministic results own their own truthful report. Do not
+    // append legacy 3-POC AI/discovery counters to them.
+    if (stats?.deterministic === true && stats?.modelCalls === 0 && stats?.schema) {
+      return baseFormatResult(stats);
+    }
     const base = baseFormatResult(stats);
     const quality = apolloQuality.stats();
     const discovery = candidateDiscovery.stats();
@@ -29,16 +37,26 @@ if (!globalThis[REPORT_FLAG]) {
 }
 
 async function handle(message, context = {}) {
-  // A user 3-POC command starts a fresh bounded deep-enrichment budget. The
-  // approval reply itself does not pass through this controller, so the same
-  // budget remains active for the subsequently approved enrichment run.
+  const original = String(context.originalMessage || message || '');
+  if (sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message)) {
+    return universalController.handle(message, context);
+  }
+
+  // Local/attached Excel compatibility path. This is intentionally isolated so
+  // universal Google enrichment cannot accidentally fall back to model routing.
   apolloQuality.startRun();
   candidateDiscovery.startRun();
   const result = await enrichment.handleThreePocCommand(message, context);
-  return result || enrichment.responseShape(false,
-    'The 3-POC spreadsheet domain owns this command but could not compile it safely. Apollo was not called and no general model was invoked.',
-    { error: 'THREE_POC_COMMAND_UNCOMPILED', apolloCalled: false, taskType: 'three-poc-enrichment' }
-  );
+  return result || {
+    ok: false,
+    text: 'The legacy local-Excel 3-POC compatibility path could not compile this command safely. Apollo was not called and no general model was invoked.',
+    response: 'The legacy local-Excel 3-POC compatibility path could not compile this command safely. Apollo was not called and no general model was invoked.',
+    error: 'THREE_POC_COMMAND_UNCOMPILED',
+    apolloCalled: false,
+    model: 'mark3-three-poc-domain-controller',
+    provider: 'local-three-poc-control',
+    taskType: 'three-poc-enrichment',
+  };
 }
 
 module.exports = { handle };
