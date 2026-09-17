@@ -9,6 +9,7 @@ const paidTools = require('./paid-tool-approval');
 const targetResolver = require('./universal-sheet-target-resolver');
 const inspector = require('./universal-sheet-inspector');
 const approvalHandler = require('./universal-paid-approval-handler');
+const typedErrors = require('./spreadsheet-enrichment-errors');
 
 approvalHandler.install();
 
@@ -61,6 +62,24 @@ function response(ok, body, extra = {}) {
     mode: 'operator',
     toolRounds: 0,
     ...extra,
+  };
+}
+
+function typedFailure(error, context = {}) {
+  const typed = typedErrors.normalize(error, context);
+  return {
+    typed,
+    diagnostic: typedErrors.format(typed),
+    fields: {
+      error: typed.code,
+      errorCode: typed.code,
+      errorSubsystem: typed.subsystem,
+      errorType: typed.type,
+      errorStage: typed.stage,
+      errorHint: typed.hint,
+      errorMessage: typed.message,
+      retryAttempts: typed.retryAttempts,
+    },
   };
 }
 
@@ -170,9 +189,15 @@ async function handle(message, context = {}) {
   const original = String(context.originalMessage || message || '');
   const sheetUrl = sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message);
   if (!sheetUrl) {
+    const failure = typedFailure(Object.assign(new Error('No full Google Sheets URL could be resolved.'), {
+      code: 'UNIVERSAL_SPREADSHEET_URL_REQUIRED',
+      subsystem: 'TARGETING',
+      errorType: 'CONFIG',
+      stage: 'spreadsheet-source-resolution',
+    }));
     return response(false,
-      'Universal spreadsheet enrichment owns this command, but no full Google Sheets URL could be resolved. Nothing was edited and Apollo was not called.',
-      { error: 'UNIVERSAL_SPREADSHEET_URL_REQUIRED', apolloCalled: false });
+      `Universal spreadsheet enrichment stopped safely: ${failure.diagnostic}. ${failure.typed.hint} Nothing was edited and Apollo was not called.`,
+      { ...failure.fields, diagnostic: failure.diagnostic, apolloCalled: false });
   }
 
   const requestedSheetName = parseSheetName(original);
@@ -182,17 +207,12 @@ async function handle(message, context = {}) {
   try {
     inspection = await inspect(sheetUrl, requestedSheetName, rowLimit, { explicitNameAuthoritative });
   } catch (error) {
-    const code = error.code || 'UNIVERSAL_SPREADSHEET_INSPECTION_FAILED';
-    const stage = error.stage || 'unknown-inspection-stage';
-    const detail = `${code} [${stage}]: ${error.message || 'unknown inspection failure'}`;
+    const failure = typedFailure(error, { stage: error?.stage || 'preapproval-inspection' });
     return response(false,
-      `Universal spreadsheet inspection stopped safely: ${detail}. Nothing was edited and Apollo was not called.`,
+      `Universal spreadsheet inspection stopped safely: ${failure.diagnostic}. ${failure.typed.hint} Nothing was edited and Apollo was not called.`,
       {
-        error: code,
-        errorCode: code,
-        errorStage: stage,
-        errorMessage: error.message || '',
-        diagnostic: detail,
+        ...failure.fields,
+        diagnostic: failure.diagnostic,
         apolloCalled: false,
         spreadsheetUrl: sheetUrl,
         sheetName: requestedSheetName || null,
@@ -203,9 +223,15 @@ async function handle(message, context = {}) {
   const exactSheetName = inspection.sheetName || inspection.requestedTarget?.sheetName || requestedSheetName || '';
   const summary = inspection.schema || {};
   if (!schemaReadable(summary)) {
+    const failure = typedFailure(Object.assign(new Error(`Schema confidence ${Number(summary.confidence || 0).toFixed(2)} is below the safe enrichment threshold.`), {
+      code: 'UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW',
+      subsystem: 'SCHEMA',
+      errorType: 'SCHEMA',
+      stage: 'schema-confidence-gate',
+    }));
     return response(false,
-      `ULTRON could not infer a sufficiently reliable person/company enrichment schema from worksheet "${exactSheetName || '?'}", so it refused to guess column relationships. Nothing was edited and Apollo was not called.`,
-      { error: 'UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW', apolloCalled: false, spreadsheetUrl: sheetUrl, sheetName: exactSheetName || null, schema: summary });
+      `Universal spreadsheet enrichment stopped safely: ${failure.diagnostic}. ${failure.typed.hint} Nothing was edited and Apollo was not called.`,
+      { ...failure.fields, diagnostic: failure.diagnostic, apolloCalled: false, spreadsheetUrl: sheetUrl, sheetName: exactSheetName || null, schema: summary });
   }
 
   const request = {
@@ -258,5 +284,6 @@ module.exports = {
   schemaReadable,
   approvalSummary,
   metadataFallbackTarget,
+  typedFailure,
   installApprovalHandler: approvalHandler.install,
 };
