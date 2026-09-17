@@ -2,8 +2,8 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 const scope = new AsyncLocalStorage();
 
-// Ownership precedes interpretation. No model, persistence or bootstrap import
-// belongs in this module. HTTP dispatch does not depend on assistant wrappers.
+// Ownership precedes interpretation. No model/bootstrap import belongs here.
+// HTTP dispatch owns exclusive domain routing and paid-tool approval re-entry.
 function normalize(message) {
   return String(message || '').trim().replace(/^(?:hey\s+)?ultron\b[\s,:;.!-]*/i, '').replace(/\blinked\s+in\b/ig, 'LinkedIn');
 }
@@ -46,8 +46,6 @@ function isUniversalSpreadsheetEnrichmentRequest(message, options = {}) {
   const source = spreadsheetSourceSignals(text, options);
   if (!source.hasSource) return false;
 
-  // Require both a mutation/research action and enrichment semantics. This keeps
-  // ordinary spreadsheet editing/calculation commands outside the enrichment domain.
   const action = /\b(?:enrich|research|find|discover|fill|populate|complete|repair|verify|resolve|source|append|add|update)\b/i.test(text);
   const enrichmentObject = /\b(?:contacts?|people|persons?|decision\s*makers?|pocs?|leads?|recruiters?|hiring|employees?|founders?|owners?|managers?|directors?|linkedin|emails?|e-?mails?|phones?|mobiles?|designations?|titles?|employers?|companies?|missing\s+(?:data|fields?|columns?|contacts?))\b/i.test(text);
   const explicitEnrichment = /\b(?:contact|lead|person|people|company|business|linkedin|apollo|decision\s*maker|poc)\s+(?:enrichment|research)\b/i.test(text)
@@ -61,7 +59,18 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
 
 function claim(message, options = {}) {
   const text = normalize(message);
+  const source = spreadsheetSourceSignals(text, options);
+
   if (isThreePocSpreadsheetRequest(text, options)) {
+    // Google-Sheet 3-POC wording is just one schema shape inside the universal
+    // deterministic engine. Local/attached Excel remains the legacy compatibility path.
+    if (source.hasGoogleSheet) {
+      return Object.freeze({
+        domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
+        controller: 'universal-spreadsheet-domain-controller', generalModelAllowed: false,
+        artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+      });
+    }
     return Object.freeze({
       domain: 'three-poc-spreadsheet', claimed: true, exclusive: true,
       controller: 'three-poc-domain-controller', generalModelAllowed: false,
@@ -71,7 +80,7 @@ function claim(message, options = {}) {
   if (isUniversalSpreadsheetEnrichmentRequest(text, options)) {
     return Object.freeze({
       domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
-      controller: 'three-poc-domain-controller', generalModelAllowed: false,
+      controller: 'universal-spreadsheet-domain-controller', generalModelAllowed: false,
       artifactAllowed: false, allowWebFallback: false, yieldTo: null,
     });
   }
@@ -145,16 +154,53 @@ function compileWithGemini(fn) {
   return scope.run({ ...(current || { route: claim('LinkedIn mission') }), compiler: true }, fn);
 }
 
+async function resolveUniversalPaidApproval(message) {
+  const paidTools = require('./paid-tool-approval');
+  const handler = require('./universal-paid-approval-handler');
+  const pending = paidTools.pending('apollo');
+  if (!pending || pending.operation !== handler.OPERATION) return null;
+
+  const decision = paidTools.resolveMessage(String(message || ''));
+  if (!decision) return null;
+  const result = await handler.execute(decision);
+  if (!result) return null;
+
+  const route = Object.freeze({
+    domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
+    controller: 'universal-spreadsheet-domain-controller', generalModelAllowed: false,
+    artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+    approvalReentry: true,
+  });
+  require('./events').emit('command_route_decision', route);
+  require('./events').emit('universal_spreadsheet_approval_resolved', {
+    approvalId: decision.id,
+    status: decision.status,
+    operation: decision.operation,
+  });
+  return { ...result, route: route.domain, routing: route };
+}
+
 async function dispatch(message, options = {}) {
   const originalMessage = String(message || '');
+
+  // Paid-tool approval re-entry is resolved before ordinary intent routing. This
+  // prevents generic assistant wrappers or legacy 3-POC code from consuming an
+  // approval that belongs to the universal deterministic spreadsheet domain.
+  const paidApprovalResult = await resolveUniversalPaidApproval(originalMessage);
+  if (paidApprovalResult) return paidApprovalResult;
+
   const resolvedMessage = normalize(originalMessage);
   const route = claim(originalMessage, options);
   require('./events').emit('command_route_decision', route);
   if (process.env.ULTRON_M3_ROUTE_DEBUG === '1') console.log('[Command Control]', JSON.stringify(route));
   if (!route.exclusive) return null;
   return scope.run({ route, compiler: false }, async () => {
-    const spreadsheetDomain = route.controller === 'three-poc-domain-controller';
-    const controller = spreadsheetDomain ? require('./three-poc-domain-controller') : require('./linkedin-domain-controller');
+    const spreadsheetDomain = ['three-poc-domain-controller', 'universal-spreadsheet-domain-controller'].includes(route.controller);
+    const controller = route.controller === 'universal-spreadsheet-domain-controller'
+      ? require('./universal-spreadsheet-domain-controller')
+      : route.controller === 'three-poc-domain-controller'
+        ? require('./three-poc-domain-controller')
+        : require('./linkedin-domain-controller');
     try {
       const result = await controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage });
       if (scope.getStore().violation) throw scope.getStore().violation;
@@ -182,6 +228,7 @@ module.exports = {
   isLocalThreePocWorkbookRequest,
   claim,
   dispatch,
+  resolveUniversalPaidApproval,
   assertAllowed,
   isInternalModelPayload,
   invariantCodeForDomain,
