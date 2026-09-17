@@ -143,7 +143,11 @@ function expectedPersonFields(group) {
 }
 
 function normalizeName(value) {
-  return ranker.normalize(value).replace(/\b(?:mr|mrs|ms|dr)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const base = String(value || '')
+    .replace(/\s+[—–]\s+.*$/, '')
+    .replace(/\s*\([^)]{2,120}\)\s*$/, '')
+    .trim();
+  return ranker.normalize(base).replace(/\b(?:mr|mrs|ms|dr)\b/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function samePerson(existing = {}, person = {}) {
@@ -220,6 +224,7 @@ module.exports = {
   classifyPersonGroups,
   planRow,
   expectedPersonFields,
+  normalizeName,
   samePerson,
   personValues,
   safeWritesForGroup,
