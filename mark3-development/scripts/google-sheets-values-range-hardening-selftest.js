@@ -32,4 +32,34 @@ assert.equal(
 );
 assert.equal(hardening.shouldRetry(Object.assign(new Error('Invalid credentials'), { status: 401 })), false);
 
-console.log('Google Sheets values range hardening self-test passed: wide universal reads clamp to the exact physical grid only on range/grid failures, including Arya 2 A:ZZ -> A:O.');
+(async () => {
+  const parsed = hardening.parseSheetRange("'Arya 2'!A:ZZ");
+  const physicalLastColumnIndex = 14; // O
+  const fakeValues = async (_id, range) => {
+    const probe = String(range).match(/!([A-Z]+)1:\1?([A-Z]+)?1$/);
+    const col = String(range).match(/!([A-Z]+)1:/)?.[1];
+    if (!col) return [];
+    let index = 0;
+    for (const char of col) index = index * 26 + (char.charCodeAt(0) - 64);
+    index -= 1;
+    if (index > physicalLastColumnIndex) {
+      const error = new Error(`Range (${range}) exceeds grid limits. Max columns: 15`);
+      error.status = 400;
+      throw error;
+    }
+    return [];
+  };
+
+  const last = await hardening.lastReadableColumn(fakeValues, 'sheet-id', parsed);
+  assert.equal(last, 14, 'Values-only binary probe must discover O as the last readable Arya 2 column without metadata');
+  assert.equal(
+    hardening.rangeWithEndColumn(parsed, last),
+    "'Arya 2'!A:O",
+    'metadata-free recovery must rebuild the final safe A:O range',
+  );
+
+  console.log('Google Sheets values range hardening self-test passed: wide universal reads recover from grid failures with metadata when available and with Values-only binary probing when metadata is unavailable; Arya 2 A:ZZ resolves to A:O.');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
