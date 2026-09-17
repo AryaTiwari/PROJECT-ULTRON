@@ -1,8 +1,8 @@
 'use strict';
 
 // Temporary exact-tab scope for legacy Google 3-POC execution. When enabled,
-// metadata is always reduced to the configured tab. If metadata itself fails,
-// that exact tab is synthesized so values/writes can continue by A1 range.
+// metadata is always reduced to the configured tab and sheetGid() is forced to
+// the configured gid, so stale view state in a workbook mention cannot change scope.
 
 const threePoc = require('./three-poc-enrichment-operator');
 const googleSheets = require('./google-sheets-operator');
@@ -13,6 +13,7 @@ const stats = {
   metadataFallbacks: 0,
   metadataScoped: 0,
   targetMisses: 0,
+  gidOverrides: 0,
   lastError: null,
   targetSheet: null,
   targetGid: null,
@@ -65,7 +66,8 @@ function restrictMetadata(meta, name, gid) {
 async function withMetadataFallback(source, fn) {
   if (!enabled() || !targetSheet()) return fn();
 
-  const original = googleSheets.metadata;
+  const originalMetadata = googleSheets.metadata;
+  const originalSheetGid = googleSheets.sheetGid;
   const name = targetSheet();
   const gid = targetGid(source);
   stats.targetSheet = name;
@@ -74,7 +76,7 @@ async function withMetadataFallback(source, fn) {
   googleSheets.metadata = async function metadataWithExactTabFallback(id) {
     stats.metadataAttempts++;
     try {
-      const meta = await original(id);
+      const meta = await originalMetadata(id);
       const scoped = restrictMetadata(meta, name, gid);
       if (!scoped) {
         stats.targetMisses++;
@@ -92,10 +94,19 @@ async function withMetadataFallback(source, fn) {
     }
   };
 
+  googleSheets.sheetGid = function exactConfiguredSheetGid() {
+    if (gid != null) {
+      stats.gidOverrides++;
+      return Number(gid);
+    }
+    return originalSheetGid(source);
+  };
+
   try {
     return await fn();
   } finally {
-    googleSheets.metadata = original;
+    googleSheets.metadata = originalMetadata;
+    googleSheets.sheetGid = originalSheetGid;
   }
 }
 
