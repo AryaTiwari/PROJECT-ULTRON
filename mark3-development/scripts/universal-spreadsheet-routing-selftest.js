@@ -3,6 +3,7 @@
 const assert = require('assert/strict');
 const control = require('../core/command-control-plane');
 const targetResolver = require('../core/universal-sheet-target-resolver');
+const spreadsheetController = require('../core/universal-spreadsheet-domain-controller');
 
 const url = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit';
 
@@ -30,8 +31,12 @@ assert.equal(control.invariantCodeForDomain('spreadsheet-enrichment'), 'SPREADSH
 assert.equal(control.isUniversalSpreadsheetEnrichmentRequest(`Fill missing contacts in ${url}`), true);
 assert.equal(control.isUniversalSpreadsheetEnrichmentRequest(`Change formatting in ${url}`), false);
 
-// Exact worksheet targeting regression. A gid supplied in the URL is authoritative;
-// the engine must not scan all tabs and substitute a higher-confidence worksheet.
+// Natural-language tab targeting forms used by the chat UI.
+assert.equal(spreadsheetController.parseSheetName('Target only the `Gaurav 2` tab.'), 'Gaurav 2');
+assert.equal(spreadsheetController.parseSheetName('Target only the Gaurav 2 tab.'), 'Gaurav 2');
+assert.equal(spreadsheetController.parseSheetName('Target tab: "Arya 2"'), 'Arya 2');
+
+// Exact worksheet targeting regression.
 const meta = {
   sheets: [
     { properties: { title: 'Divya', sheetId: 111, index: 0 } },
@@ -56,10 +61,22 @@ const matchingNameAndGid = targetResolver.resolveTabs(meta, aryaUrl, { sheetName
 assert.equal(matchingNameAndGid.targetSource, 'name+gid');
 assert.equal(matchingNameAndGid.target.name, 'Arya 2');
 
+// Direct URL conflict remains fail-closed.
 assert.throws(
   () => targetResolver.resolveTabs(meta, aryaUrl, { sheetName: 'Divya' }),
   (error) => error && error.code === 'UNIVERSAL_SHEET_TARGET_CONFLICT'
 );
+
+// But a file/@mention-expanded URL can carry a stale view gid. An explicit tab
+// name in the user's actual command wins in this mode.
+const mentionOverride = targetResolver.resolveTabs(meta, aryaUrl, {
+  sheetName: 'Gaurav 2',
+  explicitNameAuthoritative: true,
+});
+assert.equal(mentionOverride.target.name, 'Gaurav 2');
+assert.equal(mentionOverride.target.sheetId, 333);
+assert.equal(mentionOverride.targetSource, 'explicit-name-over-mention-gid');
+assert.equal(mentionOverride.ignoredViewGid, 222);
 
 assert.throws(
   () => targetResolver.resolveTabs(meta, `${url}#gid=999`, {}),
@@ -71,4 +88,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: generic contact enrichment has first-class exclusive ownership, legacy 3-POC remains compatible, ordinary sheet edits are not hijacked, and explicit worksheet name/gid targets cannot drift to another tab.');
+console.log('Universal spreadsheet routing self-test passed: generic enrichment ownership, quoted tab parsing, direct URL conflict safety, and explicit-tab-over-mention-gid targeting are protected.');
