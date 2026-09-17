@@ -17,14 +17,13 @@ const flexible = control.claim(`Research and fill missing people data in ${url};
 assert.equal(flexible.domain, 'spreadsheet-enrichment');
 assert.equal(flexible.controller, 'universal-spreadsheet-domain-controller');
 
-// Historical 3-POC wording on a Google Sheet is merely one schema shape inside
-// the universal deterministic engine. It must not route back to legacy AI code.
+// Historical explicit 3-POC wording keeps its compatibility route. That
+// controller delegates Google execution to the universal deterministic engine.
 const legacyWordingOnGoogle = control.claim(`Run anchored 3-POC enrichment on ${url}. POC 1, POC 2 and POC 3 must be completed.`);
-assert.equal(legacyWordingOnGoogle.domain, 'spreadsheet-enrichment');
-assert.equal(legacyWordingOnGoogle.controller, 'universal-spreadsheet-domain-controller');
+assert.equal(legacyWordingOnGoogle.domain, 'three-poc-spreadsheet');
+assert.equal(legacyWordingOnGoogle.controller, 'three-poc-domain-controller');
 assert.equal(legacyWordingOnGoogle.generalModelAllowed, false);
 
-// Attached/local Excel can remain on the isolated compatibility path.
 const localLegacy = control.claim('Run anchored 3-POC enrichment on this workbook. POC 1, POC 2 and POC 3 must be completed.', {
   attachments: [{ id: 'file-1', name: 'contacts.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }],
 });
@@ -47,13 +46,10 @@ assert.equal(spreadsheetController.parseSheetName('Target only the `Gaurav 2` ta
 assert.equal(spreadsheetController.parseSheetName('Target only the Gaurav 2 tab.'), 'Gaurav 2');
 assert.equal(spreadsheetController.parseSheetName('Target tab: "Arya 2"'), 'Arya 2');
 
-// A validation cap must never be silent. This protects against a forgotten
-// ULTRON_M3_THREE_POC_ROW_LIMIT making a tiny validation pass look like a full run.
 assert.match(spreadsheetController.rowLimitNotice(8), /VALIDATION MODE IS ACTIVE/i);
 assert.match(spreadsheetController.rowLimitNotice(8), /first 8 non-empty data rows/i);
 assert.match(spreadsheetController.rowLimitNotice(undefined), /FULL-SHEET MODE/i);
 
-// Exact worksheet targeting regression.
 const meta = {
   sheets: [
     { properties: { title: 'Divya', sheetId: 111, index: 0 } },
@@ -78,14 +74,11 @@ const matchingNameAndGid = targetResolver.resolveTabs(meta, aryaUrl, { sheetName
 assert.equal(matchingNameAndGid.targetSource, 'name+gid');
 assert.equal(matchingNameAndGid.target.name, 'Arya 2');
 
-// Direct URL conflict remains fail-closed.
 assert.throws(
   () => targetResolver.resolveTabs(meta, aryaUrl, { sheetName: 'Divya' }),
   (error) => error && error.code === 'UNIVERSAL_SHEET_TARGET_CONFLICT'
 );
 
-// But a file/@mention-expanded URL can carry a stale view gid. An explicit tab
-// name in the user's actual command wins in this mode.
 const mentionOverride = targetResolver.resolveTabs(meta, aryaUrl, {
   sheetName: 'Gaurav 2',
   explicitNameAuthoritative: true,
@@ -105,4 +98,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: first-class Google enrichment ownership, isolated local-Excel compatibility, quoted tab parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, and visible validation/full-sheet mode are protected.');
+console.log('Universal spreadsheet routing self-test passed: first-class generic Google enrichment ownership, isolated explicit 3-POC compatibility, quoted tab parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, and visible validation/full-sheet mode are protected.');
