@@ -197,20 +197,26 @@ async function handle(message, context = {}) {
   }
 
   const requestedSheetName = parseSheetName(original);
-  // When the user references a workbook through @mention/file attachment, the
-  // resolved URL can retain whichever tab happened to be open. An explicit tab
-  // name in the natural-language request must override that incidental view gid.
-  // A directly pasted URL remains strict: name/gid disagreement fails closed.
-  const explicitNameAuthoritative = Boolean(requestedSheetName && !directSheetUrl);
+  // A worksheet name explicitly stated in the user's command is the strongest
+  // target signal. Connector/file mentions can materialize as a full URL inside
+  // originalMessage, so "URL present in originalMessage" cannot reliably mean
+  // "the user manually pasted a tab-specific URL". The requested tab name wins
+  // over any stale/current-view gid bundled with the workbook reference.
+  const explicitNameAuthoritative = Boolean(requestedSheetName);
   const rowLimit = configuredRowLimit();
   let inspection;
   try {
     inspection = await inspect(sheetUrl, requestedSheetName, rowLimit, { explicitNameAuthoritative });
   } catch (error) {
+    const code = error.code || 'UNIVERSAL_SPREADSHEET_INSPECTION_FAILED';
+    const detail = `${code}: ${error.message || 'unknown inspection failure'}`;
     return response(false,
-      `Universal spreadsheet inspection stopped safely: ${error.message} Nothing was edited and Apollo was not called.`,
+      `Universal spreadsheet inspection stopped safely: ${detail}. Nothing was edited and Apollo was not called.`,
       {
-        error: error.code || 'UNIVERSAL_SPREADSHEET_INSPECTION_FAILED',
+        error: code,
+        errorCode: code,
+        errorMessage: error.message || '',
+        diagnostic: detail,
         apolloCalled: false,
         spreadsheetUrl: sheetUrl,
         sheetName: requestedSheetName || null,
