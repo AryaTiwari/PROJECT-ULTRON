@@ -6,14 +6,21 @@
 // cells. Recovery must not depend on workbook metadata because metadata itself can
 // fail independently. We therefore use metadata when available, but fall back to
 // a Values-API-only binary probe that discovers the last readable column.
+//
+// Google can also invalidate an access token before our local expires_at value.
+// Values reads therefore get one forced OAuth refresh + retry on HTTP 401.
 
 const sheets = require('./google-sheets-operator');
+const auth = require('./google-sheets-auth');
 
 const INSTALL_FLAG = Symbol.for('ultron.mark3.googleSheetsValuesRangeHardening.installed');
 const state = {
   retries: 0,
   successes: 0,
   failures: 0,
+  authRetries: 0,
+  authRetrySuccesses: 0,
+  authRetryFailures: 0,
   metadataAttempts: 0,
   metadataFailures: 0,
   probeCalls: 0,
@@ -60,10 +67,45 @@ function errorText(error) {
   return `${String(error?.message || error || '')} ${details}`.toLowerCase();
 }
 
+function isUnauthorized(error) {
+  return Number(error?.status) === 401 || String(error?.googleStatus || '').toUpperCase() === 'UNAUTHENTICATED';
+}
+
 function shouldRetry(error) {
   const combined = errorText(error);
   if (/range exceeds grid limits|exceeds grid limits|outside the sheet limits|range.*exceed|grid.*limit/.test(combined)) return true;
   return Number(error?.status) === 400 && /\brange\b/.test(combined) && /\b(?:grid|limit|column|row)\b/.test(combined);
+}
+
+function authRequiredError(cause) {
+  const error = new Error('Google Sheets authorization is no longer valid. Re-authorize Google Sheets once.');
+  error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+  error.status = 401;
+  error.cause = cause;
+  error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
+  return error;
+}
+
+async function retryAfterUnauthorized(originalValues, id, range, firstError) {
+  if (!isUnauthorized(firstError)) throw firstError;
+  state.authRetries++;
+  state.lastStrategy = 'oauth-force-refresh';
+  state.lastError = String(firstError?.message || firstError || '').slice(0, 500);
+  try {
+    await auth.accessToken({ forceRefresh: true });
+  } catch (refreshError) {
+    state.authRetryFailures++;
+    throw refreshError?.code ? refreshError : authRequiredError(refreshError);
+  }
+  try {
+    const rows = await originalValues(id, range);
+    state.authRetrySuccesses++;
+    return rows;
+  } catch (retryError) {
+    state.authRetryFailures++;
+    if (isUnauthorized(retryError)) throw authRequiredError(retryError);
+    throw retryError;
+  }
 }
 
 function clampRange(range, grid = {}) {
@@ -98,8 +140,6 @@ function rangeWithEndColumn(parsed, endColumnIndex) {
 
 function columnProbeRange(parsed, columnIndexValue) {
   const col = sheets.columnName(columnIndexValue);
-  // Probe the first row only. This validates whether the physical grid contains
-  // the column while keeping each recovery request tiny.
   return `${sheets.quoteSheet(parsed.sheetName)}!${col}1:${col}1`;
 }
 
@@ -116,15 +156,11 @@ async function lastReadableColumn(originalValues, id, parsed) {
       state.probeSuccesses++;
       return true;
     } catch (error) {
-      // A non-grid error means probing cannot safely distinguish sheet width from
-      // auth/network/permission failure. Bubble it up instead of disguising it.
       if (!shouldRetry(error)) throw error;
       return false;
     }
   }
 
-  // If even the starting column cannot be read, this is not a recoverable
-  // end-column overflow for the requested range.
   if (!(await readable(lowBound))) return null;
   if (await readable(highBound)) return highBound;
 
@@ -198,47 +234,57 @@ function install() {
   const originalMetadata = sheets.metadata.bind(sheets);
 
   sheets.values = async function gridSafeValues(id, range) {
+    let firstError;
     try {
       return await originalValues(id, range);
     } catch (error) {
-      if (!shouldRetry(error)) throw error;
-      const parsed = parseSheetRange(range);
-      if (!parsed) throw error;
-
-      state.retries++;
-      state.lastOriginalRange = String(range || '');
-      state.lastError = String(error?.message || error || '').slice(0, 500);
-
-      // Fast path: use real grid metadata when available.
-      const metadataRetry = await retryWithMetadata(originalValues, originalMetadata, id, range, parsed);
-      if (metadataRetry.rows) {
-        state.successes++;
-        return metadataRetry.rows;
-      }
-
-      // Metadata is intentionally not authoritative for recovery. Discover the
-      // actual last readable column directly with the Values API instead.
-      try {
-        const rows = await retryWithValueProbes(originalValues, id, range, parsed);
-        if (rows) {
-          state.successes++;
-          return rows;
-        }
-      } catch (probeError) {
-        state.failures++;
-        state.lastError = String(probeError?.message || probeError || '').slice(0, 500);
-        probeError.originalRange = range;
-        probeError.rangeRecoveryStrategy = state.lastStrategy || 'values-binary-probe';
-        probeError.rangeRecoveryProbeCalls = state.probeCalls;
-        throw probeError;
-      }
-
-      state.failures++;
-      error.originalRange = range;
-      error.rangeRecoveryStrategy = 'metadata+values-probe-exhausted';
-      error.rangeRecoveryProbeCalls = state.probeCalls;
-      throw error;
+      firstError = error;
     }
+
+    // A stale/revoked cached access token used to surface as the generic
+    // GOOGLE_SHEETS_API_ERROR. Recover exactly once before any range logic.
+    if (isUnauthorized(firstError)) {
+      try {
+        return await retryAfterUnauthorized(originalValues, id, range, firstError);
+      } catch (authRetryError) {
+        firstError = authRetryError;
+      }
+    }
+
+    if (!shouldRetry(firstError)) throw firstError;
+    const parsed = parseSheetRange(range);
+    if (!parsed) throw firstError;
+
+    state.retries++;
+    state.lastOriginalRange = String(range || '');
+    state.lastError = String(firstError?.message || firstError || '').slice(0, 500);
+
+    const metadataRetry = await retryWithMetadata(originalValues, originalMetadata, id, range, parsed);
+    if (metadataRetry.rows) {
+      state.successes++;
+      return metadataRetry.rows;
+    }
+
+    try {
+      const rows = await retryWithValueProbes(originalValues, id, range, parsed);
+      if (rows) {
+        state.successes++;
+        return rows;
+      }
+    } catch (probeError) {
+      state.failures++;
+      state.lastError = String(probeError?.message || probeError || '').slice(0, 500);
+      probeError.originalRange = range;
+      probeError.rangeRecoveryStrategy = state.lastStrategy || 'values-binary-probe';
+      probeError.rangeRecoveryProbeCalls = state.probeCalls;
+      throw probeError;
+    }
+
+    state.failures++;
+    firstError.originalRange = range;
+    firstError.rangeRecoveryStrategy = 'metadata+values-probe-exhausted';
+    firstError.rangeRecoveryProbeCalls = state.probeCalls;
+    throw firstError;
   };
 
   const api = Object.freeze({
@@ -248,6 +294,9 @@ function install() {
     clampRange,
     parseSheetRange,
     shouldRetry,
+    isUnauthorized,
+    authRequiredError,
+    retryAfterUnauthorized,
     lastReadableColumn,
     rangeWithEndColumn,
     columnProbeRange,
@@ -263,6 +312,9 @@ module.exports = {
   clampRange,
   parseSheetRange,
   shouldRetry,
+  isUnauthorized,
+  authRequiredError,
+  retryAfterUnauthorized,
   lastReadableColumn,
   rangeWithEndColumn,
   columnProbeRange,
