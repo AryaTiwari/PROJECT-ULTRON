@@ -74,7 +74,8 @@ assert.match(moduleSource, /confidence < 0\.78/);
 assert.match(moduleSource, /companyPresentInEvidence/);
 assert.match(moduleSource, /finally \{\s*apollo\.resolvePersonProfile = previousResolvePersonProfile;/s);
 assert.match(moduleSource, /ULTRON_M3_THREE_POC_LINKEDIN_ANCHOR_FALLBACK_MAX', 8/);
-assert.doesNotMatch(moduleSource, /gmail|yahoo|outlook|email domain/i);
+assert.match(moduleSource, /Do not infer employer from an email domain/);
+assert.doesNotMatch(moduleSource, /@(gmail|yahoo|outlook)\./i);
 assert.match(controllerSource, /three-poc-linkedin-anchor-fallback/);
 
 console.log('3-POC LinkedIn anchor fallback self-test passed: Apollo stays primary, exact authenticated LinkedIn profile resolves missing current employers, historical employers are rejected, OmniRoute-only text extraction is evidence-gated, and the Apollo profile resolver is restored after each workbook run.');
