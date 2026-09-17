@@ -1,4 +1,4 @@
-// Scoped exact-profile fallback for anchored 3-POC POC-1 employer resolution.
+// Scoped exact-profile fallback for anchored/explicit 3-POC POC-1 employer resolution.
 //
 // Apollo remains the primary identity/contact source. During a 3-POC workbook run
 // only, if Apollo cannot supply POC-1's current employer, this wrapper reads the
@@ -351,7 +351,7 @@ function install() {
     const base = originalFormatResult(result);
     const fallback = result?.linkedinAnchorEmployerFallback;
     if (!fallback) return base;
-    return `${base} Exact-LinkedIn POC-1 employer fallback: ${fallback.structuredSuccesses + fallback.omniRouteSuccesses}/${fallback.attempts} resolved (${fallback.structuredSuccesses} structured, ${fallback.omniRouteSuccesses} OmniRoute); ${fallback.failures} unresolved, ${fallback.budgetSkips} safety-cap skips, ${fallback.omniRouteBlocked} non-OmniRoute blocks. Personal-API fallbacks: 0.`;
+    return `${base} Exact-LinkedIn POC-1 employer fallback: ${fallback.structuredSuccesses + fallback.omniRouteSuccesses}/${fallback.attempts} resolved (${fallback.structuredSuccesses} structured; OmniRoute ${fallback.omniRouteAttempts} attempts/${fallback.omniRouteSuccesses} successes); ${fallback.failures} unresolved, ${fallback.budgetSkips} safety-cap skips, ${fallback.omniRouteBlocked} non-OmniRoute blocks. Personal-API fallbacks: 0.`;
   };
 
   const api = Object.freeze({ startRun, stats, structuredEmployer, linkedinSlug, profileEvidenceText });
