@@ -1,36 +1,39 @@
 'use strict';
 
-// Compatibility domain owner while universal spreadsheet enrichment replaces
-// the legacy 3-POC executor. Google Sheets now go through the deterministic
-// universal schema/planning/ranking engine. Attached Excel remains on the legacy
-// path until the universal source adapter has equivalent workbook guarantees.
+// Compatibility domain owner while universal deterministic spreadsheet
+// enrichment replaces the legacy fixed 3-POC executor.
 
 const sheets = require('./google-sheets-operator');
 
-// Install universal schema/ranking policies BEFORE the universal controller and
-// operator are required. This guarantees every Google-Sheet run sees the hardened
-// structural schema inference and population-adaptive deterministic ranker.
+// Universal schema/ranking policies must be installed before the universal
+// controller/operator are required.
 require('./universal-deterministic-bootstrap').install();
 
 const universalController = require('./universal-spreadsheet-domain-controller');
 const enrichment = require('./lead-enrichment-bootstrap');
 const threePoc = require('./three-poc-enrichment-operator');
+
+// These Apollo-only policies remain useful to both paths: discovery stays broad
+// and cheap; deeper contact quality remains bounded to verified final people.
 const apolloQuality = require('./apollo-three-poc-quality').install();
 const candidateDiscovery = require('./three-poc-candidate-discovery-policy').install();
 
-// Legacy wrappers remain installed ONLY for attached/local Excel compatibility.
-// The universal Google path never calls these AI/model wrappers.
-require('./three-poc-linkedin-anchor-fallback').install();
-require('./three-poc-linkedin-profile-resilience').install();
-require('./three-poc-linkedin-profile-normalizer').install();
-require('./three-poc-omniroute-diversity').install();
+const LEGACY_WRAPPERS_FLAG = Symbol.for('ultron.mark3.legacyThreePocAiWrappers.installed');
+function installLegacyExcelWrappers() {
+  if (globalThis[LEGACY_WRAPPERS_FLAG]) return;
+  require('./three-poc-linkedin-anchor-fallback').install();
+  require('./three-poc-linkedin-profile-resilience').install();
+  require('./three-poc-linkedin-profile-normalizer').install();
+  require('./three-poc-omniroute-diversity').install();
+  globalThis[LEGACY_WRAPPERS_FLAG] = true;
+}
 
 const REPORT_FLAG = Symbol.for('ultron.mark3.apolloThreePocQuality.reportInstalled');
 if (!globalThis[REPORT_FLAG]) {
   const baseFormatResult = threePoc.formatResult.bind(threePoc);
-  threePoc.formatResult = function formatThreePocWithQuality(stats) {
-    // Universal deterministic results own their own truthful report. Do not
-    // append legacy 3-POC AI/discovery counters to them.
+  threePoc.formatResult = function formatSpreadsheetEnrichmentResult(stats) {
+    // Universal deterministic results own their own report. No legacy selector,
+    // reviewer, OmniRoute or fixed-slot diagnostics are appended.
     if (stats?.deterministic === true && stats?.modelCalls === 0 && stats?.schema) {
       return baseFormatResult(stats);
     }
@@ -44,12 +47,16 @@ if (!globalThis[REPORT_FLAG]) {
 
 async function handle(message, context = {}) {
   const original = String(context.originalMessage || message || '');
+
+  // All Google Sheet enrichment, including historical 3-POC wording, uses the
+  // universal deterministic engine. There is no model fallback in this path.
   if (sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message)) {
     return universalController.handle(message, context);
   }
 
-  // Local/attached Excel compatibility path. This is intentionally isolated so
-  // universal Google enrichment cannot accidentally fall back to model routing.
+  // Attached/local Excel remains a compatibility path for now. Install the old
+  // model wrappers lazily only here so they cannot contaminate Google execution.
+  installLegacyExcelWrappers();
   apolloQuality.startRun();
   candidateDiscovery.startRun();
   const result = await enrichment.handleThreePocCommand(message, context);
@@ -65,4 +72,4 @@ async function handle(message, context = {}) {
   };
 }
 
-module.exports = { handle };
+module.exports = { handle, installLegacyExcelWrappers };
