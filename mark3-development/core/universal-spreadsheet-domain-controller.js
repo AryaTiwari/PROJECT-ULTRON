@@ -53,6 +53,14 @@ function configuredRowLimit() {
   return Number.isFinite(legacyLimit) && legacyLimit > 0 ? Math.floor(legacyLimit) : undefined;
 }
 
+function rowLimitNotice(rowLimit) {
+  const limit = Number(rowLimit || 0);
+  if (Number.isFinite(limit) && limit > 0) {
+    return `VALIDATION MODE IS ACTIVE: enrichment is capped to the first ${Math.floor(limit)} non-empty data rows by an environment row-limit. This is not a full-sheet run.`;
+  }
+  return 'FULL-SHEET MODE: no enrichment row-limit is active, so every non-empty data row is eligible for the pass.';
+}
+
 function response(ok, body, extra = {}) {
   return {
     ok,
@@ -83,8 +91,9 @@ function approvalSummary(inspection) {
   const header = summary.headerRowNumber || '?';
   return [
     `ULTRON deterministically inspected worksheet "${inspection?.sheetName || '?'}" before Apollo approval.`,
+    rowLimitNotice(inspection?.rowLimitApplied),
     `It detected header row ${header}, ${people} person/contact group${people === 1 ? '' : 's'} and ${companies} company group${companies === 1 ? '' : 's'} without assuming a fixed POC count or fixed column letters.`,
-    `The planned pass contains ${analysis.openPersonSlots || 0} open and ${analysis.partialPersonSlots || 0} partial person/contact slots.`,
+    `The planned pass contains ${analysis.openPersonSlots || 0} open and ${analysis.partialPersonSlots || 0} partial person/contact slots within the currently eligible row range.`,
     `Schema inference, employer parsing, authority ranking and column assignment use zero AI/model calls.`,
     `Apollo will be used only after approval for exact identity/contact discovery and hydration, and existing populated identities/contacts are preserved unless an exact verified same-person repair is safe.`,
   ].join(' ');
@@ -101,7 +110,7 @@ function installApprovalBridge() {
       return originalEnrich(url, options);
     }
     try {
-      return await universal.run({
+      const result = await universal.run({
         sheetUrl: url,
         sheetName: request.sheetName || undefined,
         explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative),
@@ -110,6 +119,11 @@ function installApprovalBridge() {
         rowLimit: request.rowLimit || options.rowLimit || undefined,
         allowLinkedInEmployerFallback: true,
       });
+      return {
+        ...result,
+        rowLimitApplied: request.rowLimit || null,
+        validationMode: Boolean(request.rowLimit),
+      };
     } finally {
       globalThis[REQUEST_FLAG] = null;
     }
@@ -117,7 +131,11 @@ function installApprovalBridge() {
 
   legacyThreePoc.formatResult = function universalCompatibilityFormat(result) {
     if (result?.deterministic === true && result?.modelCalls === 0 && result?.schema) {
-      return universal.formatResult(result);
+      const formatted = universal.formatResult(result);
+      if (Number(result?.rowLimitApplied || 0) > 0) {
+        return `VALIDATION MODE: capped to the first ${Math.floor(Number(result.rowLimitApplied))} non-empty data rows. This was not a full-sheet run. ${formatted}`;
+      }
+      return `FULL-SHEET MODE: no row cap was active. ${formatted}`;
     }
     return originalFormat(result);
   };
@@ -155,6 +173,8 @@ async function inspect(sheetUrl, sheetName, rowLimit, options = {}) {
   });
   return {
     ...inspection,
+    rowLimitApplied: rowLimit || null,
+    validationMode: Boolean(rowLimit),
     requestedTarget: {
       sheetName: target.sheetName || null,
       sheetId: target.sheetId,
@@ -236,6 +256,8 @@ async function handle(message, context = {}) {
     spreadsheetUrl: sheetUrl,
     sheetName: exactSheetName || null,
     requestedTarget: inspection.requestedTarget || null,
+    rowLimitApplied: rowLimit || null,
+    validationMode: Boolean(rowLimit),
     deterministic: true,
     modelCalls: 0,
   });
@@ -247,6 +269,7 @@ module.exports = {
   resolveRequestedTarget,
   parseSheetName,
   configuredRowLimit,
+  rowLimitNotice,
   schemaReadable,
   approvalSummary,
   installApprovalBridge,
