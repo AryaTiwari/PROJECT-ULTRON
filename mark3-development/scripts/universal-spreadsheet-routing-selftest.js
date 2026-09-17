@@ -10,15 +10,26 @@ const url = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1
 const generic = control.claim(`Enrich missing decision maker contacts, phones and emails in this spreadsheet: ${url}`);
 assert.equal(generic.exclusive, true);
 assert.equal(generic.domain, 'spreadsheet-enrichment');
-assert.equal(generic.controller, 'three-poc-domain-controller');
+assert.equal(generic.controller, 'universal-spreadsheet-domain-controller');
 assert.equal(generic.generalModelAllowed, false);
 
 const flexible = control.claim(`Research and fill missing people data in ${url}; analyze the columns and populate verified contacts.`);
 assert.equal(flexible.domain, 'spreadsheet-enrichment');
+assert.equal(flexible.controller, 'universal-spreadsheet-domain-controller');
 
-const legacy = control.claim(`Run anchored 3-POC enrichment on ${url}. POC 1, POC 2 and POC 3 must be completed.`);
-assert.equal(legacy.domain, 'three-poc-spreadsheet');
-assert.equal(legacy.controller, 'three-poc-domain-controller');
+// Historical 3-POC wording on a Google Sheet is merely one schema shape inside
+// the universal deterministic engine. It must not route back to legacy AI code.
+const legacyWordingOnGoogle = control.claim(`Run anchored 3-POC enrichment on ${url}. POC 1, POC 2 and POC 3 must be completed.`);
+assert.equal(legacyWordingOnGoogle.domain, 'spreadsheet-enrichment');
+assert.equal(legacyWordingOnGoogle.controller, 'universal-spreadsheet-domain-controller');
+assert.equal(legacyWordingOnGoogle.generalModelAllowed, false);
+
+// Attached/local Excel can remain on the isolated compatibility path.
+const localLegacy = control.claim('Run anchored 3-POC enrichment on this workbook. POC 1, POC 2 and POC 3 must be completed.', {
+  attachments: [{ id: 'file-1', name: 'contacts.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }],
+});
+assert.equal(localLegacy.domain, 'three-poc-spreadsheet');
+assert.equal(localLegacy.controller, 'three-poc-domain-controller');
 
 const ordinaryEdit = control.claim(`Update cell A1 in ${url} to "September".`);
 assert.notEqual(ordinaryEdit.domain, 'spreadsheet-enrichment');
@@ -94,4 +105,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: generic enrichment ownership, quoted tab parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, and visible validation/full-sheet mode are protected.');
+console.log('Universal spreadsheet routing self-test passed: first-class Google enrichment ownership, isolated local-Excel compatibility, quoted tab parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, and visible validation/full-sheet mode are protected.');
