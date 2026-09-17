@@ -41,6 +41,15 @@ function installLegacyExcelWrappers() {
   globalThis[LEGACY_WRAPPERS_FLAG] = true;
 }
 
+// Keep the normal Google path explicit and independently testable. Temporary
+// Big Pickle mode bypasses this helper only when its opt-in environment flag is on.
+function defaultUniversalGoogleDispatch(original, message, context) {
+  if (sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message)) {
+    return universalController.handle(message, context);
+  }
+  return null;
+}
+
 const REPORT_FLAG = Symbol.for('ultron.mark3.apolloThreePocQuality.reportInstalled');
 if (!globalThis[REPORT_FLAG]) {
   const baseFormatResult = threePoc.formatResult.bind(threePoc);
@@ -88,7 +97,7 @@ async function handle(message, context = {}) {
   // Google path is re-enabled only when the user explicitly starts temporary
   // Big Pickle mode. This keeps the workaround tightly scoped.
   if (googleUrl && !bigPickleMode()) {
-    return universalController.handle(message, context);
+    return defaultUniversalGoogleDispatch(original, message, context);
   }
 
   if (googleUrl && bigPickleMode()) {
@@ -111,4 +120,4 @@ async function handle(message, context = {}) {
   return handleLegacy(message, context);
 }
 
-module.exports = { handle, handleLegacy, installLegacyExcelWrappers, bigPickleMode };
+module.exports = { handle, handleLegacy, defaultUniversalGoogleDispatch, installLegacyExcelWrappers, bigPickleMode };
