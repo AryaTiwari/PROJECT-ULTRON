@@ -4,6 +4,11 @@
 // Explicit tab names and Google Sheets gid fragments are authoritative. The
 // engine may compare schema confidence across tabs only when the user supplied
 // no worksheet target at all.
+//
+// When a workbook was supplied through an app/file mention, the resolved URL can
+// carry a stale UI-view gid. In that case callers may set explicitNameAuthoritative
+// so an explicitly named worksheet beats that incidental gid. Direct user-pasted
+// tab URLs should leave that option false and conflicts fail closed.
 
 function text(value) { return String(value ?? '').trim(); }
 
@@ -46,6 +51,7 @@ function resolveTabs(meta, sheetUrl, options = {}) {
   const gid = parseGid(sheetUrl);
   const byName = requestedName ? namedTab(tabs, requestedName) : null;
   const byGid = gid != null ? tabs.find((tab) => tab.sheetId === gid) || null : null;
+  const explicitNameAuthoritative = Boolean(options.explicitNameAuthoritative && requestedName);
 
   if (requestedName && !byName) {
     throw targetError('UNIVERSAL_SHEET_TAB_NOT_FOUND', `Google Sheet tab not found: ${requestedName}`, {
@@ -53,13 +59,13 @@ function resolveTabs(meta, sheetUrl, options = {}) {
       availableTabs: tabs.map((tab) => tab.name),
     });
   }
-  if (gid != null && !byGid) {
+  if (gid != null && !byGid && !explicitNameAuthoritative) {
     throw targetError('UNIVERSAL_SHEET_GID_NOT_FOUND', `Google Sheet tab for gid=${gid} was not found.`, {
       requestedGid: gid,
       availableTabs: tabs.map((tab) => ({ name: tab.name, sheetId: tab.sheetId })),
     });
   }
-  if (byName && byGid && byName.sheetId !== byGid.sheetId) {
+  if (byName && byGid && byName.sheetId !== byGid.sheetId && !explicitNameAuthoritative) {
     throw targetError(
       'UNIVERSAL_SHEET_TARGET_CONFLICT',
       `Requested tab "${byName.name}" conflicts with the Google Sheets URL target "${byGid.name}" (gid=${gid}). Nothing should be edited until the target is unambiguous.`,
@@ -68,13 +74,23 @@ function resolveTabs(meta, sheetUrl, options = {}) {
   }
 
   const target = byName || byGid || null;
+  const nameOverrodeGid = Boolean(explicitNameAuthoritative && byName && byGid && byName.sheetId !== byGid.sheetId);
   return {
     tabs,
     targets: target ? [target] : tabs,
     targeted: Boolean(target),
-    targetSource: byName && byGid ? 'name+gid' : byName ? 'name' : byGid ? 'gid' : 'none',
+    targetSource: nameOverrodeGid
+      ? 'explicit-name-over-mention-gid'
+      : byName && byGid
+        ? 'name+gid'
+        : byName
+          ? 'name'
+          : byGid
+            ? 'gid'
+            : 'none',
     requestedName: requestedName || '',
     requestedGid: gid,
+    ignoredViewGid: nameOverrodeGid ? gid : null,
     target,
   };
 }
