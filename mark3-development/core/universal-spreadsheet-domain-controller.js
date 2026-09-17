@@ -14,7 +14,7 @@
 
 const sheets = require('./google-sheets-operator');
 const paidTools = require('./paid-tool-approval');
-const universal = require('./universal-sheet-enrichment-operator');
+const universal = require('./universal-sheet-enrichment-targeted');
 const legacyThreePoc = require('./three-poc-enrichment-operator');
 const targetResolver = require('./universal-sheet-target-resolver');
 
