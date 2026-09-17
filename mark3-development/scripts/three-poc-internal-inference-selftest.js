@@ -1,4 +1,9 @@
 const assert = require('assert/strict');
+
+// This script is already part of npm start/check. Load the universal deterministic
+// regression suite here so arbitrary-layout enrichment cannot regress silently.
+require('./universal-deterministic-enrichment-selftest');
+
 const control = require('../core/command-control-plane');
 
 const internalPayload = JSON.stringify({
@@ -19,15 +24,12 @@ assert.equal(control.isInternalModelPayload('Find recruiter email from LinkedIn'
 assert.equal(control.invariantCodeForDomain('linkedin'), 'LINKEDIN_ROUTE_INVARIANT_VIOLATION');
 assert.equal(control.invariantCodeForDomain('three-poc-spreadsheet'), 'THREE_POC_ROUTE_INVARIANT_VIOLATION');
 
-// The exact bug: internal JSON contains linkedin.com + email, which the old
-// fallback classifier treated as a fresh exclusive LinkedIn user command.
+// Historical regression: internal JSON containing linkedin.com + email must not
+// be reclassified as a fresh external LinkedIn user command.
 assert.doesNotThrow(() => control.assertAllowed('general-model', {
   messages: [{ role: 'user', content: internalPayload }],
 }));
 
-// Natural user commands must still be protected when they reach the fallback
-// classifier outside the normal HTTP ownership path. Preserve the historical
-// LinkedIn-specific error code because existing callers/tests rely on it.
 assert.throws(
   () => control.assertAllowed('general-model', {
     messages: [{ role: 'user', content: 'Find the email for this person on LinkedIn and enrich the contact.' }],
@@ -35,8 +37,6 @@ assert.throws(
   (error) => error && error.code === 'LINKEDIN_ROUTE_INVARIANT_VIOLATION'
 );
 
-// A domain-scoped internal reasoning permit may use the general-model boundary
-// (OmniRoute), but must NOT unlock direct provider calls/personal API keys.
 (async () => {
   await control.runInternalInference('three-poc-spreadsheet', async () => {
     assert.doesNotThrow(() => control.assertAllowed('general-model', {
@@ -51,7 +51,7 @@ assert.throws(
     );
   });
 
-  console.log('3-POC internal inference self-test passed. Internal JSON is not reclassified as a LinkedIn user command; scoped OmniRoute reasoning remains allowed while direct personal-model calls remain blocked, with stable domain-specific invariant codes.');
+  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet regressions also ran; legacy scoped OmniRoute fallback remains isolated and direct personal-model calls stay blocked.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
