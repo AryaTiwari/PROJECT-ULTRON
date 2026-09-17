@@ -111,15 +111,15 @@ async function withExactTargetGuards(request, fn) {
 function mergePrimaryAndFallback(primary, fb) {
   if (!fb?.attempted) return primary;
   const stats = { ...(primary.stats || {}) };
-  stats.rowsChanged = Number(stats.rowsChanged || 0) + Number(fb.rowsChanged || 0);
-  stats.cellsChanged = Number(stats.cellsChanged || 0) + Number(fb.cellsChanged || 0);
-  stats.candidateSearches = Number(stats.candidateSearches || 0) + Number(fb.candidateSearches || 0);
-  stats.candidateCacheHits = Number(stats.candidateCacheHits || 0) + Number(fb.candidateCacheHits || 0);
-  stats.candidatesDiscovered = Number(stats.candidatesDiscovered || 0) + Number(fb.candidatesDiscovered || 0);
-  stats.hydrationAttempts = Number(stats.hydrationAttempts || 0) + Number(fb.hydrationAttempts || 0);
-  stats.hydrationFailures = Number(stats.hydrationFailures || 0) + Number(fb.hydrationFailures || 0);
-  stats.newPeopleSelected = Number(stats.newPeopleSelected || 0) + Number(fb.newPeopleSelected || 0);
-  stats.identityConflicts = Number(stats.identityConflicts || 0) + Number(fb.identityConflicts || 0);
+  for (const field of [
+    'rowsChanged','cellsChanged','candidateSearches','candidateCacheHits','candidatesDiscovered',
+    'hydrationAttempts','hydrationFailures','newPeopleSelected','identityConflicts',
+    'existingVerificationAttempts','existingVerificationFailures','existingGroupsRepaired',
+    'embeddedDesignationWrites','anchorFieldsFilled','orphanContactTargets','orphanContactVerified',
+    'orphanContactBlocked'
+  ]) {
+    stats[field] = Number(stats[field] || 0) + Number(fb[field] || 0);
+  }
   stats.unfilledOpenGroups = Number(fb.unresolvedTargets || 0);
   return { ...primary, stats };
 }
@@ -163,12 +163,12 @@ async function run(request = {}, options = {}) {
 }
 
 function formatResult(result) {
-  let primary = base.formatResult(result).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
+  const primary = base.formatResult(result).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
   const fb = result?.bigPickleFallback;
   if (!fb?.enabled) return `${primary} Primary execution remained fully deterministic; Big Pickle fallback was disabled. AI/model calls: 0.`;
   const model = fb.fallback || {};
   const fallbackText = fb.attempted
-    ? `Big Pickle fallback: ${fb.modelCalls || 0} model call${Number(fb.modelCalls || 0) === 1 ? '' : 's'}; ${fb.candidateFallbackSelections || 0} candidate selection${Number(fb.candidateFallbackSelections || 0) === 1 ? '' : 's'} recovered; ${fb.employerFallbackSuccesses || 0}/${fb.employerFallbackAttempts || 0} employer ambiguities resolved; ${fb.cellsChanged || 0} additional cell${Number(fb.cellsChanged || 0) === 1 ? '' : 's'} written; ${fb.candidateFallbackAbstains || 0} abstain${Number(fb.candidateFallbackAbstains || 0) === 1 ? '' : 's'}; models [${(model.actualModels || []).join(', ') || 'none'}]; personal API fallbacks 0.`
+    ? `Big Pickle fallback: ${fb.modelCalls || 0} model call${Number(fb.modelCalls || 0) === 1 ? '' : 's'}; ${fb.candidateFallbackSelections || 0} ambiguous candidate selection${Number(fb.candidateFallbackSelections || 0) === 1 ? '' : 's'} recovered; ${fb.employerFallbackSuccesses || 0}/${fb.employerFallbackAttempts || 0} employer ambiguities resolved; ${fb.existingGroupsRepaired || 0} existing group${Number(fb.existingGroupsRepaired || 0) === 1 ? '' : 's'} repaired after fallback employer verification; ${fb.embeddedDesignationWrites || 0} designation upgrade${Number(fb.embeddedDesignationWrites || 0) === 1 ? '' : 's'}; ${fb.cellsChanged || 0} additional cell${Number(fb.cellsChanged || 0) === 1 ? '' : 's'} written; ${fb.candidateFallbackAbstains || 0} abstain${Number(fb.candidateFallbackAbstains || 0) === 1 ? '' : 's'}; models [${(model.actualModels || []).join(', ') || 'none'}]; personal API fallbacks 0.`
     : 'Big Pickle fallback was available but not needed because the deterministic pass left no eligible ambiguity to resolve. AI/model calls: 0.';
   return `${primary} Primary engine: deterministic. ${fallbackText}`;
 }
