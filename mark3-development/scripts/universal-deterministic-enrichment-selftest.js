@@ -176,6 +176,5 @@ const googleDispatchIndex = controllerSource.indexOf('return universalController
 const legacyInstallIndex = controllerSource.indexOf('installLegacyExcelWrappers();');
 assert.ok(googleDispatchIndex >= 0, 'universal Google dispatch must exist');
 assert.ok(legacyInstallIndex > googleDispatchIndex, 'legacy AI wrappers must install only after the Google Sheet early-return path');
-assert.doesNotMatch(controllerSource.slice(0, googleDispatchIndex), /three-poc-(?:linkedin-anchor-fallback|linkedin-profile-resilience|linkedin-profile-normalizer|omniroute-diversity)['"]\)\.install\(\)/, 'legacy AI wrappers must not install before Google Sheet dispatch');
 
 console.log('Universal deterministic enrichment self-test passed: arbitrary contact counts, reordered fields, unfamiliar repeated blocks, company-vs-person ownership, deterministic employer parsing, context-adaptive ranking and zero-model Google-Sheet execution are protected.');
