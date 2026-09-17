@@ -5,78 +5,62 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..', 'core');
-const pickleSource = fs.readFileSync(path.join(root, 'three-poc-big-pickle-override.js'), 'utf8');
-const tabSource = fs.readFileSync(path.join(root, 'three-poc-direct-tab-fallback.js'), 'utf8');
+const fallbackSource = fs.readFileSync(path.join(root, 'universal-big-pickle-fallback.js'), 'utf8');
+const fallbackPassSource = fs.readFileSync(path.join(root, 'universal-big-pickle-fallback-pass.js'), 'utf8');
+const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
+const deterministicSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const controllerSource = fs.readFileSync(path.join(root, 'three-poc-domain-controller.js'), 'utf8');
+const approvalSource = fs.readFileSync(path.join(root, 'universal-paid-approval-handler.js'), 'utf8');
 const providerSource = fs.readFileSync(path.join(root, 'provider-registry.js'), 'utf8');
 
-// Big Pickle remains globally blocked from ordinary auto-routing. This temporary
-// path must be an explicit scoped exception, not a new global default.
+// Big Pickle remains unavailable to ordinary automatic model selection.
 assert.ok(providerSource.includes('/big[-_ ]?pickle/i'), 'Big Pickle must remain blocked from ordinary auto-routing');
-assert.match(pickleSource, /ULTRON_M3_THREE_POC_BIG_PICKLE/);
-assert.match(pickleSource, /oc\/big-pickle/);
-assert.match(pickleSource, /skipModelValidation: true/);
-assert.match(pickleSource, /routingMode: 'big-pickle-only'/);
-assert.match(pickleSource, /personalApiFallbackAllowed: false/);
-assert.doesNotMatch(pickleSource, /modelRouter\.chat\(/);
 
-// OpenCode disable policy is authoritative even in temporary mode.
-assert.match(pickleSource, /ULTRON_M3_DISABLE_OPENCODE/);
-assert.match(pickleSource, /BIG_PICKLE_OPENCODE_DISABLED/);
+// The deterministic operator itself remains model-free. The fallback is outside
+// the primary executor so source/schema/planning/writes cannot become model-owned.
+assert.doesNotMatch(deterministicSource, /big-pickle|omniroute|model-router|chatOmniRouteOnly/i);
+assert.match(targetedSource, /const primary = await base\.run\(exact\.request, options\)/);
+assert.match(targetedSource, /fallbackPass\.run\(exact\.request, primary, options\)/);
+assert.ok(
+  targetedSource.indexOf('const primary = await base.run(exact.request, options)')
+    < targetedSource.indexOf('fallbackPass.run(exact.request, primary, options)'),
+  'deterministic primary must execute before Big Pickle fallback'
+);
 
-// Exact source + exact tab scope are both mandatory. This prevents @mentions
-// from being interpreted as local XLSX by the old source compiler.
-assert.match(controllerSource, /ULTRON_M3_THREE_POC_SOURCE_URL/);
-assert.match(controllerSource, /BIG_PICKLE_SOURCE_URL_REQUIRED/);
-assert.match(controllerSource, /sourcePinnedMessage/);
-assert.match(controllerSource, /if \(bigPickleMode\(\)\)/);
-assert.match(controllerSource, /defaultUniversalGoogleDispatch/);
-assert.match(tabSource, /ULTRON_M3_THREE_POC_TARGET_SHEET/);
-assert.match(tabSource, /ULTRON_M3_THREE_POC_TARGET_GID/);
-assert.match(tabSource, /restrictMetadata/);
-assert.match(tabSource, /metadataScoped/);
-assert.match(tabSource, /metadataFallbacks/);
-assert.match(tabSource, /googleSheets\.sheetGid = function exactConfiguredSheetGid/);
-assert.match(controllerSource, /BIG_PICKLE_TARGET_SHEET_REQUIRED/);
+// Big Pickle can reason only inside the spreadsheet domain's internal-inference
+// scope and only through OmniRoute/OpenCode. No direct personal provider route.
+assert.match(fallbackSource, /runInternalInference\('spreadsheet-enrichment'/);
+assert.match(fallbackSource, /oc\/big-pickle/);
+assert.match(fallbackSource, /skipModelValidation: true/);
+assert.doesNotMatch(fallbackSource, /modelRouter\.chat|direct-model|gemini\/|openai\//i);
+assert.match(fallbackSource, /personalApiFallbacks:\s*0/);
+assert.match(fallbackSource, /select ONLY one candidateKey/);
+assert.match(fallbackSource, /Use ONLY the supplied LinkedIn-profile evidence/);
 
-// Pre-approval inspection and paid execution both preflight the exact configured
-// worksheet values. This means THREE_POC_LAYOUT_NOT_FOUND cannot be produced by
-// a workbook scan when the configured Arya 2 A:ZZ range itself is valid.
-assert.match(tabSource, /async function directExactTabRead/);
-assert.match(tabSource, /threePoc\.detectThreePocLayout\(rows\)/);
-assert.match(tabSource, /threePoc\.inspectSource = async function exactTabFallbackInspect/);
-assert.match(tabSource, /inspectionFromDirectRead/);
-assert.match(tabSource, /await directExactTabRead\(source, 'enrichment-preflight'\)/);
-assert.match(tabSource, /THREE_POC_EXACT_TAB_LAYOUT_NOT_FOUND/);
-assert.match(tabSource, /header=\$\{JSON\.stringify/);
+// Fallback post-pass still relies on deterministic Apollo hydration, same-employer
+// verification, orphan-contact proof and safeWritesForGroup before any cell write.
+assert.match(fallbackPassSource, /apollo\.resolveDecisionMaker/);
+assert.match(fallbackPassSource, /ranker\.sameEmployer/);
+assert.match(fallbackPassSource, /orphanPolicy\.verify/);
+assert.match(fallbackPassSource, /planner\.safeWritesForGroup/);
+assert.match(fallbackPassSource, /base\.repairExistingGroups/);
 
-const directTab = require('../core/three-poc-direct-tab-fallback');
-const meta = {
-  properties: { title: 'Test' },
-  sheets: [
-    { properties: { title: 'Gaurav 2', sheetId: 1317116143, index: 0 } },
-    { properties: { title: 'Arya 2', sheetId: 1791507355, index: 1 } },
-  ],
-};
-const scoped = directTab.restrictMetadata(meta, 'Arya 2', 1791507355);
-assert.ok(scoped);
-assert.equal(scoped.sheets.length, 1);
-assert.equal(scoped.sheets[0].properties.title, 'Arya 2');
-assert.equal(scoped.sheets[0].properties.sheetId, 1791507355);
-assert.equal(directTab.restrictMetadata(meta, 'Missing', 999), null);
+// Historical 3-POC wording may still reach the compatibility controller, but any
+// Google Sheet URL must immediately delegate to universal deterministic routing.
+assert.match(controllerSource, /Google is always universal-first/);
+assert.match(controllerSource, /if \(googleUrl\) return defaultUniversalGoogleDispatch/);
+assert.doesNotMatch(controllerSource, /three-poc-big-pickle-override/);
 
-// Source pinning behavior is tested with a temporary environment override.
-const oldSource = process.env.ULTRON_M3_THREE_POC_SOURCE_URL;
-try {
-  process.env.ULTRON_M3_THREE_POC_SOURCE_URL = 'https://docs.google.com/spreadsheets/d/testSpreadsheet123/edit#gid=1791507355';
-  const controller = require('../core/three-poc-domain-controller');
-  assert.equal(controller.bigPickleSourceUrl(), 'https://docs.google.com/spreadsheets/d/testSpreadsheet123/edit#gid=1791507355');
-  const pinned = controller.sourcePinnedMessage('Use @New_Sheet_14-09-25 and run anchored 3-POC on Arya 2.');
-  assert.match(pinned, /^https:\/\/docs\.google\.com\/spreadsheets\/d\/testSpreadsheet123\/edit#gid=1791507355/);
-  assert.match(pinned, /@New_Sheet_14-09-25/);
-} finally {
-  if (oldSource == null) delete process.env.ULTRON_M3_THREE_POC_SOURCE_URL;
-  else process.env.ULTRON_M3_THREE_POC_SOURCE_URL = oldSource;
-}
+// Final approval reporting must expose actual fallback model use instead of
+// falsely stamping every completed run as modelCalls=0.
+assert.match(approvalSource, /const modelCalls = Number\(result\?\.modelCalls \|\| 0\)/);
+assert.match(approvalSource, /fallbackModelUsed:\s*fallbackUsed/);
 
-console.log('Big Pickle 3-POC fallback self-test passed: the workaround is opt-in, Big Pickle-only, personal-key-free, OpenCode-policy-aware, pinned to one canonical Google source and one exact worksheet, and both approval inspection and enrichment preflight validate the exact target values before legacy execution.');
+const fallback = require('../core/universal-big-pickle-fallback');
+assert.equal(fallback.evidenceContainsCompany('Northstar Technologies Pvt. Ltd.', 'Current company: Northstar Technologies'), true);
+assert.equal(fallback.evidenceContainsCompany('Completely Different Corp', 'Current company: Northstar Technologies'), false);
+assert.equal(fallback.ambiguityReason({ ranked: [{ score: 60, confidence: 0.4 }] }, 0.54), 'low-confidence');
+assert.equal(fallback.ambiguityReason({ ranked: [{ score: 60, confidence: 0.7 }, { score: 57, confidence: 0.68 }] }, 0.54), 'close-score');
+assert.equal(fallback.ambiguityReason({ ranked: [{ score: 70, confidence: 0.72 }, { score: 50, confidence: 0.65 }] }, 0.54), null);
+
+console.log('Universal Big Pickle fallback self-test passed: Google enrichment is deterministic-first, Big Pickle is bounded to spreadsheet-internal ambiguity resolution, Apollo verification still gates writes, personal-provider fallback is forbidden, and legacy 3-POC wording cannot make Big Pickle own a Google Sheet run.');
