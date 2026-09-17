@@ -1,9 +1,11 @@
 'use strict';
 
-// Google Sheets Values API rejects A1 ranges that extend beyond the physical grid
-// on some sheets (for example `'Arya 2'!A:ZZ` when the tab only has columns A:O).
-// Universal enrichment intentionally asks for a wide schema-neutral range, so this
-// wrapper retries only grid-bound failures with the exact real tab dimensions.
+// Universal enrichment deliberately asks Google Sheets for a wide schema-neutral
+// range (for example `'Arya 2'!A:ZZ`). Some tabs have a much smaller physical
+// grid and Google rejects the request instead of simply returning the populated
+// cells. Recovery must not depend on workbook metadata because metadata itself can
+// fail independently. We therefore use metadata when available, but fall back to
+// a Values-API-only binary probe that discovers the last readable column.
 
 const sheets = require('./google-sheets-operator');
 
@@ -12,9 +14,15 @@ const state = {
   retries: 0,
   successes: 0,
   failures: 0,
+  metadataAttempts: 0,
+  metadataFailures: 0,
+  probeCalls: 0,
+  probeSuccesses: 0,
   lastOriginalRange: null,
   lastClampedRange: null,
   lastGrid: null,
+  lastProbeColumn: null,
+  lastStrategy: null,
   lastError: null,
 };
 
@@ -46,13 +54,16 @@ function parseSheetRange(range) {
   };
 }
 
-function shouldRetry(error) {
-  const message = String(error?.message || error || '').toLowerCase();
-  if (/range exceeds grid limits|exceeds grid limits|outside the sheet limits|range.*exceed/.test(message)) return true;
-  // Some Google 400 responses are generic while details contain the range error.
+function errorText(error) {
   let details = '';
-  try { details = JSON.stringify(error?.googleDetails || []).toLowerCase(); } catch {}
-  return Number(error?.status) === 400 && /grid|range|limit/.test(`${message} ${details}`);
+  try { details = JSON.stringify(error?.googleDetails || []); } catch {}
+  return `${String(error?.message || error || '')} ${details}`.toLowerCase();
+}
+
+function shouldRetry(error) {
+  const combined = errorText(error);
+  if (/range exceeds grid limits|exceeds grid limits|outside the sheet limits|range.*exceed|grid.*limit/.test(combined)) return true;
+  return Number(error?.status) === 400 && /\brange\b/.test(combined) && /\b(?:grid|limit|column|row)\b/.test(combined);
 }
 
 function clampRange(range, grid = {}) {
@@ -79,18 +90,106 @@ function clampRange(range, grid = {}) {
   return `${sheets.quoteSheet(parsed.sheetName)}!${startRef}:${endRef}`;
 }
 
+function rangeWithEndColumn(parsed, endColumnIndex) {
+  const startRef = `${parsed.startColumn}${parsed.startRow == null ? '' : parsed.startRow}`;
+  const endRef = `${sheets.columnName(endColumnIndex)}${parsed.endRow == null ? '' : parsed.endRow}`;
+  return `${sheets.quoteSheet(parsed.sheetName)}!${startRef}:${endRef}`;
+}
+
+function columnProbeRange(parsed, columnIndexValue) {
+  const col = sheets.columnName(columnIndexValue);
+  // Probe the first row only. This validates whether the physical grid contains
+  // the column while keeping each recovery request tiny.
+  return `${sheets.quoteSheet(parsed.sheetName)}!${col}1:${col}1`;
+}
+
+async function lastReadableColumn(originalValues, id, parsed) {
+  const lowBound = columnIndex(parsed.startColumn);
+  const highBound = columnIndex(parsed.endColumn);
+  if (lowBound < 0 || highBound < lowBound) return null;
+
+  async function readable(index) {
+    state.probeCalls++;
+    state.lastProbeColumn = sheets.columnName(index);
+    try {
+      await originalValues(id, columnProbeRange(parsed, index));
+      state.probeSuccesses++;
+      return true;
+    } catch (error) {
+      // A non-grid error means probing cannot safely distinguish sheet width from
+      // auth/network/permission failure. Bubble it up instead of disguising it.
+      if (!shouldRetry(error)) throw error;
+      return false;
+    }
+  }
+
+  // If even the starting column cannot be read, this is not a recoverable
+  // end-column overflow for the requested range.
+  if (!(await readable(lowBound))) return null;
+  if (await readable(highBound)) return highBound;
+
+  let lo = lowBound;
+  let hi = highBound;
+  while (lo + 1 < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (await readable(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
 function reset() {
-  state.retries = 0;
-  state.successes = 0;
-  state.failures = 0;
-  state.lastOriginalRange = null;
-  state.lastClampedRange = null;
-  state.lastGrid = null;
-  state.lastError = null;
+  for (const key of Object.keys(state)) {
+    if (typeof state[key] === 'number') state[key] = 0;
+    else state[key] = null;
+  }
 }
 
 function snapshot() {
   return { ...state, lastGrid: state.lastGrid ? { ...state.lastGrid } : null };
+}
+
+async function retryWithMetadata(originalValues, originalMetadata, id, range, parsed) {
+  state.metadataAttempts++;
+  let meta;
+  try {
+    meta = await originalMetadata(id);
+  } catch (error) {
+    state.metadataFailures++;
+    return { rows: null, error, retryable: true };
+  }
+
+  const target = (meta?.sheets || []).find((item) => String(item?.properties?.title || '').trim().toLowerCase() === parsed.sheetName.trim().toLowerCase());
+  const grid = target?.properties?.gridProperties || null;
+  const clamped = grid ? clampRange(range, grid) : null;
+  state.lastGrid = grid ? {
+    sheetName: target.properties.title,
+    sheetId: target.properties.sheetId,
+    rowCount: Number(grid.rowCount || 0),
+    columnCount: Number(grid.columnCount || 0),
+  } : null;
+
+  if (!clamped || clamped === range) return { rows: null, error: null, retryable: true };
+  state.lastClampedRange = clamped;
+  try {
+    const rows = await originalValues(id, clamped);
+    state.lastStrategy = 'metadata-clamp';
+    return { rows, error: null, retryable: false };
+  } catch (error) {
+    if (!shouldRetry(error)) throw error;
+    return { rows: null, error, retryable: true };
+  }
+}
+
+async function retryWithValueProbes(originalValues, id, range, parsed) {
+  const last = await lastReadableColumn(originalValues, id, parsed);
+  if (!Number.isInteger(last)) return null;
+  const clamped = rangeWithEndColumn(parsed, last);
+  if (!clamped || clamped === range) return null;
+  state.lastClampedRange = clamped;
+  const rows = await originalValues(id, clamped);
+  state.lastStrategy = 'values-binary-probe';
+  return rows;
 }
 
 function install() {
@@ -110,46 +209,61 @@ function install() {
       state.lastOriginalRange = String(range || '');
       state.lastError = String(error?.message || error || '').slice(0, 500);
 
-      let meta;
-      try {
-        meta = await originalMetadata(id);
-      } catch {
-        state.failures++;
-        throw error;
-      }
-      const target = (meta?.sheets || []).find((item) => String(item?.properties?.title || '').trim().toLowerCase() === parsed.sheetName.trim().toLowerCase());
-      const grid = target?.properties?.gridProperties || null;
-      const clamped = grid ? clampRange(range, grid) : null;
-      state.lastGrid = grid ? {
-        sheetName: target.properties.title,
-        sheetId: target.properties.sheetId,
-        rowCount: Number(grid.rowCount || 0),
-        columnCount: Number(grid.columnCount || 0),
-      } : null;
-      state.lastClampedRange = clamped;
-      if (!clamped || clamped === range) {
-        state.failures++;
-        throw error;
+      // Fast path: use real grid metadata when available.
+      const metadataRetry = await retryWithMetadata(originalValues, originalMetadata, id, range, parsed);
+      if (metadataRetry.rows) {
+        state.successes++;
+        return metadataRetry.rows;
       }
 
+      // Metadata is intentionally not authoritative for recovery. Discover the
+      // actual last readable column directly with the Values API instead.
       try {
-        const rows = await originalValues(id, clamped);
-        state.successes++;
-        return rows;
-      } catch (retryError) {
+        const rows = await retryWithValueProbes(originalValues, id, range, parsed);
+        if (rows) {
+          state.successes++;
+          return rows;
+        }
+      } catch (probeError) {
         state.failures++;
-        state.lastError = String(retryError?.message || retryError || '').slice(0, 500);
-        retryError.originalRange = range;
-        retryError.clampedRange = clamped;
-        retryError.grid = state.lastGrid;
-        throw retryError;
+        state.lastError = String(probeError?.message || probeError || '').slice(0, 500);
+        probeError.originalRange = range;
+        probeError.rangeRecoveryStrategy = state.lastStrategy || 'values-binary-probe';
+        probeError.rangeRecoveryProbeCalls = state.probeCalls;
+        throw probeError;
       }
+
+      state.failures++;
+      error.originalRange = range;
+      error.rangeRecoveryStrategy = 'metadata+values-probe-exhausted';
+      error.rangeRecoveryProbeCalls = state.probeCalls;
+      throw error;
     }
   };
 
-  const api = Object.freeze({ installed: true, reset, snapshot, clampRange, parseSheetRange, shouldRetry });
+  const api = Object.freeze({
+    installed: true,
+    reset,
+    snapshot,
+    clampRange,
+    parseSheetRange,
+    shouldRetry,
+    lastReadableColumn,
+    rangeWithEndColumn,
+    columnProbeRange,
+  });
   globalThis[INSTALL_FLAG] = api;
   return api;
 }
 
-module.exports = { install, reset, snapshot, clampRange, parseSheetRange, shouldRetry };
+module.exports = {
+  install,
+  reset,
+  snapshot,
+  clampRange,
+  parseSheetRange,
+  shouldRetry,
+  lastReadableColumn,
+  rangeWithEndColumn,
+  columnProbeRange,
+};
