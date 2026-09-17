@@ -1,13 +1,13 @@
 'use strict';
 
-// First-class one-run Apollo approval handler for universal Google-Sheet
-// enrichment. This deliberately sits outside the legacy 3-POC approval path.
+// First-class one-run Apollo approval executor for universal Google-Sheet
+// enrichment. Approval resolution itself is owned by command-control-plane;
+// this module only validates and executes a resolved decision.
 
 const paidTools = require('./paid-tool-approval');
 const universal = require('./universal-sheet-enrichment-targeted');
 
 const OPERATION = 'universal-spreadsheet-enrichment';
-const INSTALL_FLAG = Symbol.for('ultron.mark3.universalPaidApprovalHandler.installed');
 
 function response(ok, body, extra = {}) {
   return {
@@ -94,25 +94,10 @@ async function execute(decision) {
   }
 }
 
+// Kept as an explicit hook for callers/self-tests. There is intentionally no
+// assistant.handle monkey-patch anymore; command-control-plane resolves approval.
 function install() {
-  if (globalThis[INSTALL_FLAG]) return globalThis[INSTALL_FLAG];
-  const assistant = require('./assistant');
-  if (!assistant?.handle) throw new Error('Assistant handle is unavailable for universal paid approval handling.');
-  const originalHandle = assistant.handle.bind(assistant);
-
-  assistant.handle = async function universalPaidApprovalAwareHandle(message, options = {}) {
-    const pending = paidTools.pending('apollo');
-    if (!pending || pending.operation !== OPERATION) return originalHandle(message, options);
-
-    const decision = paidTools.resolveMessage(String(message || ''));
-    if (!decision) return originalHandle(message, options);
-    const handled = await execute(decision);
-    return handled || originalHandle(message, options);
-  };
-
-  const api = Object.freeze({ installed: true, operation: OPERATION });
-  globalThis[INSTALL_FLAG] = api;
-  return api;
+  return Object.freeze({ installed: true, operation: OPERATION, owner: 'command-control-plane' });
 }
 
 module.exports = { OPERATION, install, execute, modePrefix };
