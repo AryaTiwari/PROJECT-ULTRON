@@ -32,11 +32,20 @@ assert.equal(
 );
 assert.equal(hardening.shouldRetry(Object.assign(new Error('Invalid credentials'), { status: 401 })), false);
 
+// Auth failures are handled before grid/range recovery. A stale access token must
+// be recognized as unauthorized so the Values wrapper can force-refresh exactly once.
+assert.equal(hardening.isUnauthorized(Object.assign(new Error('Invalid Credentials'), { status: 401 })), true);
+assert.equal(hardening.isUnauthorized({ googleStatus: 'UNAUTHENTICATED' }), true);
+assert.equal(hardening.isUnauthorized(Object.assign(new Error('Bad request'), { status: 400 })), false);
+const authError = hardening.authRequiredError(new Error('still unauthorized'));
+assert.equal(authError.code, 'GOOGLE_SHEETS_AUTH_REQUIRED');
+assert.equal(authError.status, 401);
+assert.match(authError.reauthorizeCommand, /google-sheets-auth\.js/i);
+
 (async () => {
   const parsed = hardening.parseSheetRange("'Arya 2'!A:ZZ");
   const physicalLastColumnIndex = 14; // O
   const fakeValues = async (_id, range) => {
-    const probe = String(range).match(/!([A-Z]+)1:\1?([A-Z]+)?1$/);
     const col = String(range).match(/!([A-Z]+)1:/)?.[1];
     if (!col) return [];
     let index = 0;
@@ -58,7 +67,7 @@ assert.equal(hardening.shouldRetry(Object.assign(new Error('Invalid credentials'
     'metadata-free recovery must rebuild the final safe A:O range',
   );
 
-  console.log('Google Sheets values range hardening self-test passed: wide universal reads recover from grid failures with metadata when available and with Values-only binary probing when metadata is unavailable; Arya 2 A:ZZ resolves to A:O.');
+  console.log('Google Sheets values hardening self-test passed: stale 401 tokens are recognized for forced-refresh recovery, while wide universal reads still recover from real grid failures with metadata or Values-only probing.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
