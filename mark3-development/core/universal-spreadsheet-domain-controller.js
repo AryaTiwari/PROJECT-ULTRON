@@ -26,6 +26,10 @@ function text(value) { return String(value == null ? '' : value).trim(); }
 function parseSheetName(message) {
   const value = String(message || '');
   const linePatterns = [
+    // Target only the `Gaurav 2` tab.
+    /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet)\b/im,
+    // Target only the Gaurav 2 tab.
+    /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet)\b/im,
     /(?:^|\n)\s*(?:target|use|sheet|tab)\s+(?:only\s+)?(?:tab|sheet)?\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})/im,
     /(?:^|\n)\s*target\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet)\s+["'`“”]?([^\n"'`“”]{1,120})/im,
     /\b(?:target|use)\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})/i,
@@ -33,8 +37,11 @@ function parseSheetName(message) {
   for (const pattern of linePatterns) {
     const match = value.match(pattern);
     if (!match) continue;
-    const candidate = text(match[1]).replace(/[.]+$/, '').trim();
-    if (candidate && !/^(?:only|the)$/i.test(candidate)) return candidate;
+    const candidate = text(match[1])
+      .replace(/^[`"'“”]+|[`"'“”]+$/g, '')
+      .replace(/[.]+$/, '')
+      .trim();
+    if (candidate && !/^(?:only|the|tab|sheet)$/i.test(candidate)) return candidate;
   }
   return '';
 }
@@ -97,6 +104,7 @@ function installApprovalBridge() {
       return await universal.run({
         sheetUrl: url,
         sheetName: request.sheetName || undefined,
+        explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative),
       }, {
         apolloApproved: true,
         rowLimit: request.rowLimit || options.rowLimit || undefined,
@@ -119,10 +127,13 @@ function installApprovalBridge() {
 
 installApprovalBridge();
 
-async function resolveRequestedTarget(sheetUrl, requestedSheetName = '') {
+async function resolveRequestedTarget(sheetUrl, requestedSheetName = '', options = {}) {
   const spreadsheetId = sheets.spreadsheetId(sheetUrl);
   const meta = await sheets.metadata(spreadsheetId);
-  const resolution = targetResolver.resolveTabs(meta, sheetUrl, { sheetName: requestedSheetName || undefined });
+  const resolution = targetResolver.resolveTabs(meta, sheetUrl, {
+    sheetName: requestedSheetName || undefined,
+    explicitNameAuthoritative: Boolean(options.explicitNameAuthoritative),
+  });
   return {
     spreadsheetId,
     resolution,
@@ -132,11 +143,12 @@ async function resolveRequestedTarget(sheetUrl, requestedSheetName = '') {
   };
 }
 
-async function inspect(sheetUrl, sheetName, rowLimit) {
-  const target = await resolveRequestedTarget(sheetUrl, sheetName);
+async function inspect(sheetUrl, sheetName, rowLimit, options = {}) {
+  const target = await resolveRequestedTarget(sheetUrl, sheetName, options);
   const inspection = await universal.run({
     sheetUrl,
     sheetName: target.sheetName || undefined,
+    explicitNameAuthoritative: Boolean(options.explicitNameAuthoritative),
   }, {
     dryRun: true,
     rowLimit,
@@ -148,6 +160,7 @@ async function inspect(sheetUrl, sheetName, rowLimit) {
       sheetId: target.sheetId,
       source: target.targetSource,
       requestedGid: target.resolution.requestedGid,
+      ignoredViewGid: target.resolution.ignoredViewGid,
       requestedName: target.resolution.requestedName || null,
     },
   };
@@ -155,7 +168,8 @@ async function inspect(sheetUrl, sheetName, rowLimit) {
 
 async function handle(message, context = {}) {
   const original = String(context.originalMessage || message || '');
-  const sheetUrl = sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message);
+  const directSheetUrl = sheets.extractSheetUrl(original);
+  const sheetUrl = directSheetUrl || sheets.extractSheetUrl(message);
   if (!sheetUrl) {
     return response(false,
       'Universal spreadsheet enrichment owns this command, but no full Google Sheets URL could be resolved. Nothing was edited and Apollo was not called.',
@@ -163,10 +177,15 @@ async function handle(message, context = {}) {
   }
 
   const requestedSheetName = parseSheetName(original);
+  // When the user references a workbook through @mention/file attachment, the
+  // resolved URL can retain whichever tab happened to be open. An explicit tab
+  // name in the natural-language request must override that incidental view gid.
+  // A directly pasted URL remains strict: name/gid disagreement fails closed.
+  const explicitNameAuthoritative = Boolean(requestedSheetName && !directSheetUrl);
   const rowLimit = configuredRowLimit();
   let inspection;
   try {
-    inspection = await inspect(sheetUrl, requestedSheetName, rowLimit);
+    inspection = await inspect(sheetUrl, requestedSheetName, rowLimit, { explicitNameAuthoritative });
   } catch (error) {
     return response(false,
       `Universal spreadsheet inspection stopped safely: ${error.message} Nothing was edited and Apollo was not called.`,
@@ -193,6 +212,7 @@ async function handle(message, context = {}) {
     sheetName: exactSheetName,
     sheetId: inspection.requestedTarget?.sheetId ?? null,
     targetSource: inspection.requestedTarget?.source || 'none',
+    explicitNameAuthoritative,
     rowLimit,
     schemaFingerprint: summary.fingerprint || null,
     requestedAt: new Date().toISOString(),
