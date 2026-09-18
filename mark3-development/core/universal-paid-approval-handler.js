@@ -78,6 +78,7 @@ async function execute(decision) {
     }, {
       apolloApproved: true,
       rowLimit: payload.rowLimit || undefined,
+      schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
       allowLinkedInEmployerFallback: true,
     }));
 
@@ -129,6 +130,7 @@ async function execute(decision) {
       fallbackModelUsed: fallbackUsed,
       boundedAiBatchRescue: Boolean(result?.aiBatchRescue?.attempted),
       boundedAiBatchMaxCalls: Number(result?.aiBatchRescue?.maxCalls || 0),
+      expectedPersonGroups: payload.expectedPersonGroups || null,
       modelCalls,
       completedFully: !partialCompletion,
       partialCompletion,
