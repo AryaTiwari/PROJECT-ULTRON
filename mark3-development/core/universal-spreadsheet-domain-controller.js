@@ -107,8 +107,10 @@ function approvalSummary(inspection) {
     `It detected header row ${header}, ${people} person/contact group${people === 1 ? '' : 's'} and ${companies} company group${companies === 1 ? '' : 's'} without assuming a fixed POC count or fixed column letters.`,
     `The planned pass contains ${analysis.openPersonSlots || 0} open and ${analysis.partialPersonSlots || 0} partial person/contact slots within the currently eligible row range.`,
     'Pre-approval inspection uses worksheet values only: no Apollo, LinkedIn profile fetch, Big Pickle or other AI/model call occurs.',
-    'During approved execution, schema inference, ownership, row planning, normal employer parsing, normal authority ranking and writes remain deterministic-first.',
-    'Big Pickle is available only as a bounded fallback after deterministic evidence is insufficient: it may resolve a current-employer ambiguity from exact profile evidence or break a low-confidence/tied eligible candidate shortlist. It cannot invent candidates, choose worksheets, bypass Apollo identity hydration or write directly.',
+    'During approved execution, worksheet targeting, schema inference, ownership, anchor handling, Apollo discovery/hydration, verification and spreadsheet writes remain deterministic.',
+    'After the deterministic pass, a bounded AI batch rescue is available for unresolved POC slots. It uses one whole-run context pass, one whole-run candidate-selection pass, and only when needed one reviewer pass: maximum 3 logical AI calls for the entire run, not per row.',
+    'The AI may choose only supplied Apollo candidate keys and employer wording supported by the row evidence. It cannot invent candidates, choose worksheets/columns, bypass Apollo identity/employer verification or write cells directly.',
+    'When bounded AI batch rescue is active, the old per-row Big Pickle fallback is suppressed so the whole-run AI-call cap stays real.',
     'Apollo will be used only after approval for exact identity/contact discovery and hydration, and existing populated identities/contacts are preserved unless an exact verified same-person repair is safe.',
   ].join(' ');
 }
@@ -275,6 +277,8 @@ async function handle(message, context = {}) {
     inspectionMode: inspection.inspectionMode,
     deterministicPrimary: true,
     fallbackModelAvailable: true,
+    boundedAiBatchAvailable: true,
+    boundedAiBatchMaxCalls: Math.max(1, Math.min(3, Number(process.env.ULTRON_M3_UNIVERSAL_AI_BATCH_MAX_CALLS || 3))),
     modelCalls: 0,
   });
 }
