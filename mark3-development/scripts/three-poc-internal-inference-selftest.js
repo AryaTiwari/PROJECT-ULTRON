@@ -55,6 +55,7 @@ assert.throws(
 
 (async () => {
   await require('./universal-contact-completion-selftest').run();
+  await require('./universal-schema-continuity-selftest').run();
   await control.runInternalInference('three-poc-spreadsheet', async () => {
     assert.doesNotThrow(() => control.assertAllowed('general-model', {
       messages: [{ role: 'user', content: internalPayload }],
@@ -68,7 +69,7 @@ assert.throws(
     );
   });
 
-  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, typed-error taxonomy, Apollo transport retry, verified contact completion, bounded AI batch rescue, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; personal direct-model calls stay blocked.');
+  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, typed-error taxonomy, Apollo transport retry, verified contact completion, schema continuity recovery, bounded AI batch rescue, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; personal direct-model calls stay blocked.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
