@@ -131,6 +131,9 @@ function approvalSummary(inspection) {
     `ULTRON deterministically inspected worksheet "${inspection?.sheetName || '?'}" before Apollo approval.`,
     rowLimitNotice(inspection?.rowLimitApplied),
     `It detected header row ${header}, ${people} person/contact group${people === 1 ? '' : 's'} and ${companies} company group${companies === 1 ? '' : 's'} without assuming a fixed POC count or fixed column letters.`,
+    (summary.continuityRecoveries || []).length
+      ? `Schema continuity recovery reconstructed ${(summary.continuityRecoveries || []).length} explicitly expected missing contact group${(summary.continuityRecoveries || []).length === 1 ? '' : 's'} in blank trailing columns. ${(summary.headerRepairs || []).length} missing header cell${(summary.headerRepairs || []).length === 1 ? '' : 's'} will be restored only after approval and only if those cells are still blank.`
+      : 'Schema continuity recovery was not needed.',
     `The planned pass contains ${analysis.openPersonSlots || 0} open and ${analysis.partialPersonSlots || 0} partial person/contact slots within the currently eligible row range.`,
     'Pre-approval inspection uses worksheet values only: no Apollo, LinkedIn profile fetch, Big Pickle or other AI/model call occurs.',
     'During approved execution, worksheet targeting, schema inference, ownership, anchor handling, Apollo discovery/hydration, verification and spreadsheet writes remain deterministic.',
