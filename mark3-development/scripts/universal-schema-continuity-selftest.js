@@ -9,6 +9,14 @@ const controller = require('../core/universal-spreadsheet-domain-controller');
 const operator = require('../core/universal-sheet-enrichment-operator');
 const sheets = require('../core/google-sheets-operator');
 
+const previousExpectedGroupsEnv = process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS;
+delete process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS;
+
+function restoreExpectedGroupsEnv() {
+  if (previousExpectedGroupsEnv == null) delete process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS;
+  else process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS = previousExpectedGroupsEnv;
+}
+
 function brokenArya2Rows() {
   return [
     ['Person or Company Name','L','Post Details','L','Linkedin Id','Phone no','Email ID'],
@@ -91,6 +99,7 @@ async function run() {
   } finally {
     sheets.readCell = originals.readCell;
     sheets.writeCells = originals.writeCells;
+    restoreExpectedGroupsEnv();
   }
 
   console.log('Universal schema continuity self-test passed: explicit 3-POC intent recovers missing H:M contact groups from blank trailing space, restores only blank headers after approval, preserves populated header cells, and generic sheets do not receive invented groups.');
@@ -98,6 +107,7 @@ async function run() {
 
 if (require.main === module) {
   run().catch((error) => {
+    restoreExpectedGroupsEnv();
     console.error(error);
     process.exitCode = 1;
   });
