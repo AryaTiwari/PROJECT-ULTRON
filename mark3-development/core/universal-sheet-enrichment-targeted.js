@@ -10,6 +10,7 @@ const targetResolver = require('./universal-sheet-target-resolver');
 const base = require('./universal-sheet-enrichment-operator');
 const fallbackPass = require('./universal-big-pickle-fallback-pass');
 const fallback = require('./universal-big-pickle-fallback');
+const typedErrors = require('./spreadsheet-enrichment-errors');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 
@@ -130,9 +131,42 @@ async function run(request = {}, options = {}) {
     let result = primary;
     let fb = null;
 
-    if (!options.dryRun && options.apolloApproved === true && fallback.enabled()) {
-      fb = await fallbackPass.run(exact.request, primary, options);
-      result = mergePrimaryAndFallback(primary, fb);
+    const primaryHalted = Boolean(primary?.stats?.haltedEarly || primary?.partialCompletion && primary?.completedFully === false);
+    if (primaryHalted) {
+      fb = {
+        enabled: fallback.enabled(),
+        attempted: false,
+        skippedReason: 'primary-systemic-halt',
+        modelCalls: 0,
+        fallback: fallback.snapshot(),
+      };
+    } else if (!options.dryRun && options.apolloApproved === true && fallback.enabled()) {
+      try {
+        fb = await fallbackPass.run(exact.request, primary, options);
+        result = mergePrimaryAndFallback(primary, fb);
+      } catch (error) {
+        const typed = typedErrors.normalize(error, { stage: error?.stage || 'big-pickle-fallback-pass' });
+        fb = {
+          enabled: true,
+          attempted: true,
+          haltedEarly: true,
+          skippedReason: 'fallback-error',
+          modelCalls: 0,
+          error: {
+            code: typed.code,
+            subsystem: typed.subsystem,
+            type: typed.type,
+            stage: typed.stage,
+            message: typed.message,
+            hint: typed.hint,
+            attemptedRange: typed.attemptedRange || null,
+            retryAttempts: typed.retryAttempts,
+          },
+          fallback: fallback.snapshot(),
+        };
+        // Big Pickle is non-authoritative. Preserve successful deterministic work.
+        result = primary;
+      }
     }
 
     const modelCalls = Number(fb?.modelCalls || 0);
@@ -168,6 +202,13 @@ function formatResult(result) {
   const fb = result?.bigPickleFallback;
   if (!fb?.enabled) return `${primary} Primary execution remained fully deterministic; Big Pickle fallback was disabled. AI/model calls: 0.`;
   const model = fb.fallback || {};
+  if (fb.skippedReason === 'primary-systemic-halt') {
+    return `${primary} Big Pickle fallback was not attempted because the deterministic primary halted safely on a systemic typed error. Earlier verified writes were preserved. AI/model calls: 0.`;
+  }
+  if (fb.skippedReason === 'fallback-error') {
+    const e = fb.error || {};
+    return `${primary} Primary deterministic work was preserved. Big Pickle fallback stopped independently with [${e.subsystem || 'BIG_PICKLE'}/${e.type || 'INTERNAL'}] ${e.code || 'BIG_PICKLE_FALLBACK_FAILED'} @ ${e.stage || 'big-pickle-fallback-pass'}: ${e.message || 'unknown fallback failure'}. ${e.hint || ''} Personal API fallbacks 0.`;
+  }
   if (!fb.attempted) {
     return `${primary} Primary engine: deterministic. Big Pickle fallback was available but not needed because the deterministic pass left no eligible ambiguity to resolve. AI/model calls: 0.`;
   }
