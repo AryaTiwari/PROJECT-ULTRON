@@ -87,6 +87,7 @@ async function execute(decision) {
     const body = `${modePrefix(payload.rowLimit)} ${universal.formatResult(enriched)}`;
     const modelCalls = Number(result?.modelCalls || 0);
     const fallbackUsed = modelCalls > 0;
+    const partialCompletion = Boolean(result?.partialCompletion || result?.stats?.haltedEarly || result?.bigPickleFallback?.haltedEarly);
     return response(true, body, {
       universalEnrichment: enriched,
       spreadsheetProvider: 'google',
@@ -97,6 +98,11 @@ async function execute(decision) {
       deterministic: !fallbackUsed,
       fallbackModelUsed: fallbackUsed,
       modelCalls,
+      completedFully: !partialCompletion,
+      partialCompletion,
+      resumeSafe: result?.resumeSafe !== false,
+      haltError: result?.stats?.haltError || result?.bigPickleFallback?.haltError || result?.bigPickleFallback?.error || null,
+      rowFailureAudit: result?.stats?.rowFailureAudit || [],
       provider: fallbackUsed ? 'deterministic+apollo+google-sheets+omniroute/opencode' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
@@ -112,6 +118,9 @@ async function execute(decision) {
       errorMessage: typed.message,
       diagnostic,
       retryAttempts: typed.retryAttempts,
+      attemptedRange: typed.attemptedRange || null,
+      endpoint: typed.endpoint || null,
+      providerStatus: typed.providerStatus ?? typed.status ?? null,
       spreadsheetProvider: 'google',
       spreadsheetUrl: payload.url,
       sheetName: payload.sheetName,
