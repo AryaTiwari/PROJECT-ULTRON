@@ -44,6 +44,9 @@ assert.equal(control.isUniversalSpreadsheetEnrichmentRequest(`Change formatting 
 // Natural-language tab targeting forms used by the chat UI.
 assert.equal(spreadsheetController.parseSheetName('Target only the `Gaurav 2` tab.'), 'Gaurav 2');
 assert.equal(spreadsheetController.parseSheetName('Target only the Gaurav 2 tab.'), 'Gaurav 2');
+assert.equal(spreadsheetController.parseSheetName('Target only the `Arya 2` worksheet.'), 'Arya 2');
+assert.equal(spreadsheetController.parseSheetName('Use only the Arya 2 worksheet.'), 'Arya 2');
+assert.equal(spreadsheetController.parseSheetName('Target worksheet: "Arya 2"'), 'Arya 2');
 assert.equal(spreadsheetController.parseSheetName('Target tab: "Arya 2"'), 'Arya 2');
 
 assert.match(spreadsheetController.rowLimitNotice(8), /VALIDATION MODE IS ACTIVE/i);
@@ -128,4 +131,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, isolated 3-POC compatibility, quoted tab parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, and visible validation/full-sheet mode are protected.');
+console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, isolated 3-POC compatibility, quoted tab/worksheet parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, and visible validation/full-sheet mode are protected.');
