@@ -38,6 +38,32 @@ function parseSheetName(message) {
   return '';
 }
 
+function parseExpectedPersonGroups(message) {
+  const value = String(message || '');
+  const found = [];
+
+  for (const match of value.matchAll(/\b(?:poc|contact|person)(?:\s*[-#:]?\s*)(\d{1,2})\b/gi)) {
+    found.push(Number(match[1]));
+  }
+  for (const match of value.matchAll(/\b(\d{1,2})\s+(?:pocs?|person\s+groups?|contact\s+groups?)\b/gi)) {
+    found.push(Number(match[1]));
+  }
+
+  const wordOrdinals = {
+    first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
+    sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10,
+  };
+  for (const match of value.matchAll(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:poc|contact|person)\b/gi)) {
+    found.push(wordOrdinals[String(match[1]).toLowerCase()] || 0);
+  }
+
+  const env = Number(process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS || 0);
+  if (Number.isFinite(env) && env > 0) found.push(env);
+
+  const valid = found.filter((value) => Number.isInteger(value) && value >= 1 && value <= 20);
+  return valid.length ? Math.max(...valid) : 0;
+}
+
 function configuredRowLimit() {
   const universalLimit = Number(process.env.ULTRON_M3_UNIVERSAL_ENRICHMENT_ROW_LIMIT || 0);
   if (Number.isFinite(universalLimit) && universalLimit > 0) return Math.floor(universalLimit);
@@ -208,11 +234,15 @@ async function handle(message, context = {}) {
   }
 
   const requestedSheetName = parseSheetName(original);
+  const expectedPersonGroups = parseExpectedPersonGroups(original);
   const explicitNameAuthoritative = Boolean(requestedSheetName);
   const rowLimit = configuredRowLimit();
   let inspection;
   try {
-    inspection = await inspect(sheetUrl, requestedSheetName, rowLimit, { explicitNameAuthoritative });
+    inspection = await inspect(sheetUrl, requestedSheetName, rowLimit, {
+      explicitNameAuthoritative,
+      schema: expectedPersonGroups ? { expectedPersonGroups } : {},
+    });
   } catch (error) {
     const failure = typedFailure(error, { stage: error?.stage || 'preapproval-inspection' });
     return response(false,
@@ -250,6 +280,7 @@ async function handle(message, context = {}) {
     targetSource: inspection.requestedTarget?.source || 'none',
     explicitNameAuthoritative,
     rowLimit: rowLimit || null,
+    expectedPersonGroups: expectedPersonGroups || null,
     schemaFingerprint: summary.fingerprint || null,
     requestedAt: new Date().toISOString(),
   };
@@ -279,6 +310,9 @@ async function handle(message, context = {}) {
     fallbackModelAvailable: true,
     boundedAiBatchAvailable: true,
     boundedAiBatchMaxCalls: Math.max(1, Math.min(3, Number(process.env.ULTRON_M3_UNIVERSAL_AI_BATCH_MAX_CALLS || 3))),
+    expectedPersonGroups: expectedPersonGroups || null,
+    schemaContinuityRecoveries: summary.continuityRecoveries || [],
+    plannedHeaderRepairs: summary.headerRepairs || [],
     modelCalls: 0,
   });
 }
@@ -288,6 +322,7 @@ module.exports = {
   inspect,
   resolveRequestedTarget,
   parseSheetName,
+  parseExpectedPersonGroups,
   configuredRowLimit,
   rowLimitNotice,
   schemaReadable,
