@@ -10,6 +10,7 @@ const targetResolver = require('./universal-sheet-target-resolver');
 const base = require('./universal-sheet-enrichment-operator');
 const fallbackPass = require('./universal-big-pickle-fallback-pass');
 const fallback = require('./universal-big-pickle-fallback');
+const aiBatchRescue = require('./universal-ai-batch-rescue');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
@@ -123,6 +124,22 @@ function mergePrimaryAndFallback(primary, fb) {
   return { ...primary, stats };
 }
 
+
+function mergePrimaryAndAiRescue(primary, rescue) {
+  if (!rescue?.attempted) return primary;
+  const stats = { ...(primary.stats || {}) };
+  for (const field of [
+    'rowsChanged','cellsChanged','newPeopleSelected','embeddedDesignationWrites',
+    'hydrationAttempts','hydrationFailures'
+  ]) {
+    stats[field] = Number(stats[field] || 0) + Number(rescue[field] || 0);
+  }
+  if (Number.isFinite(Number(rescue.unresolvedSlots))) {
+    stats.unfilledOpenGroups = Number(rescue.unresolvedSlots || 0);
+  }
+  return { ...primary, stats };
+}
+
 async function run(request = {}, options = {}) {
   const exact = await resolveExactRequest(request);
   const sharedDiscoveryCache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
@@ -137,13 +154,32 @@ async function run(request = {}, options = {}) {
     let fb = null;
     let postPrimaryError = null;
 
+    let aiRescue = null;
     try {
       const primaryHalted = Boolean(primary?.stats?.haltedEarly || primary?.partialCompletion && primary?.completedFully === false);
       if (primaryHalted) {
+        aiRescue = {
+          enabled: aiBatchRescue.enabled(),
+          attempted: false,
+          skippedReason: 'primary-systemic-halt',
+          modelCalls: 0,
+        };
         fb = {
           enabled: fallback.enabled(),
           attempted: false,
           skippedReason: 'primary-systemic-halt',
+          modelCalls: 0,
+          fallback: fallback.snapshot(),
+        };
+      } else if (!runOptions.dryRun && runOptions.apolloApproved === true && aiBatchRescue.enabled()) {
+        aiRescue = await aiBatchRescue.run(exact.request, primary, runOptions);
+        result = mergePrimaryAndAiRescue(primary, aiRescue);
+        // Batch AI is the bounded rescue strategy. Do not append per-row Big Pickle
+        // calls afterwards or the promised whole-run model-call cap becomes fiction.
+        fb = {
+          enabled: fallback.enabled(),
+          attempted: false,
+          skippedReason: 'ai-batch-rescue-active',
           modelCalls: 0,
           fallback: fallback.snapshot(),
         };
@@ -204,14 +240,16 @@ async function run(request = {}, options = {}) {
       };
     }
 
-    const modelCalls = Number(fb?.modelCalls || fb?.fallback?.calls || 0);
+    const modelCalls = Number(aiRescue?.modelCalls || 0) + Number(fb?.modelCalls || fb?.fallback?.calls || 0);
     const decorated = {
       ...result,
       primaryStats,
       deterministicPrimary: true,
       deterministic: modelCalls === 0,
       fallbackModelUsed: modelCalls > 0,
+      boundedAiBatchRescue: Boolean(aiRescue?.attempted),
       modelCalls,
+      aiBatchRescue: aiRescue,
       bigPickleFallback: fb,
       postPrimaryError,
       completedFully: postPrimaryError ? false : result?.completedFully,
@@ -238,7 +276,14 @@ async function run(request = {}, options = {}) {
 function formatResult(result) {
   const primaryView = result?.primaryStats ? { ...result, stats: result.primaryStats } : result;
   const primary = base.formatResult(primaryView).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
+  const ai = result?.aiBatchRescue;
   const fb = result?.bigPickleFallback;
+  if (ai?.attempted) {
+    const audit = (ai.selectionAudit || []).slice(0, 6).map((item) =>
+      `row ${item.rowNumber} POC-${item.slot || '?'} ${item.name || item.candidateKey} (${item.fields?.join('/') || 'verified'})`
+    );
+    return `${primary} Bounded AI batch rescue: ${ai.modelCalls || 0}/${ai.maxCalls || 3} whole-run model calls used (${ai.contextCalls || 0} context, ${ai.selectionCalls || 0} selection, ${ai.reviewerCalls || 0} reviewer); ${ai.rowsOfferedForSelection || 0} rows and ${ai.slotsOfferedForSelection || 0} open POC slots offered; ${ai.aiSelectionsProposed || 0} selections proposed, ${ai.aiSelectionsAccepted || 0} Apollo-verified selections accepted, ${ai.aiSelectionRejects || 0} rejected by deterministic identity/employer/write safety; ${ai.employersResolvedByAi || 0} employers recovered from supplied row evidence; ${ai.candidatesDiscovered || 0} Apollo candidates discovered; ${ai.hydrationAttempts || 0} final hydration attempts/${ai.hydrationFailures || 0} failures; rescue changed ${ai.cellsChanged || 0} cells across ${ai.rowsChanged || 0} rows; ${ai.phoneCellsFilled || 0} phone cells completed, ${ai.phoneStillPending || 0} phones still pending; ${ai.unresolvedSlots || 0} slots unresolved. Models [${(ai.actualModels || []).join(', ') || 'none'}]. Personal API fallbacks 0. Big Pickle per-row fallback was suppressed to preserve the whole-run AI-call cap.${audit.length ? ` Samples: ${audit.join('; ')}.` : ''}`;
+  }
   if (!fb?.enabled) return `${primary} Primary execution remained fully deterministic; Big Pickle fallback was disabled. AI/model calls: 0.`;
   const model = fb.fallback || {};
   if (fb.skippedReason === 'primary-systemic-halt') {
@@ -275,4 +320,5 @@ module.exports = {
   syntheticResolution,
   withExactTargetGuards,
   mergePrimaryAndFallback,
+  mergePrimaryAndAiRescue,
 };
