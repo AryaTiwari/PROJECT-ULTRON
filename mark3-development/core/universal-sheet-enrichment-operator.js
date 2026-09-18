@@ -898,6 +898,7 @@ module.exports = {
   queuePendingPhone,
   syncPendingPhoneAssignments,
   repairExistingGroups,
+  enrichAnchorGroup,
   candidateDiscoveryKey,
   mergeCandidatePools,
   companyPriorityTitles,
