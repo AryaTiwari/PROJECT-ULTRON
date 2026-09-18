@@ -63,7 +63,7 @@ function defaultCode(error, subsystem, type) {
   if (subsystem === 'LINKEDIN' && type === 'NETWORK') return 'LINKEDIN_NETWORK_ERROR';
   if (subsystem === 'BIG_PICKLE' && type === 'NETWORK') return 'BIG_PICKLE_NETWORK_ERROR';
   if (type === 'NETWORK') return 'SPREADSHEET_NETWORK_ERROR';
-  return 'UNIVERSAL_SPREADSHEET_EXECUTION_FAILED';
+  return 'UNIVERSAL_INTERNAL_UNCLASSIFIED';
 }
 
 function hintFor(subsystem, type, code) {
