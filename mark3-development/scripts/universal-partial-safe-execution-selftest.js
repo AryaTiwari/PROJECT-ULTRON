@@ -60,6 +60,7 @@ const baseSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-o
 const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
 const fallbackSource = fs.readFileSync(path.join(root, 'universal-big-pickle-fallback-pass.js'), 'utf8');
 const handlerSource = fs.readFileSync(path.join(root, 'universal-paid-approval-handler.js'), 'utf8');
+const controlSource = fs.readFileSync(path.join(root, 'command-control-plane.js'), 'utf8');
 
 assert.match(baseSource, /rowFailureAudit/);
 assert.match(baseSource, /haltedEarly/);
@@ -80,5 +81,12 @@ assert.match(handlerSource, /resumeSafe/);
 assert.match(handlerSource, /UNIVERSAL_RESULT_FORMAT_FAILED/);
 assert.match(handlerSource, /reportFormattingError/);
 assert.match(handlerSource, /return response\(true, body/);
+assert.match(handlerSource, /EXECUTION_CONTRACT = 'universal-partial-safe-v2'/);
+assert.match(handlerSource, /executionContract: EXECUTION_CONTRACT/);
+assert.match(controlSource, /executionContract: 'universal-partial-safe-v2'/);
+assert.match(controlSource, /typedErrors\.normalize\(error/);
+for (const source of [baseSource, targetedSource, fallbackSource, handlerSource, controlSource]) {
+  assert.doesNotMatch(source, /UNIVERSAL_SPREADSHEET_EXECUTION_FAILED/, 'generic execution failure must not survive the partial-safe contract');
+}
 
-console.log('Universal partial-safe execution self-test passed: row-local failures continue, isolated Apollo network faults use a bounded circuit breaker, repeated/systemic failures halt safely with earlier writes preserved, post-primary/fallback/reporting failures cannot erase deterministic work, and reruns remain resume-safe.');
+console.log('Universal partial-safe execution self-test passed: row-local failures continue, isolated Apollo network faults use a bounded circuit breaker, repeated/systemic failures halt safely with earlier writes preserved, post-primary/fallback/reporting failures cannot erase deterministic work, control-plane errors stay typed, generic UNIVERSAL_SPREADSHEET_EXECUTION_FAILED is banned, and reruns remain resume-safe.');
