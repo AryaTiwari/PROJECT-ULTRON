@@ -767,7 +767,15 @@ async function fetchPhoneResults() {
   if (!url) return [];
   const response = await fetch(url, { headers: { Accept: 'application/json' } });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.ok) throw new Error(data.error || `Apollo webhook results failed (${response.status}).`);
+  if (!response.ok || !data.ok) {
+    const error = new Error(data.error || `Apollo webhook results failed (${response.status}).`);
+    error.code = 'APOLLO_PHONE_RESULTS_FAILED';
+    error.subsystem = 'APOLLO';
+    error.errorType = response.status === 429 ? 'RATE_LIMIT' : (response.status >= 500 ? 'API' : 'BAD_REQUEST');
+    error.stage = 'apollo-phone-results-read';
+    error.status = response.status;
+    throw error;
+  }
   return Array.isArray(data.results) ? data.results : [];
 }
 
@@ -780,7 +788,15 @@ async function consumePhoneResult(apolloPersonId) {
     body: JSON.stringify({ apollo_person_id: apolloPersonId }),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.ok) throw new Error(data.error || `Apollo webhook consume failed (${response.status}).`);
+  if (!response.ok || !data.ok) {
+    const error = new Error(data.error || `Apollo webhook consume failed (${response.status}).`);
+    error.code = 'APOLLO_PHONE_RESULT_CONSUME_FAILED';
+    error.subsystem = 'APOLLO';
+    error.errorType = response.status === 429 ? 'RATE_LIMIT' : (response.status >= 500 ? 'API' : 'BAD_REQUEST');
+    error.stage = 'apollo-phone-result-consume';
+    error.status = response.status;
+    throw error;
+  }
   return true;
 }
 
