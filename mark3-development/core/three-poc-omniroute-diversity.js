@@ -59,10 +59,10 @@ function researchScore(model,taskType='research') {
 }
 function laneFrom(messages=[]) {
   const system=String(messages.find((m)=>m?.role==='system')?.content||'').toLowerCase();
-  if (system.includes('hiring-authority selector')) return 'selector';
-  if (system.includes('independent hiring-responsibility reviewer')) return 'reviewer';
+  if (system.includes('hiring-authority selector') || system.includes('batch poc selector')) return 'selector';
+  if (system.includes('independent hiring-responsibility reviewer') || system.includes('independent batch poc reviewer')) return 'reviewer';
   if (system.includes('exact linkedin employer resolver')) return 'employer';
-  if (system.includes('company context analyst')) return 'company-context';
+  if (system.includes('company context analyst') || system.includes('spreadsheet context analyst')) return 'company-context';
   if (system.includes('profile employer normalizer')) return 'profile-normalizer';
   return 'three-poc-general';
 }
