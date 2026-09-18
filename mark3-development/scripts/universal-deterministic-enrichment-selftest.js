@@ -10,6 +10,7 @@ const schemaTools = require('../core/universal-sheet-schema');
 const planner = require('../core/universal-enrichment-planner');
 const ranker = require('../core/universal-authority-ranker');
 const profileParser = require('../core/universal-linkedin-profile-parser');
+const operator = require('../core/universal-sheet-enrichment-operator');
 
 assert.equal(bootstrap.deterministic, true);
 assert.equal(bootstrap.modelCalls, 0);
@@ -154,7 +155,37 @@ function infer(rows) {
   assert.ok(ranked.ranked.length >= 2, 'functional owner may remain available as a lower-priority/contextual candidate');
 }
 
-// 10) Static model-free contract for the universal Google-Sheet execution path.
+// 10) Broad and title-targeted discovery pools must merge without duplicate hydration candidates.
+{
+  const merged = operator.mergeCandidatePools(
+    [
+      { id: '1', name: 'Founder', title: 'Founder' },
+      { id: '2', name: 'Engineer', title: 'Engineer' },
+    ],
+    [
+      { id: '1', name: 'Founder', title: 'Founder' },
+      { id: '3', name: 'Recruiter', title: 'Technical Recruiter' },
+    ],
+  );
+  assert.deepEqual(merged.map((item) => item.id), ['1', '2', '3']);
+  const priorityTitles = operator.companyPriorityTitles().map((value) => String(value).toLowerCase());
+  assert.ok(priorityTitles.includes('founder'));
+  assert.ok(priorityTitles.includes('recruiter'));
+  assert.equal(operator.companyPriorityCandidate({ title: 'Technical Recruiter' }), true);
+  assert.equal(operator.companyPriorityCandidate({ title: 'Software Engineer' }), false);
+}
+
+// 11) Primary and Big Pickle fallback must share discovery evidence instead of repeating Apollo searches.
+{
+  const targetedSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-sheet-enrichment-targeted.js'), 'utf8');
+  const fallbackSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-big-pickle-fallback-pass.js'), 'utf8');
+  assert.match(targetedSource, /sharedDiscoveryCache/);
+  assert.match(targetedSource, /runOptions = \{ \.\.\.options, discoveryCache: sharedDiscoveryCache \}/);
+  assert.match(targetedSource, /fallbackPass\.run\(exact\.request, primary, runOptions\)/);
+  assert.match(fallbackSource, /options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);
+}
+
+// 12) Static model-free contract for the universal Google-Sheet execution path.
 for (const filename of [
   'universal-sheet-enrichment-operator.js',
   'universal-enrichment-engine.js',
