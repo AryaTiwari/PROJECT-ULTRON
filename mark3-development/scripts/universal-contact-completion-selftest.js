@@ -113,4 +113,61 @@ assert.match(bootstrapSource, /const highRecallDiscovery = candidateDiscovery\.i
 assert.match(fallbackSource, /try \{\s*return await control\.runInternalInference\('spreadsheet-enrichment'/s);
 assert.match(fallbackSource, /catch \(error\) \{\s*state\.failures\+\+;\s*state\.lastError/s);
 
-console.log('Universal contact completion self-test passed: existing POC names reuse unique same-employer Apollo discovery identities, pending phone reveals are queued for bounded end-of-run webhook sync without overwriting populated cells, universal verified-email/high-recall wrappers are installed, and Big Pickle control failures fail closed.');
+(async () => {
+  const apollo = require('../core/apollo-enrichment');
+  const sheets = require('../core/google-sheets-operator');
+  const originals = {
+    fetchPhoneResults: apollo.fetchPhoneResults,
+    recordPhoneResult: apollo.recordPhoneResult,
+    consumePhoneResult: apollo.consumePhoneResult,
+    readCell: sheets.readCell,
+    writeCells: sheets.writeCells,
+  };
+  const writes = [];
+  try {
+    apollo.fetchPhoneResults = async () => [{ apollo_person_id: 'apollo-hemanth', phone: '+919876543210' }];
+    apollo.recordPhoneResult = () => ['https://www.linkedin.com/in/hemanth-test'];
+    apollo.consumePhoneResult = async () => true;
+    sheets.readCell = async () => '';
+    sheets.writeCells = async (_id, changes) => {
+      writes.push(...changes);
+      return { updatedCells: changes.length };
+    };
+
+    const stats = operator.freshStats();
+    await operator.syncPendingPhoneAssignments(
+      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2' },
+      queue,
+      stats,
+      { phoneSyncPolls: 1, phoneSyncWaitMs: 1 },
+    );
+    assert.equal(writes.length, 1, 'one verified pending phone should be written');
+    assert.equal(writes[0].range, "'Arya 2'!I7");
+    assert.equal(writes[0].value, '+919876543210');
+    assert.equal(stats.phoneCellsFilled, 1);
+    assert.equal(stats.phoneStillPending, 0);
+
+    writes.length = 0;
+    sheets.readCell = async () => '+911111111111';
+    const populatedStats = operator.freshStats();
+    await operator.syncPendingPhoneAssignments(
+      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2' },
+      queue,
+      populatedStats,
+      { phoneSyncPolls: 1, phoneSyncWaitMs: 1 },
+    );
+    assert.equal(writes.length, 0, 'existing phone must never be overwritten by webhook completion');
+    assert.equal(populatedStats.phoneWriteSkippedPopulated, 1);
+  } finally {
+    apollo.fetchPhoneResults = originals.fetchPhoneResults;
+    apollo.recordPhoneResult = originals.recordPhoneResult;
+    apollo.consumePhoneResult = originals.consumePhoneResult;
+    sheets.readCell = originals.readCell;
+    sheets.writeCells = originals.writeCells;
+  }
+
+  console.log('Universal contact completion self-test passed: existing POC names reuse unique same-employer Apollo discovery identities, verified pending phone callbacks write the exact blank POC phone cell without overwriting populated cells, universal verified-email/high-recall wrappers are installed, and Big Pickle control failures fail closed.');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
