@@ -2,11 +2,17 @@
 
 const assert = require('assert/strict');
 const hardening = require('../core/apollo-fetch-hardening');
+const apollo = require('../core/apollo-enrichment');
 
 assert.equal(hardening.isApolloUrl('https://api.apollo.io/api/v1/mixed_people/api_search'), true);
 assert.equal(hardening.isApolloUrl('https://sheets.googleapis.com/v4/spreadsheets/abc'), false);
 assert.equal(hardening.isTransportFailure(new TypeError('Failed to fetch')), true);
 assert.equal(hardening.isTransportFailure(new Error('Apollo returned HTTP 400')), false);
+const bodyError = apollo.apolloBodyReadError(new TypeError('terminated'), 3, 'https://api.apollo.io/api/v1/people/match');
+assert.equal(bodyError.code, 'APOLLO_NETWORK_BODY_READ_FAILED');
+assert.equal(bodyError.subsystem, 'APOLLO');
+assert.equal(bodyError.errorType, 'NETWORK');
+assert.equal(bodyError.retryAttempts, 3);
 
 (async () => {
   let attempts = 0;
@@ -48,7 +54,7 @@ assert.equal(hardening.isTransportFailure(new Error('Apollo returned HTTP 400'))
   await assert.rejects(() => passThrough('https://sheets.googleapis.com/v4/spreadsheets/x'), /Failed to fetch/);
   assert.equal(googleAttempts, 1, 'non-Apollo requests must not be intercepted by Apollo hardening');
 
-  console.log('Apollo fetch hardening self-test passed: Apollo transport failures retry twice then surface APOLLO_NETWORK_FETCH_FAILED; non-Apollo fetches stay untouched.');
+  console.log('Apollo fetch hardening self-test passed: Apollo transport failures retry twice, interrupted response bodies are typed, and non-Apollo fetches stay untouched.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
