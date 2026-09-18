@@ -129,6 +129,9 @@ function schemaSummary(schema) {
     ordinalContactRecoveries: Array.isArray(schema.ordinalContactRecoveries) ? schema.ordinalContactRecoveries : [],
     proximityRecoveries: Array.isArray(schema.proximityRecoveries) ? schema.proximityRecoveries : [],
     entityOwnershipRecoveries: Array.isArray(schema.entityOwnershipRecoveries) ? schema.entityOwnershipRecoveries : [],
+    continuityRecoveries: Array.isArray(schema.continuityRecoveries) ? schema.continuityRecoveries : [],
+    headerRepairs: Array.isArray(schema.headerRepairs) ? schema.headerRepairs : [],
+    expectedPersonGroups: Number(schema.expectedPersonGroups || 0) || null,
     fingerprint: schema.fingerprint,
   };
 }
