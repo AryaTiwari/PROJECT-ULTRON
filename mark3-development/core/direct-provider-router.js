@@ -11,6 +11,12 @@ const MODEL_DISCOVERY_TIMEOUT_MS = Math.max(3000, Number(process.env.ULTRON_M3_D
 const MODELS_PER_PROVIDER = Math.max(1, Math.min(4, Number(process.env.ULTRON_M3_DIRECT_MODELS_PER_PROVIDER || 2)));
 
 const PROVIDERS = {
+  xai: {
+    family: 'openai',
+    keys: ['XAI_API_KEY', 'XAI_API_KEY2', 'GROK_API_KEY', 'GROK_API_KEY2'],
+    baseUrl: 'https://api.x.ai/v1',
+    specialties: ['reasoning-heavy research', 'candidate comparison', 'independent review', 'long-context analysis'],
+  },
   gemini: {
     family: 'gemini',
     keys: ['GEMINI_API_KEY', 'GEMINI_API_KEY2', 'GOOGLE_API_KEY', 'GOOGLE_API_KEY2'],
@@ -32,6 +38,14 @@ const PROVIDERS = {
 };
 
 const DEFAULT_MODELS = {
+  xai: {
+    simple_qa: ['grok-4.6'],
+    general: ['grok-4.6'],
+    coding: ['grok-4.6'],
+    planning: ['grok-4.6'],
+    research: ['grok-4.6'],
+    automation: ['grok-4.6'],
+  },
   gemini: {
     simple_qa: ['gemini-3.6-flash', 'gemini-3.5-flash-lite'],
     general: ['gemini-3.6-flash', 'gemini-3.5-flash'],
@@ -80,10 +94,10 @@ function providerOrder(taskType) {
   const task = taskName(taskType);
   const configured = csv(`ULTRON_M3_DIRECT_PROVIDER_ORDER_${task.toUpperCase()}`).map((provider) => provider.toLowerCase());
   if (configured.length) return configured.filter((provider) => PROVIDERS[provider]);
-  if (task === 'simple_qa' || task === 'automation') return ['groq', 'gemini', 'nvidia'];
-  if (task === 'coding' || task === 'planning') return ['nvidia', 'gemini', 'groq'];
-  if (task === 'research') return ['gemini', 'nvidia', 'groq'];
-  return ['gemini', 'groq', 'nvidia'];
+  if (task === 'simple_qa' || task === 'automation') return ['gemini', 'xai', 'groq', 'nvidia'];
+  if (task === 'coding' || task === 'planning') return ['nvidia', 'xai', 'gemini', 'groq'];
+  if (task === 'research') return ['xai', 'gemini', 'nvidia', 'groq'];
+  return ['gemini', 'xai', 'nvidia', 'groq'];
 }
 
 function configuredModelOverride(provider, taskType) {
@@ -273,11 +287,11 @@ function modelScore(model, taskType, provider, preferenceIndex = -1) {
     if (/reason|think|pro/.test(value)) score += 10;
     if (size >= 27) score += 12;
   } else if (task === 'planning') {
-    if (/reason|think|nemotron|gpt-oss|glm|pro|deepseek/.test(value)) score += 36;
+    if (/reason|think|nemotron|gpt-oss|glm|pro|deepseek|grok/.test(value)) score += 36;
     if (size >= 70) score += 15;
     else if (size >= 27) score += 8;
   } else if (task === 'research') {
-    if (/pro|reason|think|nemotron|gpt-oss|glm|deepseek/.test(value)) score += 28;
+    if (/pro|reason|think|nemotron|gpt-oss|glm|deepseek|grok/.test(value)) score += 28;
     if (/flash/.test(value) && provider === 'gemini') score += 12;
     if (size >= 70) score += 10;
   } else {
