@@ -196,11 +196,30 @@ async function dispatch(message, options = {}) {
       return { ...result, route: route.domain, routing: route };
     } catch (error) {
       if (spreadsheetDomain) {
+        const typedErrors = require('./spreadsheet-enrichment-errors');
+        const typed = typedErrors.normalize(error, { stage: error?.stage || 'spreadsheet-controller-dispatch' });
+        const diagnostic = typedErrors.format(typed);
         return {
-          ok: false, text: error.message, response: error.message,
-          error: error.code || 'SPREADSHEET_ENRICHMENT_CONTROLLER_FAILED',
-          model: 'mark3-universal-deterministic-enrichment', provider: 'local-spreadsheet-control',
-          taskType: 'universal-sheet-enrichment', route: route.domain, routing: route,
+          ok: false,
+          text: `Universal spreadsheet control stopped safely: ${diagnostic}. ${typed.hint}`,
+          response: `Universal spreadsheet control stopped safely: ${diagnostic}. ${typed.hint}`,
+          error: typed.code,
+          errorCode: typed.code,
+          errorSubsystem: typed.subsystem,
+          errorType: typed.type,
+          errorStage: typed.stage,
+          errorHint: typed.hint,
+          errorMessage: typed.message,
+          retryAttempts: typed.retryAttempts,
+          attemptedRange: typed.attemptedRange || null,
+          endpoint: typed.endpoint || null,
+          providerStatus: typed.providerStatus ?? typed.status ?? null,
+          executionContract: 'universal-partial-safe-v2',
+          model: 'mark3-universal-deterministic-enrichment',
+          provider: 'local-spreadsheet-control',
+          taskType: 'universal-sheet-enrichment',
+          route: route.domain,
+          routing: route,
         };
       }
       return { ok: false, text: error.message, response: error.message, error: error.code || 'LINKEDIN_CONTROLLER_FAILED',
