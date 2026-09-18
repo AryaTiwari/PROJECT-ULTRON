@@ -125,11 +125,13 @@ function mergePrimaryAndFallback(primary, fb) {
 
 async function run(request = {}, options = {}) {
   const exact = await resolveExactRequest(request);
+  const sharedDiscoveryCache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
+  const runOptions = { ...options, discoveryCache: sharedDiscoveryCache };
   return withExactTargetGuards(exact.request, async () => {
     // From this point onward, a successful deterministic primary is authoritative.
     // Optional fallback/decorating failures must never invalidate verified writes
     // that base.run() already committed to the worksheet.
-    const primary = await base.run(exact.request, options);
+    const primary = await base.run(exact.request, runOptions);
     const primaryStats = { ...(primary.stats || {}) };
     let result = primary;
     let fb = null;
@@ -145,9 +147,9 @@ async function run(request = {}, options = {}) {
           modelCalls: 0,
           fallback: fallback.snapshot(),
         };
-      } else if (!options.dryRun && options.apolloApproved === true && fallback.enabled()) {
+      } else if (!runOptions.dryRun && runOptions.apolloApproved === true && fallback.enabled()) {
         try {
-          fb = await fallbackPass.run(exact.request, primary, options);
+          fb = await fallbackPass.run(exact.request, primary, runOptions);
           result = mergePrimaryAndFallback(primary, fb);
         } catch (error) {
           const typed = typedErrors.normalize(error, { stage: error?.stage || 'big-pickle-fallback-pass' });
