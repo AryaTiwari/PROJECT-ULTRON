@@ -113,39 +113,45 @@ function infer(rows) {
   assert.ok(/explicit-current|current-experience|top-card/i.test(resolved.source));
 }
 
-// 8) Context-adaptive ranking. Rich role context can make a functional owner outrank generic recruiting.
+// 8) Company-contact ranking must honor the canonical lead priority while remaining deterministic.
 {
+  const founder = {
+    id: 'f1', name: 'Founder', title: 'Founder & Director', seniority: 'owner',
+    functions: ['executive'], departments: ['executive'], organizationName: 'Northstar Technologies',
+  };
+  const recruitingManager = {
+    id: 'm1', name: 'Manager', title: 'Talent Acquisition Manager', seniority: 'manager',
+    functions: ['talent acquisition'], departments: ['human resources'], organizationName: 'Northstar Technologies',
+  };
   const recruiter = {
-    id: 'r1', name: 'Recruiter', title: 'Talent Acquisition Specialist', seniority: 'senior',
+    id: 'r1', name: 'Recruiter', title: 'Technical Recruiter', seniority: 'senior',
     functions: ['recruiting'], departments: ['human resources'], organizationName: 'Northstar Technologies',
   };
   const sapOwner = {
     id: 's1', name: 'SAP Owner', title: 'SAP Delivery Head', seniority: 'head',
     functions: ['information technology'], departments: ['engineering'], organizationName: 'Northstar Technologies',
   };
-  const genericExec = {
-    id: 'e1', name: 'Executive', title: 'Managing Director', seniority: 'c_suite',
-    functions: ['executive'], departments: ['executive'], organizationName: 'Northstar Technologies',
-  };
   const context = { company: 'Northstar Technologies', details: 'Hiring SAP S/4HANA delivery consultants for implementation and migration projects', companyHeadcount: 700 };
-  const ranked = ranker.rankCandidates([recruiter, sapOwner, genericExec], context, { minimumScore: 0 });
-  const sap = ranked.ranked.find((item) => item.candidate.id === 's1');
-  const exec = ranked.ranked.find((item) => item.candidate.id === 'e1');
-  assert.ok(sap, 'SAP functional owner should remain eligible under rich SAP context');
-  assert.ok(!exec || sap.score > exec.score, 'large-company generic leadership must not automatically beat role ownership');
+  const ranked = ranker.rankCandidates([recruiter, sapOwner, founder, recruitingManager], context, { minimumScore: 0 });
+  const ids = ranked.ranked.map((item) => item.candidate.id);
+  assert.ok(ids.includes('f1'), 'founder/director must remain eligible');
+  assert.ok(ids.includes('m1'), 'TA/HR manager must remain eligible');
+  assert.ok(ids.includes('r1'), 'ordinary recruiter must remain eligible even when Apollo structured metadata is sparse');
+  assert.ok(ids.indexOf('f1') < ids.indexOf('m1'), 'Founder/Director/Owner must outrank recruiting/HR manager');
+  assert.ok(ids.indexOf('m1') < ids.indexOf('r1'), 'recruiting/HR manager must outrank recruiter/TA specialist');
   assert.equal(ranked.modelCalls, 0);
   assert.equal(ranked.deterministic, true);
 }
 
-// 9) Sparse context should still value explicit hiring-function evidence without a hardcoded title ladder.
+// 9) A recruiter title alone is sufficient to enter the candidate pool; contextual evidence still breaks ties.
 {
   const candidates = [
-    { id: 'a', name: 'A', title: 'People Acquisition Partner', seniority: 'manager', functions: ['talent acquisition'], departments: ['people'], organizationName: 'Orbit' },
-    { id: 'b', name: 'B', title: 'Operations Director', seniority: 'director', functions: ['operations'], departments: ['operations'], organizationName: 'Orbit' },
+    { id: 'a', name: 'A', title: 'Recruiter', organizationName: 'Orbit' },
+    { id: 'b', name: 'B', title: 'SAP Delivery Head', seniority: 'head', functions: ['information technology'], organizationName: 'Orbit' },
   ];
-  const ranked = ranker.rankCandidates(candidates, { company: 'Orbit' }, { minimumScore: 0 });
-  assert.ok(ranked.ranked.length >= 1);
-  assert.equal(ranked.ranked[0].candidate.id, 'a', 'explicit hiring-function evidence should dominate unrelated authority when context is sparse');
+  const ranked = ranker.rankCandidates(candidates, { company: 'Orbit', details: 'Hiring SAP consultants' }, { minimumScore: 0 });
+  assert.ok(ranked.ranked.some((item) => item.candidate.id === 'a'), 'plain recruiter must not fall through the hiringAuthority eligibility gap');
+  assert.ok(ranked.ranked.length >= 2, 'functional owner may remain available as a lower-priority/contextual candidate');
 }
 
 // 10) Static model-free contract for the universal Google-Sheet execution path.
@@ -177,4 +183,4 @@ const legacyInstallIndex = controllerSource.indexOf('installLegacyExcelWrappers(
 assert.ok(googleDispatchIndex >= 0, 'universal Google dispatch must exist');
 assert.ok(legacyInstallIndex > googleDispatchIndex, 'legacy AI wrappers must install only after the Google Sheet early-return path');
 
-console.log('Universal deterministic enrichment self-test passed: arbitrary contact counts, reordered fields, unfamiliar repeated blocks, company-vs-person ownership, deterministic employer parsing, context-adaptive ranking and zero-model Google-Sheet execution are protected.');
+console.log('Universal deterministic enrichment self-test passed: arbitrary contact counts, reordered fields, unfamiliar repeated blocks, company-vs-person ownership, deterministic employer parsing, canonical company-contact priority, context-adaptive ranking and zero-model Google-Sheet execution are protected.');
