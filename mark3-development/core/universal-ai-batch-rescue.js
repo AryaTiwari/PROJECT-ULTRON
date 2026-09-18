@@ -59,6 +59,7 @@ function freshStats() {
     rowsConsidered: 0,
     rowsWithKnownEmployer: 0,
     employersResolvedByAi: 0,
+    employerOverridesByAi: 0,
     employerAbstains: 0,
     employerEvidenceRejects: 0,
     candidateSearches: 0,
@@ -332,8 +333,9 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       content: [
         'You are ULTRON Spreadsheet Context Analyst.',
         'Analyze ALL supplied rows in one batch.',
-        'For each row, identify the CURRENT employer/hiring organization and summarize the hiring context.',
-        'If knownCompany is supplied, preserve it unless the row evidence clearly contradicts it; do not invent a replacement.',
+        'For each row, identify the TARGET HIRING ORGANIZATION whose employees should become the additional POCs, and summarize the hiring context.',
+        'The post author\'s current employer and the target hiring organization may be different. If the row explicitly says a role is for/join/at another company, prefer that explicit hiring company for POC discovery.',
+        'If knownCompany is supplied, use it as strong evidence but you may override it only when a different hiring company is explicitly named in the supplied row fields.',
         'If knownCompany is empty, choose a company ONLY when its wording is directly supported by the supplied row fields.',
         'Never infer a company from general knowledge.',
         'Return strict JSON only: {"rows":[{"rowNumber":2,"company":"","hiringContext":"","confidence":0.0,"reason":""}]}.',
@@ -348,19 +350,35 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   for (const [rowNumber, record] of rowRecords.entries()) {
     const aiContext = contextMap.get(rowNumber);
     let companyContext = record.knownCompany;
-    if (!companyContext?.company && aiContext?.company) {
-      if (aiContext.confidence >= 0.6 && companySupported(aiContext.company, record.evidence)) {
+    if (aiContext?.company) {
+      const aiSupported = companySupported(aiContext.company, record.evidence);
+      const aiKey = ranker.companyKey(aiContext.company);
+      const knownKey = ranker.companyKey(record.knownCompany?.company || '');
+      const differsFromKnown = Boolean(aiKey && knownKey && aiKey !== knownKey);
+      if (!companyContext?.company) {
+        if (aiContext.confidence >= 0.6 && aiSupported) {
+          companyContext = {
+            company: aiContext.company,
+            domain: '',
+            source: 'ai-batch-row-evidence',
+            anchorLinkedin: text(record.plan?.anchor?.snapshot?.values?.linkedin),
+            anchorApolloPersonId: '',
+            anchorPerson: null,
+          };
+          stats.employersResolvedByAi++;
+        } else {
+          stats.employerEvidenceRejects++;
+        }
+      } else if (differsFromKnown && aiContext.confidence >= 0.82 && aiSupported) {
         companyContext = {
           company: aiContext.company,
           domain: '',
-          source: 'ai-batch-row-evidence',
+          source: 'ai-batch-explicit-hiring-company-override',
           anchorLinkedin: text(record.plan?.anchor?.snapshot?.values?.linkedin),
           anchorApolloPersonId: '',
           anchorPerson: null,
         };
-        stats.employersResolvedByAi++;
-      } else {
-        stats.employerEvidenceRejects++;
+        stats.employerOverridesByAi++;
       }
     }
     if (!companyContext?.company) {
