@@ -28,6 +28,45 @@ const shortlist = rescue.shortlistCandidates(candidates, { hiringContext: 'Hirin
 assert.ok(shortlist.some((item) => item.id === 'founder'));
 assert.ok(shortlist.some((item) => item.id === 'recruiter'));
 
+const partialRepair = {
+  group: { id: 'person_2', ordinal: 2 },
+  snapshot: {
+    empty: false,
+    hasIdentity: true,
+    values: { name: 'Existing Recruiter — Talent Acquisition Specialist', linkedin: '', phone: '', email: '' },
+    missingFields: ['phone', 'email'],
+  },
+  isAnchor: false,
+};
+const openFill = {
+  group: { id: 'person_3', ordinal: 3 },
+  snapshot: { empty: true, hasIdentity: false, values: {}, missingFields: ['name', 'phone', 'email'] },
+  isAnchor: false,
+};
+const anchor = {
+  group: { id: 'person_1', ordinal: 1 },
+  snapshot: { empty: false, hasIdentity: true, values: { name: 'Anchor Person' } },
+  isAnchor: true,
+};
+const targets = rescue.rescueTargets({
+  groups: {
+    partial: [partialRepair],
+    open: [openFill],
+    existing: [anchor, partialRepair],
+  },
+});
+assert.equal(targets.length, 2, 'batch rescue should include both identity-bearing partial POCs and empty POCs');
+assert.equal(targets[0].rescueMode, 'repair');
+assert.equal(targets[1].rescueMode, 'fill');
+
+const repairCandidates = [
+  { id: 'low-rank-exact', name: 'Existing Recruiter', title: 'Coordinator', organizationName: 'Example Co' },
+  ...candidates,
+];
+assert.equal(rescue.exactRepairCandidate(targets[0], repairCandidates[0]), true);
+const targetAwarePool = rescue.candidatePoolForTargets(repairCandidates, targets, { hiringContext: 'Hiring SAP consultant' }, 3);
+assert.ok(targetAwarePool.some((item) => item.id === 'low-rank-exact'), 'existing exact-name repair candidate must survive shortlist pruning');
+
 const target2 = { group: { id: 'person_2', ordinal: 2 }, snapshot: { empty: true } };
 const target3 = { group: { id: 'person_3', ordinal: 3 }, snapshot: { empty: true } };
 const rowPackages = new Map([[2, {
@@ -72,6 +111,9 @@ assert.match(rescueSource, /ranker\.sameEmployer/);
 assert.match(rescueSource, /planner\.safeWritesForGroup/);
 assert.match(rescueSource, /stats\.modelCalls >= stats\.maxCalls/);
 assert.match(rescueSource, /reviewerNeeded/);
+assert.match(rescueSource, /rescueMode: 'repair'/);
+assert.match(rescueSource, /candidatePoolForTargets/);
+assert.match(rescueSource, /planner\.samePerson/);
 assert.doesNotMatch(rescueSource, /direct-model|gemini\/|openai\/|anthropic\//i);
 
 assert.match(targetedSource, /deferOpenGroupSelectionToAi: boundedAiEnabled/);
@@ -81,4 +123,4 @@ assert.match(operatorSource, /stats\.deferredOpenGroups \+= fillTargets\.length/
 assert.match(operatorSource, /options\.deferOpenGroupSelectionToAi/);
 assert.match(controllerSource, /maximum 3 logical AI calls for the entire run, not per row/);
 
-console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, reviewer is conditional, maximum logical model calls are hard-capped at 3, AI can only select supplied Apollo keys, deterministic Apollo/employer/write verification remains mandatory, and per-row Big Pickle calls are suppressed while batch rescue is active.');
+console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, partial existing POCs and empty POCs share the same batch, exact repair identities survive shortlist pruning, reviewer is conditional, maximum logical model calls are hard-capped at 3, AI can only select supplied Apollo keys, deterministic Apollo/employer/write verification remains mandatory, and per-row Big Pickle calls are suppressed while batch rescue is active.');
