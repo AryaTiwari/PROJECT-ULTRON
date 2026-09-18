@@ -440,6 +440,10 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       continue;
     }
 
+    for (const candidate of people || []) {
+      const key = text(candidate?.apolloPersonId || candidate?.id || candidate?.linkedinUrl || candidate?.linkedin_url).toLowerCase();
+      if (key) uniqueCandidateKeys.add(key);
+    }
     const hiringContext = aiContext?.hiringContext || text(record.plan?.context?.postDetails || record.plan?.context?.details || '');
     const shortlisted = candidatePoolForTargets(people || [], record.targets, { hiringContext }, candidateLimit(options));
     if (!shortlisted.length) {
@@ -609,11 +613,12 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       }
 
       const writePlan = planner.safeWritesForGroup(pkg.row, assignment.target.group, person);
-      if (!writePlan.allowed || !writePlan.writes.length) {
+      if (!writePlan.allowed) {
         stats.aiSelectionRejects++;
         continue;
       }
 
+      const queueBefore = pendingPhoneQueue.length;
       base.queuePendingPhone(
         { pendingPhoneQueue },
         rowNumber,
@@ -621,6 +626,15 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         assignment.target.snapshot,
         person,
       );
+      const queuedPendingPhone = pendingPhoneQueue.length > queueBefore;
+
+      // A repair can be valuable even when Apollo's phone is asynchronous and
+      // there is no immediate email/name write. Keep the verified assignment alive
+      // so the end-of-run webhook sync can complete the phone cell.
+      if (!writePlan.writes.length && !queuedPendingPhone) {
+        stats.aiSelectionRejects++;
+        continue;
+      }
 
       const byColumn = new Map();
       for (const write of writePlan.writes) if (!byColumn.has(write.columnIndex)) byColumn.set(write.columnIndex, write);
@@ -628,11 +642,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         range: sheets.cellRange(source.sheetName, rowNumber, write.columnIndex),
         value: write.value,
       }));
-      if (!changes.length) continue;
-
-      await sheets.writeCells(source.spreadsheetId, changes);
-      changedRows.add(rowNumber);
-      stats.cellsChanged += changes.length;
+      if (changes.length) {
+        await sheets.writeCells(source.spreadsheetId, changes);
+        changedRows.add(rowNumber);
+        stats.cellsChanged += changes.length;
+      }
       if (repairMode) stats.existingRepairsAccepted++;
       else stats.newPeopleSelected++;
       stats.aiSelectionsAccepted++;
@@ -647,7 +661,9 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         title: text(person.title),
         confidence: assignment.confidence,
         reason: assignment.reason,
-        fields: writePlan.writes.map((write) => write.field),
+        fields: writePlan.writes.length
+          ? writePlan.writes.map((write) => write.field)
+          : (queuedPendingPhone ? ['phone-pending'] : []),
       });
       claimed.add(assignment.candidateKey);
       if (nameKey) existing.names.add(nameKey);
