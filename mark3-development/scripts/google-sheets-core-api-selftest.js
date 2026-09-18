@@ -25,10 +25,12 @@ assert.equal(
 const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'google-sheets-operator.js'), 'utf8');
 const metadataFunction = source.match(/async function metadata\(id\)\s*\{([\s\S]*?)\n\}/)?.[1] || '';
 assert.ok(metadataFunction, 'metadata() implementation must be present');
+assert.match(source, /google-sheets-http-body-read/, 'Google response-body interruptions must surface as a typed network stage');
+assert.match(source, /bodyReadAttempt < 2/, 'Google response-body interruptions must retry before failing');
 assert.match(
   metadataFunction,
   /properties\(title\),sheets\(properties\(sheetId,title,index,gridProperties\(rowCount,columnCount\)\)\)/,
   'metadata() must request title, tab ids/names and grid dimensions',
 );
 
-console.log('Google Sheets core API self-test passed: HTTP failures keep specific auth/range/quota/server codes, generated A1 ranges are recognized for tab-vs-range diagnosis, and metadata() exposes the required workbook/tab/grid fields.');
+console.log('Google Sheets core API self-test passed: HTTP failures keep specific auth/range/quota/server codes, interrupted response bodies retry with typed network errors, generated A1 ranges are recognized for tab-vs-range diagnosis, and metadata() exposes the required workbook/tab/grid fields.');
