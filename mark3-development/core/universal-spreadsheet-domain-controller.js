@@ -81,6 +81,9 @@ function typedFailure(error, context = {}) {
       errorHint: typed.hint,
       errorMessage: typed.message,
       retryAttempts: typed.retryAttempts,
+      attemptedRange: typed.attemptedRange || null,
+      endpoint: typed.endpoint || null,
+      providerStatus: typed.providerStatus ?? typed.status ?? null,
     },
   };
 }
