@@ -12,6 +12,8 @@
 
 const control = require('./command-control-plane');
 const modelRouter = require('./model-router');
+const omniDiversity = require('./three-poc-omniroute-diversity');
+const omniFallback = require('./omniroute-fallback');
 const engine = require('./universal-enrichment-engine');
 const base = require('./universal-sheet-enrichment-operator');
 const planner = require('./universal-enrichment-planner');
@@ -51,6 +53,7 @@ function freshStats() {
     attempted: false,
     maxCalls: 0,
     modelCalls: 0,
+    modelAttempts: 0,
     contextCalls: 0,
     selectionCalls: 0,
     reviewerCalls: 0,
@@ -97,20 +100,33 @@ function freshStats() {
 }
 
 async function batchChat(messages, purpose, stats, options = {}) {
-  if (stats.modelCalls >= stats.maxCalls) return null;
-  stats.modelCalls++;
+  if (stats.modelAttempts >= stats.maxCalls) return null;
+  stats.modelAttempts++;
   if (purpose === 'context') stats.contextCalls++;
   if (purpose === 'selection') stats.selectionCalls++;
   if (purpose === 'review') stats.reviewerCalls++;
+
   try {
+    // The old high-fill 3-POC path used concrete-provider OmniRoute diversity.
+    // Reuse that proven route here, but keep the new whole-run 2/3-pass budget.
+    await omniFallback.ensure({ reason: `bounded spreadsheet AI ${purpose} pass` });
+
     return await control.runInternalInference('spreadsheet-enrichment', async () => {
-      const result = await modelRouter.chatOmniRouteOnly({
+      const original = modelRouter.chatOmniRouteOnly.bind(modelRouter);
+      const result = await omniDiversity.diversifiedChat(original, {
         model: 'auto/best-reasoning',
         taskType: 'research',
         messages,
       });
-      const actual = text(result?.model || result?.raw?.model || 'omniroute-auto');
+      const body = resultText(result);
+      if (!body) {
+        const error = new Error('Bounded batch AI returned no usable final text.');
+        error.code = 'AI_BATCH_EMPTY_RESPONSE';
+        throw error;
+      }
+      const actual = text(result?.raw?.model || result?.model || '');
       if (actual && !stats.actualModels.includes(actual)) stats.actualModels.push(actual);
+      stats.modelCalls++;
       return result;
     });
   } catch (error) {
@@ -118,7 +134,7 @@ async function batchChat(messages, purpose, stats, options = {}) {
     stats.errors.push({
       purpose,
       code: text(error?.code || 'AI_BATCH_REASONING_FAILED'),
-      message: text(error?.message || error).slice(0, 400),
+      message: text(error?.message || error).slice(0, 500),
     });
     return null;
   }
@@ -464,7 +480,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.candidatesDiscovered = uniqueCandidateKeys.size;
   stats.rowsOfferedForSelection = rowPackages.size;
   stats.slotsOfferedForSelection = [...rowPackages.values()].reduce((sum, pkg) => sum + pkg.targets.length, 0);
-  if (!rowPackages.size || stats.modelCalls >= stats.maxCalls) return stats;
+  if (!rowPackages.size || stats.modelAttempts >= stats.maxCalls) return stats;
 
   const selectionInput = [...rowPackages.entries()].map(([rowNumber, pkg]) => ({
     rowNumber,
@@ -511,7 +527,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.aiSelectionsProposed = [...assignments.values()].reduce((sum, list) => sum + list.length, 0);
 
   // PASS 3: reviewer only when selection is incomplete/weak and budget allows it.
-  if (stats.modelCalls < stats.maxCalls && reviewerNeeded(assignments, rowPackages)) {
+  if (stats.modelAttempts < stats.maxCalls && reviewerNeeded(assignments, rowPackages)) {
     stats.reviewerTriggered = true;
     const reviewRows = [...rowPackages.entries()].filter(([rowNumber, pkg]) => {
       const selected = assignments.get(rowNumber) || [];
