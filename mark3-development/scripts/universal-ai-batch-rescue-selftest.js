@@ -121,6 +121,8 @@ assert.match(targetedSource, /ai-batch-rescue-active/);
 assert.match(targetedSource, /Big Pickle per-row fallback was suppressed/);
 assert.match(operatorSource, /stats\.deferredOpenGroups \+= fillTargets\.length/);
 assert.match(operatorSource, /options\.deferOpenGroupSelectionToAi/);
+assert.match(operatorSource, /repairDiscoveryNeeded \|\| \(!deferOpenSelection && fillTargets\.length\)/);
+assert.doesNotMatch(operatorSource, /if \(fillTargets\.length \|\| repairDiscoveryNeeded\) \{\s*people = await discoverCompanyPeople/);
 assert.match(controllerSource, /maximum 3 logical AI calls for the entire run, not per row/);
 
 console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, partial existing POCs and empty POCs share the same batch, exact repair identities survive shortlist pruning, reviewer is conditional, maximum logical model calls are hard-capped at 3, AI can only select supplied Apollo keys, deterministic Apollo/employer/write verification remains mandatory, and per-row Big Pickle calls are suppressed while batch rescue is active.');
