@@ -107,7 +107,7 @@ function invariantCodeForDomain(domain) {
 
 function assertAllowed(kind, { model = '', messages = [] } = {}) {
   const current = scope.getStore();
-  if (kind === 'general-model' && current?.internalInferenceDomain && current?.route?.domain === current.internalInferenceDomain) return;
+  if (['general-model', 'omniroute'].includes(kind) && current?.internalInferenceDomain && current?.route?.domain === current.internalInferenceDomain) return;
   const lastUser = (Array.isArray(messages) ? messages : []).filter(item => item.role === 'user').at(-1)?.content;
   const inferred = !current && !isInternalModelPayload(lastUser) ? claim(typeof lastUser === 'string' ? lastUser : '') : null;
   if (!current?.route.exclusive && !inferred?.exclusive) return;
