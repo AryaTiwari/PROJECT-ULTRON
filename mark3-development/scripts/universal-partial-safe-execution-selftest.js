@@ -63,7 +63,7 @@ assert.match(baseSource, /haltedEarly/);
 assert.match(baseSource, /resumeSafe: true/);
 assert.match(baseSource, /isRecoverableRowFailure/);
 assert.match(targetedSource, /primary-systemic-halt/);
-assert.match(targetedSource, /Preserve successful deterministic work/);
+assert.match(targetedSource, /deterministic primary result|verified writes/i);
 assert.match(targetedSource, /UNIVERSAL_POST_PRIMARY_FAILURE/);
 assert.match(targetedSource, /postPrimaryError/);
 assert.match(targetedSource, /result = primary/);
