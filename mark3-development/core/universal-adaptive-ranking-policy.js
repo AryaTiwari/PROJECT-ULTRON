@@ -1,9 +1,9 @@
 'use strict';
 
 // Population-adaptive, model-free ranking policy for universal enrichment.
-// It deliberately avoids a universal title ladder. The base ranker extracts
-// evidence dimensions; this layer calibrates those dimensions against the
-// candidate population and the amount of row context that is actually present.
+// The base ranker extracts evidence dimensions; this layer calibrates them against
+// the candidate population while preserving ULTRON's canonical company-contact
+// priority lanes. Context and evidence break ties inside/below those lanes.
 
 const base = require('./universal-authority-ranker');
 
@@ -234,7 +234,7 @@ function rankCandidates(candidates = [], context = {}, options = {}) {
 
   return {
     ranked,
-    rejected: scored.filter((row) => !row.eligible || row.score < threshold),
+    rejected: scored.filter((row) => !row.eligible || (row.contactPriority >= 99 && row.score < threshold)),
     total: scored.length,
     eligible: ranked.length,
     threshold: Number(threshold.toFixed(2)),
