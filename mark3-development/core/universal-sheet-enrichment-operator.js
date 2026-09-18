@@ -759,6 +759,11 @@ async function run(request = {}, options = {}) {
     throw error;
   }
 
+  // These wrappers are installed by the deterministic bootstrap, but their
+  // accounting/budgets are per approved enrichment run, not process-lifetime.
+  try { require('./apollo-three-poc-quality').startRun(); } catch {}
+  try { require('./three-poc-candidate-discovery-policy').startRun(); } catch {}
+
   const stats = freshStats();
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const pendingPhoneQueue = [];
