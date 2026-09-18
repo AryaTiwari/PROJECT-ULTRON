@@ -421,8 +421,17 @@ function isRecoverableRowFailure(typed = {}) {
   return ['NOT_FOUND', 'AMBIGUITY'].includes(type);
 }
 
+function isTransientProviderRowFailure(typed = {}) {
+  const subsystem = text(typed.subsystem).toUpperCase();
+  const type = text(typed.type).toUpperCase();
+  const code = text(typed.code).toUpperCase();
+  if (subsystem !== 'APOLLO') return false;
+  if (['NETWORK', 'TIMEOUT'].includes(type)) return true;
+  return /NETWORK|TIMEOUT|UNAVAILABLE|FETCH_FAILED/.test(code);
+}
+
 function formatFailureSummary(typed = {}) {
-  return `[${typed.subsystem || 'UNIVERSAL'}/${typed.type || 'INTERNAL'}] ${typed.code || 'UNIVERSAL_SPREADSHEET_EXECUTION_FAILED'} @ ${typed.stage || 'row-enrichment'}: ${typed.message || 'unknown failure'}`;
+  return `[${typed.subsystem || 'UNIVERSAL'}/${typed.type || 'INTERNAL'}] ${typed.code || 'UNIVERSAL_INTERNAL_UNCLASSIFIED'} @ ${typed.stage || 'row-enrichment'}: ${typed.message || 'unknown failure'}`;
 }
 
 function freshStats() {
@@ -457,6 +466,9 @@ function freshStats() {
     selectionAudit: [],
     rowFailures: 0,
     recoverableRowFailures: 0,
+    transientProviderFailures: 0,
+    transientProviderContinuations: 0,
+    consecutiveTransientProviderFailures: 0,
     systemicHalts: 0,
     haltedEarly: false,
     haltAtRow: null,
@@ -509,6 +521,7 @@ async function run(request = {}, options = {}) {
         stats.cellsChanged += changes.length;
       }
       stats.rowsProcessed++;
+      stats.consecutiveTransientProviderFailures = 0;
     } catch (error) {
       const typed = typedFailureSummary(error, {
         stage: error?.stage || 'primary-row-enrichment',
@@ -518,8 +531,26 @@ async function run(request = {}, options = {}) {
 
       if (isRecoverableRowFailure(typed)) {
         stats.recoverableRowFailures++;
+        stats.consecutiveTransientProviderFailures = 0;
         stats.rowsProcessed++;
         continue;
+      }
+
+      // Apollo already retries transport failures at the HTTP boundary. One
+      // exhausted row-level network failure should still not invalidate or stop
+      // unrelated rows immediately. Continue a bounded number of consecutive
+      // transient provider failures, then open the circuit and halt safely.
+      if (isTransientProviderRowFailure(typed)) {
+        const maxTransient = integer(options.maxTransientRowFailures, 2, 1, 5);
+        stats.transientProviderFailures++;
+        stats.consecutiveTransientProviderFailures++;
+        if (stats.consecutiveTransientProviderFailures <= maxTransient) {
+          stats.transientProviderContinuations++;
+          stats.rowsProcessed++;
+          continue;
+        }
+      } else {
+        stats.consecutiveTransientProviderFailures = 0;
       }
 
       stats.systemicHalts++;
@@ -556,7 +587,7 @@ function formatResult(result) {
     ? `Universal deterministic enrichment PARTIALLY completed on ${result.sheetName}; execution halted safely at row ${s.haltAtRow} after preserving all earlier verified writes.`
     : `Universal deterministic enrichment finished on ${result.sheetName}.`;
   const rowFailureText = s.rowFailures
-    ? ` Row fault containment: ${s.rowFailures} row failure${Number(s.rowFailures) === 1 ? '' : 's'} captured, ${s.recoverableRowFailures || 0} recovered by continuing, ${s.systemicHalts || 0} systemic halt${Number(s.systemicHalts || 0) === 1 ? '' : 's'}.`
+    ? ` Row fault containment: ${s.rowFailures} row failure${Number(s.rowFailures) === 1 ? '' : 's'} captured, ${s.recoverableRowFailures || 0} ordinary row-local failure${Number(s.recoverableRowFailures || 0) === 1 ? '' : 's'} continued, ${s.transientProviderContinuations || 0} transient Apollo transport failure${Number(s.transientProviderContinuations || 0) === 1 ? '' : 's'} continued under the circuit breaker, ${s.systemicHalts || 0} systemic halt${Number(s.systemicHalts || 0) === 1 ? '' : 's'}.`
     : ' Row fault containment: no row failures.';
   const haltText = s.haltError
     ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
@@ -579,6 +610,7 @@ module.exports = {
   fillOpenGroups,
   typedFailureSummary,
   isRecoverableRowFailure,
+  isTransientProviderRowFailure,
   formatFailureSummary,
   freshStats,
   run,
