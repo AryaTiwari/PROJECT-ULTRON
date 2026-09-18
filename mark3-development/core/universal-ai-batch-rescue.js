@@ -109,9 +109,8 @@ async function batchChat(messages, purpose, stats, options = {}) {
   try {
     // The old high-fill 3-POC path used concrete-provider OmniRoute diversity.
     // Reuse that proven route here, but keep the new whole-run 2/3-pass budget.
-    await omniFallback.ensure({ reason: `bounded spreadsheet AI ${purpose} pass` });
-
     return await control.runInternalInference('spreadsheet-enrichment', async () => {
+      await omniFallback.ensure({ reason: `bounded spreadsheet AI ${purpose} pass` });
       const original = modelRouter.chatOmniRouteOnly.bind(modelRouter);
       const result = await omniDiversity.diversifiedChat(original, {
         model: 'auto/best-reasoning',
