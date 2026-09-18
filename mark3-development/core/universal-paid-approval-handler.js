@@ -136,6 +136,10 @@ async function execute(decision) {
       provider: fallbackUsed ? 'deterministic+apollo+google-sheets+omniroute/opencode' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
+    if (!error?.code) error.code = 'UNIVERSAL_APPROVED_EXECUTION_LOCAL_FAILURE';
+    if (!error?.subsystem) error.subsystem = 'UNIVERSAL';
+    if (!error?.errorType) error.errorType = 'INTERNAL';
+    if (!error?.stage) error.stage = 'approved-enrichment-execution';
     const typed = typedErrors.normalize(error, { stage: error?.stage || 'approved-enrichment-execution' });
     const diagnostic = typedErrors.format(typed);
     return response(false, `Universal spreadsheet enrichment stopped safely: ${diagnostic}. ${typed.hint}`, {
