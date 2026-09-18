@@ -21,7 +21,8 @@ const apolloNetwork = base.typedFailureSummary(Object.assign(new Error('Failed t
   stage: 'apollo-http-transport',
   retryAttempts: 3,
 }));
-assert.equal(base.isRecoverableRowFailure(apolloNetwork), false, 'provider-wide Apollo transport failure should halt safely instead of hammering later rows');
+assert.equal(base.isRecoverableRowFailure(apolloNetwork), false, 'Apollo transport failure is not an ordinary row-local API miss');
+assert.equal(base.isTransientProviderRowFailure(apolloNetwork), true, 'Apollo network failure should use the bounded transient-provider circuit breaker');
 
 const googleWrite = base.typedFailureSummary(Object.assign(new Error('permission denied'), {
   code: 'GOOGLE_SHEETS_FORBIDDEN',
@@ -41,6 +42,8 @@ const formatted = base.formatResult({
     rowsChanged: 2,
     cellsChanged: 6,
     rowFailures: 1,
+    transientProviderFailures: 3,
+    transientProviderContinuations: 2,
     systemicHalts: 1,
     haltedEarly: true,
     haltAtRow: 6,
@@ -62,6 +65,9 @@ assert.match(baseSource, /rowFailureAudit/);
 assert.match(baseSource, /haltedEarly/);
 assert.match(baseSource, /resumeSafe: true/);
 assert.match(baseSource, /isRecoverableRowFailure/);
+assert.match(baseSource, /isTransientProviderRowFailure/);
+assert.match(baseSource, /maxTransientRowFailures/);
+assert.match(baseSource, /transientProviderContinuations/);
 assert.match(targetedSource, /primary-systemic-halt/);
 assert.match(targetedSource, /deterministic primary result|verified writes/i);
 assert.match(targetedSource, /UNIVERSAL_POST_PRIMARY_FAILURE/);
@@ -75,4 +81,4 @@ assert.match(handlerSource, /UNIVERSAL_RESULT_FORMAT_FAILED/);
 assert.match(handlerSource, /reportFormattingError/);
 assert.match(handlerSource, /return response\(true, body/);
 
-console.log('Universal partial-safe execution self-test passed: row-local failures can continue, systemic failures halt safely with earlier writes preserved, post-primary/fallback/reporting failures cannot erase deterministic work, and reruns remain resume-safe.');
+console.log('Universal partial-safe execution self-test passed: row-local failures continue, isolated Apollo network faults use a bounded circuit breaker, repeated/systemic failures halt safely with earlier writes preserved, post-primary/fallback/reporting failures cannot erase deterministic work, and reruns remain resume-safe.');
