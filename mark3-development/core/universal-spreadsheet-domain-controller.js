@@ -17,12 +17,14 @@ function text(value) { return String(value == null ? '' : value).trim(); }
 
 function parseSheetName(message) {
   const value = String(message || '');
+  // "worksheet" is a first-class synonym for "sheet"/"tab". This matters for
+  // prompts such as: Target only the `Arya 2` worksheet.
   const linePatterns = [
-    /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet)\b/im,
-    /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet)\b/im,
-    /(?:^|\n)\s*(?:target|use|sheet|tab)\s+(?:only\s+)?(?:tab|sheet)?\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})/im,
-    /(?:^|\n)\s*target\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet)\s+["'`“”]?([^\n"'`“”]{1,120})/im,
-    /\b(?:target|use)\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})/i,
+    /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/im,
+    /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet|worksheet)\b/im,
+    /(?:^|\n)\s*(?:target|use|sheet|tab|worksheet)\s+(?:only\s+)?(?:tab|sheet|worksheet)?\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})/im,
+    /(?:^|\n)\s*target\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet|worksheet)\s+["'`“”]?([^\n"'`“”]{1,120})/im,
+    /\b(?:target|use)\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet|worksheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})/i,
   ];
   for (const pattern of linePatterns) {
     const match = value.match(pattern);
@@ -31,7 +33,7 @@ function parseSheetName(message) {
       .replace(/^[`"'“”]+|[`"'“”]+$/g, '')
       .replace(/[.]+$/, '')
       .trim();
-    if (candidate && !/^(?:only|the|tab|sheet)$/i.test(candidate)) return candidate;
+    if (candidate && !/^(?:only|the|tab|sheet|worksheet)$/i.test(candidate)) return candidate;
   }
   return '';
 }
