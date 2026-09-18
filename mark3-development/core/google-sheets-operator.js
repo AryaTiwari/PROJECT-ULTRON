@@ -205,6 +205,7 @@ async function request(url, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
   let forceRefresh = false;
   let transientAttempt = 0;
+  let bodyReadAttempt = 0;
 
   while (true) {
     const token = await auth.accessToken({ forceRefresh });
@@ -229,7 +230,28 @@ async function request(url, options = {}) {
       throw error;
     }
 
-    const rawText = await response.text();
+    let rawText;
+    try {
+      rawText = await response.text();
+    } catch (cause) {
+      // Values batch updates and sheet-property updates used by this module are
+      // idempotent set operations. Replaying the exact request after an interrupted
+      // response body is therefore safe even if Google already applied it.
+      if (bodyReadAttempt < 2) {
+        await sleep(300 * (2 ** bodyReadAttempt));
+        bodyReadAttempt++;
+        continue;
+      }
+      const error = new Error(`Google Sheets response body could not be read after ${bodyReadAttempt + 1} attempts: ${cause?.message || cause}`);
+      error.code = 'GOOGLE_SHEETS_NETWORK_ERROR';
+      error.subsystem = 'GOOGLE_SHEETS';
+      error.errorType = 'NETWORK';
+      error.stage = 'google-sheets-http-body-read';
+      error.retryAttempts = bodyReadAttempt + 1;
+      error.endpoint = String(url || '');
+      error.cause = cause;
+      throw error;
+    }
     let data = {};
     try { data = rawText ? JSON.parse(rawText) : {}; } catch {}
     if (response.ok) return data;
