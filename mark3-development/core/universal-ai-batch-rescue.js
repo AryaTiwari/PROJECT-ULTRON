@@ -103,16 +103,27 @@ function providerName(model) {
   return text(direct.providerForModel(model)).toLowerCase();
 }
 
+function allowedDirectProviders() {
+  const configured = String(process.env.ULTRON_M3_UNIVERSAL_AI_DIRECT_PROVIDERS || 'xai,gemini,nvidia')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+    .map((value) => value === 'grok' ? 'xai' : value);
+  return [...new Set(configured)];
+}
+
 function orderedDirectCandidates(candidates, purpose, stats) {
-  const rows = [...new Set(Array.isArray(candidates) ? candidates : [])];
+  const allow = new Set(allowedDirectProviders());
+  const rows = [...new Set(Array.isArray(candidates) ? candidates : [])]
+    .filter((model) => allow.has(providerName(model)));
   if (!rows.length) return [];
 
   const previouslyUsed = new Set((stats.directProvidersUsed || []).map((value) => text(value).toLowerCase()).filter(Boolean));
   const purposePreference = purpose === 'context'
-    ? ['gemini', 'nvidia', 'groq']
+    ? ['gemini', 'xai', 'nvidia']
     : purpose === 'selection'
-      ? ['nvidia', 'gemini', 'groq']
-      : ['groq', 'nvidia', 'gemini'];
+      ? ['xai', 'nvidia', 'gemini']
+      : ['nvidia', 'xai', 'gemini'];
 
   return rows
     .map((model, index) => {
@@ -149,7 +160,7 @@ async function batchChat(messages, purpose, stats, options = {}) {
     stats.errors.push({
       purpose,
       code: 'DIRECT_PROVIDER_NOT_CONFIGURED',
-      message: 'No env-backed direct AI provider/model is currently available for research inference.',
+      message: `No env-backed direct AI provider/model is available for research inference from allowed providers: ${allowedDirectProviders().join(', ')}.`,
     });
     return null;
   }
@@ -785,5 +796,7 @@ module.exports = {
   candidatePoolForTargets,
   validateAssignments,
   reviewerNeeded,
+  allowedDirectProviders,
+  orderedDirectCandidates,
   run,
 };
