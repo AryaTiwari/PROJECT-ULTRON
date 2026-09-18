@@ -50,6 +50,13 @@ function freshStats() {
     identityConflicts: 0,
     unresolvedTargets: 0,
     audit: [],
+    rowFailures: 0,
+    recoverableRowFailures: 0,
+    systemicHalts: 0,
+    haltedEarly: false,
+    haltAtRow: null,
+    haltError: null,
+    rowFailureAudit: [],
     modelCalls: 0,
   };
 }
@@ -160,13 +167,14 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     if (!targets.length && !repairEligible) continue;
     stats.rowsEligible++;
 
-    const companyContext = await companyContextFor(plan, row, options, stats);
-    if (!companyContext?.company) {
-      stats.unresolvedTargets += targets.length + (repairEligible ? 1 : 0);
-      continue;
-    }
+    try {
+      const companyContext = await companyContextFor(plan, row, options, stats);
+      if (!companyContext?.company) {
+        stats.unresolvedTargets += targets.length + (repairEligible ? 1 : 0);
+        continue;
+      }
 
-    const writes = [];
+      const writes = [];
 
     // A fallback-resolved employer is useful for more than brand-new contacts.
     // Re-run the deterministic same-person repair logic against the newly verified
@@ -266,10 +274,30 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       range: sheets.cellRange(source.sheetName, rowNumber, write.columnIndex),
       value: write.value,
     }));
-    if (changes.length) {
-      await sheets.writeCells(source.spreadsheetId, changes);
-      stats.rowsChanged++;
-      stats.cellsChanged += changes.length;
+      if (changes.length) {
+        await sheets.writeCells(source.spreadsheetId, changes);
+        stats.rowsChanged++;
+        stats.cellsChanged += changes.length;
+      }
+    } catch (error) {
+      const typed = base.typedFailureSummary(error, { stage: error?.stage || 'fallback-row-enrichment' });
+      stats.rowFailures++;
+      stats.rowFailureAudit.push({ rowNumber, ...typed });
+
+      // Big Pickle itself is optional. Model fallback failures never invalidate
+      // deterministic work and may safely leave this row unresolved.
+      const recoverable = typed.subsystem === 'BIG_PICKLE' || base.isRecoverableRowFailure(typed);
+      if (recoverable) {
+        stats.recoverableRowFailures++;
+        stats.unresolvedTargets += targets.length + (repairEligible ? 1 : 0);
+        continue;
+      }
+
+      stats.systemicHalts++;
+      stats.haltedEarly = true;
+      stats.haltAtRow = rowNumber;
+      stats.haltError = typed;
+      break;
     }
   }
 
