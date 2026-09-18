@@ -175,14 +175,20 @@ function infer(rows) {
   assert.equal(operator.companyPriorityCandidate({ title: 'Software Engineer' }), false);
 }
 
-// 11) Primary and Big Pickle fallback must share discovery evidence instead of repeating Apollo searches.
+// 11) Primary, bounded AI rescue and legacy Big Pickle fallback must share
+// discovery evidence instead of repeating Apollo searches. Empty-slot selection is
+// intentionally deferred to the bounded AI rescue when it is enabled.
 {
   const targetedSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-sheet-enrichment-targeted.js'), 'utf8');
   const fallbackSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-big-pickle-fallback-pass.js'), 'utf8');
+  const aiSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-ai-batch-rescue.js'), 'utf8');
   assert.match(targetedSource, /sharedDiscoveryCache/);
-  assert.match(targetedSource, /runOptions = \{ \.\.\.options, discoveryCache: sharedDiscoveryCache \}/);
+  assert.match(targetedSource, /deferOpenGroupSelectionToAi:\s*boundedAiEnabled/);
+  assert.match(targetedSource, /aiBatchRescue\.run\(exact\.request, primary, runOptions\)/);
   assert.match(targetedSource, /fallbackPass\.run\(exact\.request, primary, runOptions\)/);
+  assert.match(aiSource, /options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);
   assert.match(fallbackSource, /options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);
+  assert.match(operator.toString ? fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-sheet-enrichment-operator.js'), 'utf8') : '', /deferOpenGroupSelectionToAi/);
 }
 
 // 12) Static model-free contract for the universal Google-Sheet execution path.
@@ -214,4 +220,4 @@ const legacyInstallIndex = controllerSource.indexOf('installLegacyExcelWrappers(
 assert.ok(googleDispatchIndex >= 0, 'universal Google dispatch must exist');
 assert.ok(legacyInstallIndex > googleDispatchIndex, 'legacy AI wrappers must install only after the Google Sheet early-return path');
 
-console.log('Universal deterministic enrichment self-test passed: arbitrary contact counts, reordered fields, unfamiliar repeated blocks, company-vs-person ownership, deterministic employer parsing, canonical company-contact priority, context-adaptive ranking and zero-model Google-Sheet execution are protected.');
+console.log('Universal deterministic enrichment self-test passed: arbitrary contact counts, reordered fields, unfamiliar repeated blocks, company-vs-person ownership, deterministic employer parsing, canonical company-contact priority and the model-free safety/write layer are protected; unresolved empty-slot selection may now be deferred to the separately bounded AI rescue.');
