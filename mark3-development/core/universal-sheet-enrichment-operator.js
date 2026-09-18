@@ -15,6 +15,7 @@ const engine = require('./universal-enrichment-engine');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 
 function text(value) { return String(value ?? '').trim(); }
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function integer(value, fallback, min = 1, max = 100000) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
@@ -203,6 +204,130 @@ function candidateFillTargets(plan) {
   return [...targets.values()].sort((a, b) => (a.group.ordinal || 999) - (b.group.ordinal || 999));
 }
 
+function existingRepairNeedsDiscovery(plan) {
+  return (plan?.groups?.partial || []).some((item) =>
+    !item.isAnchor
+    && item.snapshot?.hasIdentity
+    && item.snapshot?.values?.name
+    && item.snapshot?.linkedinKind !== 'linkedin_person'
+    && (
+      (item.group?.fields?.phone && !item.snapshot?.values?.phone)
+      || (item.group?.fields?.email && !item.snapshot?.values?.email)
+      || needsEmbeddedDesignationRepair(item)
+    )
+  );
+}
+
+function exactCandidateForExisting(item, candidates = [], companyContext = {}) {
+  const wanted = planner.normalizeName(item?.snapshot?.values?.name || '');
+  if (!wanted) return null;
+  const matches = (Array.isArray(candidates) ? candidates : []).filter((candidate) =>
+    planner.normalizeName(candidate?.name || '') === wanted
+    && ranker.sameEmployer(candidate, companyContext)
+  );
+  if (matches.length !== 1) return null;
+  return matches[0];
+}
+
+function queuePendingPhone(options, rowNumber, group, snapshot, person) {
+  const queue = options?.pendingPhoneQueue;
+  if (!Array.isArray(queue) || !Number.isInteger(rowNumber) || !group?.fields?.phone) return;
+  if (text(snapshot?.values?.phone)) return;
+  const apolloPersonId = text(person?.apolloPersonId || person?.id);
+  if (!apolloPersonId || text(person?.phone) || person?.phoneStatus !== 'pending') return;
+  const key = `${rowNumber}|${group.fields.phone.index}|${apolloPersonId}`;
+  if (queue.some((item) => item.key === key)) return;
+  queue.push({
+    key,
+    rowNumber,
+    columnIndex: group.fields.phone.index,
+    groupId: group.id,
+    apolloPersonId,
+    personName: text(person?.name),
+  });
+}
+
+function phoneSyncPolls(options = {}) {
+  const raw = Number(options.phoneSyncPolls ?? process.env.ULTRON_M3_APOLLO_PHONE_SYNC_POLLS ?? 4);
+  return Number.isFinite(raw) ? Math.max(1, Math.min(8, Math.floor(raw))) : 4;
+}
+
+function phoneSyncWaitMs(options = {}) {
+  const raw = Number(options.phoneSyncWaitMs ?? process.env.ULTRON_M3_APOLLO_PHONE_SYNC_WAIT_MS ?? 1500);
+  return Number.isFinite(raw) ? Math.max(250, Math.min(5000, Math.floor(raw))) : 1500;
+}
+
+async function syncPendingPhoneAssignments(source, queue = [], stats, options = {}) {
+  const pending = Array.isArray(queue) ? queue.filter((item) => item?.apolloPersonId) : [];
+  stats.pendingPhoneRequests = pending.length;
+  if (!pending.length) return;
+
+  const unresolved = new Map(pending.map((item) => [item.key, item]));
+  const handledProviderIds = new Set();
+  const polls = phoneSyncPolls(options);
+  const waitMs = phoneSyncWaitMs(options);
+
+  for (let attempt = 0; attempt < polls && unresolved.size; attempt++) {
+    if (attempt > 0) await sleep(waitMs);
+    let results = [];
+    try {
+      results = await apollo.fetchPhoneResults();
+      stats.phoneSyncPolls++;
+    } catch (error) {
+      stats.phoneSyncErrors++;
+      stats.phoneSyncLastError = typedFailureSummary(error, { stage: 'apollo-phone-result-sync' });
+      break;
+    }
+    if (!Array.isArray(results) || !results.length) continue;
+
+    const byId = new Map();
+    for (const result of results) {
+      const id = text(result?.apollo_person_id);
+      if (id) byId.set(id, result);
+    }
+
+    const changes = [];
+    const resolvedKeys = [];
+    for (const [key, item] of unresolved.entries()) {
+      const result = byId.get(item.apolloPersonId);
+      if (!result) continue;
+      const phone = apollo.validPhone(result?.phone);
+      apollo.recordPhoneResult(item.apolloPersonId, phone);
+      handledProviderIds.add(item.apolloPersonId);
+      if (!phone) {
+        resolvedKeys.push(key);
+        stats.phoneNotFound++;
+        continue;
+      }
+
+      const range = sheets.cellRange(source.sheetName, item.rowNumber, item.columnIndex);
+      let current = '';
+      try { current = await sheets.readCell(source.spreadsheetId, range); } catch {}
+      if (!sheets.isBlank(current)) {
+        resolvedKeys.push(key);
+        stats.phoneWriteSkippedPopulated++;
+        continue;
+      }
+      changes.push({ range, value: phone, rowNumber: item.rowNumber });
+      resolvedKeys.push(key);
+    }
+
+    if (changes.length) {
+      await sheets.writeCells(source.spreadsheetId, changes);
+      stats.phoneCellsFilled += changes.length;
+      stats.cellsChanged += changes.length;
+      const phoneRows = new Set(changes.map((change) => change.rowNumber));
+      stats.phoneRowsChanged += phoneRows.size;
+    }
+    for (const key of resolvedKeys) unresolved.delete(key);
+  }
+
+  for (const apolloPersonId of handledProviderIds) {
+    try { await apollo.consumePhoneResult(apolloPersonId); } catch {}
+  }
+  stats.phoneStillPending = unresolved.size;
+}
+
 async function repairExistingGroups(row, plan, companyContext, stats, options = {}) {
   const writes = [];
   const targets = new Map();
@@ -211,6 +336,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     if (needsEmbeddedDesignationRepair(item)) targets.set(item.group.id, item);
   }
 
+  const candidatePool = Array.isArray(options.candidatePool) ? options.candidatePool : [];
   for (const item of targets.values()) {
     const group = item.group;
     const snapshot = item.snapshot;
@@ -218,29 +344,82 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     const needEmail = Boolean(group.fields.email && !snapshot.values.email);
     const needPhone = Boolean(group.fields.phone && !snapshot.values.phone);
     let resolved = null;
+    let verificationPath = '';
     stats.existingVerificationAttempts++;
+
     try {
       if (snapshot.linkedinKind === 'linkedin_person') {
+        verificationPath = 'exact-linkedin';
         resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone });
       } else if (snapshot.values.name && companyContext.company) {
-        resolved = await apollo.resolvePersonByNameCompany(snapshot.values.name, companyContext.company, companyContext.domain, { needEmail, needPhone });
+        const exactCandidate = exactCandidateForExisting(item, candidatePool, companyContext);
+        if (exactCandidate) {
+          verificationPath = 'same-company-discovery-exact-name';
+          stats.existingDiscoveryIdentityMatches++;
+          resolved = await apollo.resolveDecisionMaker(exactCandidate, companyContext.company, companyContext.domain, { needEmail, needPhone });
+        } else {
+          verificationPath = 'apollo-name-company';
+          resolved = await apollo.resolvePersonByNameCompany(snapshot.values.name, companyContext.company, companyContext.domain, { needEmail, needPhone });
+        }
       }
-    } catch {}
-    if (!resolved || resolved.noMatch || resolved.ambiguous || resolved.identityVerified === false || !ranker.sameEmployer(resolved, companyContext)) {
+    } catch (error) {
       stats.existingVerificationFailures++;
+      stats.existingRepairAudit.push({
+        rowNumber: options.rowNumber || null,
+        groupId: group.id,
+        name: snapshot.values.name || '',
+        path: verificationPath || 'unresolved',
+        status: 'verification-error',
+        code: String(error?.code || 'APOLLO_EXISTING_CONTACT_VERIFY_FAILED'),
+        message: String(error?.message || error || '').slice(0, 240),
+      });
       continue;
     }
+
+    if (!resolved || resolved.noMatch || resolved.ambiguous || resolved.identityVerified === false || !ranker.sameEmployer(resolved, companyContext)) {
+      stats.existingVerificationFailures++;
+      stats.existingRepairAudit.push({
+        rowNumber: options.rowNumber || null,
+        groupId: group.id,
+        name: snapshot.values.name || '',
+        path: verificationPath || 'unresolved',
+        status: 'identity-or-employer-not-verified',
+      });
+      continue;
+    }
+
+    queuePendingPhone(options, Number(options.rowNumber), group, snapshot, resolved);
     const planWrite = planner.safeWritesForGroup(row, group, resolved, { allowRoleNormalization: Boolean(options.allowRoleNormalization) });
-    if (!planWrite.allowed) { stats.identityConflicts++; continue; }
+    if (!planWrite.allowed) {
+      stats.identityConflicts++;
+      stats.existingRepairAudit.push({
+        rowNumber: options.rowNumber || null,
+        groupId: group.id,
+        name: snapshot.values.name || '',
+        path: verificationPath,
+        status: 'identity-conflict',
+      });
+      continue;
+    }
+
     writes.push(...planWrite.writes);
     stats.embeddedDesignationWrites += planWrite.writes.filter((write) => write.embeddedRole).length;
     if (planWrite.writes.length) stats.existingGroupsRepaired++;
+    stats.existingRepairAudit.push({
+      rowNumber: options.rowNumber || null,
+      groupId: group.id,
+      name: snapshot.values.name || '',
+      path: verificationPath,
+      status: planWrite.writes.length ? 'repaired' : (needPhone && resolved.phoneStatus === 'pending' ? 'phone-pending' : 'verified-no-new-data'),
+      fields: planWrite.writes.map((write) => write.field),
+    });
   }
   return writes;
 }
 
-async function enrichAnchorGroup(row, plan, companyContext, stats) {
+async function enrichAnchorGroup(row, plan, companyContext, stats, options = {}) {
   if (plan.anchor?.type !== 'person' || !companyContext.anchorPerson) return [];
+  queuePendingPhone(options, Number(options.rowNumber), plan.anchor.group, plan.anchor.snapshot, companyContext.anchorPerson);
   const writePlan = planner.safeWritesForGroup(row, plan.anchor.group, companyContext.anchorPerson);
   if (!writePlan.allowed) { stats.identityConflicts++; return []; }
   stats.anchorFieldsFilled += writePlan.writes.length;
@@ -414,6 +593,7 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
         stats.orphanContactVerified++;
       }
 
+      queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, person);
       const writePlan = planner.safeWritesForGroup(row, target.group, person);
       if (!writePlan.allowed || !writePlan.writes.length) {
         stats.identityConflicts++;
@@ -524,10 +704,21 @@ function freshStats() {
     candidatesDiscovered: 0,
     postHydrationDuplicates: 0,
     discoveryDiagnostics: [],
+    pendingPhoneRequests: 0,
+    phoneSyncPolls: 0,
+    phoneSyncErrors: 0,
+    phoneSyncLastError: null,
+    phoneCellsFilled: 0,
+    phoneRowsChanged: 0,
+    phoneNotFound: 0,
+    phoneWriteSkippedPopulated: 0,
+    phoneStillPending: 0,
     candidatesRanked: 0,
     existingVerificationAttempts: 0,
     existingVerificationFailures: 0,
+    existingDiscoveryIdentityMatches: 0,
     existingGroupsRepaired: 0,
+    existingRepairAudit: [],
     embeddedDesignationWrites: 0,
     newPeopleSelected: 0,
     hydrationAttempts: 0,
@@ -570,6 +761,8 @@ async function run(request = {}, options = {}) {
 
   const stats = freshStats();
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
+  const pendingPhoneQueue = [];
+  const runOptions = { ...options, discoveryCache: cache, pendingPhoneQueue };
   for (const record of analysis.rowPlans) {
     stats.rowsSeen++;
     const { row, rowNumber, plan } = record;
@@ -581,12 +774,18 @@ async function run(request = {}, options = {}) {
       stats.anchorsResolved++;
 
       const writes = [];
-      writes.push(...await enrichAnchorGroup(row, plan, companyContext, stats));
-      writes.push(...await repairExistingGroups(row, plan, companyContext, stats, options));
       const fillTargets = candidateFillTargets(plan);
+      const repairDiscoveryNeeded = existingRepairNeedsDiscovery(plan);
+      let people = [];
+      if (fillTargets.length || repairDiscoveryNeeded) {
+        people = await discoverCompanyPeople(companyContext, cache, stats, { ...runOptions, location: plan.context?.location || '' });
+      }
+
+      const rowOptions = { ...runOptions, rowNumber, candidatePool: people };
+      writes.push(...await enrichAnchorGroup(row, plan, companyContext, stats, rowOptions));
+      writes.push(...await repairExistingGroups(row, plan, companyContext, stats, rowOptions));
       if (fillTargets.length) {
-        const people = await discoverCompanyPeople(companyContext, cache, stats, { ...options, location: plan.context?.location || '' });
-        writes.push(...await fillOpenGroups(row, plan, companyContext, people, stats, options));
+        writes.push(...await fillOpenGroups(row, plan, companyContext, people, stats, rowOptions));
       }
 
       const byColumn = new Map();
@@ -638,6 +837,13 @@ async function run(request = {}, options = {}) {
     }
   }
 
+  try {
+    await syncPendingPhoneAssignments(source, pendingPhoneQueue, stats, runOptions);
+  } catch (error) {
+    stats.phoneSyncErrors++;
+    stats.phoneSyncLastError = typedFailureSummary(error, { stage: error?.stage || 'apollo-phone-result-sync' });
+  }
+
   return {
     ok: true,
     deterministic: true,
@@ -669,7 +875,7 @@ function formatResult(result) {
   const haltText = s.haltError
     ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
     : '';
-  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
+  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts, ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked, ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -682,6 +888,10 @@ module.exports = {
   candidateAlreadyPresent,
   needsEmbeddedDesignationRepair,
   candidateFillTargets,
+  existingRepairNeedsDiscovery,
+  exactCandidateForExisting,
+  queuePendingPhone,
+  syncPendingPhoneAssignments,
   repairExistingGroups,
   candidateDiscoveryKey,
   mergeCandidatePools,
