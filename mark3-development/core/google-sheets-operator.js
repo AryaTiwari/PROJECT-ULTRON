@@ -312,9 +312,35 @@ async function ensureGridSize(id, sheetId, options = {}) {
   return { expanded: true, columnCount: nextColumns, rowCount: nextRows };
 }
 
+function looksLikeGeneratedA1(range) {
+  const raw = String(range || '').trim();
+  return /^'(?:[^']|'')+'![A-Za-z]+\\d*:[A-Za-z]+\\d*$/.test(raw)
+    || /^[A-Za-z0-9 _.-]+![A-Za-z]+\\d*:[A-Za-z]+\\d*$/.test(raw);
+}
+
 async function values(id, range) {
-  const data = await request(`${API}/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`);
-  return data.values || [];
+  try {
+    const data = await request(`${API}/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`);
+    return data.values || [];
+  } catch (error) {
+    error.requestedRange = String(range || '');
+    // Google uses "Unable to parse range" for both malformed A1 syntax and a
+    // syntactically valid A1 expression whose worksheet name does not exist.
+    // ULTRON constructs its own A1 expressions, so when that generated syntax is
+    // valid, report the real layer: worksheet targeting, not range grammar.
+    if (
+      error?.code === 'GOOGLE_SHEETS_RANGE_INVALID'
+      && /unable to parse range/i.test(String(error?.message || ''))
+      && looksLikeGeneratedA1(range)
+    ) {
+      error.code = 'GOOGLE_SHEETS_TAB_NOT_FOUND';
+      error.subsystem = 'TARGETING';
+      error.errorType = 'NOT_FOUND';
+      error.stage = error.stage || 'sheet-values-read';
+      error.hint = `Google rejected the generated A1 range for worksheet targeting. Requested range: ${range}`;
+    }
+    throw error;
+  }
 }
 
 function hyperlinkFromCell(cell) {
@@ -443,4 +469,5 @@ module.exports = {
   cellRange,
   isBlank,
   classifyApiError,
+  looksLikeGeneratedA1,
 };
