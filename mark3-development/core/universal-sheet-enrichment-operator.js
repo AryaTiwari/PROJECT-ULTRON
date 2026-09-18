@@ -248,13 +248,13 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
 }
 
 function phoneSyncPolls(options = {}) {
-  const raw = Number(options.phoneSyncPolls ?? process.env.ULTRON_M3_APOLLO_PHONE_SYNC_POLLS ?? 4);
-  return Number.isFinite(raw) ? Math.max(1, Math.min(8, Math.floor(raw))) : 4;
+  const raw = Number(options.phoneSyncPolls ?? process.env.ULTRON_M3_APOLLO_PHONE_SYNC_POLLS ?? 8);
+  return Number.isFinite(raw) ? Math.max(1, Math.min(10, Math.floor(raw))) : 8;
 }
 
 function phoneSyncWaitMs(options = {}) {
-  const raw = Number(options.phoneSyncWaitMs ?? process.env.ULTRON_M3_APOLLO_PHONE_SYNC_WAIT_MS ?? 1500);
-  return Number.isFinite(raw) ? Math.max(250, Math.min(5000, Math.floor(raw))) : 1500;
+  const raw = Number(options.phoneSyncWaitMs ?? process.env.ULTRON_M3_APOLLO_PHONE_SYNC_WAIT_MS ?? 1800);
+  return Number.isFinite(raw) ? Math.max(250, Math.min(5000, Math.floor(raw))) : 1800;
 }
 
 async function syncPendingPhoneAssignments(source, queue = [], stats, options = {}) {
