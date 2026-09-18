@@ -130,6 +130,40 @@ function retryDelay(response, attempt) {
   return Math.min(12_000, 800 * (2 ** attempt));
 }
 
+function apolloBodyReadError(cause, attempts, endpoint) {
+  const message = String(cause?.message || cause || 'unknown body-read failure');
+  const error = new Error('Apollo response body could not be read after ' + attempts + ' attempt' + (attempts === 1 ? '' : 's') + ': ' + message);
+  error.code = 'APOLLO_NETWORK_BODY_READ_FAILED';
+  error.subsystem = 'APOLLO';
+  error.errorType = 'NETWORK';
+  error.stage = 'apollo-http-body-read';
+  error.retryAttempts = attempts;
+  error.endpoint = String(endpoint || '');
+  error.cause = cause;
+  error.hint = 'Apollo returned a connection but the response body was interrupted. ULTRON retried the body/request before stopping safely.';
+  return error;
+}
+
+async function fetchApolloResponse(input, init, options = {}) {
+  const bodyRetries = Math.max(0, Math.min(3, Number(options.bodyRetries ?? 2)));
+  const endpoint = input instanceof URL ? input.toString() : String(input || '');
+  let lastBodyError = null;
+
+  for (let attempt = 0; attempt <= bodyRetries; attempt++) {
+    const response = await fetch(input, init);
+    try {
+      const text = await response.text();
+      return { response, text };
+    } catch (cause) {
+      lastBodyError = cause;
+      if (attempt >= bodyRetries) break;
+      await sleep(250 * (2 ** attempt));
+    }
+  }
+
+  throw apolloBodyReadError(lastBodyError, bodyRetries + 1, endpoint);
+}
+
 function webhookUrl() {
   const raw = setting('APOLLO_WEBHOOK_URL');
   const secret = setting('APOLLO_WEBHOOK_SECRET');
@@ -329,8 +363,7 @@ async function searchCompanyPeopleBroad({ company, domain = '', location = '', l
     let completed = false;
     let lastError = null;
     for (let attempt = 0; attempt < 4; attempt++) {
-      const response = await fetch(url, { method: 'POST', headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } });
-      const raw = await response.text();
+      const { response, text: raw } = await fetchApolloResponse(url, { method: 'POST', headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } });
       try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
       if (response.ok) {
         completed = true;
@@ -401,8 +434,7 @@ async function searchCompanyDecisionMaker({ company, domain = '', location = '',
     let lastError;
     let tierCompleted = false;
     for (let attempt = 0; attempt < 4; attempt++) {
-      const response = await fetch(url, { method: 'POST', headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } });
-      const text = await response.text();
+      const { response, text } = await fetchApolloResponse(url, { method: 'POST', headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } });
       let data = {};
       try { data = JSON.parse(text); } catch {}
       if (response.ok) {
@@ -489,7 +521,7 @@ async function apiCall(linkedinUrl, { needPhone }) {
 
   let lastError;
   for (let attempt = 0; attempt < 4; attempt++) {
-    const response = await fetch(url, {
+    const { response, text } = await fetchApolloResponse(url, {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
@@ -498,7 +530,6 @@ async function apiCall(linkedinUrl, { needPhone }) {
         'Cache-Control': 'no-cache',
       },
     });
-    const text = await response.text();
     let data = {};
     try { data = JSON.parse(text); } catch {}
     if (response.ok) return data;
@@ -799,6 +830,8 @@ module.exports = {
   searchCandidateFromPerson,
   rankedDecisionMakers,
   searchCompanyDecisionMaker,
+  fetchApolloResponse,
+  apolloBodyReadError,
   searchCompanyPeopleBroad,
   resolveDecisionMaker,
   resolvePersonByNameCompany,
