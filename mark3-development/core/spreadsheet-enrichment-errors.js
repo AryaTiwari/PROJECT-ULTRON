@@ -95,6 +95,9 @@ function normalize(error, context = {}) {
     hint: text(original.hint) || hintFor(subsystem, type, code),
     status: original.status ?? null,
     retryAttempts: original.retryAttempts ?? null,
+    attemptedRange: text(original.requestedRange || original.originalRange || context.attemptedRange) || null,
+    endpoint: text(original.endpoint || context.endpoint) || null,
+    providerStatus: original.status ?? null,
     causeCode: text(original?.cause?.code) || null,
     original,
   };
