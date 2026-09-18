@@ -84,10 +84,38 @@ async function execute(decision) {
       rowLimitApplied: payload.rowLimit || null,
       validationMode: Boolean(payload.rowLimit),
     };
-    const body = `${modePrefix(payload.rowLimit)} ${universal.formatResult(enriched)}`;
+
+    let body;
+    let reportFormattingError = null;
+    try {
+      body = `${modePrefix(payload.rowLimit)} ${universal.formatResult(enriched)}`;
+    } catch (error) {
+      if (!error?.code) error.code = 'UNIVERSAL_RESULT_FORMAT_FAILED';
+      if (!error?.subsystem) error.subsystem = 'UNIVERSAL';
+      if (!error?.errorType) error.errorType = 'INTERNAL';
+      if (!error?.stage) error.stage = 'result-formatting';
+      const typed = typedErrors.normalize(error, { stage: 'result-formatting' });
+      reportFormattingError = {
+        code: typed.code,
+        subsystem: typed.subsystem,
+        type: typed.type,
+        stage: typed.stage,
+        message: typed.message,
+        hint: typed.hint,
+      };
+      const s = result?.stats || {};
+      body = `${modePrefix(payload.rowLimit)} Universal enrichment execution returned safely, but result formatting hit [${typed.subsystem}/${typed.type}] ${typed.code} @ ${typed.stage}: ${typed.message}. Earlier verified writes were preserved. Processed ${s.rowsProcessed || 0}/${s.rowsSeen || 0} rows and changed ${s.cellsChanged || 0} cells across ${s.rowsChanged || 0} rows. Resume-safe: yes.`;
+    }
+
     const modelCalls = Number(result?.modelCalls || 0);
     const fallbackUsed = modelCalls > 0;
-    const partialCompletion = Boolean(result?.partialCompletion || result?.stats?.haltedEarly || result?.bigPickleFallback?.haltedEarly);
+    const partialCompletion = Boolean(
+      result?.partialCompletion
+      || result?.stats?.haltedEarly
+      || result?.bigPickleFallback?.haltedEarly
+      || result?.postPrimaryError
+      || reportFormattingError
+    );
     return response(true, body, {
       universalEnrichment: enriched,
       spreadsheetProvider: 'google',
@@ -101,7 +129,9 @@ async function execute(decision) {
       completedFully: !partialCompletion,
       partialCompletion,
       resumeSafe: result?.resumeSafe !== false,
-      haltError: result?.stats?.haltError || result?.bigPickleFallback?.haltError || result?.bigPickleFallback?.error || null,
+      haltError: result?.stats?.haltError || result?.bigPickleFallback?.haltError || result?.bigPickleFallback?.error || result?.postPrimaryError || reportFormattingError || null,
+      postPrimaryError: result?.postPrimaryError || null,
+      reportFormattingError,
       rowFailureAudit: result?.stats?.rowFailureAudit || [],
       provider: fallbackUsed ? 'deterministic+apollo+google-sheets+omniroute/opencode' : 'deterministic+apollo+google-sheets',
     });
