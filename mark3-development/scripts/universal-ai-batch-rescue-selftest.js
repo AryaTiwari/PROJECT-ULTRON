@@ -104,12 +104,16 @@ const controllerSource = fs.readFileSync(path.join(root, 'universal-spreadsheet-
 
 assert.match(rescueSource, /Maximum logical model calls are capped for the WHOLE run/);
 assert.match(rescueSource, /runInternalInference\('spreadsheet-enrichment'/);
+assert.match(rescueSource, /omniFallback\.ensure/);
+assert.match(rescueSource, /omniDiversity\.diversifiedChat/);
 assert.match(rescueSource, /chatOmniRouteOnly/);
 assert.match(rescueSource, /You may choose ONLY candidateKey values supplied inside that same row/);
 assert.match(rescueSource, /apollo\.resolveDecisionMaker/);
 assert.match(rescueSource, /ranker\.sameEmployer/);
 assert.match(rescueSource, /planner\.safeWritesForGroup/);
-assert.match(rescueSource, /stats\.modelCalls >= stats\.maxCalls/);
+assert.match(rescueSource, /stats\.modelAttempts >= stats\.maxCalls/);
+assert.match(rescueSource, /stats\.modelCalls\+\+/);
+assert.match(rescueSource, /AI_BATCH_EMPTY_RESPONSE/);
 assert.match(rescueSource, /reviewerNeeded/);
 assert.match(rescueSource, /rescueMode: 'repair'/);
 assert.match(rescueSource, /candidatePoolForTargets/);
@@ -125,4 +129,4 @@ assert.match(operatorSource, /repairDiscoveryNeeded \|\| \(!deferOpenSelection &
 assert.doesNotMatch(operatorSource, /if \(fillTargets\.length \|\| repairDiscoveryNeeded\) \{\s*people = await discoverCompanyPeople/);
 assert.match(controllerSource, /maximum 3 logical AI calls for the entire run, not per row/);
 
-console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, partial existing POCs and empty POCs share the same batch, exact repair identities survive shortlist pruning, reviewer is conditional, maximum logical model calls are hard-capped at 3, AI can only select supplied Apollo keys, deterministic Apollo/employer/write verification remains mandatory, and per-row Big Pickle calls are suppressed while batch rescue is active.');
+console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, proven concrete-model OmniRoute diversity is reused, lazy OmniRoute wake-up is explicit, failed routing attempts are distinguished from successful model responses, partial and empty POCs share the same batch, reviewer is conditional, the whole-run attempt cap remains 3, Apollo verification remains mandatory, and per-row Big Pickle is suppressed while batch rescue is active.');
