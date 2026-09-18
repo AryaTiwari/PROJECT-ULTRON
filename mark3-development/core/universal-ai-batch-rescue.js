@@ -11,9 +11,7 @@
 // Maximum logical model calls are capped for the WHOLE run, never per row.
 
 const control = require('./command-control-plane');
-const modelRouter = require('./model-router');
-const omniDiversity = require('./three-poc-omniroute-diversity');
-const omniFallback = require('./omniroute-fallback');
+const direct = require('./direct-provider-router');
 const engine = require('./universal-enrichment-engine');
 const base = require('./universal-sheet-enrichment-operator');
 const planner = require('./universal-enrichment-planner');
@@ -59,6 +57,8 @@ function freshStats() {
     reviewerCalls: 0,
     modelFailures: 0,
     actualModels: [],
+    directProvidersUsed: [],
+    directAttemptAudit: [],
     rowsConsidered: 0,
     rowsWithKnownEmployer: 0,
     employersResolvedByAi: 0,
@@ -99,44 +99,116 @@ function freshStats() {
   };
 }
 
+function providerName(model) {
+  return text(direct.providerForModel(model)).toLowerCase();
+}
+
+function orderedDirectCandidates(candidates, purpose, stats) {
+  const rows = [...new Set(Array.isArray(candidates) ? candidates : [])];
+  if (!rows.length) return [];
+
+  const previouslyUsed = new Set((stats.directProvidersUsed || []).map((value) => text(value).toLowerCase()).filter(Boolean));
+  const purposePreference = purpose === 'context'
+    ? ['gemini', 'nvidia', 'groq']
+    : purpose === 'selection'
+      ? ['nvidia', 'gemini', 'groq']
+      : ['groq', 'nvidia', 'gemini'];
+
+  return rows
+    .map((model, index) => {
+      const provider = providerName(model);
+      const preferenceIndex = purposePreference.indexOf(provider);
+      const unusedBonus = previouslyUsed.has(provider) ? 0 : 1000;
+      const preferenceScore = preferenceIndex < 0 ? 0 : 300 - preferenceIndex * 100;
+      return { model, provider, index, score: unusedBonus + preferenceScore };
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((entry) => entry.model);
+}
+
 async function batchChat(messages, purpose, stats, options = {}) {
-  if (stats.modelAttempts >= stats.maxCalls) return null;
-  stats.modelAttempts++;
   if (purpose === 'context') stats.contextCalls++;
   if (purpose === 'selection') stats.selectionCalls++;
   if (purpose === 'review') stats.reviewerCalls++;
 
+  let candidates = [];
   try {
-    // The old high-fill 3-POC path used concrete-provider OmniRoute diversity.
-    // Reuse that proven route here, but keep the new whole-run 2/3-pass budget.
-    return await control.runInternalInference('spreadsheet-enrichment', async () => {
-      await omniFallback.ensure({ reason: `bounded spreadsheet AI ${purpose} pass` });
-      const original = modelRouter.chatOmniRouteOnly.bind(modelRouter);
-      const result = await omniDiversity.diversifiedChat(original, {
-        model: 'auto/best-reasoning',
-        taskType: 'research',
-        messages,
-      });
-      const body = resultText(result);
-      if (!body) {
-        const error = new Error('Bounded batch AI returned no usable final text.');
-        error.code = 'AI_BATCH_EMPTY_RESPONSE';
-        throw error;
-      }
-      const actual = text(result?.raw?.model || result?.model || '');
-      if (actual && !stats.actualModels.includes(actual)) stats.actualModels.push(actual);
-      stats.modelCalls++;
-      return result;
-    });
+    candidates = orderedDirectCandidates(await direct.candidates('research'), purpose, stats);
   } catch (error) {
     stats.modelFailures++;
     stats.errors.push({
       purpose,
-      code: text(error?.code || 'AI_BATCH_REASONING_FAILED'),
+      code: text(error?.code || 'DIRECT_PROVIDER_DISCOVERY_FAILED'),
       message: text(error?.message || error).slice(0, 500),
     });
     return null;
   }
+
+  if (!candidates.length) {
+    stats.modelFailures++;
+    stats.errors.push({
+      purpose,
+      code: 'DIRECT_PROVIDER_NOT_CONFIGURED',
+      message: 'No env-backed direct AI provider/model is currently available for research inference.',
+    });
+    return null;
+  }
+
+  return control.runInternalInference('spreadsheet-enrichment', async () => {
+    for (const model of candidates) {
+      if (stats.modelAttempts >= stats.maxCalls) return null;
+      stats.modelAttempts++;
+
+      const provider = providerName(model) || 'direct';
+      try {
+        const result = await direct.chat({
+          model,
+          taskType: 'research',
+          messages,
+          timeoutMs: direct.timeoutFor('research'),
+        });
+
+        const body = resultText(result);
+        if (!body) {
+          const error = new Error('Direct env-backed model returned no usable final text.');
+          error.code = 'DIRECT_AI_EMPTY_RESPONSE';
+          throw error;
+        }
+
+        const actual = text(result?.model || model);
+        const actualProvider = text(result?.provider || provider);
+        if (actual && !stats.actualModels.includes(actual)) stats.actualModels.push(actual);
+        if (actualProvider && !stats.directProvidersUsed.includes(actualProvider)) stats.directProvidersUsed.push(actualProvider);
+        stats.directAttemptAudit.push({
+          purpose,
+          provider: actualProvider,
+          model: actual,
+          success: true,
+          credentialSlot: text(result?.credentialSlot || ''),
+        });
+        stats.modelCalls++;
+        return result;
+      } catch (error) {
+        stats.modelFailures++;
+        stats.directAttemptAudit.push({
+          purpose,
+          provider,
+          model,
+          success: false,
+          code: text(error?.code || error?.status || 'DIRECT_AI_FAILED'),
+          message: text(error?.message || error).slice(0, 300),
+        });
+        stats.errors.push({
+          purpose,
+          provider,
+          model,
+          code: text(error?.code || 'DIRECT_AI_FAILED'),
+          message: text(error?.message || error).slice(0, 500),
+        });
+      }
+    }
+    return null;
+  });
 }
 
 function compactEvidence(row, schema, plan) {
