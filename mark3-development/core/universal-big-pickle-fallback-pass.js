@@ -156,7 +156,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     sheetName: request.sheetName || options.sheetName,
   });
   const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema });
-  const cache = new Map();
+  const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
 
   for (const record of analysis.rowPlans) {
     stats.rowsSeen++;
