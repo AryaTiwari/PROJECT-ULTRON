@@ -24,12 +24,16 @@ assert.doesNotMatch(deterministicSource, /big-pickle|omniroute|model-router|chat
 // resulting runOptions through both deterministic primary and bounded fallback.
 // Test the execution contract rather than the historical local variable spelling.
 assert.match(targetedSource, /const sharedDiscoveryCache = options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);
-assert.match(targetedSource, /const runOptions = \{ \.\.\.options, discoveryCache: sharedDiscoveryCache \}/);
+assert.match(targetedSource, /deferOpenGroupSelectionToAi:\s*boundedAiEnabled/);
 assert.match(targetedSource, /const primary = await base\.run\(exact\.request, runOptions\)/);
+assert.match(targetedSource, /aiBatchRescue\.run\(exact\.request, primary, runOptions\)/);
 assert.match(targetedSource, /fallbackPass\.run\(exact\.request, primary, runOptions\)/);
 const primaryIndex = targetedSource.indexOf('const primary = await base.run(exact.request, runOptions)');
+const aiIndex = targetedSource.indexOf('aiBatchRescue.run(exact.request, primary, runOptions)');
 const fallbackIndex = targetedSource.indexOf('fallbackPass.run(exact.request, primary, runOptions)');
-assert.ok(primaryIndex >= 0 && fallbackIndex > primaryIndex, 'deterministic primary must execute before Big Pickle fallback');
+assert.ok(primaryIndex >= 0 && aiIndex > primaryIndex, 'deterministic safety pass must execute before bounded AI batch rescue');
+assert.ok(fallbackIndex > primaryIndex, 'legacy Big Pickle fallback must remain behind deterministic primary when batch AI is disabled');
+assert.match(targetedSource, /skippedReason:\s*'ai-batch-rescue-active'/);
 
 // Once primary returns successfully, optional fallback/orchestration problems must
 // preserve the primary result instead of reclassifying verified writes as failure.
