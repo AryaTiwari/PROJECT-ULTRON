@@ -85,7 +85,7 @@ function response(ok, body, extra = {}) {
     response: body,
     text: body,
     model: 'mark3-universal-hybrid-enrichment',
-    provider: 'deterministic+apollo+google-sheets+big-pickle-fallback',
+    provider: 'deterministic+apollo+google-sheets+bounded-direct-env-ai',
     taskType: 'universal-sheet-enrichment',
     mode: 'operator',
     toolRounds: 0,
