@@ -118,6 +118,12 @@ function orderedDirectCandidates(candidates, purpose, stats) {
     .filter((model) => allow.has(providerName(model)));
   if (!rows.length) return [];
 
+  const firstPerProvider = new Map();
+  for (const model of rows) {
+    const provider = providerName(model);
+    if (provider && !firstPerProvider.has(provider)) firstPerProvider.set(provider, model);
+  }
+
   const previouslyUsed = new Set((stats.directProvidersUsed || []).map((value) => text(value).toLowerCase()).filter(Boolean));
   const purposePreference = purpose === 'context'
     ? ['gemini', 'xai', 'nvidia']
@@ -125,9 +131,8 @@ function orderedDirectCandidates(candidates, purpose, stats) {
       ? ['xai', 'nvidia', 'gemini']
       : ['nvidia', 'xai', 'gemini'];
 
-  return rows
-    .map((model, index) => {
-      const provider = providerName(model);
+  return [...firstPerProvider.entries()]
+    .map(([provider, model], index) => {
       const preferenceIndex = purposePreference.indexOf(provider);
       const unusedBonus = previouslyUsed.has(provider) ? 0 : 1000;
       const preferenceScore = preferenceIndex < 0 ? 0 : 300 - preferenceIndex * 100;
