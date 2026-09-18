@@ -314,8 +314,8 @@ async function ensureGridSize(id, sheetId, options = {}) {
 
 function looksLikeGeneratedA1(range) {
   const raw = String(range || '').trim();
-  return /^'(?:[^']|'')+'![A-Za-z]+\\d*:[A-Za-z]+\\d*$/.test(raw)
-    || /^[A-Za-z0-9 _.-]+![A-Za-z]+\\d*:[A-Za-z]+\\d*$/.test(raw);
+  return /^'(?:[^']|'')+'![A-Za-z]+\d*:[A-Za-z]+\d*$/.test(raw)
+    || /^[A-Za-z0-9 _.-]+![A-Za-z]+\d*:[A-Za-z]+\d*$/.test(raw);
 }
 
 async function values(id, range) {
