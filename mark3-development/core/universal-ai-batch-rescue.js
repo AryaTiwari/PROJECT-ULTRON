@@ -78,6 +78,7 @@ function freshStats() {
     rowsChanged: 0,
     cellsChanged: 0,
     newPeopleSelected: 0,
+    existingRepairsAccepted: 0,
     embeddedDesignationWrites: 0,
     pendingPhoneRequests: 0,
     phoneSyncPolls: 0,
@@ -631,7 +632,8 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       await sheets.writeCells(source.spreadsheetId, changes);
       changedRows.add(rowNumber);
       stats.cellsChanged += changes.length;
-      stats.newPeopleSelected++;
+      if (repairMode) stats.existingRepairsAccepted++;
+      else stats.newPeopleSelected++;
       stats.aiSelectionsAccepted++;
       stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
       stats.selectionAudit.push({
