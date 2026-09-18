@@ -248,18 +248,87 @@ async function enrichAnchorGroup(row, plan, companyContext, stats) {
   return writePlan.writes;
 }
 
+function candidateDiscoveryKey(candidate = {}) {
+  return String(
+    candidate.apolloPersonId
+    || candidate.id
+    || candidate.linkedinUrl
+    || candidate.linkedin_url
+    || `${ranker.normalize(candidate.name || '')}|${ranker.normalize(candidate.title || '')}`
+  ).trim().toLowerCase();
+}
+
+function mergeCandidatePools(...pools) {
+  const out = [];
+  const seen = new Set();
+  for (const pool of pools) {
+    for (const candidate of Array.isArray(pool) ? pool : []) {
+      const key = candidateDiscoveryKey(candidate);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
+    }
+  }
+  return out;
+}
+
+function companyPriorityTitles() {
+  return (apollo.COMPANY_DECISION_PRIORITY || [])
+    .flatMap((tier) => Array.isArray(tier?.titles) ? tier.titles : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+}
+
+function companyPriorityCandidate(candidate = {}) {
+  return Number(apollo.decisionPriority(candidate.title || candidate.headline || '')) < 99;
+}
+
 async function discoverCompanyPeople(companyContext, cache, stats, options = {}) {
   const key = `${ranker.companyKey(companyContext.company)}|${ranker.hostname(companyContext.domain)}|${ranker.normalize(options.location || '')}`;
   if (cache.has(key)) { stats.candidateCacheHits++; return cache.get(key); }
-  const result = await apollo.searchCompanyPeopleBroad({
+
+  const broadResult = await apollo.searchCompanyPeopleBroad({
     company: companyContext.company,
     domain: companyContext.domain,
     location: options.location || '',
     limit: integer(options.candidateLimit, 100, 10, 100),
     titles: [],
   });
-  const people = Array.isArray(result?.people) ? result.people : [];
   stats.candidateSearches++;
+  stats.candidateBroadSearches++;
+  const broadPeople = Array.isArray(broadResult?.people) ? broadResult.people : [];
+
+  // Broad discovery remains first and authoritative. If it happens to return an
+  // employee slice with too few useful decision-maker/recruiting contacts, run
+  // one cheap title-targeted discovery pass before spending hydration credits.
+  const minimumPriorityPool = integer(options.minimumPriorityPool, 6, 2, 20);
+  const broadPriorityCount = broadPeople.filter(companyPriorityCandidate).length;
+  let targetedPeople = [];
+  if (broadPriorityCount < minimumPriorityPool) {
+    try {
+      const targetedResult = await apollo.searchCompanyPeopleBroad({
+        company: companyContext.company,
+        domain: companyContext.domain,
+        location: options.location || '',
+        limit: integer(options.priorityCandidateLimit, 50, 10, 100),
+        titles: companyPriorityTitles(),
+      });
+      stats.candidateSearches++;
+      stats.candidatePrioritySearches++;
+      targetedPeople = Array.isArray(targetedResult?.people) ? targetedResult.people : [];
+    } catch (error) {
+      // Supplemental discovery must not erase a successful broad search. Keep the
+      // row usable and expose the diagnostic in stats.
+      stats.candidatePrioritySearchFailures++;
+      stats.discoveryDiagnostics.push({
+        company: companyContext.company,
+        code: String(error?.code || 'APOLLO_PRIORITY_SEARCH_FAILED'),
+        message: String(error?.message || error || '').slice(0, 300),
+      });
+    }
+  }
+
+  const people = mergeCandidatePools(broadPeople, targetedPeople);
   stats.candidatesDiscovered += people.length;
   cache.set(key, people);
   return people;
@@ -331,7 +400,10 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
       if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) continue;
       const hydratedName = ranker.normalize(person?.name || '');
       const hydratedLinkedin = ranker.linkedinKey(person?.linkedinUrl || person?.returnedLinkedIn || '');
-      if ((hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) continue;
+      if ((hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) {
+        stats.postHydrationDuplicates++;
+        continue;
+      }
 
       if (orphanTarget) {
         const contactProof = orphanPolicy.verify(target.snapshot, person);
@@ -445,8 +517,13 @@ function freshStats() {
     anchorsResolved: 0,
     anchorFieldsFilled: 0,
     candidateSearches: 0,
+    candidateBroadSearches: 0,
+    candidatePrioritySearches: 0,
+    candidatePrioritySearchFailures: 0,
     candidateCacheHits: 0,
     candidatesDiscovered: 0,
+    postHydrationDuplicates: 0,
+    discoveryDiagnostics: [],
     candidatesRanked: 0,
     existingVerificationAttempts: 0,
     existingVerificationFailures: 0,
@@ -492,7 +569,7 @@ async function run(request = {}, options = {}) {
   }
 
   const stats = freshStats();
-  const cache = new Map();
+  const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   for (const record of analysis.rowPlans) {
     stats.rowsSeen++;
     const { row, rowNumber, plan } = record;
@@ -592,7 +669,7 @@ function formatResult(result) {
   const haltText = s.haltError
     ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
     : '';
-  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} candidates from ${s.candidateSearches} employer searches (${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic adaptive ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
+  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -606,6 +683,10 @@ module.exports = {
   needsEmbeddedDesignationRepair,
   candidateFillTargets,
   repairExistingGroups,
+  candidateDiscoveryKey,
+  mergeCandidatePools,
+  companyPriorityTitles,
+  companyPriorityCandidate,
   discoverCompanyPeople,
   fillOpenGroups,
   typedFailureSummary,
