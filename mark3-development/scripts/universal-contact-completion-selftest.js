@@ -6,6 +6,12 @@ const path = require('path');
 
 require('../core/universal-deterministic-bootstrap').install();
 const operator = require('../core/universal-sheet-enrichment-operator');
+const fallbackPass = require('../core/universal-big-pickle-fallback-pass');
+
+assert.equal(typeof operator.enrichAnchorGroup, 'function', 'Big Pickle fallback must be able to call the deterministic anchor-enrichment helper');
+const fallbackStats = fallbackPass.freshStats();
+assert.ok(Array.isArray(fallbackStats.existingRepairAudit), 'fallback stats must support deterministic existing-contact repair audit');
+assert.equal(fallbackStats.phoneCellsFilled, 0, 'fallback stats must understand universal phone-completion accounting');
 
 const company = { company: 'Sunrise Systems, Inc', domain: 'sunrisesys.com' };
 const existing = {
@@ -112,6 +118,7 @@ assert.match(bootstrapSource, /const highRecallDiscovery = candidateDiscovery\.i
 
 assert.match(fallbackSource, /try \{\s*return await control\.runInternalInference\('spreadsheet-enrichment'/s);
 assert.match(fallbackSource, /catch \(error\) \{\s*state\.failures\+\+;\s*state\.lastError/s);
+assert.match(operatorSource, /repairExistingGroups,\s*enrichAnchorGroup,/s);
 
 async function run() {
   const apollo = require('../core/apollo-enrichment');
