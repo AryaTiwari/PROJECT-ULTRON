@@ -11,7 +11,6 @@ require('./google-sheets-core-api-selftest');
 require('./google-sheets-values-range-hardening-selftest');
 require('./universal-deterministic-enrichment-selftest');
 require('./universal-partial-safe-execution-selftest');
-require('./universal-contact-completion-selftest');
 require('./universal-spreadsheet-routing-selftest');
 require('./universal-approval-routing-selftest');
 require('./universal-contact-display-selftest');
@@ -54,6 +53,7 @@ assert.throws(
 );
 
 (async () => {
+  await require('./universal-contact-completion-selftest').run();
   await control.runInternalInference('three-poc-spreadsheet', async () => {
     assert.doesNotThrow(() => control.assertAllowed('general-model', {
       messages: [{ role: 'user', content: internalPayload }],
