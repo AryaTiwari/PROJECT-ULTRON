@@ -16,8 +16,8 @@ function response(ok, body, extra = {}) {
     ok,
     response: body,
     text: body,
-    model: 'mark3-universal-deterministic-enrichment',
-    provider: 'deterministic+apollo+google-sheets',
+    model: 'mark3-universal-bounded-ai-enrichment',
+    provider: 'deterministic+apollo+google-sheets+bounded-ai-rescue',
     taskType: 'universal-sheet-enrichment',
     mode: 'operator',
     toolRounds: 0,
@@ -135,7 +135,7 @@ async function execute(decision) {
       postPrimaryError: result?.postPrimaryError || null,
       reportFormattingError,
       rowFailureAudit: result?.stats?.rowFailureAudit || [],
-      provider: fallbackUsed ? 'deterministic+apollo+google-sheets+omniroute/opencode' : 'deterministic+apollo+google-sheets',
+      provider: fallbackUsed ? 'deterministic+apollo+google-sheets+bounded-omniroute-ai' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
     if (!error?.code) error.code = 'UNIVERSAL_APPROVED_EXECUTION_LOCAL_FAILURE';
