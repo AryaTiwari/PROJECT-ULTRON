@@ -113,7 +113,7 @@ assert.match(bootstrapSource, /const highRecallDiscovery = candidateDiscovery\.i
 assert.match(fallbackSource, /try \{\s*return await control\.runInternalInference\('spreadsheet-enrichment'/s);
 assert.match(fallbackSource, /catch \(error\) \{\s*state\.failures\+\+;\s*state\.lastError/s);
 
-(async () => {
+async function run() {
   const apollo = require('../core/apollo-enrichment');
   const sheets = require('../core/google-sheets-operator');
   const originals = {
@@ -167,7 +167,13 @@ assert.match(fallbackSource, /catch \(error\) \{\s*state\.failures\+\+;\s*state\
   }
 
   console.log('Universal contact completion self-test passed: existing POC names reuse unique same-employer Apollo discovery identities, verified pending phone callbacks write the exact blank POC phone cell without overwriting populated cells, universal verified-email/high-recall wrappers are installed, and Big Pickle control failures fail closed.');
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+}
+
+if (require.main === module) {
+  run().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { run };
