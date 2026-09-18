@@ -9,6 +9,7 @@ const universal = require('./universal-sheet-enrichment-targeted');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 
 const OPERATION = 'universal-spreadsheet-enrichment';
+const EXECUTION_CONTRACT = 'universal-partial-safe-v2';
 
 function response(ok, body, extra = {}) {
   return {
@@ -20,6 +21,7 @@ function response(ok, body, extra = {}) {
     taskType: 'universal-sheet-enrichment',
     mode: 'operator',
     toolRounds: 0,
+    executionContract: EXECUTION_CONTRACT,
     ...extra,
   };
 }
@@ -169,4 +171,4 @@ function install() {
   return Object.freeze({ installed: true, operation: OPERATION, owner: 'command-control-plane' });
 }
 
-module.exports = { OPERATION, install, execute, modePrefix };
+module.exports = { OPERATION, EXECUTION_CONTRACT, install, execute, modePrefix };
