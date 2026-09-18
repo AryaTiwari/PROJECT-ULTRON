@@ -12,6 +12,7 @@ const ranker = require('./universal-authority-ranker');
 const profileParser = require('./universal-linkedin-profile-parser');
 const orphanPolicy = require('./universal-orphan-contact-policy');
 const engine = require('./universal-enrichment-engine');
+const typedErrors = require('./spreadsheet-enrichment-errors');
 
 function text(value) { return String(value ?? '').trim(); }
 function integer(value, fallback, min = 1, max = 100000) {
@@ -380,6 +381,50 @@ function toSheetChanges(sheetName, rowNumber, writes) {
   return (writes || []).map((write) => ({ range: sheets.cellRange(sheetName, rowNumber, write.columnIndex), value: write.value, field: write.field, groupId: write.groupId }));
 }
 
+function typedFailureSummary(error, context = {}) {
+  const typed = typedErrors.normalize(error, context);
+  return {
+    code: typed.code,
+    subsystem: typed.subsystem,
+    type: typed.type,
+    stage: typed.stage,
+    message: typed.message,
+    hint: typed.hint,
+    status: typed.status,
+    retryAttempts: typed.retryAttempts,
+    attemptedRange: typed.attemptedRange || null,
+  };
+}
+
+function isRecoverableRowFailure(typed = {}) {
+  const subsystem = text(typed.subsystem).toUpperCase();
+  const type = text(typed.type).toUpperCase();
+  const code = text(typed.code).toUpperCase();
+
+  // Google targeting/auth/write failures are workbook-level. Continuing would
+  // either repeat a broken write path or risk misleading partial state.
+  if (subsystem === 'GOOGLE_SHEETS' || subsystem === 'TARGETING' || subsystem === 'CONTROL_PLANE' || subsystem === 'SCHEMA') return false;
+
+  // Apollo transport/auth/quota/config failures are provider-wide, not row-local.
+  if (subsystem === 'APOLLO') {
+    if (['AUTH', 'PERMISSION', 'RATE_LIMIT', 'NETWORK', 'CONFIG'].includes(type)) return false;
+    if (/NOT_CONFIGURED|ACCESS_REQUIRED|AUTH_REQUIRED|RATE_LIMIT/.test(code)) return false;
+    // Company/person-specific Apollo API misses/bad requests may safely leave the
+    // current row unresolved while later rows continue.
+    return true;
+  }
+
+  if (subsystem === 'LINKEDIN') {
+    return !['AUTH', 'PERMISSION', 'RATE_LIMIT', 'NETWORK', 'CONFIG'].includes(type);
+  }
+
+  return ['NOT_FOUND', 'AMBIGUITY'].includes(type);
+}
+
+function formatFailureSummary(typed = {}) {
+  return `[${typed.subsystem || 'UNIVERSAL'}/${typed.type || 'INTERNAL'}] ${typed.code || 'UNIVERSAL_SPREADSHEET_EXECUTION_FAILED'} @ ${typed.stage || 'row-enrichment'}: ${typed.message || 'unknown failure'}`;
+}
+
 function freshStats() {
   return {
     rowsSeen: 0,
@@ -410,6 +455,13 @@ function freshStats() {
     identityConflicts: 0,
     rankingThresholds: [],
     selectionAudit: [],
+    rowFailures: 0,
+    recoverableRowFailures: 0,
+    systemicHalts: 0,
+    haltedEarly: false,
+    haltAtRow: null,
+    haltError: null,
+    rowFailureAudit: [],
     modelCalls: 0,
   };
 }
@@ -433,34 +485,58 @@ async function run(request = {}, options = {}) {
     stats.rowsSeen++;
     const { row, rowNumber, plan } = record;
     if (!plan.anchor) { stats.rowsWithoutAnchor++; continue; }
-    const companyContext = plan.anchor.type === 'company' ? companyFromCompanyAnchor(plan.anchor) : await resolvePersonAnchor(plan, row, options);
-    if (!companyContext || companyContext.unresolved || !companyContext.company) { stats.rowsWithoutEmployer++; continue; }
-    stats.anchorsResolved++;
 
-    const writes = [];
-    writes.push(...await enrichAnchorGroup(row, plan, companyContext, stats));
-    writes.push(...await repairExistingGroups(row, plan, companyContext, stats, options));
-    const fillTargets = candidateFillTargets(plan);
-    if (fillTargets.length) {
-      const people = await discoverCompanyPeople(companyContext, cache, stats, { ...options, location: plan.context?.location || '' });
-      writes.push(...await fillOpenGroups(row, plan, companyContext, people, stats, options));
-    }
+    try {
+      const companyContext = plan.anchor.type === 'company' ? companyFromCompanyAnchor(plan.anchor) : await resolvePersonAnchor(plan, row, options);
+      if (!companyContext || companyContext.unresolved || !companyContext.company) { stats.rowsWithoutEmployer++; continue; }
+      stats.anchorsResolved++;
 
-    const byColumn = new Map();
-    for (const write of writes) if (!byColumn.has(write.columnIndex)) byColumn.set(write.columnIndex, write);
-    const changes = toSheetChanges(source.sheetName, rowNumber, [...byColumn.values()]);
-    if (changes.length) {
-      await sheets.writeCells(source.spreadsheetId, changes);
-      stats.rowsChanged++;
-      stats.cellsChanged += changes.length;
+      const writes = [];
+      writes.push(...await enrichAnchorGroup(row, plan, companyContext, stats));
+      writes.push(...await repairExistingGroups(row, plan, companyContext, stats, options));
+      const fillTargets = candidateFillTargets(plan);
+      if (fillTargets.length) {
+        const people = await discoverCompanyPeople(companyContext, cache, stats, { ...options, location: plan.context?.location || '' });
+        writes.push(...await fillOpenGroups(row, plan, companyContext, people, stats, options));
+      }
+
+      const byColumn = new Map();
+      for (const write of writes) if (!byColumn.has(write.columnIndex)) byColumn.set(write.columnIndex, write);
+      const changes = toSheetChanges(source.sheetName, rowNumber, [...byColumn.values()]);
+      if (changes.length) {
+        await sheets.writeCells(source.spreadsheetId, changes);
+        stats.rowsChanged++;
+        stats.cellsChanged += changes.length;
+      }
+      stats.rowsProcessed++;
+    } catch (error) {
+      const typed = typedFailureSummary(error, {
+        stage: error?.stage || 'primary-row-enrichment',
+      });
+      stats.rowFailures++;
+      stats.rowFailureAudit.push({ rowNumber, ...typed });
+
+      if (isRecoverableRowFailure(typed)) {
+        stats.recoverableRowFailures++;
+        stats.rowsProcessed++;
+        continue;
+      }
+
+      stats.systemicHalts++;
+      stats.haltedEarly = true;
+      stats.haltAtRow = rowNumber;
+      stats.haltError = typed;
+      break;
     }
-    stats.rowsProcessed++;
   }
 
   return {
     ok: true,
     deterministic: true,
     modelCalls: 0,
+    completedFully: !stats.haltedEarly,
+    partialCompletion: Boolean(stats.haltedEarly || stats.rowFailures),
+    resumeSafe: true,
     spreadsheetId: source.spreadsheetId,
     spreadsheetTitle: source.spreadsheetTitle,
     sheetName: source.sheetName,
@@ -476,7 +552,16 @@ function formatResult(result) {
   const groups = Array.isArray(schema.personGroups) ? schema.personGroups.length : 0;
   const companies = Array.isArray(schema.companyGroups) ? schema.companyGroups.length : 0;
   const ordinalRecovered = Array.isArray(schema.ordinalContactRecoveries) ? schema.ordinalContactRecoveries.length : 0;
-  return `Universal deterministic enrichment finished on ${result.sheetName}. Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} candidates from ${s.candidateSearches} employer searches (${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic adaptive ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}. AI/model calls: 0.`;
+  const status = s.haltedEarly
+    ? `Universal deterministic enrichment PARTIALLY completed on ${result.sheetName}; execution halted safely at row ${s.haltAtRow} after preserving all earlier verified writes.`
+    : `Universal deterministic enrichment finished on ${result.sheetName}.`;
+  const rowFailureText = s.rowFailures
+    ? ` Row fault containment: ${s.rowFailures} row failure${Number(s.rowFailures) === 1 ? '' : 's'} captured, ${s.recoverableRowFailures || 0} recovered by continuing, ${s.systemicHalts || 0} systemic halt${Number(s.systemicHalts || 0) === 1 ? '' : 's'}.`
+    : ' Row fault containment: no row failures.';
+  const haltText = s.haltError
+    ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
+    : '';
+  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} candidates from ${s.candidateSearches} employer searches (${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic adaptive ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -492,6 +577,9 @@ module.exports = {
   repairExistingGroups,
   discoverCompanyPeople,
   fillOpenGroups,
+  typedFailureSummary,
+  isRecoverableRowFailure,
+  formatFailureSummary,
   freshStats,
   run,
   formatResult,
