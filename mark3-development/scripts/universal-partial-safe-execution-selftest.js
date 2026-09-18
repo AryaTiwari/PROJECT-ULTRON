@@ -64,9 +64,15 @@ assert.match(baseSource, /resumeSafe: true/);
 assert.match(baseSource, /isRecoverableRowFailure/);
 assert.match(targetedSource, /primary-systemic-halt/);
 assert.match(targetedSource, /Preserve successful deterministic work/);
+assert.match(targetedSource, /UNIVERSAL_POST_PRIMARY_FAILURE/);
+assert.match(targetedSource, /postPrimaryError/);
+assert.match(targetedSource, /result = primary/);
 assert.match(fallbackSource, /fallback-row-enrichment/);
 assert.match(fallbackSource, /recoverableRowFailures/);
 assert.match(handlerSource, /partialCompletion/);
 assert.match(handlerSource, /resumeSafe/);
+assert.match(handlerSource, /UNIVERSAL_RESULT_FORMAT_FAILED/);
+assert.match(handlerSource, /reportFormattingError/);
+assert.match(handlerSource, /return response\(true, body/);
 
-console.log('Universal partial-safe execution self-test passed: row-local Apollo failures can continue, provider/workbook failures halt safely with earlier writes preserved, reruns are resume-safe, and Big Pickle cannot erase deterministic primary results.');
+console.log('Universal partial-safe execution self-test passed: row-local failures can continue, systemic failures halt safely with earlier writes preserved, post-primary/fallback/reporting failures cannot erase deterministic work, and reruns remain resume-safe.');
