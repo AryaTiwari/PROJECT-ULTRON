@@ -895,8 +895,13 @@ async function run(request = {}, options = {}) {
       const writes = [];
       const fillTargets = candidateFillTargets(plan);
       const repairDiscoveryNeeded = existingRepairNeedsDiscovery(plan);
+      const deferOpenSelection = Boolean(options.deferOpenGroupSelectionToAi);
       let people = [];
-      if (fillTargets.length || repairDiscoveryNeeded) {
+      // When bounded batch AI owns open-slot selection, do not burn a deterministic
+      // discovery/ranking pass for those same empty slots first. Existing-contact
+      // repair still gets its candidate pool because that is deterministic identity
+      // completion, not candidate selection.
+      if (repairDiscoveryNeeded || (!deferOpenSelection && fillTargets.length)) {
         people = await discoverCompanyPeople(companyContext, cache, stats, { ...runOptions, location: plan.context?.location || '' });
       }
 
@@ -904,7 +909,7 @@ async function run(request = {}, options = {}) {
       writes.push(...await enrichAnchorGroup(row, plan, companyContext, stats, rowOptions));
       writes.push(...await repairExistingGroups(row, plan, companyContext, stats, rowOptions));
       if (fillTargets.length) {
-        if (options.deferOpenGroupSelectionToAi) {
+        if (deferOpenSelection) {
           stats.deferredOpenGroups += fillTargets.length;
           stats.unfilledOpenGroups += fillTargets.length;
         } else {
