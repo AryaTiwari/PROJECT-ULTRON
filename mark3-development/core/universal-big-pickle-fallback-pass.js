@@ -152,6 +152,8 @@ async function hydrateSelection(selection, companyContext, target, stats) {
 
 async function run(request = {}, primaryResult = {}, options = {}) {
   const stats = freshStats();
+  const pendingPhoneQueue = [];
+  const runOptions = { ...options, pendingPhoneQueue };
   fallback.resetRun();
   if (!fallback.enabled()) return { ...stats, enabled: false, fallback: fallback.snapshot() };
 
@@ -179,7 +181,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     stats.rowsEligible++;
 
     try {
-      const companyContext = await companyContextFor(plan, row, options, stats);
+      const companyContext = await companyContextFor(plan, row, runOptions, stats);
       if (!companyContext?.company) {
         stats.unresolvedTargets += targets.length + (repairEligible ? 1 : 0);
         continue;
@@ -191,12 +193,13 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     // Re-run the deterministic same-person repair logic against the newly verified
     // employer context so bare names/designations and missing contact fields can be
     // repaired without giving Big Pickle any write authority.
-    writes.push(...await base.enrichAnchorGroup(row, plan, companyContext, stats));
-    writes.push(...await base.repairExistingGroups(row, plan, companyContext, stats, options));
+    const rowOptions = { ...runOptions, rowNumber };
+    writes.push(...await base.enrichAnchorGroup(row, plan, companyContext, stats, rowOptions));
+    writes.push(...await base.repairExistingGroups(row, plan, companyContext, stats, rowOptions));
 
     if (targets.length) {
       const people = await base.discoverCompanyPeople(companyContext, cache, stats, {
-        ...options,
+        ...runOptions,
         location: plan.context?.location || '',
       });
       const existing = existingKeys(plan);
@@ -208,7 +211,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         anchorApolloPersonId: companyContext.anchorApolloPersonId,
         anchorLinkedin: companyContext.anchorLinkedin,
       };
-      const ranking = ranker.rankCandidates(available, context, { minimumScore: options.minimumScore });
+      const ranking = ranker.rankCandidates(available, context, { minimumScore: runOptions.minimumScore });
 
       if (!ranking.ranked.length) {
         stats.unresolvedTargets += targets.length;
@@ -224,7 +227,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
               ranking,
               context,
               target,
-              minimumConfidence: Number(options.minimumConfidence ?? 0.54),
+              minimumConfidence: Number(runOptions.minimumConfidence ?? 0.54),
               excludeKeys: [...excluded],
             });
             if (!selection) {
@@ -246,6 +249,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
               stats.orphanContactVerified++;
             }
 
+            base.queuePendingPhone(rowOptions, rowNumber, target.group, target.snapshot, person);
             const writePlan = planner.safeWritesForGroup(row, target.group, person);
             if (!writePlan.allowed || !writePlan.writes.length) {
               stats.identityConflicts++;
@@ -310,6 +314,13 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       stats.haltError = typed;
       break;
     }
+  }
+
+  try {
+    await base.syncPendingPhoneAssignments(source, pendingPhoneQueue, stats, runOptions);
+  } catch (error) {
+    stats.phoneSyncErrors++;
+    stats.phoneSyncLastError = base.typedFailureSummary(error, { stage: error?.stage || 'fallback-phone-result-sync' });
   }
 
   const fallbackStats = fallback.snapshot();
