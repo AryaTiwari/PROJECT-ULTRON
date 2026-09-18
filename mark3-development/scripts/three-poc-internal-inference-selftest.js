@@ -73,10 +73,17 @@ assert.throws(
     assert.doesNotThrow(() => control.assertAllowed('general-model', {
       messages: [{ role: 'user', content: internalPayload }],
     }));
-    assert.doesNotThrow(() => control.assertAllowed('omniroute'));
+    assert.doesNotThrow(() => control.assertAllowed('direct-model', {
+      model: 'xai/grok-4.6',
+      messages: [{ role: 'user', content: internalPayload }],
+    }));
+    assert.throws(
+      () => control.assertAllowed('omniroute'),
+      (error) => error && error.code === 'SPREADSHEET_ENRICHMENT_ROUTE_INVARIANT_VIOLATION'
+    );
   });
 
-  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, typed-error taxonomy, Apollo transport retry, verified contact completion, schema continuity recovery, bounded AI batch rescue, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; personal direct-model calls stay blocked, while OmniRoute transport is permitted only inside authorized internal spreadsheet inference.');
+  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, typed-error taxonomy, Apollo transport retry, verified contact completion, schema continuity recovery, bounded direct-env AI batch rescue, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; direct env-backed models are permitted only inside authorized spreadsheet inference, while OmniRoute remains blocked there.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
