@@ -126,50 +126,83 @@ function mergePrimaryAndFallback(primary, fb) {
 async function run(request = {}, options = {}) {
   const exact = await resolveExactRequest(request);
   return withExactTargetGuards(exact.request, async () => {
+    // From this point onward, a successful deterministic primary is authoritative.
+    // Optional fallback/decorating failures must never invalidate verified writes
+    // that base.run() already committed to the worksheet.
     const primary = await base.run(exact.request, options);
     const primaryStats = { ...(primary.stats || {}) };
     let result = primary;
     let fb = null;
+    let postPrimaryError = null;
 
-    const primaryHalted = Boolean(primary?.stats?.haltedEarly || primary?.partialCompletion && primary?.completedFully === false);
-    if (primaryHalted) {
-      fb = {
-        enabled: fallback.enabled(),
-        attempted: false,
-        skippedReason: 'primary-systemic-halt',
-        modelCalls: 0,
-        fallback: fallback.snapshot(),
-      };
-    } else if (!options.dryRun && options.apolloApproved === true && fallback.enabled()) {
-      try {
-        fb = await fallbackPass.run(exact.request, primary, options);
-        result = mergePrimaryAndFallback(primary, fb);
-      } catch (error) {
-        const typed = typedErrors.normalize(error, { stage: error?.stage || 'big-pickle-fallback-pass' });
+    try {
+      const primaryHalted = Boolean(primary?.stats?.haltedEarly || primary?.partialCompletion && primary?.completedFully === false);
+      if (primaryHalted) {
         fb = {
-          enabled: true,
-          attempted: true,
-          haltedEarly: true,
-          skippedReason: 'fallback-error',
+          enabled: fallback.enabled(),
+          attempted: false,
+          skippedReason: 'primary-systemic-halt',
           modelCalls: 0,
-          error: {
-            code: typed.code,
-            subsystem: typed.subsystem,
-            type: typed.type,
-            stage: typed.stage,
-            message: typed.message,
-            hint: typed.hint,
-            attemptedRange: typed.attemptedRange || null,
-            retryAttempts: typed.retryAttempts,
-          },
           fallback: fallback.snapshot(),
         };
-        // Big Pickle is non-authoritative. Preserve successful deterministic work.
-        result = primary;
+      } else if (!options.dryRun && options.apolloApproved === true && fallback.enabled()) {
+        try {
+          fb = await fallbackPass.run(exact.request, primary, options);
+          result = mergePrimaryAndFallback(primary, fb);
+        } catch (error) {
+          const typed = typedErrors.normalize(error, { stage: error?.stage || 'big-pickle-fallback-pass' });
+          fb = {
+            enabled: true,
+            attempted: true,
+            haltedEarly: true,
+            skippedReason: 'fallback-error',
+            modelCalls: 0,
+            error: {
+              code: typed.code,
+              subsystem: typed.subsystem,
+              type: typed.type,
+              stage: typed.stage,
+              message: typed.message,
+              hint: typed.hint,
+              attemptedRange: typed.attemptedRange || null,
+              retryAttempts: typed.retryAttempts,
+            },
+            fallback: fallback.snapshot(),
+          };
+          result = primary;
+        }
       }
+    } catch (error) {
+      if (!error?.code) error.code = 'UNIVERSAL_POST_PRIMARY_FAILURE';
+      if (!error?.subsystem) error.subsystem = 'UNIVERSAL';
+      if (!error?.errorType) error.errorType = 'INTERNAL';
+      if (!error?.stage) error.stage = 'post-primary-orchestration';
+      const typed = typedErrors.normalize(error, { stage: 'post-primary-orchestration' });
+      postPrimaryError = {
+        code: typed.code,
+        subsystem: typed.subsystem,
+        type: typed.type,
+        stage: typed.stage,
+        message: typed.message,
+        hint: typed.hint,
+        attemptedRange: typed.attemptedRange || null,
+        retryAttempts: typed.retryAttempts,
+      };
+      // Preserve the deterministic primary result. A local orchestration/reporting
+      // bug after verified writes is a warning, not a reason to report the whole
+      // enrichment run as failed.
+      result = primary;
+      fb = fb || {
+        enabled: fallback.enabled(),
+        attempted: false,
+        skippedReason: 'post-primary-error',
+        modelCalls: 0,
+        error: postPrimaryError,
+        fallback: (() => { try { return fallback.snapshot(); } catch { return { enabled: fallback.enabled(), calls: 0, actualModels: [], personalApiFallbacks: 0 }; } })(),
+      };
     }
 
-    const modelCalls = Number(fb?.modelCalls || 0);
+    const modelCalls = Number(fb?.modelCalls || fb?.fallback?.calls || 0);
     const decorated = {
       ...result,
       primaryStats,
@@ -178,6 +211,10 @@ async function run(request = {}, options = {}) {
       fallbackModelUsed: modelCalls > 0,
       modelCalls,
       bigPickleFallback: fb,
+      postPrimaryError,
+      completedFully: postPrimaryError ? false : result?.completedFully,
+      partialCompletion: Boolean(postPrimaryError || result?.partialCompletion),
+      resumeSafe: result?.resumeSafe !== false,
     };
     if (!exact.resolution) return decorated;
     return {
