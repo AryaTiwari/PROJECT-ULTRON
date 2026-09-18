@@ -387,6 +387,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
   const rowPackages = new Map();
   const discoveryStats = base.freshStats();
+  const uniqueCandidateKeys = new Set();
   for (const [rowNumber, record] of rowRecords.entries()) {
     const aiContext = contextMap.get(rowNumber);
     let companyContext = record.knownCompany;
@@ -456,7 +457,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
   stats.candidateSearches = discoveryStats.candidateSearches || 0;
   stats.candidateCacheHits = discoveryStats.candidateCacheHits || 0;
-  stats.candidatesDiscovered = discoveryStats.candidatesDiscovered || 0;
+  stats.candidatesDiscovered = uniqueCandidateKeys.size;
   stats.rowsOfferedForSelection = rowPackages.size;
   stats.slotsOfferedForSelection = [...rowPackages.values()].reduce((sum, pkg) => sum + pkg.targets.length, 0);
   if (!rowPackages.size || stats.modelCalls >= stats.maxCalls) return stats;
