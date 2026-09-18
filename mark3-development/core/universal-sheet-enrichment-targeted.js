@@ -256,7 +256,12 @@ function formatResult(result) {
     ? ` Fallback halted safely at row ${fb.haltAtRow || '?'} with [${fb.haltError.subsystem || 'BIG_PICKLE'}/${fb.haltError.type || 'INTERNAL'}] ${fb.haltError.code || 'BIG_PICKLE_FALLBACK_FAILED'} @ ${fb.haltError.stage || 'fallback-row-enrichment'}: ${fb.haltError.message || 'unknown fallback failure'}. Deterministic primary writes remain valid.`
     : '';
   const fallbackRows = fb.rowFailures
-    ? ` Row fault containment captured ${fb.rowFailures} fallback row failure${Number(fb.rowFailures) === 1 ? '' : 's'}; ${fb.recoverableRowFailures || 0} continued safely.`
+    ? (() => {
+        const samples = (fb.rowFailureAudit || []).slice(0, 4).map((item) =>
+          `row ${item.rowNumber || '?'} [${item.subsystem || 'UNIVERSAL'}/${item.type || 'INTERNAL'}] ${item.code || 'UNKNOWN'} @ ${item.stage || 'fallback-row-enrichment'}`
+        );
+        return ` Row fault containment captured ${fb.rowFailures} fallback row failure${Number(fb.rowFailures) === 1 ? '' : 's'}; ${fb.recoverableRowFailures || 0} continued safely.${samples.length ? ` Samples: ${samples.join('; ')}.` : ''}`;
+      })()
     : '';
   const fallbackText = `Big Pickle fallback: ${fb.modelCalls || 0} model call${Number(fb.modelCalls || 0) === 1 ? '' : 's'}; ${fb.candidateFallbackSelections || 0} ambiguous candidate selection${Number(fb.candidateFallbackSelections || 0) === 1 ? '' : 's'} recovered; ${fb.employerFallbackSuccesses || 0}/${fb.employerFallbackAttempts || 0} employer ambiguities resolved; ${fb.existingGroupsRepaired || 0} existing group${Number(fb.existingGroupsRepaired || 0) === 1 ? '' : 's'} repaired after fallback employer verification; ${fb.embeddedDesignationWrites || 0} designation upgrade${Number(fb.embeddedDesignationWrites || 0) === 1 ? '' : 's'}; fallback changed ${fb.cellsChanged || 0} cells across ${fb.rowsChanged || 0} rows; combined cells changed ${combinedCells}; ${fb.candidateFallbackAbstains || 0} abstain${Number(fb.candidateFallbackAbstains || 0) === 1 ? '' : 's'}; models [${(model.actualModels || []).join(', ') || 'none'}]; personal API fallbacks 0.${fallbackRows}${fallbackHalt}`;
   return `${primary} Primary engine: deterministic. ${fallbackText}`;
