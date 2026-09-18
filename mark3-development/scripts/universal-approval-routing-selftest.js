@@ -34,8 +34,20 @@ assert.match(inspectorSource, /inspectionMode: 'values-only-preapproval'/);
 assert.match(inspectorSource, /UNIVERSAL_SHEET_VALUES_READ_FAILED/);
 assert.match(inspectorSource, /UNIVERSAL_SHEET_PLANNING_FAILED/);
 
-assert.match(controllerSource, /errorStage: stage/);
-assert.match(controllerSource, /unknown-inspection-stage/);
+// Typed-error regression: verify the contract, not a historical local-variable spelling.
+// The controller now normalizes failures once, exposes the canonical fields from
+// typedFailure(), and spreads those fields into both source-resolution and
+// pre-approval inspection responses.
+assert.match(controllerSource, /const typedErrors = require\('\.\/spreadsheet-enrichment-errors'\)/);
+assert.match(controllerSource, /function typedFailure\(error, context = \{\}\)/);
+assert.match(controllerSource, /errorSubsystem: typed\.subsystem/);
+assert.match(controllerSource, /errorType: typed\.type/);
+assert.match(controllerSource, /errorCode: typed\.code/);
+assert.match(controllerSource, /errorStage: typed\.stage/);
+assert.match(controllerSource, /errorHint: typed\.hint/);
+assert.match(controllerSource, /\.\.\.failure\.fields/);
+assert.match(controllerSource, /typedFailure\(error, \{ stage: error\?\.stage \|\| 'preapproval-inspection' \}\)/);
+assert.doesNotMatch(controllerSource, /unknown-inspection-stage/);
 
 const control = require('../core/command-control-plane');
 const handler = require('../core/universal-paid-approval-handler');
@@ -82,4 +94,4 @@ const googleThreePocRoute = control.claim(
 assert.equal(googleThreePocRoute.domain, 'three-poc-spreadsheet');
 assert.equal(googleThreePocRoute.controller, 'three-poc-domain-controller');
 
-console.log('Universal approval routing self-test passed: the Gaurav 2 full-sheet command is first-class, approval re-entry is command-control owned, pre-approval inspection is values/schema-only, explicit legacy 3-POC compatibility stays isolated, and inspection errors are stage-specific.');
+console.log('Universal approval routing self-test passed: the Gaurav 2 full-sheet command is first-class, approval re-entry is command-control owned, pre-approval inspection is values/schema-only, explicit legacy 3-POC compatibility stays isolated, and typed inspection errors expose the canonical subsystem/type/code/stage contract.');
