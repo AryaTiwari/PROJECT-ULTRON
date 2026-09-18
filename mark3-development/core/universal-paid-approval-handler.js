@@ -127,6 +127,8 @@ async function execute(decision) {
       deterministicPrimary: true,
       deterministic: !fallbackUsed,
       fallbackModelUsed: fallbackUsed,
+      boundedAiBatchRescue: Boolean(result?.aiBatchRescue?.attempted),
+      boundedAiBatchMaxCalls: Number(result?.aiBatchRescue?.maxCalls || 0),
       modelCalls,
       completedFully: !partialCompletion,
       partialCompletion,
