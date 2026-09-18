@@ -10,6 +10,7 @@ require('./apollo-fetch-hardening-selftest');
 require('./google-sheets-core-api-selftest');
 require('./google-sheets-values-range-hardening-selftest');
 require('./universal-deterministic-enrichment-selftest');
+require('./universal-partial-safe-execution-selftest');
 require('./universal-spreadsheet-routing-selftest');
 require('./universal-approval-routing-selftest');
 require('./universal-contact-display-selftest');
