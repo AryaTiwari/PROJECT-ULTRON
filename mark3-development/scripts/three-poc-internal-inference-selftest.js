@@ -69,7 +69,14 @@ assert.throws(
     );
   });
 
-  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, typed-error taxonomy, Apollo transport retry, verified contact completion, schema continuity recovery, bounded AI batch rescue, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; personal direct-model calls stay blocked.');
+  await control.runInternalInference('spreadsheet-enrichment', async () => {
+    assert.doesNotThrow(() => control.assertAllowed('general-model', {
+      messages: [{ role: 'user', content: internalPayload }],
+    }));
+    assert.doesNotThrow(() => control.assertAllowed('omniroute'));
+  });
+
+  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, typed-error taxonomy, Apollo transport retry, verified contact completion, schema continuity recovery, bounded AI batch rescue, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; personal direct-model calls stay blocked, while OmniRoute transport is permitted only inside authorized internal spreadsheet inference.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
