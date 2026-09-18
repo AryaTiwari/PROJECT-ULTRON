@@ -21,6 +21,10 @@ function integer(value, fallback, min = 1, max = 100000) {
   return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
 }
 function websiteDomain(value) { return ranker.hostname(value); }
+
+const backgroundPhoneAssignments = new Map();
+let backgroundPhoneWatcher = null;
+let backgroundPhoneWatcherRemaining = 0;
 function linkedinSlug(value) {
   const normalized = apollo.normalizeLinkedIn(value);
   if (!normalized) return '';
@@ -257,6 +261,110 @@ function phoneSyncWaitMs(options = {}) {
   return Number.isFinite(raw) ? Math.max(250, Math.min(5000, Math.floor(raw))) : 1800;
 }
 
+
+function backgroundPhoneKey(source, item) {
+  return `${source.spreadsheetId}|${source.sheetName}|${item.rowNumber}|${item.columnIndex}|${item.apolloPersonId}`;
+}
+
+function registerBackgroundPhoneAssignments(source, items = []) {
+  for (const item of items) {
+    if (!item?.apolloPersonId) continue;
+    const key = backgroundPhoneKey(source, item);
+    backgroundPhoneAssignments.set(key, {
+      ...item,
+      spreadsheetId: source.spreadsheetId,
+      sheetName: source.sheetName,
+      registeredAt: new Date().toISOString(),
+    });
+  }
+  return backgroundPhoneAssignments.size;
+}
+
+async function syncBackgroundPhoneAssignments() {
+  if (!backgroundPhoneAssignments.size) return { resolved: 0, pending: 0 };
+  const results = await apollo.fetchPhoneResults();
+  if (!Array.isArray(results) || !results.length) {
+    return { resolved: 0, pending: backgroundPhoneAssignments.size };
+  }
+
+  const byId = new Map();
+  for (const result of results) {
+    const id = text(result?.apollo_person_id);
+    if (id) byId.set(id, result);
+  }
+
+  let resolved = 0;
+  const handledIds = new Set();
+  for (const [key, item] of [...backgroundPhoneAssignments.entries()]) {
+    const result = byId.get(item.apolloPersonId);
+    if (!result) continue;
+    const phone = apollo.validPhone(result?.phone);
+    apollo.recordPhoneResult(item.apolloPersonId, phone);
+    handledIds.add(item.apolloPersonId);
+
+    try {
+      const range = sheets.cellRange(item.sheetName, item.rowNumber, item.columnIndex);
+      const current = await sheets.readCell(item.spreadsheetId, range);
+      if (phone && sheets.isBlank(current)) {
+        await sheets.writeCells(item.spreadsheetId, [{ range, value: phone }]);
+      }
+      backgroundPhoneAssignments.delete(key);
+      resolved++;
+    } catch (error) {
+      item.lastError = text(error?.message || error).slice(0, 300);
+      item.lastAttemptAt = new Date().toISOString();
+      backgroundPhoneAssignments.set(key, item);
+    }
+  }
+
+  for (const id of handledIds) {
+    const stillPendingForId = [...backgroundPhoneAssignments.values()]
+      .some((item) => item.apolloPersonId === id);
+    if (!stillPendingForId) {
+      try { await apollo.consumePhoneResult(id); } catch {}
+    }
+  }
+
+  return { resolved, pending: backgroundPhoneAssignments.size };
+}
+
+function startBackgroundPhoneWatcher() {
+  if (backgroundPhoneWatcher || !backgroundPhoneAssignments.size) return;
+  backgroundPhoneWatcherRemaining = Math.max(
+    1,
+    Math.min(60, Number(process.env.ULTRON_M3_APOLLO_PHONE_WATCHER_ATTEMPTS || 30)),
+  );
+
+  const tick = async () => {
+    backgroundPhoneWatcher = null;
+    if (!backgroundPhoneAssignments.size || backgroundPhoneWatcherRemaining-- <= 0) return;
+    try { await syncBackgroundPhoneAssignments(); } catch {}
+    if (backgroundPhoneAssignments.size && backgroundPhoneWatcherRemaining > 0) {
+      const delay = Math.max(
+        5000,
+        Math.min(120000, Number(process.env.ULTRON_M3_APOLLO_PHONE_WATCHER_INTERVAL_MS || 45000)),
+      );
+      backgroundPhoneWatcher = setTimeout(tick, delay);
+      backgroundPhoneWatcher.unref?.();
+    }
+  };
+
+  const firstDelay = Math.max(
+    1000,
+    Math.min(60000, Number(process.env.ULTRON_M3_APOLLO_PHONE_WATCHER_FIRST_MS || 15000)),
+  );
+  backgroundPhoneWatcher = setTimeout(tick, firstDelay);
+  backgroundPhoneWatcher.unref?.();
+}
+
+function backgroundPhoneStatus() {
+  return {
+    pending: backgroundPhoneAssignments.size,
+    watcherActive: Boolean(backgroundPhoneWatcher),
+    attemptsRemaining: backgroundPhoneWatcherRemaining,
+  };
+}
+
 async function syncPendingPhoneAssignments(source, queue = [], stats, options = {}) {
   const pending = Array.isArray(queue) ? queue.filter((item) => item?.apolloPersonId) : [];
   stats.pendingPhoneRequests = pending.length;
@@ -326,6 +434,11 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
     try { await apollo.consumePhoneResult(apolloPersonId); } catch {}
   }
   stats.phoneStillPending = unresolved.size;
+  if (unresolved.size && options.backgroundPhoneWatcher !== false) {
+    stats.backgroundPhonePending = registerBackgroundPhoneAssignments(source, [...unresolved.values()]);
+    startBackgroundPhoneWatcher();
+    stats.backgroundPhoneWatcher = true;
+  }
 }
 
 async function repairExistingGroups(row, plan, companyContext, stats, options = {}) {
@@ -886,7 +999,7 @@ function formatResult(result) {
   const haltText = s.haltError
     ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
     : '';
-  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts, ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked, ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors. Open-slot routing: ${s.deferredOpenGroups || 0} empty groups deferred to bounded AI selection. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
+  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} cells across ${s.rowsChanged} rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts, ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked, ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Open-slot routing: ${s.deferredOpenGroups || 0} empty groups deferred to bounded AI selection. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -902,6 +1015,10 @@ module.exports = {
   existingRepairNeedsDiscovery,
   exactCandidateForExisting,
   queuePendingPhone,
+  registerBackgroundPhoneAssignments,
+  syncBackgroundPhoneAssignments,
+  startBackgroundPhoneWatcher,
+  backgroundPhoneStatus,
   syncPendingPhoneAssignments,
   repairExistingGroups,
   enrichAnchorGroup,
