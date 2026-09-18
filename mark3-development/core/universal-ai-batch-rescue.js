@@ -223,9 +223,48 @@ function shortlistCandidates(candidates, context, limit) {
     .map((entry) => entry.candidate);
 }
 
-function emptyTargets(plan) {
-  return (plan?.groups?.open || []).filter((item) => !item.isAnchor)
+function rescueTargets(plan) {
+  const open = (plan?.groups?.open || [])
+    .filter((item) => !item.isAnchor)
+    .map((item) => ({ ...item, rescueMode: 'fill' }));
+  const repair = (plan?.groups?.partial || [])
+    .filter((item) => !item.isAnchor && item.snapshot?.hasIdentity)
+    .map((item) => ({ ...item, rescueMode: 'repair' }));
+  return [...repair, ...open]
     .sort((a, b) => (a.group.ordinal || 999) - (b.group.ordinal || 999));
+}
+
+function exactRepairCandidate(target, candidate) {
+  if (target?.rescueMode !== 'repair') return false;
+  const existingName = planner.normalizeName(target?.snapshot?.values?.name || '');
+  const candidateName = planner.normalizeName(candidate?.name || '');
+  const existingLinkedin = ranker.linkedinKey(target?.snapshot?.values?.linkedin || '');
+  const candidateLinkedin = ranker.linkedinKey(candidate?.linkedinUrl || candidate?.linkedin_url || '');
+  if (existingLinkedin && candidateLinkedin) return existingLinkedin === candidateLinkedin;
+  return Boolean(existingName && candidateName && existingName === candidateName);
+}
+
+function candidatePoolForTargets(candidates, targets, context, limit) {
+  const chosen = [];
+  const seen = new Set();
+  const keyOf = (candidate) => text(candidate?.apolloPersonId || candidate?.id || candidate?.linkedinUrl || candidate?.linkedin_url).toLowerCase();
+  const add = (candidate) => {
+    const key = keyOf(candidate);
+    if (!key || seen.has(key) || chosen.length >= limit) return;
+    seen.add(key);
+    chosen.push(candidate);
+  };
+
+  // Existing partial POCs get first-class representation in the AI batch even
+  // when their titles are not high enough to survive authority pre-ranking.
+  for (const target of targets || []) {
+    if (target?.rescueMode !== 'repair') continue;
+    for (const candidate of candidates || []) {
+      if (exactRepairCandidate(target, candidate)) add(candidate);
+    }
+  }
+  for (const candidate of shortlistCandidates(candidates, context, limit)) add(candidate);
+  return chosen.slice(0, limit);
 }
 
 function existingIdentitySet(plan) {
@@ -306,7 +345,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   const contextInput = [];
   for (const record of analysis.rowPlans) {
     const { row, rowNumber, plan } = record;
-    const targets = emptyTargets(plan);
+    const targets = rescueTargets(plan);
     if (!plan.anchor || !targets.length) continue;
     stats.rowsConsidered++;
     const evidence = compactEvidence(row, source.schema, plan);
@@ -399,10 +438,8 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       continue;
     }
 
-    const existing = existingIdentitySet(record.plan);
-    const available = (people || []).filter((candidate) => !base.candidateAlreadyPresent(candidate, existing));
     const hiringContext = aiContext?.hiringContext || text(record.plan?.context?.postDetails || record.plan?.context?.details || '');
-    const shortlisted = shortlistCandidates(available, { hiringContext }, candidateLimit(options));
+    const shortlisted = candidatePoolForTargets(people || [], record.targets, { hiringContext }, candidateLimit(options));
     if (!shortlisted.length) {
       stats.unresolvedSlots += record.targets.length;
       continue;
@@ -432,9 +469,13 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       linkedin: text(pkg.plan?.anchor?.snapshot?.values?.linkedin),
     },
     existingPeople: [...existingIdentitySet(pkg.plan).names],
-    openSlots: pkg.targets.map((target) => ({
+    targets: pkg.targets.map((target) => ({
       slot: String(target.group.ordinal || target.group.id),
       ordinal: target.group.ordinal || null,
+      mode: target.rescueMode,
+      existingName: text(target.snapshot?.values?.name),
+      existingLinkedin: text(target.snapshot?.values?.linkedin),
+      missingFields: target.snapshot?.missingFields || [],
     })),
     candidates: pkg.candidates.map(compactCandidate),
   }));
@@ -445,10 +486,12 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       role: 'system',
       content: [
         'You are ULTRON Batch POC Selector.',
-        'Fill unresolved workplace POC slots for ALL supplied rows.',
+        'Handle unresolved workplace POC targets for ALL supplied rows.',
         'You may choose ONLY candidateKey values supplied inside that same row.',
-        'Never select the anchor or any person listed in existingPeople.',
-        'Prefer people who can realistically influence or own hiring for that row.',
+        'Each target has mode=fill or mode=repair.',
+        'For mode=fill: never select the anchor or any person already listed in existingPeople.',
+        'For mode=repair: select a candidate ONLY when it is the same real person as existingName/existingLinkedin; otherwise abstain for that target.',
+        'Prefer people who can realistically influence or own hiring for fill targets.',
         'Use company size cues, recruiting/HR responsibility, functional relevance and seniority together; do not blindly follow prestige.',
         'A recruiter owning the vacancy may beat a distant executive; a founder/director may be right for a smaller company.',
         'Assign unique people to unique slots.',
@@ -473,7 +516,13 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       rowNumber,
       company: pkg.companyContext.company,
       hiringContext: pkg.hiringContext,
-      openSlots: pkg.targets.map((target) => String(target.group.ordinal || target.group.id)),
+      targets: pkg.targets.map((target) => ({
+        slot: String(target.group.ordinal || target.group.id),
+        mode: target.rescueMode,
+        existingName: text(target.snapshot?.values?.name),
+        existingLinkedin: text(target.snapshot?.values?.linkedin),
+        missingFields: target.snapshot?.missingFields || [],
+      })),
       firstPass: (assignments.get(rowNumber) || []).map((item) => ({
         slot: String(item.target.group.ordinal || item.target.group.id),
         candidateKey: item.candidateKey,
@@ -489,7 +538,9 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           'You are ULTRON Independent Batch POC Reviewer.',
           'Review only the supplied weak/incomplete rows.',
           'Select ONLY supplied candidateKey values. Never invent people.',
-          'Return the strongest complete slot assignments you can justify from the row hiring context.',
+          'Return the strongest complete target assignments you can justify from the row hiring context.',
+          'For repair targets, preserve identity: choose only the candidate that is genuinely the same existing person.',
+          'For fill targets, do not reuse an existing row identity.',
           'Keep unique people per row and abstain rather than fabricate.',
           'Return strict JSON only in the exact same {"rows":[...]} schema as the first selector.',
         ].join(' '),
@@ -543,7 +594,13 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
       const nameKey = ranker.normalize(person.name || '');
       const linkedinKey = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
-      if ((nameKey && existing.names.has(nameKey)) || (linkedinKey && existing.linkedins.has(linkedinKey))) {
+      const repairMode = assignment.target.rescueMode === 'repair';
+      if (repairMode) {
+        if (!planner.samePerson(assignment.target.snapshot?.values || {}, person)) {
+          stats.aiSelectionRejects++;
+          continue;
+        }
+      } else if ((nameKey && existing.names.has(nameKey)) || (linkedinKey && existing.linkedins.has(linkedinKey))) {
         stats.identityDuplicatesSkipped++;
         stats.aiSelectionRejects++;
         continue;
@@ -581,6 +638,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         rowNumber,
         groupId: assignment.target.group.id,
         slot: assignment.target.group.ordinal || null,
+        mode: assignment.target.rescueMode,
         candidateKey: assignment.candidateKey,
         name: text(person.name),
         title: text(person.title),
@@ -616,6 +674,9 @@ module.exports = {
   compactEvidence,
   companySupported,
   shortlistCandidates,
+  rescueTargets,
+  exactRepairCandidate,
+  candidatePoolForTargets,
   validateAssignments,
   reviewerNeeded,
   run,
