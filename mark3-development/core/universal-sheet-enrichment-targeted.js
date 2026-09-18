@@ -143,7 +143,12 @@ function mergePrimaryAndAiRescue(primary, rescue) {
 async function run(request = {}, options = {}) {
   const exact = await resolveExactRequest(request);
   const sharedDiscoveryCache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
-  const runOptions = { ...options, discoveryCache: sharedDiscoveryCache };
+  const boundedAiEnabled = aiBatchRescue.enabled() && options.apolloApproved === true && !options.dryRun;
+  const runOptions = {
+    ...options,
+    discoveryCache: sharedDiscoveryCache,
+    deferOpenGroupSelectionToAi: boundedAiEnabled,
+  };
   return withExactTargetGuards(exact.request, async () => {
     // From this point onward, a successful deterministic primary is authoritative.
     // Optional fallback/decorating failures must never invalidate verified writes
