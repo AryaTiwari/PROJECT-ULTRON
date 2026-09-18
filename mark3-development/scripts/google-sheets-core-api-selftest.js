@@ -13,6 +13,9 @@ assert.equal(sheets.classifyApiError(404, { error: { status: 'NOT_FOUND' } }), '
 assert.equal(sheets.classifyApiError(409, { error: { status: 'ABORTED' } }), 'GOOGLE_SHEETS_CONFLICT');
 assert.equal(sheets.classifyApiError(429, { error: { status: 'RESOURCE_EXHAUSTED' } }), 'GOOGLE_SHEETS_RATE_LIMITED');
 assert.equal(sheets.classifyApiError(503, { error: { status: 'UNAVAILABLE' } }), 'GOOGLE_SHEETS_UNAVAILABLE');
+assert.equal(sheets.looksLikeGeneratedA1("'Arya 2'!A:ZZ"), true);
+assert.equal(sheets.looksLikeGeneratedA1("'Arya 2'!A1:O20"), true);
+assert.equal(sheets.looksLikeGeneratedA1("not a range"), false);
 assert.equal(
   sheets.classifyApiError(418, { error: { status: 'TEAPOT', message: 'Unexpected status' } }),
   'GOOGLE_SHEETS_HTTP_418',
@@ -28,4 +31,4 @@ assert.match(
   'metadata() must request title, tab ids/names and grid dimensions',
 );
 
-console.log('Google Sheets core API self-test passed: HTTP failures keep specific auth/range/quota/server codes and metadata() exposes the required workbook/tab/grid fields.');
+console.log('Google Sheets core API self-test passed: HTTP failures keep specific auth/range/quota/server codes, generated A1 ranges are recognized for tab-vs-range diagnosis, and metadata() exposes the required workbook/tab/grid fields.');
