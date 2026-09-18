@@ -140,4 +140,4 @@ function install(){
   };
   const api=Object.freeze({startRun,stats,diversePool,researchScore,laneFrom,usableConcreteModel,routeFamilyMatches});globalThis[INSTALL_FLAG]=api;return api;
 }
-module.exports={install,startRun,stats,diversePool,researchScore,laneFrom,usableConcreteModel,routeFamilyMatches};
+module.exports={install,startRun,stats,diversePool,researchScore,laneFrom,usableConcreteModel,routeFamilyMatches,diversifiedChat};
