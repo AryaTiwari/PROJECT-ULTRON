@@ -746,6 +746,44 @@ function toSheetChanges(sheetName, rowNumber, writes) {
   return (writes || []).map((write) => ({ range: sheets.cellRange(sheetName, rowNumber, write.columnIndex), value: write.value, field: write.field, groupId: write.groupId }));
 }
 
+async function applyRecoveredHeaderRepairs(source, stats) {
+  const repairs = Array.isArray(source?.schema?.headerRepairs) ? source.schema.headerRepairs : [];
+  stats.headerRepairsPlanned = repairs.length;
+  if (!repairs.length) return [];
+
+  const changes = [];
+  for (const repair of repairs) {
+    if (!Number.isInteger(repair?.columnIndex) || !Number.isInteger(repair?.rowNumber)) continue;
+    const range = sheets.cellRange(source.sheetName, repair.rowNumber, repair.columnIndex);
+    let current = '';
+    try { current = await sheets.readCell(source.spreadsheetId, range); } catch (error) {
+      error.stage = error.stage || 'schema-continuity-header-read';
+      throw error;
+    }
+    if (!sheets.isBlank(current)) {
+      stats.headerRepairsSkippedPopulated++;
+      continue;
+    }
+    changes.push({ range, value: repair.value, rowNumber: repair.rowNumber, columnIndex: repair.columnIndex });
+  }
+
+  if (!changes.length) return [];
+  try {
+    await sheets.writeCells(source.spreadsheetId, changes);
+  } catch (error) {
+    error.stage = error.stage || 'schema-continuity-header-write';
+    throw error;
+  }
+
+  for (const change of changes) {
+    const rowIndex = change.rowNumber - 1;
+    if (!source.rows[rowIndex]) source.rows[rowIndex] = [];
+    source.rows[rowIndex][change.columnIndex] = change.value;
+  }
+  stats.headerRepairsWritten += changes.length;
+  return changes;
+}
+
 function typedFailureSummary(error, context = {}) {
   const typed = typedErrors.normalize(error, context);
   return {
@@ -856,6 +894,9 @@ function freshStats() {
     haltAtRow: null,
     haltError: null,
     rowFailureAudit: [],
+    headerRepairsPlanned: 0,
+    headerRepairsWritten: 0,
+    headerRepairsSkippedPopulated: 0,
     modelCalls: 0,
   };
 }
@@ -873,12 +914,17 @@ async function run(request = {}, options = {}) {
     throw error;
   }
 
+  const stats = freshStats();
+
+  // Persist continuity-recovered headers only after the approved run begins and
+  // only into cells that are still blank. This makes the restored contact layout
+  // self-describing for later runs without risking overwrite of user data.
+  await applyRecoveredHeaderRepairs(source, stats);
+
   // These wrappers are installed by the deterministic bootstrap, but their
   // accounting/budgets are per approved enrichment run, not process-lifetime.
   try { require('./apollo-three-poc-quality').startRun(); } catch {}
   try { require('./three-poc-candidate-discovery-policy').startRun(); } catch {}
-
-  const stats = freshStats();
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const pendingPhoneQueue = [];
   const runOptions = { ...options, discoveryCache: cache, pendingPhoneQueue };
@@ -1033,6 +1079,7 @@ module.exports = {
   companyPriorityCandidate,
   discoverCompanyPeople,
   fillOpenGroups,
+  applyRecoveredHeaderRepairs,
   typedFailureSummary,
   isRecoverableRowFailure,
   isTransientProviderRowFailure,
