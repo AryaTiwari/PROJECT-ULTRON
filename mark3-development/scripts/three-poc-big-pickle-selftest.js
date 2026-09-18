@@ -19,13 +19,23 @@ assert.ok(providerSource.includes('/big[-_ ]?pickle/i'), 'Big Pickle must remain
 // The deterministic operator itself remains model-free. The fallback is outside
 // the primary executor so source/schema/planning/writes cannot become model-owned.
 assert.doesNotMatch(deterministicSource, /big-pickle|omniroute|model-router|chatOmniRouteOnly/i);
-assert.match(targetedSource, /const primary = await base\.run\(exact\.request, options\)/);
-assert.match(targetedSource, /fallbackPass\.run\(exact\.request, primary, options\)/);
-assert.ok(
-  targetedSource.indexOf('const primary = await base.run(exact.request, options)')
-    < targetedSource.indexOf('fallbackPass.run(exact.request, primary, options)'),
-  'deterministic primary must execute before Big Pickle fallback'
-);
+
+// The exact-target wrapper now creates one shared discovery cache and passes the
+// resulting runOptions through both deterministic primary and bounded fallback.
+// Test the execution contract rather than the historical local variable spelling.
+assert.match(targetedSource, /const sharedDiscoveryCache = options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);
+assert.match(targetedSource, /const runOptions = \{ \.\.\.options, discoveryCache: sharedDiscoveryCache \}/);
+assert.match(targetedSource, /const primary = await base\.run\(exact\.request, runOptions\)/);
+assert.match(targetedSource, /fallbackPass\.run\(exact\.request, primary, runOptions\)/);
+const primaryIndex = targetedSource.indexOf('const primary = await base.run(exact.request, runOptions)');
+const fallbackIndex = targetedSource.indexOf('fallbackPass.run(exact.request, primary, runOptions)');
+assert.ok(primaryIndex >= 0 && fallbackIndex > primaryIndex, 'deterministic primary must execute before Big Pickle fallback');
+
+// Once primary returns successfully, optional fallback/orchestration problems must
+// preserve the primary result instead of reclassifying verified writes as failure.
+assert.match(targetedSource, /result = primary/);
+assert.match(targetedSource, /postPrimaryError/);
+assert.match(targetedSource, /skippedReason: 'fallback-error'/);
 
 // Big Pickle can reason only inside the spreadsheet domain's internal-inference
 // scope and only through OmniRoute/OpenCode. No direct personal provider route.
@@ -63,4 +73,4 @@ assert.equal(fallback.ambiguityReason({ ranked: [{ score: 60, confidence: 0.4 }]
 assert.equal(fallback.ambiguityReason({ ranked: [{ score: 60, confidence: 0.7 }, { score: 57, confidence: 0.68 }] }, 0.54), 'close-score');
 assert.equal(fallback.ambiguityReason({ ranked: [{ score: 70, confidence: 0.72 }, { score: 50, confidence: 0.65 }] }, 0.54), null);
 
-console.log('Universal Big Pickle fallback self-test passed: Google enrichment is deterministic-first, Big Pickle is bounded to spreadsheet-internal ambiguity resolution, Apollo verification still gates writes, personal-provider fallback is forbidden, and legacy 3-POC wording cannot make Big Pickle own a Google Sheet run.');
+console.log('Universal Big Pickle fallback self-test passed: deterministic primary executes before bounded fallback with a shared discovery cache, post-primary fallback failures preserve deterministic work, Apollo verification still gates writes, personal-provider fallback is forbidden, and legacy 3-POC wording cannot make Big Pickle own a Google Sheet run.');
