@@ -139,7 +139,7 @@ async function execute(decision) {
       postPrimaryError: result?.postPrimaryError || null,
       reportFormattingError,
       rowFailureAudit: result?.stats?.rowFailureAudit || [],
-      provider: fallbackUsed ? 'deterministic+apollo+google-sheets+bounded-omniroute-ai' : 'deterministic+apollo+google-sheets',
+      provider: fallbackUsed ? 'deterministic+apollo+google-sheets+bounded-direct-env-ai' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
     if (!error?.code) error.code = 'UNIVERSAL_APPROVED_EXECUTION_LOCAL_FAILURE';
