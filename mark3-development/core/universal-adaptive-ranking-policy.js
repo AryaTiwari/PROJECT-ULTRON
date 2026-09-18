@@ -49,6 +49,31 @@ function structuredCoverage(candidates = []) {
   return usable / candidates.length;
 }
 
+function companyContactPriority(candidate = {}) {
+  const value = base.normalize([candidate.title, candidate.headline].filter(Boolean).join(' '));
+  if (!value) return 99;
+
+  // Canonical company-lead preference used by ULTRON:
+  // Founder/Director/Owner > recruiting/HR head or manager > recruiter/TA.
+  if (/\b(?:founder|co founder|owner|managing director|executive director|director)\b/.test(value)) return 1;
+
+  const exactManager = value === 'manager';
+  if (
+    /\b(?:head recruiter|lead recruiter|recruitment head|head of recruitment|recruitment lead|recruiting lead|head of talent acquisition|talent acquisition head|talent acquisition lead|head of hr|head of people|recruitment manager|recruiting manager|hiring manager|talent acquisition manager|hr manager|human resources manager|general manager)\b/.test(value)
+    || exactManager
+  ) return 2;
+
+  if (/\b(?:hr recruiter|human resources recruiter|technical recruiter|talent acquisition recruiter|recruiter|talent acquisition specialist|talent acquisition partner|recruitment specialist)\b/.test(value)) return 3;
+  return 99;
+}
+
+function prioritySignal(priority) {
+  if (priority === 1) return 1;
+  if (priority === 2) return 0.78;
+  if (priority === 3) return 0.58;
+  return 0;
+}
+
 function adaptiveWeights(context = {}, candidates = []) {
   const contextSignal = contextRichness(context);
   const structuredSignal = structuredCoverage(candidates);
@@ -66,7 +91,8 @@ function adaptiveWeights(context = {}, candidates = []) {
     evidenceBreadth: 0.10,
     relativeDominance: 0.12,
     identity: 0.06,
-    scale: sizeKnown ? 0.08 : 0,
+    scale: sizeKnown ? 0.06 : 0,
+    companyContactPriority: 0.18,
   };
   const total = Object.values(weights).reduce((sum, value) => sum + value, 0) || 1;
   for (const key of Object.keys(weights)) weights[key] /= total;
@@ -119,6 +145,8 @@ function adaptiveScoreRows(candidates = [], context = {}) {
     const identity = clamp(c.identity);
     const conflict = clamp(c.conflictPenalty);
     const scale = Math.max(-1, Math.min(1, Number(c.scaleAdjustment || 0)));
+    const contactPriority = companyContactPriority(row.candidate);
+    const contactPrioritySignal = prioritySignal(contactPriority);
 
     const w = calibration.weights;
     const evidence =
@@ -129,7 +157,8 @@ function adaptiveScoreRows(candidates = [], context = {}) {
       + clamp(c.evidenceBreadth) * w.evidenceBreadth
       + dominance * w.relativeDominance
       + identity * w.identity
-      + Math.max(0, scale) * w.scale;
+      + Math.max(0, scale) * w.scale
+      + contactPrioritySignal * w.companyContactPriority;
 
     const penalty = conflict + Math.max(0, -scale) * 0.45;
     const score = clamp(evidence - penalty) * 100;
@@ -139,12 +168,20 @@ function adaptiveScoreRows(candidates = [], context = {}) {
       Number(c.contextRelevance || 0),
       Number(c.authority || 0),
     );
-    const eligible = conflict < 0.9 && identity >= 0.25 && usefulEvidence >= 0.12;
+    // A candidate in the explicit company-contact priority lanes is valid evidence
+    // even when Apollo omits structured function/department metadata.
+    const eligible = conflict < 0.9 && identity >= 0.25 && (contactPriority < 99 || usefulEvidence >= 0.12);
 
     return {
       ...row,
       score: Number(score.toFixed(2)),
       eligible,
+      contactPriority,
+      components: {
+        ...c,
+        companyContactPriority: contactPriority < 99 ? contactPriority : null,
+        companyContactPrioritySignal: Number(contactPrioritySignal.toFixed(3)),
+      },
       adaptive: {
         ...calibration,
         percentiles,
@@ -168,16 +205,32 @@ function confidenceFor(rows, index) {
 
 function rankCandidates(candidates = [], context = {}, options = {}) {
   const scored = adaptiveScoreRows(candidates, context);
-  const eligible = scored.filter((row) => row.eligible).sort((a, b) => b.score - a.score || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || '')));
+  const eligible = scored.filter((row) => row.eligible).sort((a, b) => {
+    const ap = Number(a.contactPriority || 99);
+    const bp = Number(b.contactPriority || 99);
+    const aTiered = ap < 99;
+    const bTiered = bp < 99;
+    if (aTiered !== bTiered) return aTiered ? -1 : 1;
+    if (aTiered && ap !== bp) return ap - bp;
+    return b.score - a.score || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || ''));
+  });
 
-  // Threshold adapts mildly to the evidence population. We still enforce a floor
-  // so weak candidate pools fail closed instead of filling cells for the sake of it.
+  // Keep a quality floor for unclassified functional candidates, but do not throw
+  // away explicit Founder/Director, HR-manager or recruiter lanes merely because
+  // Apollo's sparse search payload omitted structured metadata.
   const requested = Number(options.minimumScore);
   const median = eligible.length ? [...eligible.map((row) => row.score)].sort((a, b) => a - b)[Math.floor(eligible.length / 2)] : 0;
-  const threshold = Number.isFinite(requested) ? requested : Math.max(34, Math.min(52, median * 0.82));
-  const ranked = eligible
-    .filter((row) => row.score >= threshold)
-    .map((row, index, rows) => ({ ...row, confidence: Number(confidenceFor(rows, index).toFixed(3)), rank: index + 1 }));
+  const threshold = Number.isFinite(requested) ? requested : Math.max(30, Math.min(48, median * 0.78));
+  const rankedPool = eligible.filter((row) => row.contactPriority < 99 || row.score >= threshold);
+  const ranked = rankedPool
+    .map((row, index, rows) => {
+      const priorityBoost = row.contactPriority === 1 ? 0.14 : row.contactPriority === 2 ? 0.11 : row.contactPriority === 3 ? 0.08 : 0;
+      return {
+        ...row,
+        confidence: Number(clamp(confidenceFor(rows, index) + priorityBoost).toFixed(3)),
+        rank: index + 1,
+      };
+    });
 
   return {
     ranked,
@@ -205,9 +258,9 @@ function install() {
   base.selectCandidates = selectCandidates;
   base.adaptiveScoreRows = adaptiveScoreRows;
   base.adaptiveWeights = adaptiveWeights;
-  const api = Object.freeze({ rankCandidates, selectCandidates, adaptiveScoreRows, adaptiveWeights, percentile, contextRichness, structuredCoverage });
+  const api = Object.freeze({ rankCandidates, selectCandidates, adaptiveScoreRows, adaptiveWeights, percentile, contextRichness, structuredCoverage, companyContactPriority, prioritySignal });
   globalThis[INSTALL_FLAG] = api;
   return api;
 }
 
-module.exports = { install, rankCandidates, selectCandidates, adaptiveScoreRows, adaptiveWeights, percentile, contextRichness, structuredCoverage };
+module.exports = { install, rankCandidates, selectCandidates, adaptiveScoreRows, adaptiveWeights, percentile, contextRichness, structuredCoverage, companyContactPriority, prioritySignal };
