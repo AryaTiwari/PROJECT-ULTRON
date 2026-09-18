@@ -85,6 +85,10 @@ function enabled() {
   return !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_DIRECT_ENABLED || '1'));
 }
 
+function envOnly() {
+  return /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_DIRECT_ENV_ONLY || '0'));
+}
+
 function taskName(taskType) {
   const value = String(taskType || 'general').toLowerCase();
   return ['simple_qa', 'general', 'coding', 'planning', 'research', 'automation'].includes(value) ? value : 'general';
@@ -219,7 +223,7 @@ async function storedCredentials() {
 async function allCredentialEntries(provider) {
   const cfg = PROVIDERS[provider];
   if (!cfg) return [];
-  const stored = await storedCredentials();
+  const stored = envOnly() ? {} : await storedCredentials();
   const seenValues = new Set();
   const entries = [];
   for (const slot of cfg.keys) {
@@ -710,7 +714,7 @@ async function health() {
   return {
     enabled: enabled(),
     configured: Object.values(providers).some((row) => row.configured),
-    strategy: 'specialist-provider-order + passive-catalog + quota-only-key-cooldown + least-recently-used-key-pool',
+    strategy: `${envOnly() ? 'env-only' : 'env-or-local-store'} + specialist-provider-order + passive-catalog + quota-only-key-cooldown + least-recently-used-key-pool`,
     providers,
     providerOrder: {
       general: providerOrder('general'),
@@ -736,6 +740,7 @@ module.exports = {
   PROVIDERS,
   DEFAULT_MODELS,
   enabled,
+  envOnly,
   parse,
   canonical,
   providerForModel,
