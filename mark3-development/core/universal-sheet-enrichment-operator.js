@@ -524,18 +524,67 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   const waterfallPending = pending.filter((item) => item.phoneMode === 'waterfall' && item.phoneWaterfallRequestId);
   const nativePending = pending.filter((item) => item.phoneMode !== 'waterfall');
 
-  // Waterfall requests were already polled during verified enrichment. Persist
-  // them immediately for zero-wait background polling instead of asking the
-  // unrelated webhook result store for an ID it will never receive.
+  // Poll all waterfall request IDs concurrently after row processing. This avoids
+  // serial per-person waiting while still giving Apollo one bounded same-run
+  // chance to return numbers before requests move to the background watcher.
+  const unresolvedWaterfall = [];
   if (waterfallPending.length) {
-    stats.phoneWaterfallPendingAssignments = waterfallPending.length;
-    registerBackgroundPhoneAssignments(source, waterfallPending);
-    startBackgroundPhoneWatcher();
-    stats.backgroundPhoneWatcher = true;
+    const quality = require('./apollo-three-poc-quality');
+    const syncPollsRaw = Number(options.phoneWaterfallSyncPolls ?? process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_SYNC_POLLS ?? 1);
+    const syncPolls = Number.isFinite(syncPollsRaw) ? Math.max(0, Math.min(3, Math.floor(syncPollsRaw))) : 1;
+
+    const outcomes = await Promise.allSettled(
+      waterfallPending.map(async (item) => ({
+        item,
+        result: await quality.pollPhoneRequest(item.phoneWaterfallRequestId, { polls: syncPolls }),
+      }))
+    );
+
+    const waterfallChanges = [];
+    for (const outcome of outcomes) {
+      if (outcome.status !== 'fulfilled') {
+        const failedItem = waterfallPending[outcomes.indexOf(outcome)];
+        if (failedItem) unresolvedWaterfall.push(failedItem);
+        continue;
+      }
+
+      const { item, result } = outcome.value;
+      const state = text(result?.state);
+      const phone = apollo.validPhone(result?.phone);
+      if (phone) {
+        apollo.recordPhoneResult(item.apolloPersonId, phone);
+        const range = sheets.cellRange(source.sheetName, item.rowNumber, item.columnIndex);
+        let current = '';
+        try { current = await sheets.readCell(source.spreadsheetId, range); } catch {}
+        if (sheets.isBlank(current)) {
+          waterfallChanges.push({ range, value: phone, rowNumber: item.rowNumber });
+        } else {
+          stats.phoneWriteSkippedPopulated++;
+        }
+      } else if (['not_found', 'terminal'].includes(state)) {
+        stats.phoneNotFound++;
+      } else {
+        unresolvedWaterfall.push(item);
+      }
+    }
+
+    if (waterfallChanges.length) {
+      await sheets.writeCells(source.spreadsheetId, waterfallChanges);
+      stats.phoneCellsFilled += waterfallChanges.length;
+      stats.cellsChanged += waterfallChanges.length;
+      stats.phoneRowsChanged += new Set(waterfallChanges.map((change) => change.rowNumber)).size;
+    }
+
+    stats.phoneWaterfallPendingAssignments = unresolvedWaterfall.length;
+    if (unresolvedWaterfall.length && options.backgroundPhoneWatcher !== false) {
+      registerBackgroundPhoneAssignments(source, unresolvedWaterfall);
+      startBackgroundPhoneWatcher();
+      stats.backgroundPhoneWatcher = true;
+    }
   }
 
   if (!nativePending.length) {
-    stats.phoneStillPending = waterfallPending.length;
+    stats.phoneStillPending = unresolvedWaterfall.length;
     stats.backgroundPhonePending = backgroundPhoneAssignments.size;
     return;
   }
@@ -603,7 +652,7 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   for (const apolloPersonId of handledProviderIds) {
     try { await apollo.consumePhoneResult(apolloPersonId); } catch {}
   }
-  stats.phoneStillPending = unresolved.size + waterfallPending.length;
+  stats.phoneStillPending = unresolved.size + unresolvedWaterfall.length;
   if (unresolved.size && options.backgroundPhoneWatcher !== false) {
     registerBackgroundPhoneAssignments(source, [...unresolved.values()]);
     startBackgroundPhoneWatcher();
