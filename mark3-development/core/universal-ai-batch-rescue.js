@@ -757,10 +757,10 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
       let person = null;
       try {
-        person = await apollo.resolveDecisionMaker(
+        person = await base.hydrateDecisionMakerVerified(
           assignment.candidate,
-          pkg.companyContext.company,
-          pkg.companyContext.domain,
+          pkg.companyContext,
+          stats,
           {
             needEmail: Boolean(assignment.target.group.fields.email),
             needPhone: Boolean(assignment.target.group.fields.phone),
