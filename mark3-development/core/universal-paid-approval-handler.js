@@ -81,6 +81,7 @@ async function execute(decision) {
       schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
       allowLinkedInEmployerFallback: true,
       pocPhasePipeline: true,
+      contactPhaseOrdinal: payload.contactPhaseOrdinal || undefined,
     }));
 
     const enriched = {
