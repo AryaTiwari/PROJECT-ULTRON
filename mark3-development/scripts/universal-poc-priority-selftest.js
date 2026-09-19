@@ -355,6 +355,8 @@ assert.match(targetedSource, /poc-phase-deterministic-only/);
 assert.match(targetedSource, /async function runPocPhasePipeline/);
 assert.match(targetedSource, /ai-skipped-no-verified-candidate-pool/);
 const diagnosticsSource = fs.readFileSync(path.join(root, 'universal-enrichment-diagnostics.js'), 'utf8');
+assert.match(diagnosticsSource, /POC3_REQUESTED_UNRESOLVED/);
+assert.match(diagnosticsSource, /Requested POC-3 is still unresolved/);
 assert.match(diagnosticsSource, /AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL/);
 assert.match(diagnosticsSource, /Fix deterministic discovery\/verification evidence; changing AI providers will not help/);
 assert.match(targetedSource, /targetOrdinals: \[2\]/);
