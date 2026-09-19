@@ -90,6 +90,23 @@ assert.equal(
   'hydration must still reject a clearly different employer',
 );
 
+assert.equal(
+  apollo.hydratedEmployerMatchesCandidate(
+    { id: 'apollo-linkedin-current', organization_name: 'Old Employer', organization: {} },
+    {
+      id: 'apollo-linkedin-current',
+      organizationName: 'Hanvitt Consulting & Solutions',
+      organizationDomain: 'hanvitt.com',
+      linkedinEmployerVerified: true,
+      linkedinEmployerCompany: 'Hanvitt Consulting & Solutions',
+    },
+    'Hanvitt Consulting & Solutions',
+    'hanvitt.com',
+  ),
+  true,
+  'explicit current-employer proof from authenticated LinkedIn may override stale Apollo organization metadata for the exact same identity',
+);
+
 assert.equal(base.anchorNeedsHydration({
   anchor: {
     type: 'person',
@@ -118,6 +135,16 @@ const linkedinRefs = [...base.collectLinkedInPersonUrls({
 assert.equal(linkedinRefs.length, 2);
 assert.ok(linkedinRefs.every((value) => /linkedin\.com\/in\//.test(value)));
 
+const companySlugs = [...base.collectLinkedInCompanySlugs({
+  references: {
+    search: [
+      { kind: 'company', url: '/company/hanvitt-consulting-solutions/' },
+      { kind: 'company', url: 'https://www.linkedin.com/company/people-click/' },
+    ],
+  },
+})];
+assert.deepEqual(companySlugs, ['hanvitt-consulting-solutions', 'people-click']);
+
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
@@ -134,7 +161,11 @@ assert.match(operatorSource, /adaptiveBroadCandidateLimit/);
 assert.match(operatorSource, /APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED/);
 assert.match(operatorSource, /APOLLO_BRAND_KEYWORD_SEARCH_FAILED/);
 assert.match(operatorSource, /LINKEDIN_ZERO_RESULT_SEARCH_FAILED/);
+assert.match(operatorSource, /linkedinMcp\.callTool\('search_companies'/);
+assert.match(operatorSource, /linkedinMcp\.callTool\('get_company_employees'/);
 assert.match(operatorSource, /linkedinMcp\.callTool\('search_people'/);
+assert.match(operatorSource, /profileParser\.resolveCurrentEmployer/);
+assert.match(operatorSource, /linkedinEmployerVerified: true/);
 assert.match(operatorSource, /apollo\.resolvePersonProfile/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_LINKEDIN_ZERO_RESULT_FALLBACK/);
 assert.match(operatorSource, /priority-fast-v2\|/);
@@ -155,7 +186,8 @@ const runSource = operatorSource.slice(operatorSource.indexOf('async function ru
 const exactRepairIndex = runSource.indexOf('repairExistingGroups(row, plan, companyContext, stats, repairOptions)');
 const prioritySearchIndex = runSource.indexOf('discoverPriorityPeopleFast(companyContext, cache, stats');
 assert.ok(exactRepairIndex >= 0 && prioritySearchIndex > exactRepairIndex, 'existing POC exact repair must happen before candidate discovery');
-assert.match(runSource, /if \(poc2Targets\.length\) \{[\s\S]*?discoverPriorityPeopleFast/);
+assert.match(runSource, /if \(poc2Targets\.length && !aiFallbackEnabled\) \{[\s\S]*?discoverPriorityPeopleFast/);
+assert.match(runSource, /if \(aiFallbackEnabled\) \{[\s\S]*?stats\.deferredOpenGroups/);
 assert.match(runSource, /if \(poc3Targets\.length\) \{[\s\S]*?if \(people\.length\)/);
 
 assert.match(rescueSource, /Number\(item\.group\?\.ordinal \|\| 0\) === wantedOrdinal/);
@@ -171,4 +203,4 @@ assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);
 
-console.log('Universal POC priority self-test passed: row evidence resolves employers without AI, existing POCs repair before discovery, mandatory POC-2 uses targeted -> broad -> brand Apollo discovery then read-only LinkedIn only on total Apollo zero-result, every LinkedIn candidate is Apollo-verified, POC-3 never triggers discovery, and only exact unresolved POC-2 residue may reach AI/last resort.');
+console.log('Universal POC priority self-test passed: existing POCs repair deterministically, empty POC-2 skips redundant manual hydration when batch AI is enabled, sparse-company discovery escalates Apollo -> LinkedIn company employees -> exact profile verification, empty discovery is not cached, LinkedIn current-employer proof can safely override stale Apollo org metadata for the exact identity, and POC-3 remains optional.');
