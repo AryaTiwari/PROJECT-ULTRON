@@ -433,14 +433,19 @@ function reviewerNeeded(assignments, rowPackages) {
 
 async function deterministicCompany(plan, row, options = {}) {
   if (!plan?.anchor) return null;
+
+  const rowEvidence = base.inferHiringCompanyFromEvidence(plan, row);
+  if (rowEvidence?.company || rowEvidence?.domain) return rowEvidence;
+
   let anchorContext = null;
   if (plan.anchor.type === 'company') {
     anchorContext = base.companyFromCompanyAnchor(plan.anchor);
   } else {
     try { anchorContext = await base.resolvePersonAnchor(plan, row, options); } catch {}
   }
-  const preferred = base.preferredHiringCompanyContext(plan, row, anchorContext);
-  return preferred?.company || preferred?.domain ? preferred : null;
+  return anchorContext && !anchorContext.unresolved && (anchorContext.company || anchorContext.domain)
+    ? anchorContext
+    : null;
 }
 
 async function run(request = {}, primaryResult = {}, options = {}) {
