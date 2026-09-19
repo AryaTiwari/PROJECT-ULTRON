@@ -679,6 +679,81 @@ function existingPersonVerificationContext(item, fallbackContext = {}) {
   return fallbackContext;
 }
 
+
+function existingContactSearchName(value) {
+  return text(value)
+    .replace(/\s+[—–]\s+.*$/, '')
+    .replace(/\s*\([^)]{2,120}\)\s*$/, '')
+    .trim();
+}
+
+async function repairExistingContactFromPublicIndex(item, companyContext, stats, options = {}) {
+  if (!publicIndexFallbackEnabled(options)) return null;
+  const snapshot = item?.snapshot || {};
+  const name = existingContactSearchName(snapshot?.values?.name || '');
+  const company = text(companyContext?.company || companyContext?.domain || '').replace(/"/g, '').trim();
+  if (!name || !company) return null;
+
+  const queries = [
+    `site:linkedin.com/in "${name.replace(/"/g, '')}" "${company}"`,
+    `site:linkedin.com/in "${name.replace(/"/g, '')}" ${company}`,
+  ];
+  const refs = new Map();
+  const addItems = (items, provider) => {
+    for (const raw of Array.isArray(items) ? items : []) {
+      const record = publicIndexRecord(raw, options.location || '');
+      if (!record?.linkedin) continue;
+      if (planner.normalizeName(record.name || '') !== planner.normalizeName(name)) continue;
+      if (!refs.has(record.linkedin)) refs.set(record.linkedin, { ...record, publicIndexProvider: provider });
+    }
+  };
+
+  if (leadSources.status()?.serpApiConfigured) {
+    for (const query of queries) {
+      if (refs.size >= 4) break;
+      try {
+        const result = await leadSources.serpSearch(query, { limit: 10, timeoutMs: 15000 });
+        stats.existingPublicIndexSearches = Number(stats.existingPublicIndexSearches || 0) + 1;
+        addItems(result?.results, 'serpapi-google');
+      } catch (error) {
+        stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
+      }
+    }
+  }
+
+  if (!refs.size && web.status()?.configured) {
+    for (const query of queries) {
+      if (refs.size >= 4) break;
+      try {
+        const result = await web.searchWeb(query, { limit: 10, timeoutMs: 12000 });
+        stats.existingPublicIndexSearches = Number(stats.existingPublicIndexSearches || 0) + 1;
+        addItems(result?.results, 'tinyfish-search');
+      } catch (error) {
+        stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
+      }
+    }
+  }
+
+  const needEmail = Boolean(item?.group?.fields?.email && !snapshot?.values?.email);
+  const needPhone = Boolean(item?.group?.fields?.phone && !snapshot?.values?.phone);
+  for (const record of [...refs.values()].slice(0, 4)) {
+    try {
+      stats.existingPublicIndexVerificationAttempts = Number(stats.existingPublicIndexVerificationAttempts || 0) + 1;
+      const person = await apollo.resolvePersonProfile(record.linkedin, {
+        needEmail,
+        needPhone,
+        force: true,
+      });
+      if (!person || person.noMatch || person.ambiguous || person.identityVerified === false) continue;
+      if (!planner.samePerson(snapshot.values, person)) continue;
+      if (!ranker.sameEmployer(person, companyContext)) continue;
+      stats.existingPublicIndexVerified = Number(stats.existingPublicIndexVerified || 0) + 1;
+      return person;
+    } catch {}
+  }
+  return null;
+}
+
 async function repairExistingGroups(row, plan, companyContext, stats, options = {}) {
   const writes = [];
   const targets = new Map();
@@ -696,6 +771,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     const verificationContext = existingPersonVerificationContext(item, companyContext);
     let resolved = null;
     let verificationPath = '';
+    let verificationError = null;
     stats.existingVerificationAttempts++;
 
     try {
@@ -713,36 +789,53 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       } else if (snapshot.values.name && (verificationContext.company || verificationContext.domain)) {
         verificationPath = 'apollo-name-company';
         resolved = await apollo.resolvePersonByNameCompany(
-          snapshot.values.name,
+          existingContactSearchName(snapshot.values.name),
           verificationContext.company,
           verificationContext.domain,
           { needEmail, needPhone },
         );
       }
     } catch (error) {
-      stats.existingVerificationFailures++;
-      stats.existingRepairAudit.push({
-        rowNumber: options.rowNumber || null,
-        groupId: group.id,
-        name: snapshot.values.name || '',
-        path: verificationPath || 'unresolved',
-        status: 'verification-error',
-        code: String(error?.code || 'APOLLO_EXISTING_CONTACT_VERIFY_FAILED'),
-        message: String(error?.message || error || '').slice(0, 240),
-      });
-      continue;
+      verificationError = error;
+      resolved = null;
     }
 
-    if (!resolved || resolved.noMatch || resolved.ambiguous || resolved.identityVerified === false || !ranker.sameEmployer(resolved, verificationContext)) {
-      stats.existingVerificationFailures++;
-      stats.existingRepairAudit.push({
-        rowNumber: options.rowNumber || null,
-        groupId: group.id,
-        name: snapshot.values.name || '',
-        path: verificationPath || 'unresolved',
-        status: 'identity-or-employer-not-verified',
-      });
-      continue;
+    const directVerified = Boolean(
+      resolved
+      && !resolved.noMatch
+      && !resolved.ambiguous
+      && resolved.identityVerified !== false
+      && ranker.sameEmployer(resolved, verificationContext)
+      && planner.samePerson(snapshot.values, resolved)
+    );
+
+    if (!directVerified) {
+      const publicResolved = await repairExistingContactFromPublicIndex(
+        item,
+        verificationContext,
+        stats,
+        options,
+      );
+      if (publicResolved) {
+        resolved = publicResolved;
+        verificationPath = verificationPath
+          ? `${verificationPath}->public-index-exact`
+          : 'public-index-exact';
+      } else {
+        stats.existingVerificationFailures++;
+        stats.existingRepairAudit.push({
+          rowNumber: options.rowNumber || null,
+          groupId: group.id,
+          name: snapshot.values.name || '',
+          path: verificationPath || 'unresolved',
+          status: verificationError ? 'verification-error' : 'identity-or-employer-not-verified',
+          ...(verificationError ? {
+            code: String(verificationError?.code || 'APOLLO_EXISTING_CONTACT_VERIFY_FAILED'),
+            message: String(verificationError?.message || verificationError || '').slice(0, 240),
+          } : {}),
+        });
+        continue;
+      }
     }
 
     queuePendingPhone(options, Number(options.rowNumber), group, snapshot, resolved);
@@ -2090,6 +2183,9 @@ function freshStats() {
     existingVerificationAttempts: 0,
     existingVerificationFailures: 0,
     existingDiscoveryIdentityMatches: 0,
+    existingPublicIndexSearches: 0,
+    existingPublicIndexVerificationAttempts: 0,
+    existingPublicIndexVerified: 0,
     existingGroupsRepaired: 0,
     existingRepairAudit: [],
     embeddedDesignationWrites: 0,
@@ -2180,7 +2276,8 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
     'publicIndexSearchCalls','publicIndexProfilesFound','publicIndexApolloVerificationAttempts',
     'publicIndexApolloVerifiedCandidates','publicIndexFailures',
     'linkedinHydrationRecoveryAttempts','linkedinHydrationRecoverySuccesses','linkedinHydrationRecoveryFailures',
-    'postHydrationDuplicates','existingVerificationAttempts','existingGroupsRepaired','embeddedDesignationWrites',
+    'postHydrationDuplicates','existingVerificationAttempts','existingPublicIndexSearches',
+    'existingPublicIndexVerificationAttempts','existingPublicIndexVerified','existingGroupsRepaired','embeddedDesignationWrites',
     'newPeopleSelected','hydrationAttempts','hydrationFailures','manualPoc2Attempts','manualPoc2Filled',
     'manualPoc3Attempts','manualPoc3Filled','optionalPoc3Deferred','orphanContactTargets','orphanContactVerified',
     'orphanContactBlocked','orphanContactMismatches','phoneCellsFilled','phoneRowsChanged','phoneNotFound',
@@ -2580,7 +2677,7 @@ function formatResult(result) {
   const haltText = s.haltError
     ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
     : '';
-  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally; ${(schema.continuityRecoveries || []).length} contact groups recovered by explicit schema continuity. Header continuity repair: ${s.headerRepairsWritten || 0}/${s.headerRepairsPlanned || 0} missing headers restored into blank cells, ${s.headerRepairsSkippedPopulated || 0} skipped because populated. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} contact cells across ${s.rowsChanged} data rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); LinkedIn fallback ${s.linkedinFallbackCompanySearches || 0} company searches, ${s.linkedinFallbackCompanyProfiles || 0} company profiles, ${s.linkedinFallbackCompanyUrns || 0} company URNs, ${s.linkedinFallbackCurrentCompanySearches || 0} current-company people searches, ${s.linkedinFallbackEmployeeSearches || 0} employee-page searches, ${s.linkedinFallbackSearches || 0} generic people searches, ${s.linkedinFallbackProfilesFound || 0} profile refs, ${s.linkedinFallbackVerifiedCandidates || 0} Apollo-verified candidates, ${s.linkedinFallbackFailures || 0} failures; public-index fallback ${s.publicIndexSearchCalls || 0} searches, ${s.publicIndexProfilesFound || 0} LinkedIn profile refs, ${s.publicIndexApolloVerificationAttempts || 0} Apollo verification attempts, ${s.publicIndexApolloVerifiedCandidates || 0} exact verified candidates, ${s.publicIndexFailures || 0} failures; ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; exact LinkedIn employer recovery ${s.linkedinHydrationRecoverySuccesses || 0}/${s.linkedinHydrationRecoveryAttempts || 0} succeeded (${s.linkedinHydrationRecoveryFailures || 0} failed); ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts (business-email exact match preferred when available), ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Final-POC contact waterfall: phone ${contactQuality.phoneWaterfallStarted || 0} started/${contactQuality.phoneWaterfallSucceeded || 0} found/${contactQuality.phoneWaterfallPending || 0} pending/${contactQuality.phoneWaterfallNotFound || 0} not-found/${contactQuality.phoneWaterfallUnavailable || 0} unavailable/${contactQuality.phoneWaterfallBudgetSkips || 0} budget-skipped; email ${contactQuality.waterfallStarted || 0} started/${contactQuality.waterfallSucceeded || 0} found/${contactQuality.waterfallPending || 0} pending/${contactQuality.waterfallBudgetSkips || 0} budget-skipped. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked; resumed ${s.resumedPhoneAssignments || 0} persisted callback assignments from earlier runs, resolved ${s.resumedPhoneResolved || 0}, wrote ${s.resumedPhoneCellsFilled || 0} recovered phone cells; ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Priority routing: POC-1 exact anchor completion always runs first; existing POC-2 exact repair runs deterministically; empty POC-2 manual hydration attempts ${s.manualPoc2Attempts || 0} (skipped when batch AI owns selection), manual fills ${s.manualPoc2Filled || 0}, unresolved POC-2 deferred to AI ${s.deferredOpenGroups || 0} across ${(s.deferredPoc2Rows || []).length} exact rows; optional POC-3 manual attempts ${s.manualPoc3Attempts || 0}, strong-confidence fills ${s.manualPoc3Filled || 0}, left optional ${s.optionalPoc3Deferred || 0}. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; row-evidence employers resolved ${s.rowEvidenceEmployersResolved || 0}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. Results-first routing: fast sweep deferred ${(s.primarySweepDeferredRows || []).length} row${(s.primarySweepDeferredRows || []).length === 1 ? '' : 's'}; deterministic leftover recheck ${s.deterministicRecheckAttempted ? `ran on ${(s.deterministicRecheckRows || []).length} row${(s.deterministicRecheckRows || []).length === 1 ? '' : 's'}; mandatory blockers remaining [${(s.deterministicRecheckRemainingMandatoryRows || []).join(', ') || 'none'}]; contact-repair residue [${(s.deterministicRecheckRemainingRepairRows || []).join(', ') || 'none'}]; other warning/pending residue [${(s.deterministicRecheckRemainingWarningRows || []).join(', ') || 'none'}]` : 'was not needed'}. Diagnostics: ${diagnostics.uniqueIssues([...(diagnostics.classifyLeftovers(s.leftoverQueue || []).issues || []), ...diagnostics.runtimeIssues(s)]).map(diagnostics.formatIssue).join(' | ') || '[INFO] NO_ACTIVE_ENRICHMENT_ISSUES: no unresolved deterministic issues recorded.'} AI/model calls: 0.`;
+  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally; ${(schema.continuityRecoveries || []).length} contact groups recovered by explicit schema continuity. Header continuity repair: ${s.headerRepairsWritten || 0}/${s.headerRepairsPlanned || 0} missing headers restored into blank cells, ${s.headerRepairsSkippedPopulated || 0} skipped because populated. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} contact cells across ${s.rowsChanged} data rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); LinkedIn fallback ${s.linkedinFallbackCompanySearches || 0} company searches, ${s.linkedinFallbackCompanyProfiles || 0} company profiles, ${s.linkedinFallbackCompanyUrns || 0} company URNs, ${s.linkedinFallbackCurrentCompanySearches || 0} current-company people searches, ${s.linkedinFallbackEmployeeSearches || 0} employee-page searches, ${s.linkedinFallbackSearches || 0} generic people searches, ${s.linkedinFallbackProfilesFound || 0} profile refs, ${s.linkedinFallbackVerifiedCandidates || 0} Apollo-verified candidates, ${s.linkedinFallbackFailures || 0} failures; public-index fallback ${s.publicIndexSearchCalls || 0} searches, ${s.publicIndexProfilesFound || 0} LinkedIn profile refs, ${s.publicIndexApolloVerificationAttempts || 0} Apollo verification attempts, ${s.publicIndexApolloVerifiedCandidates || 0} exact verified candidates, ${s.publicIndexFailures || 0} failures; ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; exact LinkedIn employer recovery ${s.linkedinHydrationRecoverySuccesses || 0}/${s.linkedinHydrationRecoveryAttempts || 0} succeeded (${s.linkedinHydrationRecoveryFailures || 0} failed); ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts (business-email exact match preferred when available), ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, public-index exact-name repair ${s.existingPublicIndexSearches || 0} searches/${s.existingPublicIndexVerificationAttempts || 0} Apollo verification attempts/${s.existingPublicIndexVerified || 0} exact identities recovered, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Final-POC contact waterfall: phone ${contactQuality.phoneWaterfallStarted || 0} started/${contactQuality.phoneWaterfallSucceeded || 0} found/${contactQuality.phoneWaterfallPending || 0} pending/${contactQuality.phoneWaterfallNotFound || 0} not-found/${contactQuality.phoneWaterfallUnavailable || 0} unavailable/${contactQuality.phoneWaterfallBudgetSkips || 0} budget-skipped; email ${contactQuality.waterfallStarted || 0} started/${contactQuality.waterfallSucceeded || 0} found/${contactQuality.waterfallPending || 0} pending/${contactQuality.waterfallBudgetSkips || 0} budget-skipped. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked; resumed ${s.resumedPhoneAssignments || 0} persisted callback assignments from earlier runs, resolved ${s.resumedPhoneResolved || 0}, wrote ${s.resumedPhoneCellsFilled || 0} recovered phone cells; ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Priority routing: POC-1 exact anchor completion always runs first; existing POC-2 exact repair runs deterministically; empty POC-2 manual hydration attempts ${s.manualPoc2Attempts || 0} (skipped when batch AI owns selection), manual fills ${s.manualPoc2Filled || 0}, unresolved POC-2 deferred to AI ${s.deferredOpenGroups || 0} across ${(s.deferredPoc2Rows || []).length} exact rows; optional POC-3 manual attempts ${s.manualPoc3Attempts || 0}, strong-confidence fills ${s.manualPoc3Filled || 0}, left optional ${s.optionalPoc3Deferred || 0}. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; row-evidence employers resolved ${s.rowEvidenceEmployersResolved || 0}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. Results-first routing: fast sweep deferred ${(s.primarySweepDeferredRows || []).length} row${(s.primarySweepDeferredRows || []).length === 1 ? '' : 's'}; deterministic leftover recheck ${s.deterministicRecheckAttempted ? `ran on ${(s.deterministicRecheckRows || []).length} row${(s.deterministicRecheckRows || []).length === 1 ? '' : 's'}; mandatory blockers remaining [${(s.deterministicRecheckRemainingMandatoryRows || []).join(', ') || 'none'}]; contact-repair residue [${(s.deterministicRecheckRemainingRepairRows || []).join(', ') || 'none'}]; other warning/pending residue [${(s.deterministicRecheckRemainingWarningRows || []).join(', ') || 'none'}]` : 'was not needed'}. Diagnostics: ${diagnostics.uniqueIssues([...(diagnostics.classifyLeftovers(s.leftoverQueue || []).issues || []), ...diagnostics.runtimeIssues(s)]).map(diagnostics.formatIssue).join(' | ') || '[INFO] NO_ACTIVE_ENRICHMENT_ISSUES: no unresolved deterministic issues recorded.'} AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -2595,6 +2692,8 @@ module.exports = {
   existingIdentityKeys,
   candidateAlreadyPresent,
   existingPersonVerificationContext,
+  existingContactSearchName,
+  repairExistingContactFromPublicIndex,
   needsEmbeddedDesignationRepair,
   candidateFillTargets,
 
