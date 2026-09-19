@@ -50,7 +50,9 @@ function maxWaterfalls() {
 }
 
 function phoneWaterfallEnabled() {
-  return !/^(0|false|no|off)$/i.test(String(apollo.setting('ULTRON_M3_THREE_POC_PHONE_WATERFALL', '1')).trim());
+  // Native Apollo reveal + webhook settlement is the production default.
+  // The custom poll-only phone waterfall is an opt-in experimental fallback.
+  return /^(1|true|yes|on)$/i.test(String(apollo.setting('ULTRON_M3_THREE_POC_PHONE_WATERFALL', '0')).trim());
 }
 
 function maxPhoneWaterfalls() {
@@ -386,8 +388,32 @@ async function startPhoneWaterfall(result) {
   return { ...polled, requestId, payload: polled.payload || data };
 }
 
+function pendingPhoneWaterfallRequestId(result = {}) {
+  const direct = cacheEntryFor(result);
+  const directRecord = direct.record || {};
+  const directId = String(directRecord.threePocPhoneWaterfallRequestId || '').trim();
+  if (directId && directRecord.threePocPhoneWaterfallStatus === 'pending') return directId;
+
+  const wantedName = String(result?.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const wantedEmail = validBusinessEmail(result?.email || '');
+  const wantedCompany = String(result?.organizationName || result?.company || '').trim();
+  const wantedDomain = String(result?.organizationDomain || result?.domain || '').trim();
+  if (!wantedName && !wantedEmail) return '';
+
+  const cache = apollo.readCache();
+  const matches = Object.values(cache.people || {}).filter((record) => {
+    const requestId = String(record?.threePocPhoneWaterfallRequestId || '').trim();
+    if (!requestId || record?.threePocPhoneWaterfallStatus !== 'pending') return false;
+    if (wantedEmail && validBusinessEmail(record?.email || '') === wantedEmail) return true;
+    const name = String(record?.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!wantedName || name !== wantedName) return false;
+    if (!wantedCompany && !wantedDomain) return true;
+    return apollo.sameOrganization(record, wantedCompany, wantedDomain);
+  });
+  return matches.length === 1 ? String(matches[0].threePocPhoneWaterfallRequestId || '').trim() : '';
+}
+
 async function improveVerifiedPhone(result) {
-  if (!phoneWaterfallEnabled()) return result;
   if (!result || result.noMatch || result.ambiguous || result.identityVerified === false) return result;
 
   const immediate = apollo.validPhone(result.phone || '');
@@ -440,6 +466,10 @@ async function improveVerifiedPhone(result) {
     });
     return { ...result, phoneWaterfallStatus: 'error' };
   }
+
+  // Production mode uses Apollo's native reveal path. Existing already-paid
+  // custom waterfall requests are still resumed above so migration is credit-safe.
+  if (!phoneWaterfallEnabled()) return result;
 
   if (recentPhoneAttempt(record)) {
     runState.phoneWaterfallCooldownSkips++;
@@ -691,28 +721,40 @@ function install() {
   const originalResolvePersonByBusinessEmail = apollo.resolvePersonByBusinessEmail.bind(apollo);
   const originalResolvePersonProfile = apollo.resolvePersonProfile.bind(apollo);
 
-  function baseOptionsForQuality(options = {}) {
-    // When phone waterfall is active, do not also buy/start the native async phone
-    // reveal for the same final POC. Identity/email hydration stays normal, then
-    // the quality layer performs one deliberate waterfall phone lookup.
-    if (options.needPhone !== false && phoneWaterfallEnabled()) {
+  function baseOptionsForQuality(options = {}, identity = {}) {
+    if (options.needPhone === false) return options;
+    // Do not duplicate an already-paid legacy waterfall request during migration.
+    // Otherwise native Apollo phone reveal is the production path.
+    if (phoneWaterfallEnabled() || pendingPhoneWaterfallRequestId(identity)) {
       return { ...options, needPhone: false };
     }
     return options;
   }
 
   apollo.resolveDecisionMaker = async function resultsFirstResolveDecisionMaker(candidate, company, domain, options = {}) {
-    const result = await originalResolveDecisionMaker(candidate, company, domain, baseOptionsForQuality(options));
+    const result = await originalResolveDecisionMaker(candidate, company, domain, baseOptionsForQuality(options, {
+      ...candidate,
+      organizationName: candidate?.organizationName || company,
+      organizationDomain: candidate?.organizationDomain || domain,
+    }));
     return improveVerifiedContacts(result, options);
   };
 
   apollo.resolvePersonByNameCompany = async function resultsFirstResolvePersonByNameCompany(name, company, domain, options = {}) {
-    const result = await originalResolvePersonByNameCompany(name, company, domain, baseOptionsForQuality(options));
+    const result = await originalResolvePersonByNameCompany(name, company, domain, baseOptionsForQuality(options, {
+      name,
+      organizationName: company,
+      organizationDomain: domain,
+    }));
     return improveVerifiedContacts(result, options);
   };
 
   apollo.resolvePersonByBusinessEmail = async function resultsFirstResolvePersonByBusinessEmail(email, company, domain, options = {}) {
-    const result = await originalResolvePersonByBusinessEmail(email, company, domain, baseOptionsForQuality(options));
+    const result = await originalResolvePersonByBusinessEmail(email, company, domain, baseOptionsForQuality(options, {
+      email,
+      organizationName: company,
+      organizationDomain: domain,
+    }));
     return improveVerifiedContacts(result, options);
   };
 
@@ -720,7 +762,7 @@ function install() {
   // use the same final-contact quality layer as name/company and business-email
   // resolution. Historically this path bypassed phone/email waterfalls entirely.
   apollo.resolvePersonProfile = async function resultsFirstResolvePersonProfile(linkedinUrl, options = {}) {
-    const result = await originalResolvePersonProfile(linkedinUrl, baseOptionsForQuality(options));
+    const result = await originalResolvePersonProfile(linkedinUrl, baseOptionsForQuality(options, { linkedinUrl }));
     return improveVerifiedContacts(result, options);
   };
 
@@ -765,6 +807,7 @@ module.exports = {
   improveVerifiedPhone,
   improveVerifiedContacts,
   recordPhoneWaterfallOutcome,
+  pendingPhoneWaterfallRequestId,
   emailFromPayload,
   phoneFromPayload,
   pollPhoneRequest,
