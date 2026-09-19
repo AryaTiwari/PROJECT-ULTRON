@@ -157,6 +157,17 @@ function preferredHiringCompanyContext(plan, row, anchorContext = null) {
   return inferHiringCompanyFromEvidence(plan, row) || anchorContext;
 }
 
+function anchorNeedsHydration(plan = {}) {
+  const anchor = plan?.anchor;
+  if (!anchor || anchor.type !== 'person') return false;
+  const values = anchor.snapshot?.values || {};
+  const fields = anchor.group?.fields || {};
+  if (fields.phone && !text(values.phone)) return true;
+  if (fields.email && !text(values.email)) return true;
+  if (fields.role && !text(values.role)) return true;
+  return false;
+}
+
 function companyFromCompanyAnchor(anchor) {
   const values = anchor?.snapshot?.values || {};
   const company = text(values.company || values.name);
@@ -1185,11 +1196,22 @@ async function run(request = {}, options = {}) {
     if (!plan.anchor) { stats.rowsWithoutAnchor++; continue; }
 
     try {
-      let anchorCompanyContext = plan.anchor.type === 'company'
-        ? companyFromCompanyAnchor(plan.anchor)
-        : await resolvePersonAnchor(plan, row, { ...options, allowLinkedInEmployerFallback: false });
+      const rowEvidenceContext = inferHiringCompanyFromEvidence(plan, row);
+      let anchorCompanyContext = null;
+      if (plan.anchor.type === 'company') {
+        anchorCompanyContext = companyFromCompanyAnchor(plan.anchor);
+      } else if (anchorNeedsHydration(plan) || !rowEvidenceContext) {
+        anchorCompanyContext = await resolvePersonAnchor(plan, row, { ...options, allowLinkedInEmployerFallback: false });
+      } else {
+        anchorCompanyContext = {
+          unresolved: true,
+          source: 'anchor-hydration-skipped-complete',
+          anchorLinkedin: apollo.normalizeLinkedIn(plan.anchor?.snapshot?.values?.linkedin || ''),
+          anchorPerson: null,
+        };
+      }
 
-      let companyContext = inferHiringCompanyFromEvidence(plan, row)
+      let companyContext = rowEvidenceContext
         || (anchorCompanyContext && !anchorCompanyContext.unresolved && anchorCompanyContext.company ? anchorCompanyContext : null);
 
       // LinkedIn employer scraping is the slow fallback, never the default. Use it
@@ -1407,6 +1429,7 @@ module.exports = {
   companyFromCompanyAnchor,
   inferHiringCompanyFromEvidence,
   preferredHiringCompanyContext,
+  anchorNeedsHydration,
   resolvePersonAnchor,
   existingIdentityKeys,
   candidateAlreadyPresent,
