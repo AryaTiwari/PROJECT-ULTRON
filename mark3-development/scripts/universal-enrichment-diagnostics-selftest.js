@@ -75,6 +75,40 @@ assert.equal(providerReasons[0].rowNumber, 5);
 assert.equal(providerReasons[0].typed.code, 'LINKEDIN_DAILY_CAP');
 assert.equal(providerReasons[0].typed.type, 'RATE_LIMIT');
 
+const collapsedBlockers = targeted.collapseDiagnosticBlockers([
+  {
+    code: 'POC2_NO_DISCOVERY_CANDIDATES',
+    severity: 'BLOCKER',
+    blocking: true,
+    retryable: true,
+    rowNumber: 5,
+    target: 'POC-2',
+    message: 'Lifecycle wrapper',
+  },
+  {
+    code: 'UNIVERSAL_RECURSION_STACK_OVERFLOW',
+    severity: 'BLOCKER',
+    blocking: true,
+    retryable: true,
+    rowNumber: 5,
+    target: 'POC-2',
+    message: 'Maximum call stack size exceeded',
+    detail: 'candidate-discovery',
+  },
+  {
+    code: 'UNIVERSAL_RECURSION_STACK_OVERFLOW',
+    severity: 'BLOCKER',
+    blocking: true,
+    retryable: true,
+    rowNumber: 5,
+    target: 'POC-2',
+    message: 'Maximum call stack size exceeded',
+    detail: 'fallback-row-enrichment',
+  },
+]);
+assert.equal(collapsedBlockers.length, 1, 'one typed root cause must supersede duplicate lifecycle wrappers for the same row/target');
+assert.equal(collapsedBlockers[0].code, 'UNIVERSAL_RECURSION_STACK_OVERFLOW');
+
 const rendered = diagnostics.formatIssue(exhausted);
 assert.match(rendered, /^\[BLOCKER\]\[ROW 5\]\[POC-2\] POC2_NO_VERIFIED_CANDIDATE_AFTER_ALL_STRATEGIES:/);
 
@@ -98,6 +132,7 @@ assert.match(targetedSource, /REPAIR_OR_PENDING:/);
 assert.match(targetedSource, /providerRetryReasonsFromPrimary/);
 assert.match(targetedSource, /provider-retry-required/);
 assert.match(targetedSource, /const gateBlockers/);
+assert.match(targetedSource, /collapseDiagnosticBlockers/);
 assert.match(targetedSource, /Problems:/);
 
 console.log('Universal enrichment diagnostics self-test passed: row scopes remain accurate, LinkedIn safety caps are retryable rate-limit causes, recursive diagnostic helpers are forbidden, stack overflows get a dedicated typed code, and mandatory blockers remain separate from repair/pending/optional work.');
