@@ -77,6 +77,25 @@ assert.equal(queue[0].rowNumber, 7);
 assert.equal(queue[0].columnIndex, 8);
 assert.equal(queue[0].apolloPersonId, 'apollo-hemanth');
 
+const waterfallQueue = [];
+operator.queuePendingPhone(
+  { pendingPhoneQueue: waterfallQueue },
+  8,
+  existing.group,
+  existing.snapshot,
+  {
+    id: 'apollo-waterfall',
+    name: 'Waterfall Person',
+    phoneStatus: 'waterfall_pending',
+    phoneWaterfallRequestId: 'wf-request-123',
+    phone: '',
+  },
+);
+assert.equal(waterfallQueue.length, 1, 'poll-only waterfall phone must be persisted for background request-id polling');
+assert.equal(waterfallQueue[0].phoneMode, 'waterfall');
+assert.equal(waterfallQueue[0].phoneWaterfallRequestId, 'wf-request-123');
+assert.equal(waterfallQueue[0].key, '8|8', 'pending phone ownership must be unique by row/cell rather than historical person ids');
+
 operator.queuePendingPhone(
   { pendingPhoneQueue: queue },
   7,
@@ -124,6 +143,12 @@ assert.match(contactQualitySource, /run_waterfall_phone', 'true'/);
 assert.match(contactQualitySource, /poll_only', 'true'/);
 assert.match(contactQualitySource, /async function improveVerifiedPhone/);
 assert.match(contactQualitySource, /async function pollPhoneRequest/);
+assert.match(contactQualitySource, /phoneStatus: 'waterfall_pending'/);
+assert.match(contactQualitySource, /function baseOptionsForQuality/);
+assert.match(contactQualitySource, /needPhone: false/);
+assert.match(operatorSource, /item\.phoneMode === 'waterfall'/);
+assert.match(operatorSource, /quality\.pollPhoneRequest\(item\.phoneWaterfallRequestId, \{ polls: 0 \}\)/);
+assert.match(operatorSource, /backgroundPhoneKey\(source, item\)/);
 assert.match(contactQualitySource, /originalResolvePersonByBusinessEmail/);
 assert.match(contactQualitySource, /if \(options\.needPhone !== false\) next = await improveVerifiedPhone\(next\)/);
 assert.match(operatorSource, /Final-POC contact waterfall:/);
@@ -210,7 +235,7 @@ async function run() {
     sheets.writeCells = originals.writeCells;
   }
 
-  console.log('Universal contact completion self-test passed: existing POCs verify by exact LinkedIn/business-email/name+company, final verified POCs can use bounded poll-only phone waterfall before email deepening, nested waterfall phone payloads are parsed safely, native callback assignments remain resume-safe, populated phone cells are never overwritten, and Big Pickle control failures fail closed.');
+  console.log('Universal contact completion self-test passed: existing POCs verify exactly, final verified POCs use one bounded poll-only phone waterfall instead of duplicate native+waterfall spend, waterfall request IDs persist by exact sheet cell for background polling, old webhook assignments remain resume-safe, populated phone cells are never overwritten, and nested waterfall phone payloads parse safely.');
 }
 
 if (require.main === module) {
