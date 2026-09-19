@@ -592,6 +592,14 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       if (snapshot.linkedinKind === 'linkedin_person') {
         verificationPath = 'exact-linkedin';
         resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone });
+      } else if (snapshot.values.email && firstBusinessEmailDomain(snapshot.values.email)) {
+        verificationPath = 'apollo-business-email';
+        resolved = await apollo.resolvePersonByBusinessEmail(
+          snapshot.values.email,
+          verificationContext.company,
+          verificationContext.domain,
+          { needEmail: true, needPhone },
+        );
       } else if (snapshot.values.name && (verificationContext.company || verificationContext.domain)) {
         verificationPath = 'apollo-name-company';
         resolved = await apollo.resolvePersonByNameCompany(
@@ -818,10 +826,12 @@ function collectLinkedInCompanySlugs(value, out = new Set()) {
 }
 
 async function verifyLinkedInCompanyEmployee(linkedinUrl, companyContext, stats) {
+  const slug = linkedinSlug(linkedinUrl);
+  if (!slug) return null;
   let profile = null;
   try {
     profile = await linkedinMcp.callTool('get_person_profile', {
-      linkedin_username: linkedinUrl,
+      linkedin_username: slug,
       sections: 'experience',
       max_scrolls: 3,
     });
@@ -973,6 +983,66 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
 
   stats.linkedinFallbackVerifiedCandidates = Number(stats.linkedinFallbackVerifiedCandidates || 0) + verified.length;
   return verified;
+}
+
+async function hydrateDecisionMakerVerified(candidate, companyContext, stats, options = {}) {
+  const needEmail = options.needEmail !== false;
+  const needPhone = options.needPhone !== false;
+  try {
+    return await apollo.resolveDecisionMaker(
+      candidate,
+      companyContext?.company || '',
+      companyContext?.domain || '',
+      { needEmail, needPhone },
+    );
+  } catch (error) {
+    if (String(error?.code || '') !== 'APOLLO_COMPANY_MISMATCH_AFTER_HYDRATION') throw error;
+
+    stats.linkedinHydrationRecoveryAttempts = Number(stats.linkedinHydrationRecoveryAttempts || 0) + 1;
+    const linkedinUrl = apollo.normalizeLinkedIn(
+      error?.hydratedLinkedIn
+      || candidate?.linkedinUrl
+      || candidate?.linkedin_url
+      || ''
+    );
+    if (!linkedinUrl) {
+      stats.linkedinHydrationRecoveryFailures = Number(stats.linkedinHydrationRecoveryFailures || 0) + 1;
+      throw error;
+    }
+
+    const verified = await verifyLinkedInCompanyEmployee(linkedinUrl, companyContext, stats);
+    if (!verified?.linkedinEmployerVerified) {
+      stats.linkedinHydrationRecoveryFailures = Number(stats.linkedinHydrationRecoveryFailures || 0) + 1;
+      throw error;
+    }
+
+    const candidateId = text(candidate?.id || candidate?.apolloPersonId);
+    const verifiedId = text(verified?.id || verified?.apolloPersonId);
+    if (candidateId && verifiedId && candidateId !== verifiedId) {
+      stats.linkedinHydrationRecoveryFailures = Number(stats.linkedinHydrationRecoveryFailures || 0) + 1;
+      const mismatch = new Error('LINKEDIN_VERIFIED_CANDIDATE_ID_MISMATCH');
+      mismatch.code = 'LINKEDIN_VERIFIED_CANDIDATE_ID_MISMATCH';
+      throw mismatch;
+    }
+
+    const retryCandidate = {
+      ...candidate,
+      ...verified,
+      id: candidateId || verifiedId || candidate?.id,
+      apolloPersonId: candidateId || verifiedId || candidate?.apolloPersonId,
+      linkedinUrl,
+      linkedinEmployerVerified: true,
+    };
+
+    const person = await apollo.resolveDecisionMaker(
+      retryCandidate,
+      companyContext?.company || '',
+      companyContext?.domain || '',
+      { needEmail, needPhone },
+    );
+    stats.linkedinHydrationRecoverySuccesses = Number(stats.linkedinHydrationRecoverySuccesses || 0) + 1;
+    return person;
+  }
 }
 
 async function discoverPriorityPeopleFast(companyContext, cache, stats, options = {}) {
@@ -1163,7 +1233,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     stats.hydrationAttempts++;
     let person = null;
     try {
-      person = await apollo.resolveDecisionMaker(raw, companyContext.company, companyContext.domain, {
+      person = await hydrateDecisionMakerVerified(raw, companyContext, stats, {
         needEmail: Boolean(target.group.fields.email),
         needPhone: Boolean(target.group.fields.phone),
       });
@@ -1821,6 +1891,8 @@ module.exports = {
   companyBrandFromDomain,
   collectLinkedInPersonUrls,
   discoverLinkedInFallbackPeople,
+  verifyLinkedInCompanyEmployee,
+  hydrateDecisionMakerVerified,
   discoverPriorityPeopleFast,
   manualPriorityCandidates,
   fillManualPriorityGroup,
