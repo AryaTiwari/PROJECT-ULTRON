@@ -127,6 +127,7 @@ assert.match(rescueSource, /DIRECT_AI_EMPTY_RESPONSE/);
 assert.match(rescueSource, /DIRECT_PROVIDER_NOT_CONFIGURED/);
 assert.match(rescueSource, /reviewerNeeded/);
 assert.match(rescueSource, /candidatePoolForTargets/);
+assert.match(rescueSource, /base\.discoverPriorityPeopleFast/);
 assert.doesNotMatch(rescueSource, /exactRepairCandidate/);
 assert.doesNotMatch(rescueSource, /rescueMode === 'repair'/);
 assert.doesNotMatch(rescueSource, /planner\.samePerson/);
