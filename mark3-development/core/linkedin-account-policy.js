@@ -248,6 +248,10 @@ function sleep(ms) {
 
 async function waitTurn(tool) {
   const check = preflight(tool);
+  // Emergency/local-budget bypass means exactly that: no ULTRON-side spacing,
+  // burst, hourly, or daily throttle. Real provider cooldown/manual-lock checks
+  // still happen in preflight() before this point.
+  if (check.limits.localBudgetBypass) return check;
   const now = Date.now();
   const last = Date.parse(check.state.lastSafetyCallAt || check.state.lastCallAt || '');
   const elapsed = Number.isFinite(last) ? now - last : Infinity;
@@ -321,6 +325,7 @@ function nextEligibleAt(state = loadState(), now = Date.now()) {
   }
 
   const limits = settings();
+  if (limits.localBudgetBypass) return new Date(now).toISOString();
   const events = (current.events || []).filter(eventCountsTowardSafety).map((event) => Number(event.at || 0)).filter(Number.isFinite).sort((a, b) => a - b);
   const candidates = [now];
 
