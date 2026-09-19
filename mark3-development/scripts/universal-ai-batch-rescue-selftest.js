@@ -55,9 +55,9 @@ const targets = rescue.rescueTargets({
     existing: [anchor, partialRepair],
   },
 });
-assert.equal(targets.length, 2, 'batch rescue should include both identity-bearing partial POCs and empty POCs');
+assert.equal(targets.length, 1, 'AI rescue must be limited to POC-2; optional POC-3 stays manual-only by default');
+assert.equal(targets[0].group.ordinal, 2);
 assert.equal(targets[0].rescueMode, 'repair');
-assert.equal(targets[1].rescueMode, 'fill');
 
 const repairCandidates = [
   { id: 'low-rank-exact', name: 'Existing Recruiter', title: 'Coordinator', organizationName: 'Example Co' },
@@ -68,33 +68,39 @@ const targetAwarePool = rescue.candidatePoolForTargets(repairCandidates, targets
 assert.ok(targetAwarePool.some((item) => item.id === 'low-rank-exact'), 'existing exact-name repair candidate must survive shortlist pruning');
 
 const target2 = { group: { id: 'person_2', ordinal: 2 }, snapshot: { empty: true } };
-const target3 = { group: { id: 'person_3', ordinal: 3 }, snapshot: { empty: true } };
 const rowPackages = new Map([[2, {
-  targets: [target2, target3],
+  targets: [target2],
   candidates,
 }]]);
 
 const valid = rescue.validateAssignments({
   rows: [{
     rowNumber: 2,
-    assignments: [
-      { slot: '2', candidateKey: 'founder', confidence: 0.82, reason: 'leadership' },
-      { slot: '3', candidateKey: 'recruiter', confidence: 0.79, reason: 'hiring owner' },
-      { slot: '3', candidateKey: 'invented-person', confidence: 1, reason: 'fake' },
-    ],
+    candidateKey: 'founder',
+    confidence: 0.82,
+    reason: 'leadership',
   }],
 }, rowPackages);
 
-assert.equal(valid.get(2).length, 2, 'AI may only select supplied candidate keys');
+assert.equal(valid.get(2).length, 1, 'compact POC-2 response should validate');
+assert.equal(valid.get(2)[0].candidateKey, 'founder');
+
+const byName = rescue.validateAssignments({
+  results: [{
+    row: 2,
+    name: 'Recruiter One',
+    confidence: 0.75,
+  }],
+}, rowPackages);
+assert.equal(byName.get(2).length, 1, 'unique supplied candidate name may recover a missing candidateKey safely');
+assert.equal(byName.get(2)[0].candidateKey, 'recruiter');
+
+const invented = rescue.validateAssignments({
+  rows: [{ rowNumber: 2, candidateKey: 'invented-person', confidence: 1 }],
+}, rowPackages);
+assert.equal(invented.get(2).length, 0, 'invented candidate keys must still be rejected');
+
 assert.equal(rescue.reviewerNeeded(valid, rowPackages), false);
-
-const weak = rescue.validateAssignments({
-  rows: [{
-    rowNumber: 2,
-    assignments: [{ slot: '2', candidateKey: 'founder', confidence: 0.4, reason: 'uncertain' }],
-  }],
-}, rowPackages);
-assert.equal(rescue.reviewerNeeded(weak, rowPackages), true, 'third pass should trigger only for weak/incomplete rows');
 
 const root = path.join(__dirname, '..', 'core');
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
@@ -112,7 +118,10 @@ assert.match(rescueSource, /envOnly: true/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_DIRECT_PROVIDERS/);
 assert.match(rescueSource, /gemini,groq,nvidia/);
 assert.doesNotMatch(rescueSource, /omniroute|omniFallback|omniDiversity|chatOmniRouteOnly/i);
-assert.match(rescueSource, /You may choose ONLY candidateKey values supplied inside that same row/);
+assert.match(rescueSource, /Select exactly one POC-2 candidate for each supplied row/);
+assert.match(rescueSource, /candidateKey values supplied inside that same row/);
+assert.match(rescueSource, /unresolvedContextInput/);
+assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
 assert.match(rescueSource, /apollo\.resolveDecisionMaker/);
 assert.match(rescueSource, /ranker\.sameEmployer/);
 assert.match(rescueSource, /planner\.safeWritesForGroup/);
@@ -127,12 +136,13 @@ assert.match(rescueSource, /planner\.samePerson/);
 assert.doesNotMatch(rescueSource, /omniroute|big-pickle|opencode/i);
 
 assert.match(targetedSource, /deferOpenGroupSelectionToAi: boundedAiEnabled/);
-assert.match(targetedSource, /ai-batch-rescue-active/);
-assert.match(targetedSource, /Big Pickle per-row fallback was suppressed/);
-assert.match(operatorSource, /stats\.deferredOpenGroups \+= fillTargets\.length/);
-assert.match(operatorSource, /options\.deferOpenGroupSelectionToAi/);
-assert.match(operatorSource, /repairDiscoveryNeeded \|\| \(!deferOpenSelection && fillTargets\.length\)/);
-assert.doesNotMatch(operatorSource, /if \(fillTargets\.length \|\| repairDiscoveryNeeded\) \{\s*people = await discoverCompanyPeople/);
+assert.match(targetedSource, /targetOrdinals: \[2\]/);
+assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
+assert.match(operatorSource, /fillManualPriorityGroup/);
+assert.match(operatorSource, /manualPoc2Filled/);
+assert.match(operatorSource, /optionalPoc3Deferred/);
+assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
+assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
 assert.match(controllerSource, /maximum 3 direct AI attempts for the entire run, not per row/);
 assert.match(controllerSource, /env-only direct providers: Gemini is preferred for context, Groq for candidate selection and NVIDIA for the optional reviewer/);
 assert.match(controllerSource, /OmniRoute is not used/);
@@ -142,4 +152,4 @@ assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? 
 assert.match(directSource, /async function candidates\(taskType = 'general', \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
 assert.match(directSource, /async function chat\(\{ messages, model, tools = null, taskType = 'general', timeoutMs = null, envOnly: forceEnvOnly = false \} = \{\}\)/);
 
-console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, only env-backed direct Gemini/Groq/NVIDIA providers are eligible, candidates and inference both force envOnly=true, one best model per provider is considered inside the hard 3-attempt budget, OmniRoute is absent from the batch path, partial and empty POCs share the same batch, Apollo verification remains mandatory, and per-row Big Pickle is suppressed while batch rescue is active.');
+console.log('Universal bounded AI batch rescue self-test passed: AI rescue is limited to unresolved POC-2, compact/tolerant output parsing accepts only supplied candidates, deterministic employer context skips unnecessary context calls, Groq can fall through to Gemini/NVIDIA, reviewer is off by default, Apollo verification remains mandatory, and one bounded last-resort POC-2 fallback is available after manual + direct AI residue.');
