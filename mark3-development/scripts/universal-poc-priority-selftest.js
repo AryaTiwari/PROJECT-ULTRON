@@ -48,6 +48,10 @@ assert.equal(ranker.sameEmployer(
   { organizationName: 'People Click Techno Solutions Pvt Ltd', organizationDomain: '' },
   peopleClick,
 ), true, 'domain-derived brand alias must match the Apollo organization label');
+assert.equal(ranker.sameEmployer(
+  { organizationName: 'Logic Systems', organizationDomain: '' },
+  { company: 'Global Logic', domain: '' },
+), false, 'meaningful brand words such as Global must not be stripped into unsafe company matches');
 
 const sutherland = base.inferHiringCompanyFromEvidence({
   anchor: { snapshot: { values: { linkedin: 'https://www.linkedin.com/in/example/' } } },
