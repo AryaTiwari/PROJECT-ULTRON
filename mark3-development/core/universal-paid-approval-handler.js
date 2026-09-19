@@ -70,6 +70,9 @@ async function execute(decision) {
   }
 
   try {
+    const executionMode = payload.contactPhaseOrdinal
+      ? `POC-${Number(payload.contactPhaseOrdinal)} diagnostic`
+      : 'coordinated multi-POC production';
     const result = await paidTools.withPermit(decision, async () => universal.run({
       sheetUrl: payload.url,
       sheetName: payload.sheetName,
@@ -96,7 +99,7 @@ async function execute(decision) {
     let body;
     let reportFormattingError = null;
     try {
-      body = `${modePrefix(payload.rowLimit)} ${universal.formatResult(enriched)}`;
+      body = `${modePrefix(payload.rowLimit)} EXECUTION MODE: ${executionMode}. ${universal.formatResult(enriched)}`;
     } catch (error) {
       if (!error?.code) error.code = 'UNIVERSAL_RESULT_FORMAT_FAILED';
       if (!error?.subsystem) error.subsystem = 'UNIVERSAL';
@@ -136,6 +139,8 @@ async function execute(decision) {
       boundedAiBatchRescue: Boolean(result?.aiBatchRescue?.attempted),
       boundedAiBatchMaxCalls: Number(result?.aiBatchRescue?.maxCalls || 0),
       expectedPersonGroups: payload.expectedPersonGroups || null,
+      executionMode,
+      contactPhaseOrdinal: payload.contactPhaseOrdinal || null,
       modelCalls,
       completedFully: !partialCompletion,
       partialCompletion,
