@@ -306,7 +306,9 @@ assert.match(operatorSource, /pragmaticSameEmployerCandidates/);
 assert.match(operatorSource, /ordinal: 2/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5/);
 assert.match(operatorSource, /ordinal: 3/);
-assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
+assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS/);
+assert.match(operatorSource, /phaseOrdinal === 3 \? 5 : 1/);
+assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3 \? poc3Targets : poc2Targets/);
 assert.match(operatorSource, /priorityCandidateLimit: options\.manualPriorityCandidateLimit \?\? 20/);
 assert.doesNotMatch(operatorSource, /candidateLimit: options\.manualCandidateLimit \?\? 40/);
 assert.match(operatorSource, /preferredHiringCompanyContext/);
@@ -321,12 +323,13 @@ const prioritySearchIndex = runSource.indexOf('discoverPriorityPeopleFast(compan
 assert.ok(exactRepairIndex >= 0 && prioritySearchIndex > exactRepairIndex, 'existing POC exact repair must happen before candidate discovery');
 assert.match(runSource, /const openPersonTargets = \(plan\.groups\?\.open \|\| \[\]\)\.filter/);
 assert.match(runSource, /const poc2Targets = openPersonTargets\.filter/);
-assert.match(runSource, /if \(poc2Targets\.length\) \{[\s\S]*?discoverPriorityPeopleFast/);
+assert.match(runSource, /const discoveryTargets = phaseOrdinal === 3 \? poc3Targets : poc2Targets/);
+assert.match(runSource, /if \(discoveryTargets\.length\) \{[\s\S]*?discoverPriorityPeopleFast/);
 const manualPoc2Index = runSource.indexOf('fillManualPriorityGroup(row, plan, companyContext, people, stats');
 const deferPoc2Index = runSource.indexOf('stats.deferredOpenGroups += poc2Targets.length');
 assert.ok(manualPoc2Index >= 0, 'manual POC-2 selector must run');
 assert.ok(deferPoc2Index > manualPoc2Index, 'AI deferral must happen only after manual POC-2 failed');
-assert.match(runSource, /if \(poc3Targets\.length\) \{[\s\S]*?if \(people\.length\)/);
+assert.match(runSource, /if \(\(!phaseOrdinal \|\| phaseOrdinal === 3\) && poc3Targets\.length\) \{[\s\S]*?if \(people\.length\)/);
 
 assert.match(rescueSource, /Number\(item\.group\?\.ordinal \|\| 0\) === wantedOrdinal/);
 assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
@@ -336,7 +339,9 @@ assert.match(rescueSource, /unresolvedContextInput/);
 assert.match(rescueSource, /\? \['groq', 'gemini', 'nvidia'\]/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
 
-assert.match(targetedSource, /resultsFirstSweep: options\.resultsFirstSweep !== false/);
+assert.match(targetedSource, /resultsFirstSweep: runOptions\.resultsFirstSweep !== false/);
+assert.match(targetedSource, /poc-phase-deterministic-only/);
+assert.match(targetedSource, /async function runPocPhasePipeline/);
 assert.match(targetedSource, /ai-skipped-no-verified-candidate-pool/);
 const diagnosticsSource = fs.readFileSync(path.join(root, 'universal-enrichment-diagnostics.js'), 'utf8');
 assert.match(diagnosticsSource, /AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL/);
@@ -346,4 +351,4 @@ assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);
 
-console.log('Universal POC priority self-test passed: the primary sweep is results-first and bounded, unresolved rows enter a deduplicated leftover queue, the live-sheet deterministic recheck gets the full Apollo/LinkedIn company-URN waterfall, AI remains candidate-only, pending phone accounting survives recheck, and POC-3 remains optional.');
+console.log('Universal POC priority self-test passed: enrichment is ordinal-scoped, POC-2 keeps results-first deterministic discovery and deep recheck, POC-3 owns independent discovery/hydration in its dedicated phase, legacy AI remains candidate-only outside phased execution, and pending phone accounting survives rechecks.');
