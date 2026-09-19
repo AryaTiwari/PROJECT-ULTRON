@@ -150,8 +150,14 @@ assert.match(operatorSource, /item\.phoneMode === 'waterfall'/);
 assert.match(operatorSource, /quality\.pollPhoneRequest\(item\.phoneWaterfallRequestId, \{ polls: 0 \}\)/);
 assert.match(operatorSource, /backgroundPhoneKey\(source, item\)/);
 assert.match(contactQualitySource, /originalResolvePersonByBusinessEmail/);
+assert.match(contactQualitySource, /originalResolvePersonProfile/);
+assert.match(contactQualitySource, /apollo\.resolvePersonProfile = async function resultsFirstResolvePersonProfile/);
+assert.match(contactQualitySource, /return improveVerifiedContacts\(result, options\)/);
 assert.match(contactQualitySource, /if \(options\.needPhone !== false\) next = await improveVerifiedPhone\(next\)/);
 assert.match(operatorSource, /Final-POC contact waterfall:/);
+assert.match(operatorSource, /const anchorContactHydrationNeeded = \(!phaseOrdinal \|\| phaseOrdinal === 1\) && anchorNeedsHydration\(plan\)/);
+assert.match(operatorSource, /completeContacts: anchorContactHydrationNeeded/);
+assert.match(operatorSource, /completeContacts: false/);
 
 assert.match(bootstrapSource, /apollo-three-poc-quality/);
 assert.match(bootstrapSource, /three-poc-candidate-discovery-policy/);
