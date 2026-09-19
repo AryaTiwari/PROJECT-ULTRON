@@ -115,13 +115,14 @@ function freshStats() {
   };
 }
 
-function markUnresolved(stats, rowNumber, reason, detail = '') {
+function markUnresolved(stats, rowNumber, reason, detail = '', meta = {}) {
   const row = Number(rowNumber);
   if (Number.isInteger(row) && !stats.unresolvedRows.includes(row)) stats.unresolvedRows.push(row);
   stats.unresolvedReasons.push({
     rowNumber: Number.isInteger(row) ? row : null,
     reason: text(reason || 'unresolved'),
     detail: text(detail).slice(0, 300),
+    ...(meta?.typed ? { typed: meta.typed } : {}),
   });
 }
 
@@ -585,9 +586,26 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         adaptiveBroadCandidateLimit: options.adaptiveBroadCandidateLimit ?? 30,
       });
     } catch (error) {
-      stats.errors.push({ purpose: 'discovery', rowNumber, code: text(error?.code), message: text(error?.message).slice(0, 300) });
+      const typed = base.typedFailureSummary(error, { stage: error?.stage || 'ai-batch-candidate-discovery' });
+      stats.errors.push({
+        purpose: 'discovery',
+        rowNumber,
+        code: typed.code,
+        subsystem: typed.subsystem,
+        type: typed.type,
+        message: typed.message.slice(0, 300),
+      });
       stats.unresolvedSlots += record.targets.length;
-      markUnresolved(stats, rowNumber, 'apollo-discovery-failed', text(error?.message || error));
+      markUnresolved(stats, rowNumber, 'provider-discovery-failed', typed.message, {
+        typed: {
+          code: typed.code,
+          subsystem: typed.subsystem,
+          type: typed.type,
+          stage: typed.stage,
+          message: typed.message,
+          hint: typed.hint,
+        },
+      });
       continue;
     }
 
