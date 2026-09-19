@@ -138,4 +138,4 @@ assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);
 
-console.log('Universal POC priority self-test passed: row evidence resolves hiring employers without AI, existing POCs repair before discovery, POC-2 alone may trigger priority Apollo discovery, POC-3 only reuses an existing POC-2 pool, exact deferred POC-2 rows alone enter AI rescue, and fallback remains POC-2-only.');
+console.log('Universal POC priority self-test passed: row evidence resolves employers without AI, existing POCs repair before discovery, mandatory POC-2 uses targeted -> broad -> brand Apollo discovery then read-only LinkedIn only on total Apollo zero-result, every LinkedIn candidate is Apollo-verified, POC-3 never triggers discovery, and only exact unresolved POC-2 residue may reach AI/last resort.');
