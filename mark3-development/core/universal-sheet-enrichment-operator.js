@@ -1859,7 +1859,8 @@ async function run(request = {}, options = {}) {
           ...rowOptions,
           ordinal: 2,
           claimed: manualClaimed,
-          maxHydrationAttempts: options.poc2HydrationAttempts ?? 3,
+          maxHydrationAttempts: options.poc2HydrationAttempts
+            ?? Number(process.env.ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS || 5),
           fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26,
         });
         writes.push(...result.writes);
