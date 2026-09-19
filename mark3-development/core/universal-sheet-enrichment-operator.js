@@ -1061,7 +1061,7 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
     ? Number(options.rowNumber)
     : null;
   const pushLinkedInDiagnostic = (payload = {}) => {
-    pushLinkedInDiagnostic({
+    stats.discoveryDiagnostics.push({
       ...payload,
       ...(rowNumber != null ? { rowNumber, groupOrdinal: 2 } : {}),
     });
