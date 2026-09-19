@@ -91,6 +91,31 @@ assert.equal(
 );
 
 assert.equal(
+  apollo.hydratedIdentityMatchesCandidate(
+    { id: 'apollo-1', linkedin_url: '' },
+    { id: 'apollo-1', linkedinUrl: 'https://www.linkedin.com/in/example-person/' },
+  ),
+  true,
+  'exact Apollo person-id equality must remain valid when the hydration payload omits linkedin_url',
+);
+assert.equal(
+  apollo.hydratedIdentityMatchesCandidate(
+    { id: 'apollo-1', linkedin_url: 'https://www.linkedin.com/in/different-person/' },
+    { id: 'apollo-1', linkedinUrl: 'https://www.linkedin.com/in/example-person/' },
+  ),
+  false,
+  'conflicting LinkedIn identities must still be rejected even when Apollo ids match',
+);
+assert.equal(
+  apollo.hydratedIdentityMatchesCandidate(
+    { id: 'apollo-2', linkedin_url: '' },
+    { id: 'apollo-1', linkedinUrl: '' },
+  ),
+  false,
+  'different Apollo ids must always be rejected',
+);
+
+assert.equal(
   apollo.hydratedEmployerMatchesCandidate(
     { id: 'apollo-linkedin-current', organization_name: 'Old Employer', organization: {} },
     {
@@ -186,8 +211,11 @@ const runSource = operatorSource.slice(operatorSource.indexOf('async function ru
 const exactRepairIndex = runSource.indexOf('repairExistingGroups(row, plan, companyContext, stats, repairOptions)');
 const prioritySearchIndex = runSource.indexOf('discoverPriorityPeopleFast(companyContext, cache, stats');
 assert.ok(exactRepairIndex >= 0 && prioritySearchIndex > exactRepairIndex, 'existing POC exact repair must happen before candidate discovery');
-assert.match(runSource, /if \(poc2Targets\.length && !aiFallbackEnabled\) \{[\s\S]*?discoverPriorityPeopleFast/);
-assert.match(runSource, /if \(aiFallbackEnabled\) \{[\s\S]*?stats\.deferredOpenGroups/);
+assert.match(runSource, /if \(poc2Targets\.length\) \{[\s\S]*?discoverPriorityPeopleFast/);
+const manualPoc2Index = runSource.indexOf('fillManualPriorityGroup(row, plan, companyContext, people, stats');
+const deferPoc2Index = runSource.indexOf('stats.deferredOpenGroups += poc2Targets.length');
+assert.ok(manualPoc2Index >= 0, 'manual POC-2 selector must run');
+assert.ok(deferPoc2Index > manualPoc2Index, 'AI deferral must happen only after manual POC-2 failed');
 assert.match(runSource, /if \(poc3Targets\.length\) \{[\s\S]*?if \(people\.length\)/);
 
 assert.match(rescueSource, /Number\(item\.group\?\.ordinal \|\| 0\) === wantedOrdinal/);
@@ -203,4 +231,4 @@ assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);
 
-console.log('Universal POC priority self-test passed: existing POCs repair deterministically, empty POC-2 skips redundant manual hydration when batch AI is enabled, sparse-company discovery escalates Apollo -> LinkedIn company employees -> exact profile verification, empty discovery is not cached, LinkedIn current-employer proof can safely override stale Apollo org metadata for the exact identity, and POC-3 remains optional.');
+console.log('Universal POC priority self-test passed: POC-2 is manual-first even when batch AI is enabled, employer identity uses one canonical matcher across ranking and Apollo hydration, exact Apollo id hydration survives omitted LinkedIn URLs but rejects conflicting identities, sparse-company discovery escalates safely, and POC-3 remains optional.');
