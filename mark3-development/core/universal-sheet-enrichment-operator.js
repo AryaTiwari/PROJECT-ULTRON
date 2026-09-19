@@ -9,6 +9,9 @@ const config = require('./config');
 const sheets = require('./google-sheets-operator');
 const apollo = require('./apollo-enrichment');
 const linkedinMcp = require('./linkedin-mcp-client');
+const linkedinPublic = require('./linkedin-public-research');
+const leadSources = require('./lead-source-fusion');
+const web = require('./web');
 const schemaTools = require('./universal-sheet-schema');
 const planner = require('./universal-enrichment-planner');
 const ranker = require('./universal-authority-ranker');
@@ -1212,6 +1215,168 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
   return verified;
 }
 
+
+function publicIndexFallbackEnabled(options = {}) {
+  if (options.publicIndexFallback === false) return false;
+  return !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_PUBLIC_INDEX_FALLBACK ?? '1').trim());
+}
+
+function publicIndexQueries(companyContext = {}) {
+  const company = text(companyContext?.company || companyContext?.domain || '').replace(/"/g, '').trim();
+  if (!company) return [];
+  return [
+    `site:linkedin.com/in "${company}" recruiter`,
+    `site:linkedin.com/in "${company}" "talent acquisition"`,
+    `site:linkedin.com/in "${company}" "human resources" OR HR`,
+    `site:linkedin.com/in "${company}" founder OR owner OR director OR manager`,
+  ];
+}
+
+function publicIndexRecord(item, location = '') {
+  const parsed = linkedinPublic.parseResult({
+    title: item?.title || '',
+    snippet: item?.snippet || item?.description || '',
+    url: item?.url || item?.link || '',
+  }, { entityMode: 'person', location });
+  if (!parsed?.linkedin) return null;
+  return parsed;
+}
+
+async function verifyPublicIndexPerson(record, companyContext, stats) {
+  const linkedinUrl = apollo.normalizeLinkedIn(record?.linkedin || record?.url || '');
+  if (!linkedinUrl) return null;
+  stats.publicIndexApolloVerificationAttempts = Number(stats.publicIndexApolloVerificationAttempts || 0) + 1;
+
+  let person = null;
+  try {
+    person = await apollo.resolvePersonProfile(linkedinUrl, {
+      needEmail: false,
+      needPhone: false,
+      force: true,
+    });
+  } catch (error) {
+    stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
+    stats.discoveryDiagnostics.push({
+      company: companyContext?.company || companyContext?.domain || '',
+      code: String(error?.code || 'PUBLIC_INDEX_APOLLO_VERIFY_FAILED'),
+      subsystem: 'APOLLO',
+      type: String(error?.errorType || 'API'),
+      stage: 'public-index-apollo-verification',
+      message: String(error?.message || error || '').slice(0, 300),
+    });
+    return null;
+  }
+
+  if (!person || person.noMatch || person.ambiguous || person.identityVerified === false) return null;
+  if (!apollo.sameOrganization(
+    person,
+    companyContext?.company || '',
+    companyContext?.domain || '',
+  )) return null;
+
+  const apolloPersonId = text(person.apolloPersonId || person.id);
+  const title = text(person.title || record?.role);
+  if (!apolloPersonId || !title) return null;
+
+  return {
+    id: apolloPersonId,
+    apolloPersonId,
+    name: text(person.name || record?.name),
+    title,
+    headline: text(person.headline || record?.snippet),
+    linkedinUrl,
+    organizationName: text(person.organizationName || person.organization?.name || companyContext?.company),
+    organizationDomain: websiteDomain(
+      person.organizationDomain
+      || person.organization?.primary_domain
+      || person.organization?.domain
+      || companyContext?.domain
+      || ''
+    ),
+    seniority: text(person.seniority),
+    departments: Array.isArray(person.departments) ? person.departments : [],
+    functions: Array.isArray(person.functions) ? person.functions : [],
+    publicIndexCandidate: true,
+    publicIndexApolloVerified: true,
+  };
+}
+
+async function discoverPublicIndexPeople(companyContext, stats, options = {}) {
+  if (!publicIndexFallbackEnabled(options)) return [];
+  const queries = publicIndexQueries(companyContext);
+  if (!queries.length) return [];
+
+  const refs = new Map();
+  const addItems = (items, provider) => {
+    for (const item of Array.isArray(items) ? items : []) {
+      const record = publicIndexRecord(item, options.location || '');
+      if (!record?.linkedin) continue;
+      if (!refs.has(record.linkedin)) refs.set(record.linkedin, { ...record, publicIndexProvider: provider });
+    }
+  };
+
+  const serpReady = Boolean(leadSources.status()?.serpApiConfigured);
+  if (serpReady) {
+    for (const query of queries) {
+      if (refs.size >= 12) break;
+      try {
+        const result = await leadSources.serpSearch(query, { limit: 10, timeoutMs: 15000 });
+        stats.publicIndexSearchCalls = Number(stats.publicIndexSearchCalls || 0) + 1;
+        addItems(result?.results, 'serpapi-google');
+      } catch (error) {
+        stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
+        stats.discoveryDiagnostics.push({
+          company: companyContext?.company || companyContext?.domain || '',
+          code: String(error?.code || 'SERP_PUBLIC_LINKEDIN_SEARCH_FAILED'),
+          subsystem: 'SERPAPI',
+          type: String(error?.errorType || 'API'),
+          stage: 'public-linkedin-index-search',
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
+    }
+  }
+
+  if (!refs.size && web.status()?.configured) {
+    for (const query of queries.slice(0, 3)) {
+      if (refs.size >= 12) break;
+      try {
+        const result = await web.searchWeb(query, { limit: 10, timeoutMs: 12000 });
+        stats.publicIndexSearchCalls = Number(stats.publicIndexSearchCalls || 0) + 1;
+        addItems(result?.results, 'tinyfish-search');
+      } catch (error) {
+        stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
+        stats.discoveryDiagnostics.push({
+          company: companyContext?.company || companyContext?.domain || '',
+          code: String(error?.code || 'TINYFISH_PUBLIC_LINKEDIN_SEARCH_FAILED'),
+          subsystem: 'TINYFISH',
+          type: String(error?.errorType || 'API'),
+          stage: 'public-linkedin-index-search',
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
+    }
+  }
+
+  const records = [...refs.values()].slice(0, integer(
+    options.publicIndexVerifyLimit ?? process.env.ULTRON_M3_UNIVERSAL_PUBLIC_INDEX_VERIFY_LIMIT,
+    8,
+    1,
+    12,
+  ));
+  stats.publicIndexProfilesFound = Number(stats.publicIndexProfilesFound || 0) + records.length;
+  if (!records.length) return [];
+
+  const verified = [];
+  for (const record of records) {
+    const candidate = await verifyPublicIndexPerson(record, companyContext, stats);
+    if (!candidate) continue;
+    verified.push(candidate);
+  }
+  stats.publicIndexApolloVerifiedCandidates = Number(stats.publicIndexApolloVerifiedCandidates || 0) + verified.length;
+  return verified;
+}
+
 async function hydrateDecisionMakerVerified(candidate, companyContext, stats, options = {}) {
   const needEmail = options.needEmail !== false;
   const needPhone = options.needPhone !== false;
@@ -1422,12 +1587,41 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     }
   }
 
-  // 5. True zero-result fallback: one authenticated read-only LinkedIn people
-  // search. LinkedIn only supplies profile references; Apollo still owns exact
-  // identity/employer verification before these candidates can be selected.
+  // 5. Authenticated LinkedIn is useful but no longer a single point of failure.
+  // A local/account safety stop is recorded, then public-index discovery may
+  // continue without touching the authenticated LinkedIn session.
   if (!merged.length && linkedinZeroResultFallbackEnabled(options)) {
-    const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, options);
-    add(linkedinPeople);
+    try {
+      const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, options);
+      add(linkedinPeople);
+    } catch (error) {
+      const typed = typedFailureSummary(error, { stage: error?.stage || 'authenticated-linkedin-discovery' });
+      const alreadyRecorded = (stats.discoveryDiagnostics || []).some((item) =>
+        text(item?.code).toUpperCase() === text(typed.code).toUpperCase()
+        && Number(item?.rowNumber) === Number(options.rowNumber)
+      );
+      if (!alreadyRecorded) {
+        stats.discoveryDiagnostics.push({
+          rowNumber: options.rowNumber,
+          groupOrdinal: 2,
+          company: company || domain,
+          code: typed.code,
+          subsystem: typed.subsystem,
+          type: typed.type,
+          stage: typed.stage,
+          message: typed.message,
+          hint: typed.hint,
+        });
+      }
+    }
+  }
+
+  // 6. Public-index emergency fallback. SerpApi is preferred; TinyFish is used
+  // when configured and SerpApi yields no profile references. Every candidate
+  // must still survive exact Apollo identity + employer verification.
+  if (!merged.length && publicIndexFallbackEnabled(options)) {
+    const publicPeople = await discoverPublicIndexPeople(companyContext, stats, options);
+    add(publicPeople);
   }
 
   stats.candidatesDiscovered += merged.length;
@@ -1822,6 +2016,11 @@ function freshStats() {
     linkedinFallbackFailures: 0,
     linkedinFallbackProfilesFound: 0,
     linkedinFallbackVerifiedCandidates: 0,
+    publicIndexSearchCalls: 0,
+    publicIndexProfilesFound: 0,
+    publicIndexApolloVerificationAttempts: 0,
+    publicIndexApolloVerifiedCandidates: 0,
+    publicIndexFailures: 0,
     linkedinHydrationRecoveryAttempts: 0,
     linkedinHydrationRecoverySuccesses: 0,
     linkedinHydrationRecoveryFailures: 0,
@@ -1931,6 +2130,8 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
     'linkedinFallbackCompanySearches','linkedinFallbackCompanyProfiles','linkedinFallbackCompanyUrns',
     'linkedinFallbackCurrentCompanySearches','linkedinFallbackEmployeeSearches','linkedinFallbackProfileVerifications',
     'linkedinFallbackFailures','linkedinFallbackProfilesFound','linkedinFallbackVerifiedCandidates',
+    'publicIndexSearchCalls','publicIndexProfilesFound','publicIndexApolloVerificationAttempts',
+    'publicIndexApolloVerifiedCandidates','publicIndexFailures',
     'linkedinHydrationRecoveryAttempts','linkedinHydrationRecoverySuccesses','linkedinHydrationRecoveryFailures',
     'postHydrationDuplicates','existingVerificationAttempts','existingGroupsRepaired','embeddedDesignationWrites',
     'newPeopleSelected','hydrationAttempts','hydrationFailures','manualPoc2Attempts','manualPoc2Filled',
@@ -2332,7 +2533,7 @@ function formatResult(result) {
   const haltText = s.haltError
     ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
     : '';
-  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally; ${(schema.continuityRecoveries || []).length} contact groups recovered by explicit schema continuity. Header continuity repair: ${s.headerRepairsWritten || 0}/${s.headerRepairsPlanned || 0} missing headers restored into blank cells, ${s.headerRepairsSkippedPopulated || 0} skipped because populated. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} contact cells across ${s.rowsChanged} data rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); LinkedIn fallback ${s.linkedinFallbackCompanySearches || 0} company searches, ${s.linkedinFallbackCompanyProfiles || 0} company profiles, ${s.linkedinFallbackCompanyUrns || 0} company URNs, ${s.linkedinFallbackCurrentCompanySearches || 0} current-company people searches, ${s.linkedinFallbackEmployeeSearches || 0} employee-page searches, ${s.linkedinFallbackSearches || 0} generic people searches, ${s.linkedinFallbackProfilesFound || 0} profile refs, ${s.linkedinFallbackVerifiedCandidates || 0} Apollo-verified candidates, ${s.linkedinFallbackFailures || 0} failures; ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; exact LinkedIn employer recovery ${s.linkedinHydrationRecoverySuccesses || 0}/${s.linkedinHydrationRecoveryAttempts || 0} succeeded (${s.linkedinHydrationRecoveryFailures || 0} failed); ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts (business-email exact match preferred when available), ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Final-POC contact waterfall: phone ${contactQuality.phoneWaterfallStarted || 0} started/${contactQuality.phoneWaterfallSucceeded || 0} found/${contactQuality.phoneWaterfallPending || 0} pending/${contactQuality.phoneWaterfallNotFound || 0} not-found/${contactQuality.phoneWaterfallUnavailable || 0} unavailable/${contactQuality.phoneWaterfallBudgetSkips || 0} budget-skipped; email ${contactQuality.waterfallStarted || 0} started/${contactQuality.waterfallSucceeded || 0} found/${contactQuality.waterfallPending || 0} pending/${contactQuality.waterfallBudgetSkips || 0} budget-skipped. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked; resumed ${s.resumedPhoneAssignments || 0} persisted callback assignments from earlier runs, resolved ${s.resumedPhoneResolved || 0}, wrote ${s.resumedPhoneCellsFilled || 0} recovered phone cells; ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Priority routing: POC-1 exact anchor completion always runs first; existing POC-2 exact repair runs deterministically; empty POC-2 manual hydration attempts ${s.manualPoc2Attempts || 0} (skipped when batch AI owns selection), manual fills ${s.manualPoc2Filled || 0}, unresolved POC-2 deferred to AI ${s.deferredOpenGroups || 0} across ${(s.deferredPoc2Rows || []).length} exact rows; optional POC-3 manual attempts ${s.manualPoc3Attempts || 0}, strong-confidence fills ${s.manualPoc3Filled || 0}, left optional ${s.optionalPoc3Deferred || 0}. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; row-evidence employers resolved ${s.rowEvidenceEmployersResolved || 0}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. Results-first routing: fast sweep deferred ${(s.primarySweepDeferredRows || []).length} row${(s.primarySweepDeferredRows || []).length === 1 ? '' : 's'}; deterministic leftover recheck ${s.deterministicRecheckAttempted ? `ran on ${(s.deterministicRecheckRows || []).length} row${(s.deterministicRecheckRows || []).length === 1 ? '' : 's'}; mandatory blockers remaining [${(s.deterministicRecheckRemainingMandatoryRows || []).join(', ') || 'none'}]; contact-repair residue [${(s.deterministicRecheckRemainingRepairRows || []).join(', ') || 'none'}]; other warning/pending residue [${(s.deterministicRecheckRemainingWarningRows || []).join(', ') || 'none'}]` : 'was not needed'}. Diagnostics: ${diagnostics.uniqueIssues([...(diagnostics.classifyLeftovers(s.leftoverQueue || []).issues || []), ...diagnostics.runtimeIssues(s)]).map(diagnostics.formatIssue).join(' | ') || '[INFO] NO_ACTIVE_ENRICHMENT_ISSUES: no unresolved deterministic issues recorded.'} AI/model calls: 0.`;
+  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally; ${(schema.continuityRecoveries || []).length} contact groups recovered by explicit schema continuity. Header continuity repair: ${s.headerRepairsWritten || 0}/${s.headerRepairsPlanned || 0} missing headers restored into blank cells, ${s.headerRepairsSkippedPopulated || 0} skipped because populated. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} contact cells across ${s.rowsChanged} data rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); LinkedIn fallback ${s.linkedinFallbackCompanySearches || 0} company searches, ${s.linkedinFallbackCompanyProfiles || 0} company profiles, ${s.linkedinFallbackCompanyUrns || 0} company URNs, ${s.linkedinFallbackCurrentCompanySearches || 0} current-company people searches, ${s.linkedinFallbackEmployeeSearches || 0} employee-page searches, ${s.linkedinFallbackSearches || 0} generic people searches, ${s.linkedinFallbackProfilesFound || 0} profile refs, ${s.linkedinFallbackVerifiedCandidates || 0} Apollo-verified candidates, ${s.linkedinFallbackFailures || 0} failures; public-index fallback ${s.publicIndexSearchCalls || 0} searches, ${s.publicIndexProfilesFound || 0} LinkedIn profile refs, ${s.publicIndexApolloVerificationAttempts || 0} Apollo verification attempts, ${s.publicIndexApolloVerifiedCandidates || 0} exact verified candidates, ${s.publicIndexFailures || 0} failures; ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; exact LinkedIn employer recovery ${s.linkedinHydrationRecoverySuccesses || 0}/${s.linkedinHydrationRecoveryAttempts || 0} succeeded (${s.linkedinHydrationRecoveryFailures || 0} failed); ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts (business-email exact match preferred when available), ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Final-POC contact waterfall: phone ${contactQuality.phoneWaterfallStarted || 0} started/${contactQuality.phoneWaterfallSucceeded || 0} found/${contactQuality.phoneWaterfallPending || 0} pending/${contactQuality.phoneWaterfallNotFound || 0} not-found/${contactQuality.phoneWaterfallUnavailable || 0} unavailable/${contactQuality.phoneWaterfallBudgetSkips || 0} budget-skipped; email ${contactQuality.waterfallStarted || 0} started/${contactQuality.waterfallSucceeded || 0} found/${contactQuality.waterfallPending || 0} pending/${contactQuality.waterfallBudgetSkips || 0} budget-skipped. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked; resumed ${s.resumedPhoneAssignments || 0} persisted callback assignments from earlier runs, resolved ${s.resumedPhoneResolved || 0}, wrote ${s.resumedPhoneCellsFilled || 0} recovered phone cells; ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Priority routing: POC-1 exact anchor completion always runs first; existing POC-2 exact repair runs deterministically; empty POC-2 manual hydration attempts ${s.manualPoc2Attempts || 0} (skipped when batch AI owns selection), manual fills ${s.manualPoc2Filled || 0}, unresolved POC-2 deferred to AI ${s.deferredOpenGroups || 0} across ${(s.deferredPoc2Rows || []).length} exact rows; optional POC-3 manual attempts ${s.manualPoc3Attempts || 0}, strong-confidence fills ${s.manualPoc3Filled || 0}, left optional ${s.optionalPoc3Deferred || 0}. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; row-evidence employers resolved ${s.rowEvidenceEmployersResolved || 0}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. Results-first routing: fast sweep deferred ${(s.primarySweepDeferredRows || []).length} row${(s.primarySweepDeferredRows || []).length === 1 ? '' : 's'}; deterministic leftover recheck ${s.deterministicRecheckAttempted ? `ran on ${(s.deterministicRecheckRows || []).length} row${(s.deterministicRecheckRows || []).length === 1 ? '' : 's'}; mandatory blockers remaining [${(s.deterministicRecheckRemainingMandatoryRows || []).join(', ') || 'none'}]; contact-repair residue [${(s.deterministicRecheckRemainingRepairRows || []).join(', ') || 'none'}]; other warning/pending residue [${(s.deterministicRecheckRemainingWarningRows || []).join(', ') || 'none'}]` : 'was not needed'}. Diagnostics: ${diagnostics.uniqueIssues([...(diagnostics.classifyLeftovers(s.leftoverQueue || []).issues || []), ...diagnostics.runtimeIssues(s)]).map(diagnostics.formatIssue).join(' | ') || '[INFO] NO_ACTIVE_ENRICHMENT_ISSUES: no unresolved deterministic issues recorded.'} AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -2373,6 +2574,11 @@ module.exports = {
   linkedinCompanyProfileMatches,
   discoverLinkedInFallbackPeople,
   verifyLinkedInCompanyEmployee,
+  publicIndexFallbackEnabled,
+  publicIndexQueries,
+  publicIndexRecord,
+  verifyPublicIndexPerson,
+  discoverPublicIndexPeople,
   hydrateDecisionMakerVerified,
   discoverPriorityPeopleFast,
   pragmaticSameEmployerCandidates,
