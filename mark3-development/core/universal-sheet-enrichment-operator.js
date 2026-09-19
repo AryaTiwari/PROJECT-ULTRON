@@ -2342,6 +2342,7 @@ function freshStats() {
     manualPoc3Attempts: 0,
     manualPoc3Filled: 0,
     optionalPoc3Deferred: 0,
+    requestedPoc3Deferred: 0,
     unfilledOpenGroups: 0,
     orphanContactTargets: 0,
     orphanContactVerified: 0,
@@ -2413,7 +2414,7 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
     'postHydrationDuplicates','existingVerificationAttempts','existingPublicIndexSearches',
     'existingPublicIndexVerificationAttempts','existingPublicIndexVerified','existingGroupsRepaired','embeddedDesignationWrites',
     'newPeopleSelected','hydrationAttempts','hydrationFailures','manualPoc2Attempts','manualPoc2Filled',
-    'manualPoc3Attempts','manualPoc3Filled','optionalPoc3Deferred','orphanContactTargets','orphanContactVerified',
+    'manualPoc3Attempts','manualPoc3Filled','optionalPoc3Deferred','requestedPoc3Deferred','orphanContactTargets','orphanContactVerified',
     'orphanContactBlocked','orphanContactMismatches','phoneCellsFilled','phoneRowsChanged','phoneNotFound',
     'phoneWriteSkippedPopulated','phoneSyncPolls','phoneSyncErrors'
   ];
@@ -2481,6 +2482,8 @@ async function run(request = {}, options = {}) {
   const phaseOrdinals = phaseOrdinal ? [phaseOrdinal] : null;
   stats.contactPhaseOrdinal = phaseOrdinal;
   stats.contactPhaseLabel = phaseOrdinal ? `POC-${phaseOrdinal}` : 'ALL';
+  const requestedPersonGroups = Number(options.expectedPersonGroups || options.schema?.expectedPersonGroups || 0);
+  const requestedPoc3 = !phaseOrdinal && requestedPersonGroups >= 3;
 
   if (!internalRecheck) {
     // Resume Apollo phone callbacks from earlier runs/restarts before doing new
@@ -2721,9 +2724,11 @@ async function run(request = {}, options = {}) {
         }
       }
 
-      // POC-3 gets exactly one cheap manual hydration opportunity from the same
-      // discovery pool. No extra discovery and no AI rescue unless explicitly enabled.
+      // POC-3 normally gets a bounded cheap attempt. When the user explicitly
+      // requested a 3-POC result, an unresolved POC-3 must also enter the deep
+      // results-first leftover pass instead of being silently treated as optional.
       if ((!phaseOrdinal || phaseOrdinal === 3) && poc3Targets.length) {
+        let poc3Filled = false;
         if (people.length) {
           stats.manualPoc3Attempts += poc3Targets.length;
           const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
@@ -2735,10 +2740,25 @@ async function run(request = {}, options = {}) {
             fallbackMinimumScore: options.poc3FallbackMinimumScore ?? ((!phaseOrdinal || phaseOrdinal === 3) ? 30 : 42),
           });
           writes.push(...result.writes);
-          if (result.filled) stats.manualPoc3Filled++;
-          else stats.optionalPoc3Deferred += poc3Targets.length;
-        } else {
-          stats.optionalPoc3Deferred += poc3Targets.length;
+          if (result.filled) {
+            stats.manualPoc3Filled++;
+            poc3Filled = true;
+          }
+        }
+
+        if (!poc3Filled) {
+          if (requestedPoc3) {
+            stats.requestedPoc3Deferred += poc3Targets.length;
+            markLeftover(stats, rowNumber, 'requested-poc3-unresolved', {
+              groupOrdinal: 3,
+              company: companyContext.company,
+              detail: options.resultsFirstSweep
+                ? 'Requested POC-3 deferred to deep deterministic discovery after the fast sweep.'
+                : 'Requested POC-3 remains unresolved after the deep deterministic pass.',
+            });
+          } else {
+            stats.optionalPoc3Deferred += poc3Targets.length;
+          }
         }
       }
 
