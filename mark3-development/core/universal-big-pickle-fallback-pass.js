@@ -109,13 +109,16 @@ async function employerFallback(plan, options, stats) {
 }
 
 async function companyContextFor(plan, row, options, stats) {
-  let context = null;
+  let anchorContext = null;
   if (plan.anchor?.type === 'company') {
-    context = base.companyFromCompanyAnchor(plan.anchor);
+    anchorContext = base.companyFromCompanyAnchor(plan.anchor);
   } else {
-    try { context = await base.resolvePersonAnchor(plan, row, options); } catch {}
+    try { anchorContext = await base.resolvePersonAnchor(plan, row, options); } catch {}
   }
-  if (context && !context.unresolved && context.company) return context;
+
+  const evidenceContext = base.preferredHiringCompanyContext(plan, row, anchorContext);
+  if (evidenceContext?.company || evidenceContext?.domain) return evidenceContext;
+
   return employerFallback(plan, options, stats);
 }
 
