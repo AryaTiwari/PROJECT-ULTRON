@@ -775,6 +775,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   }
 
   const pendingPhoneQueue = [];
+  const pendingEmailQueue = [];
   const changedRows = new Set();
 
   for (const [rowNumber, pkg] of rowPackages.entries()) {
@@ -864,17 +865,19 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           continue;
         }
 
-        const queueBefore = pendingPhoneQueue.length;
+        const phoneQueueBefore = pendingPhoneQueue.length;
+        const emailQueueBefore = pendingEmailQueue.length;
         base.queuePendingPhone(
-          { pendingPhoneQueue },
+          { pendingPhoneQueue, pendingEmailQueue },
           rowNumber,
           assignment.target.group,
           assignment.target.snapshot,
           person,
         );
-        const queuedPendingPhone = pendingPhoneQueue.length > queueBefore;
+        const queuedPendingPhone = pendingPhoneQueue.length > phoneQueueBefore;
+        const queuedPendingEmail = pendingEmailQueue.length > emailQueueBefore;
 
-        if (!writePlan.writes.length && !queuedPendingPhone) {
+        if (!writePlan.writes.length && !queuedPendingPhone && !queuedPendingEmail) {
           stats.aiSelectionRejects++;
           continue;
         }
@@ -907,7 +910,12 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           reason: assignment.reason,
           fields: writePlan.writes.length
             ? writePlan.writes.map((write) => write.field)
-            : (queuedPendingPhone ? ['phone-pending'] : []),
+            : (queuedPendingPhone || queuedPendingEmail
+              ? [
+                  ...(queuedPendingPhone ? ['phone-pending'] : []),
+                  ...(queuedPendingEmail ? ['email-pending'] : []),
+                ]
+              : []),
         });
 
         claimed.add(claimKey);
@@ -940,6 +948,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   } catch (error) {
     stats.phoneSyncErrors++;
     stats.phoneSyncLastError = base.typedFailureSummary(error, { stage: 'ai-batch-phone-result-sync' });
+  }
+  try {
+    await base.syncPendingEmailAssignments(source, pendingEmailQueue, stats, options);
+  } catch {
+    stats.emailSyncErrors = Number(stats.emailSyncErrors || 0) + 1;
   }
 
   return stats;
