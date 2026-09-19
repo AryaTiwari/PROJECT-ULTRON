@@ -634,9 +634,18 @@ function hydratedEmployerMatchesCandidate(person, candidate = {}, company = '', 
     if (sameOrganization(person, ctx.discoveredCompany, ctx.discoveredDomain)) return true;
   }
 
+  // Authenticated LinkedIn current-experience evidence is fresher than Apollo's
+  // employer metadata. Trust it only when the candidate itself was explicitly
+  // verified on LinkedIn against the requested employer.
+  if (
+    candidate.linkedinEmployerVerified === true
+    && sameOrganization(candidate, ctx.requestedCompany, ctx.requestedDomain)
+  ) return true;
+
   // Candidate came from an employer-constrained Apollo search. If its discovered
   // employer matches the requested employer, tolerate missing hydrated org metadata,
-  // but never tolerate a clearly different hydrated organization.
+  // but never tolerate a clearly different hydrated organization unless LinkedIn
+  // explicitly verified the current employer above.
   const candidateMatchesRequested = sameOrganization(candidate, ctx.requestedCompany, ctx.requestedDomain);
   const hydratedOrg = personOrganization(person);
   const hydratedHasOrg = Boolean(hydratedOrg.organizationName || hydratedOrg.organizationDomain);
@@ -662,7 +671,8 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
   const data = await apiCall({ id: candidate.id }, { needPhone });
   const person = data.person;
   const linkedinUrl = normalizeLinkedIn(person?.linkedin_url);
-  if (!person || String(person.id) !== String(candidate.id) || !linkedinUrl) {
+  const candidateLinkedin = normalizeLinkedIn(candidate.linkedinUrl || candidate.linkedin_url || '');
+  if (!person || String(person.id) !== String(candidate.id) || !linkedinUrl || (candidateLinkedin && candidateLinkedin !== linkedinUrl)) {
     const error = new Error('APOLLO_IDENTITY_MISMATCH');
     error.code = 'APOLLO_IDENTITY_MISMATCH';
     throw error;
