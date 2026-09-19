@@ -1185,10 +1185,26 @@ async function run(request = {}, options = {}) {
     if (!plan.anchor) { stats.rowsWithoutAnchor++; continue; }
 
     try {
-      const anchorCompanyContext = plan.anchor.type === 'company'
+      let anchorCompanyContext = plan.anchor.type === 'company'
         ? companyFromCompanyAnchor(plan.anchor)
-        : await resolvePersonAnchor(plan, row, options);
-      const companyContext = preferredHiringCompanyContext(plan, row, anchorCompanyContext);
+        : await resolvePersonAnchor(plan, row, { ...options, allowLinkedInEmployerFallback: false });
+
+      let companyContext = inferHiringCompanyFromEvidence(plan, row)
+        || (anchorCompanyContext && !anchorCompanyContext.unresolved && anchorCompanyContext.company ? anchorCompanyContext : null);
+
+      // LinkedIn employer scraping is the slow fallback, never the default. Use it
+      // only when neither row evidence nor Apollo's exact anchor profile resolved
+      // a usable hiring organization.
+      if (!companyContext?.company && plan.anchor.type === 'person') {
+        try {
+          const linkedinEmployerContext = await resolvePersonAnchor(plan, row, { ...options, allowLinkedInEmployerFallback: true });
+          if (linkedinEmployerContext?.company) companyContext = linkedinEmployerContext;
+          if (!anchorCompanyContext?.anchorPerson && linkedinEmployerContext?.anchorPerson) {
+            anchorCompanyContext = linkedinEmployerContext;
+          }
+        } catch {}
+      }
+
       if (companyContext?.source && /^row-/.test(companyContext.source)) stats.rowEvidenceEmployersResolved++;
       const writes = [];
       const fillTargets = candidateFillTargets(plan);
