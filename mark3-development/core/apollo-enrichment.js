@@ -543,6 +543,44 @@ async function apiCall(linkedinUrl, { needPhone }) {
   throw lastError || new Error('Apollo enrichment failed.');
 }
 
+function candidateEmployerContext(candidate = {}, company = '', domain = '') {
+  const discoveredCompany = String(
+    candidate.organizationName
+    || candidate.organization_name
+    || candidate.organization?.name
+    || ''
+  ).trim();
+  const discoveredDomain = hostname(
+    candidate.organizationDomain
+    || candidate.organization?.website_url
+    || candidate.organization?.primary_domain
+    || candidate.organization?.domain
+    || ''
+  );
+  return {
+    requestedCompany: String(company || '').trim(),
+    requestedDomain: hostname(domain),
+    discoveredCompany,
+    discoveredDomain,
+  };
+}
+
+function hydratedEmployerMatchesCandidate(person, candidate = {}, company = '', domain = '') {
+  const ctx = candidateEmployerContext(candidate, company, domain);
+  if (sameOrganization(person, ctx.requestedCompany, ctx.requestedDomain)) return true;
+  if (ctx.discoveredCompany || ctx.discoveredDomain) {
+    if (sameOrganization(person, ctx.discoveredCompany, ctx.discoveredDomain)) return true;
+  }
+
+  // Candidate came from an employer-constrained Apollo search. If its discovered
+  // employer matches the requested employer, tolerate missing hydrated org metadata,
+  // but never tolerate a clearly different hydrated organization.
+  const candidateMatchesRequested = sameOrganization(candidate, ctx.requestedCompany, ctx.requestedDomain);
+  const hydratedOrg = personOrganization(person);
+  const hydratedHasOrg = Boolean(hydratedOrg.organizationName || hydratedOrg.organizationDomain);
+  return Boolean(candidateMatchesRequested && !hydratedHasOrg);
+}
+
 async function resolveDecisionMaker(candidate, company, domain, options = {}) {
   if (!candidate.id) return { ...candidate, identityVerified: Boolean(normalizeLinkedIn(candidate.linkedinUrl)) };
 
@@ -555,16 +593,28 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
     && satisfies(p, { needEmail, needPhone })
   );
 
-  if (cached && sameOrganization(cached[1], company, domain)) {
+  if (cached && hydratedEmployerMatchesCandidate(cached[1], candidate, company, domain)) {
     return { ...candidate, ...cached[1], linkedinUrl: cached[0], identityVerified: true };
   }
 
   const data = await apiCall({ id: candidate.id }, { needPhone });
   const person = data.person;
   const linkedinUrl = normalizeLinkedIn(person?.linkedin_url);
-  if (!person || String(person.id) !== String(candidate.id) || !linkedinUrl || !sameOrganization(person, company, domain)) {
-    const error = new Error('APOLLO_IDENTITY_OR_COMPANY_MISMATCH');
-    error.code = 'APOLLO_IDENTITY_OR_COMPANY_MISMATCH';
+  if (!person || String(person.id) !== String(candidate.id) || !linkedinUrl) {
+    const error = new Error('APOLLO_IDENTITY_MISMATCH');
+    error.code = 'APOLLO_IDENTITY_MISMATCH';
+    throw error;
+  }
+  if (!hydratedEmployerMatchesCandidate(person, candidate, company, domain)) {
+    const error = new Error('APOLLO_COMPANY_MISMATCH_AFTER_HYDRATION');
+    error.code = 'APOLLO_COMPANY_MISMATCH_AFTER_HYDRATION';
+    error.requestedCompany = String(company || '');
+    error.requestedDomain = hostname(domain);
+    error.candidateOrganizationName = String(candidate.organizationName || candidate.organization_name || '');
+    error.candidateOrganizationDomain = hostname(candidate.organizationDomain || '');
+    const hydrated = personOrganization(person);
+    error.hydratedOrganizationName = hydrated.organizationName;
+    error.hydratedOrganizationDomain = hydrated.organizationDomain;
     throw error;
   }
 
@@ -849,6 +899,8 @@ module.exports = {
   fetchApolloResponse,
   apolloBodyReadError,
   searchCompanyPeopleBroad,
+  candidateEmployerContext,
+  hydratedEmployerMatchesCandidate,
   resolveDecisionMaker,
   resolvePersonByNameCompany,
   readCache,
