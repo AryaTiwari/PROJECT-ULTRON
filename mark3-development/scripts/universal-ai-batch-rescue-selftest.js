@@ -165,9 +165,11 @@ assert.match(controllerSource, /Existing\/partial POC-2 remains deterministic ex
 assert.match(controllerSource, /EMPTY POC-2/);
 assert.match(controllerSource, /runs deterministic manual priority\/hydration first/);
 assert.match(controllerSource, /Only rows that remain empty after manual verification are deferred to bounded AI rescue/);
-assert.match(controllerSource, /targeted Apollo, bounded broad Apollo, and one brand-keyword Apollo retry/);
-assert.match(controllerSource, /authenticated read-only LinkedIn company\/people discovery/);
-assert.match(controllerSource, /Manual deterministic candidate selection and hydration always run before bounded AI/);
+assert.match(controllerSource, /results-first waterfall: targeted Apollo -> bounded broad Apollo -> brand\/domain variants -> authenticated read-only LinkedIn/);
+assert.match(controllerSource, /pragmatic same-company HR\/talent\/staffing\/placement\/people\/leadership fallback/);
+assert.match(controllerSource, /FINAL verified POC whose phone is still blank/);
+assert.match(controllerSource, /phone waterfall with poll_only\/request-id polling/);
+assert.match(controllerSource, /never waterfalls discovery candidates/);
 assert.match(controllerSource, /Selection prefers Groq, then Gemini, then NVIDIA on failure/);
 assert.match(controllerSource, /OmniRoute is not used by the direct batch path/);
 
