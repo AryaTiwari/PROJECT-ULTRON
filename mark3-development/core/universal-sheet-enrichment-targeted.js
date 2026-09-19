@@ -310,6 +310,128 @@ function providerRetryReasonsFromPrimary(stats = {}) {
   return reasons;
 }
 
+function mergePocPhaseResults(results = []) {
+  const completed = (Array.isArray(results) ? results : []).filter(Boolean);
+  if (!completed.length) return null;
+  const last = completed[completed.length - 1];
+  const stats = { ...(last.stats || {}) };
+
+  const additive = [
+    'rowsChanged','cellsChanged','anchorFieldsFilled','candidateSearches','candidateBroadSearches',
+    'candidatePrioritySearches','candidatePrioritySearchFailures','candidateCacheHits','candidatesDiscovered',
+    'linkedinFallbackSearches','linkedinFallbackCompanySearches','linkedinFallbackCompanyProfiles',
+    'linkedinFallbackCompanyUrns','linkedinFallbackCurrentCompanySearches','linkedinFallbackEmployeeSearches',
+    'linkedinFallbackProfileVerifications','linkedinFallbackFailures','linkedinFallbackProfilesFound',
+    'linkedinFallbackVerifiedCandidates','publicIndexSearchCalls','publicIndexProfilesFound',
+    'publicIndexApolloVerificationAttempts','publicIndexApolloVerifiedCandidates','publicIndexFailures',
+    'linkedinHydrationRecoveryAttempts','linkedinHydrationRecoverySuccesses','linkedinHydrationRecoveryFailures',
+    'postHydrationDuplicates','existingVerificationAttempts','existingVerificationFailures',
+    'existingDiscoveryIdentityMatches','existingPublicIndexSearches','existingPublicIndexVerificationAttempts',
+    'existingPublicIndexVerified','existingGroupsRepaired','embeddedDesignationWrites','newPeopleSelected',
+    'hydrationAttempts','hydrationFailures','lowConfidenceCandidates','manualPoc2Attempts','manualPoc2Filled',
+    'manualPoc3Attempts','manualPoc3Filled','optionalPoc3Deferred','orphanContactTargets','orphanContactVerified',
+    'orphanContactBlocked','orphanContactMismatches','identityConflicts','phoneCellsFilled','phoneRowsChanged',
+    'phoneNotFound','phoneWriteSkippedPopulated','phoneSyncPolls','phoneSyncErrors'
+  ];
+  for (const field of additive) {
+    stats[field] = completed.reduce((sum, item) => sum + Number(item?.stats?.[field] || 0), 0);
+  }
+
+  const concatFields = [
+    'discoveryDiagnostics','existingRepairAudit','selectionAudit','rowFailureAudit'
+  ];
+  for (const field of concatFields) {
+    stats[field] = completed.flatMap((item) => Array.isArray(item?.stats?.[field]) ? item.stats[field] : []);
+  }
+
+  const uniqueNumberFields = [
+    'deferredPoc2Rows','primarySweepDeferredRows','deterministicRecheckRows',
+    'deterministicRecheckResolvedRows','deterministicRecheckRemainingRows',
+    'deterministicRecheckRemainingMandatoryRows','deterministicRecheckRemainingRepairRows',
+    'deterministicRecheckRemainingWarningRows','deterministicRecheckResolvedMandatoryRows'
+  ];
+  for (const field of uniqueNumberFields) {
+    stats[field] = [...new Set(completed.flatMap((item) =>
+      Array.isArray(item?.stats?.[field]) ? item.stats[field].map(Number).filter(Number.isInteger) : []
+    ))].sort((a, b) => a - b);
+  }
+
+  const leftoverByKey = new Map();
+  for (const item of completed.flatMap((phase) => phase?.stats?.leftoverQueue || [])) {
+    const key = `${item?.rowNumber ?? ''}|${item?.groupOrdinal ?? ''}|${item?.code || item?.reason || ''}`;
+    leftoverByKey.set(key, item);
+  }
+  stats.leftoverQueue = [...leftoverByKey.values()];
+
+  stats.haltedEarly = completed.some((item) => item?.stats?.haltedEarly);
+  const halted = completed.find((item) => item?.stats?.haltedEarly);
+  if (halted) {
+    stats.haltAtRow = halted.stats.haltAtRow;
+    stats.haltError = halted.stats.haltError;
+  }
+  stats.partialCompletion = completed.some((item) => item?.partialCompletion);
+  stats.contactPhaseOrdinal = null;
+  stats.contactPhaseLabel = 'POC-1 -> POC-2 -> POC-3';
+  stats.pocPhaseSummaries = completed.map((item) => ({
+    ordinal: Number(item.contactPhaseOrdinal || item?.stats?.contactPhaseOrdinal || 0),
+    label: item.contactPhaseLabel || item?.stats?.contactPhaseLabel || '',
+    rowsSeen: Number(item?.stats?.rowsSeen || 0),
+    rowsProcessed: Number(item?.stats?.rowsProcessed || 0),
+    rowsChanged: Number(item?.stats?.rowsChanged || 0),
+    cellsChanged: Number(item?.stats?.cellsChanged || 0),
+    newPeopleSelected: Number(item?.stats?.newPeopleSelected || 0),
+    existingGroupsRepaired: Number(item?.stats?.existingGroupsRepaired || 0),
+    unfilledOpenGroups: Number(item?.stats?.unfilledOpenGroups || 0),
+    haltedEarly: Boolean(item?.stats?.haltedEarly),
+  }));
+
+  const phase2 = completed.find((item) => Number(item.contactPhaseOrdinal || item?.stats?.contactPhaseOrdinal) === 2);
+  if (phase2?.stats) {
+    stats.deferredPoc2Rows = [...(phase2.stats.deferredPoc2Rows || [])];
+    stats.deferredOpenGroups = Number(phase2.stats.deferredOpenGroups || 0);
+    stats.unfilledOpenGroups = Number(phase2.stats.unfilledOpenGroups || 0)
+      + Number(completed.find((item) => Number(item.contactPhaseOrdinal || item?.stats?.contactPhaseOrdinal) === 3)?.stats?.unfilledOpenGroups || 0);
+  }
+
+  return {
+    ...last,
+    deterministic: true,
+    completedFully: !stats.haltedEarly,
+    partialCompletion: Boolean(stats.haltedEarly || completed.some((item) => item?.partialCompletion)),
+    contactPhaseOrdinal: null,
+    contactPhaseLabel: stats.contactPhaseLabel,
+    pocPhaseResults: completed,
+    stats,
+  };
+}
+
+async function runPocPhasePipeline(request, runOptions = {}) {
+  if (runOptions.dryRun || runOptions.pocPhasePipeline === false || runOptions.contactPhaseOrdinal) {
+    return base.run(request, runOptions);
+  }
+
+  const phases = [];
+  const definitions = [
+    { ordinal: 1, resultsFirstSweep: false, deferOpenGroupSelectionToAi: false },
+    { ordinal: 2, resultsFirstSweep: runOptions.resultsFirstSweep !== false, deferOpenGroupSelectionToAi: runOptions.deferOpenGroupSelectionToAi },
+    { ordinal: 3, resultsFirstSweep: false, deferOpenGroupSelectionToAi: false },
+  ];
+
+  for (const phase of definitions) {
+    const result = await base.run(request, {
+      ...runOptions,
+      contactPhaseOrdinal: phase.ordinal,
+      targetOrdinals: [phase.ordinal],
+      resultsFirstSweep: phase.resultsFirstSweep,
+      deferOpenGroupSelectionToAi: phase.deferOpenGroupSelectionToAi,
+    });
+    phases.push(result);
+    if (result?.stats?.haltedEarly) break;
+  }
+
+  return mergePocPhaseResults(phases);
+}
+
 function mergePrimaryAndAiRescue(primary, rescue) {
   if (!rescue?.attempted) return primary;
   const stats = { ...(primary.stats || {}) };
@@ -342,7 +464,7 @@ async function run(request = {}, options = {}) {
     // From this point onward, a successful deterministic primary is authoritative.
     // Optional fallback/decorating failures must never invalidate verified writes
     // that base.run() already committed to the worksheet.
-    const primary = await base.run(exact.request, runOptions);
+    const primary = await runPocPhasePipeline(exact.request, runOptions);
     const primaryStats = { ...(primary.stats || {}) };
     const providerRetryReasons = providerRetryReasonsFromPrimary(primaryStats);
     let result = primary;
@@ -701,5 +823,7 @@ module.exports = {
   mandatoryCompletionAudit,
   mergePrimaryAndFallback,
   providerRetryReasonsFromPrimary,
+  mergePocPhaseResults,
+  runPocPhasePipeline,
   mergePrimaryAndAiRescue,
 };
