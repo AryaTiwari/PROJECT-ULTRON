@@ -38,8 +38,8 @@ assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttemp
 assert.match(operatorSource, /ordinal: 3/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
 assert.match(operatorSource, /POC-3 gets exactly one cheap manual hydration opportunity/);
-assert.match(operatorSource, /candidateLimit: options\.manualCandidateLimit \?\? 40/);
 assert.match(operatorSource, /priorityCandidateLimit: options\.manualPriorityCandidateLimit \?\? 20/);
+assert.doesNotMatch(operatorSource, /candidateLimit: options\.manualCandidateLimit \?\? 40/);
 
 assert.match(rescueSource, /Number\(item\.group\?\.ordinal \|\| 0\) === wantedOrdinal/);
 assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
