@@ -7,6 +7,7 @@ const path = require('path');
 require('../core/universal-deterministic-bootstrap').install();
 const operator = require('../core/universal-sheet-enrichment-operator');
 const fallbackPass = require('../core/universal-big-pickle-fallback-pass');
+const contactQuality = require('../core/apollo-three-poc-quality');
 
 assert.equal(typeof operator.enrichAnchorGroup, 'function', 'Big Pickle fallback must be able to call the deterministic anchor-enrichment helper');
 const fallbackStats = fallbackPass.freshStats();
@@ -40,6 +41,28 @@ const existing = {
 const verificationContext = operator.existingPersonVerificationContext(existing, company);
 assert.equal(verificationContext.domain, 'sunrisesys.com');
 assert.equal(verificationContext.source, 'existing-poc-business-email-domain');
+
+assert.equal(
+  contactQuality.phoneFromPayload({
+    people: [{
+      waterfall: {
+        phone_numbers: [{
+          vendors: [{ phone_numbers: [{ sanitized_number: '+919876543210' }] }],
+        }],
+      },
+    }],
+  }),
+  '+919876543210',
+  'phone waterfall parser must recover nested vendor phone numbers',
+);
+
+assert.equal(
+  contactQuality.phoneFromPayload({
+    person: { phone_numbers: [{ raw_number: '+12025550123' }] },
+  }),
+  '+12025550123',
+  'phone waterfall parser must also accept direct person phone_numbers',
+);
 
 const queue = [];
 operator.queuePendingPhone(
@@ -77,6 +100,7 @@ const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const bootstrapSource = fs.readFileSync(path.join(root, 'universal-deterministic-bootstrap.js'), 'utf8');
 const fallbackSource = fs.readFileSync(path.join(root, 'universal-big-pickle-fallback.js'), 'utf8');
+const contactQualitySource = fs.readFileSync(path.join(root, 'apollo-three-poc-quality.js'), 'utf8');
 
 assert.doesNotMatch(operatorSource, /existingRepairNeedsDiscovery/);
 assert.doesNotMatch(operatorSource, /exactCandidateForExisting/);
@@ -95,6 +119,14 @@ assert.match(operatorSource, /pending-phone-assignments\.json/);
 assert.match(operatorSource, /persistBackgroundPhoneAssignments/);
 assert.match(operatorSource, /loadBackgroundPhoneAssignments/);
 assert.match(operatorSource, /resumedPhoneAssignments/);
+
+assert.match(contactQualitySource, /run_waterfall_phone', 'true'/);
+assert.match(contactQualitySource, /poll_only', 'true'/);
+assert.match(contactQualitySource, /async function improveVerifiedPhone/);
+assert.match(contactQualitySource, /async function pollPhoneRequest/);
+assert.match(contactQualitySource, /originalResolvePersonByBusinessEmail/);
+assert.match(contactQualitySource, /if \(options\.needPhone !== false\) next = await improveVerifiedPhone\(next\)/);
+assert.match(operatorSource, /Final-POC contact waterfall:/);
 
 assert.match(bootstrapSource, /apollo-three-poc-quality/);
 assert.match(bootstrapSource, /three-poc-candidate-discovery-policy/);
@@ -178,7 +210,7 @@ async function run() {
     sheets.writeCells = originals.writeCells;
   }
 
-  console.log('Universal contact completion self-test passed: existing POCs verify by exact LinkedIn, then exact business email, then exact name+business-domain, fresh pending Apollo phone requests are reused briefly while stale pending requests become retryable, callback ownership stays bound to the exact row/cell/person across restarts, verified callbacks write only blank phone cells, and Big Pickle control failures fail closed.');
+  console.log('Universal contact completion self-test passed: existing POCs verify by exact LinkedIn/business-email/name+company, final verified POCs can use bounded poll-only phone waterfall before email deepening, nested waterfall phone payloads are parsed safely, native callback assignments remain resume-safe, populated phone cells are never overwritten, and Big Pickle control failures fail closed.');
 }
 
 if (require.main === module) {
