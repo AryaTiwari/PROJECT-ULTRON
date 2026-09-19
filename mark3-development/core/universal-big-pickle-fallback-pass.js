@@ -109,15 +109,16 @@ async function employerFallback(plan, options, stats) {
 }
 
 async function companyContextFor(plan, row, options, stats) {
+  const rowEvidence = base.inferHiringCompanyFromEvidence(plan, row);
+  if (rowEvidence?.company || rowEvidence?.domain) return rowEvidence;
+
   let anchorContext = null;
   if (plan.anchor?.type === 'company') {
     anchorContext = base.companyFromCompanyAnchor(plan.anchor);
   } else {
-    try { anchorContext = await base.resolvePersonAnchor(plan, row, options); } catch {}
+    try { anchorContext = await base.resolvePersonAnchor(plan, row, { ...options, allowLinkedInEmployerFallback: false }); } catch {}
   }
-
-  const evidenceContext = base.preferredHiringCompanyContext(plan, row, anchorContext);
-  if (evidenceContext?.company || evidenceContext?.domain) return evidenceContext;
+  if (anchorContext && !anchorContext.unresolved && (anchorContext.company || anchorContext.domain)) return anchorContext;
 
   return employerFallback(plan, options, stats);
 }
