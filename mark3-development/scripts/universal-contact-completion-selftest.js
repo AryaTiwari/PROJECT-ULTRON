@@ -196,8 +196,9 @@ assert.match(contactQualitySource, /apollo\.resolvePersonProfile = async functio
 assert.match(contactQualitySource, /return improveVerifiedContacts\(result, options\)/);
 assert.match(contactQualitySource, /if \(options\.needPhone !== false\) next = await improveVerifiedPhone\(next\)/);
 assert.match(operatorSource, /Final-POC contact waterfall:/);
-assert.match(operatorSource, /const anchorContactHydrationNeeded = \(!phaseOrdinal \|\| phaseOrdinal === 1\) && anchorNeedsHydration\(plan\)/);
-assert.match(operatorSource, /completeContacts: anchorContactHydrationNeeded/);
+assert.match(operatorSource, /const anchorContactHydrationNeeded = \(!phaseOrdinal \|\| phaseOrdinal === 1\)[\s\S]*?anchorNeedsHydration\(plan, anchorContactEvidence\)/);
+assert.match(operatorSource, /completeContacts: true/);
+assert.match(operatorSource, /contactEvidence: anchorContactEvidence/);
 assert.match(operatorSource, /completeContacts: false/);
 
 assert.match(bootstrapSource, /apollo-three-poc-quality/);
