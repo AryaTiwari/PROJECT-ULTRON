@@ -631,6 +631,13 @@ function hydratedEmployerMatchesCandidate(person, candidate = {}, company = '', 
   return Boolean(candidateMatchesRequested && !hydratedHasOrg);
 }
 
+function hydratedIdentityMatchesCandidate(person, candidate = {}) {
+  if (!person || !candidate?.id || String(person.id) !== String(candidate.id)) return false;
+  const hydratedLinkedin = normalizeLinkedIn(person?.linkedin_url || person?.linkedin || '');
+  const candidateLinkedin = normalizeLinkedIn(candidate.linkedinUrl || candidate.linkedin_url || '');
+  return !(candidateLinkedin && hydratedLinkedin && candidateLinkedin !== hydratedLinkedin);
+}
+
 async function resolveDecisionMaker(candidate, company, domain, options = {}) {
   if (!candidate.id) return { ...candidate, identityVerified: Boolean(normalizeLinkedIn(candidate.linkedinUrl)) };
 
@@ -651,11 +658,7 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
   const person = data.person;
   const hydratedLinkedin = normalizeLinkedIn(person?.linkedin_url || person?.linkedin || '');
   const candidateLinkedin = normalizeLinkedIn(candidate.linkedinUrl || candidate.linkedin_url || '');
-  if (
-    !person
-    || String(person.id) !== String(candidate.id)
-    || (candidateLinkedin && hydratedLinkedin && candidateLinkedin !== hydratedLinkedin)
-  ) {
+  if (!hydratedIdentityMatchesCandidate(person, candidate)) {
     const error = new Error('APOLLO_IDENTITY_MISMATCH');
     error.code = 'APOLLO_IDENTITY_MISMATCH';
     error.candidateId = String(candidate.id || '');
@@ -961,6 +964,7 @@ module.exports = {
   organizationDomainOf,
   organizationNameMatches,
   sameOrganization,
+  hydratedIdentityMatchesCandidate,
   searchCandidateFromPerson,
   rankedDecisionMakers,
   searchCompanyDecisionMaker,
