@@ -72,6 +72,9 @@ function freshStats() {
     candidatesDiscovered: 0,
     linkedinFallbackSearches: 0,
     linkedinFallbackCompanySearches: 0,
+    linkedinFallbackCompanyProfiles: 0,
+    linkedinFallbackCompanyUrns: 0,
+    linkedinFallbackCurrentCompanySearches: 0,
     linkedinFallbackEmployeeSearches: 0,
     linkedinFallbackProfileVerifications: 0,
     linkedinFallbackFailures: 0,
@@ -613,6 +616,9 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.candidatesDiscovered = uniqueCandidateKeys.size;
   stats.linkedinFallbackSearches = discoveryStats.linkedinFallbackSearches || 0;
   stats.linkedinFallbackCompanySearches = discoveryStats.linkedinFallbackCompanySearches || 0;
+  stats.linkedinFallbackCompanyProfiles = discoveryStats.linkedinFallbackCompanyProfiles || 0;
+  stats.linkedinFallbackCompanyUrns = discoveryStats.linkedinFallbackCompanyUrns || 0;
+  stats.linkedinFallbackCurrentCompanySearches = discoveryStats.linkedinFallbackCurrentCompanySearches || 0;
   stats.linkedinFallbackEmployeeSearches = discoveryStats.linkedinFallbackEmployeeSearches || 0;
   stats.linkedinFallbackProfileVerifications = discoveryStats.linkedinFallbackProfileVerifications || 0;
   stats.linkedinFallbackFailures = discoveryStats.linkedinFallbackFailures || 0;
