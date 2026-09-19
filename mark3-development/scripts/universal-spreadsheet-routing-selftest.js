@@ -48,6 +48,16 @@ assert.equal(spreadsheetController.parseSheetName('Target only the `Arya 2` work
 assert.equal(spreadsheetController.parseSheetName('Use only the Arya 2 worksheet.'), 'Arya 2');
 assert.equal(spreadsheetController.parseSheetName('Target worksheet: "Arya 2"'), 'Arya 2');
 assert.equal(spreadsheetController.parseSheetName('Target tab: "Arya 2"'), 'Arya 2');
+assert.equal(
+  spreadsheetController.parseSheetName('Enrich all POCs together on the "Arya 2" worksheet in:'),
+  'Arya 2',
+  '"on the <name> worksheet" production wording must resolve the exact tab',
+);
+assert.equal(
+  spreadsheetController.parseSheetName('Run coordinated enrichment on the Arya 2 worksheet.'),
+  'Arya 2',
+  'unquoted on-the worksheet wording must resolve the exact tab',
+);
 
 assert.match(spreadsheetController.rowLimitNotice(8), /VALIDATION MODE IS ACTIVE/i);
 assert.match(spreadsheetController.rowLimitNotice(8), /first 8 non-empty data rows/i);
