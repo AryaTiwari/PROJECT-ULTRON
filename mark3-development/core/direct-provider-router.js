@@ -220,10 +220,10 @@ async function storedCredentials() {
   try { return await loadCredentials(); } catch { return {}; }
 }
 
-async function allCredentialEntries(provider) {
+async function allCredentialEntries(provider, { envOnly: forceEnvOnly = false } = {}) {
   const cfg = PROVIDERS[provider];
   if (!cfg) return [];
-  const stored = envOnly() ? {} : await storedCredentials();
+  const stored = (forceEnvOnly || envOnly()) ? {} : await storedCredentials();
   const seenValues = new Set();
   const entries = [];
   for (const slot of cfg.keys) {
@@ -235,8 +235,8 @@ async function allCredentialEntries(provider) {
   return entries;
 }
 
-async function credentialPool(provider, { includeCooling = false } = {}) {
-  const entries = await allCredentialEntries(provider);
+async function credentialPool(provider, { includeCooling = false, envOnly: forceEnvOnly = false } = {}) {
+  const entries = await allCredentialEntries(provider, { envOnly: forceEnvOnly });
   const filtered = entries.filter((entry) => includeCooling || Number(entry.state.disabledUntil || 0) <= Date.now());
   filtered.sort((a, b) => {
     const aUsed = Number(a.state.lastUsedAt || 0);
@@ -349,14 +349,14 @@ async function fetchCatalogWithKey(provider, entry) {
   } finally { clearTimeout(timer); }
 }
 
-async function discoverProviderModels(provider, { force = false } = {}) {
+async function discoverProviderModels(provider, { force = false, envOnly: forceEnvOnly = false } = {}) {
   const cached = catalogCache.get(provider);
   if (!force && cached?.models?.length && Date.now() - cached.fetchedAt < MODEL_CACHE_MS) return [...cached.models];
 
   // Discovery is deliberately passive: it never mutates inference key health,
   // usage counters or cooldowns. A /models timeout is not evidence that a key
   // cannot perform inference.
-  const pool = await allCredentialEntries(provider);
+  const pool = await allCredentialEntries(provider, { envOnly: forceEnvOnly });
   let lastError = null;
   for (const entry of pool) {
     try {
@@ -376,10 +376,10 @@ async function discoverProviderModels(provider, { force = false } = {}) {
   return [];
 }
 
-async function modelList(provider, taskType) {
+async function modelList(provider, taskType, { envOnly: forceEnvOnly = false } = {}) {
   const override = configuredModelOverride(provider, taskType);
   if (override.length) return [...new Set(override)].filter((model) => !nonChatModel(model)).slice(0, MODELS_PER_PROVIDER);
-  const discovered = await discoverProviderModels(provider);
+  const discovered = await discoverProviderModels(provider, { envOnly: forceEnvOnly });
   const preferred = defaultModelList(provider, taskType);
   if (!discovered.length) return preferred.slice(0, MODELS_PER_PROVIDER);
   const preferenceMap = new Map(preferred.map((model, index) => [String(model).toLowerCase(), index]));
@@ -391,12 +391,12 @@ async function modelList(provider, taskType) {
     .map((entry) => entry.model);
 }
 
-async function candidates(taskType = 'general') {
+async function candidates(taskType = 'general', { envOnly: forceEnvOnly = false } = {}) {
   if (!enabled()) return [];
   const rows = [];
   for (const provider of providerOrder(taskType)) {
-    if (!(await allCredentialEntries(provider)).length) continue;
-    const models = await modelList(provider, taskType);
+    if (!(await allCredentialEntries(provider, { envOnly: forceEnvOnly })).length) continue;
+    const models = await modelList(provider, taskType, { envOnly: forceEnvOnly });
     rows.push({ provider, models: models.map((model) => canonical(provider, model)).filter((model) => !modelCooling(model)) });
   }
   const out = [];
@@ -521,13 +521,13 @@ function poolUnavailableError(provider, configured) {
   return error;
 }
 
-async function chat({ messages, model, tools = null, taskType = 'general', timeoutMs = null } = {}) {
+async function chat({ messages, model, tools = null, taskType = 'general', timeoutMs = null, envOnly: forceEnvOnly = false } = {}) {
   require('./command-control-plane').assertAllowed('direct-model', { model, messages });
 
   const parsed = parse(model);
   if (!parsed.provider) throw new Error(`Not a direct provider model: ${model}`);
-  const pool = await credentialPool(parsed.provider);
-  if (!pool.length) throw poolUnavailableError(parsed.provider, await credentialPool(parsed.provider, { includeCooling: true }));
+  const pool = await credentialPool(parsed.provider, { envOnly: forceEnvOnly });
+  if (!pool.length) throw poolUnavailableError(parsed.provider, await credentialPool(parsed.provider, { includeCooling: true, envOnly: forceEnvOnly }));
 
   const budget = Math.max(3000, Number(timeoutMs || timeoutFor(taskType)));
   let lastError = null;
