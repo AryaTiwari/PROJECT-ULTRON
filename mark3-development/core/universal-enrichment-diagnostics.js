@@ -319,10 +319,11 @@ function runtimeIssues(stats = {}) {
     if (!item?.code && !item?.message) continue;
     issues.push(typedIssue({
       code: item.code || 'DISCOVERY_DIAGNOSTIC',
-      subsystem: /LINKEDIN/i.test(text(item.code)) ? 'LINKEDIN' : (/APOLLO/i.test(text(item.code)) ? 'APOLLO' : 'DISCOVERY'),
-      type: 'API',
-      stage: 'candidate-discovery',
+      subsystem: item.subsystem || (/LINKEDIN/i.test(text(item.code)) ? 'LINKEDIN' : (/APOLLO/i.test(text(item.code)) ? 'APOLLO' : 'DISCOVERY')),
+      type: item.type || 'API',
+      stage: item.stage || 'candidate-discovery',
       message: item.message || item.code,
+      hint: item.hint || '',
     }, {
       severity: 'WARNING',
       blocking: false,
