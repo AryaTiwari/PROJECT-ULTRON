@@ -180,15 +180,48 @@ async function run(request = {}, options = {}) {
       } else if (!runOptions.dryRun && runOptions.apolloApproved === true && aiBatchRescue.enabled()) {
         aiRescue = await aiBatchRescue.run(exact.request, primary, runOptions);
         result = mergePrimaryAndAiRescue(primary, aiRescue);
-        // Batch AI is the bounded rescue strategy. Do not append per-row Big Pickle
-        // calls afterwards or the promised whole-run model-call cap becomes fiction.
-        fb = {
-          enabled: fallback.enabled(),
-          attempted: false,
-          skippedReason: 'ai-batch-rescue-active',
-          modelCalls: 0,
-          fallback: fallback.snapshot(),
-        };
+
+        // Manual/deterministic POC-2 is primary, direct env AI is secondary.
+        // If POC-2 is still unresolved, permit one tightly bounded last-resort
+        // fallback attempt per remaining POC-2 target. POC-3 is never sent here.
+        const unresolvedPoc2 = Number(aiRescue?.unresolvedSlots ?? primary?.stats?.deferredOpenGroups ?? 0);
+        const lastResortEnabled = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_LAST_RESORT_POC2 || '1'));
+        if (unresolvedPoc2 > 0 && lastResortEnabled && fallback.enabled()) {
+          try {
+            fb = await fallbackPass.run(exact.request, result, {
+              ...runOptions,
+              targetOrdinals: [2],
+              maxFallbackAttemptsPerTarget: 1,
+            });
+            result = mergePrimaryAndFallback(result, fb);
+          } catch (error) {
+            const typed = typedErrors.normalize(error, { stage: error?.stage || 'last-resort-poc2-fallback' });
+            fb = {
+              enabled: true,
+              attempted: true,
+              haltedEarly: true,
+              skippedReason: 'last-resort-fallback-error',
+              modelCalls: 0,
+              error: {
+                code: typed.code,
+                subsystem: typed.subsystem,
+                type: typed.type,
+                stage: typed.stage,
+                message: typed.message,
+                hint: typed.hint,
+              },
+              fallback: fallback.snapshot(),
+            };
+          }
+        } else {
+          fb = {
+            enabled: fallback.enabled(),
+            attempted: false,
+            skippedReason: unresolvedPoc2 > 0 ? 'last-resort-disabled' : 'poc2-resolved-before-last-resort',
+            modelCalls: 0,
+            fallback: fallback.snapshot(),
+          };
+        }
       } else if (!runOptions.dryRun && runOptions.apolloApproved === true && fallback.enabled()) {
         try {
           fb = await fallbackPass.run(exact.request, primary, runOptions);
@@ -289,7 +322,7 @@ function formatResult(result) {
       `row ${item.rowNumber} POC-${item.slot || '?'} ${item.mode || 'fill'} ${item.name || item.candidateKey} (${item.fields?.join('/') || 'verified'})`
     );
     const errors = (ai.errors || []).slice(0, 3).map((item) => `${item.purpose || 'ai'}:${item.code || 'ERROR'} ${item.message || ''}`);
-    return `${primary} Bounded AI batch rescue: ${ai.modelCalls || 0} successful model responses from ${ai.modelAttempts || 0}/${ai.maxCalls || 3} whole-run logical attempts (${ai.contextCalls || 0} context, ${ai.selectionCalls || 0} selection, ${ai.reviewerCalls || 0} reviewer); ${ai.modelFailures || 0} model/routing failures; ${ai.rowsOfferedForSelection || 0} rows and ${ai.slotsOfferedForSelection || 0} POC targets offered; ${ai.aiSelectionsProposed || 0} selections proposed, ${ai.aiSelectionsAccepted || 0} Apollo-verified selections accepted (${ai.newPeopleSelected || 0} new POCs, ${ai.existingRepairsAccepted || 0} existing POC repairs), ${ai.aiSelectionRejects || 0} rejected by deterministic identity/employer/write safety; ${ai.employersResolvedByAi || 0} employers recovered from supplied row evidence; ${ai.candidatesDiscovered || 0} Apollo candidates discovered; ${ai.hydrationAttempts || 0} final hydration attempts/${ai.hydrationFailures || 0} failures; rescue changed ${ai.cellsChanged || 0} cells across ${ai.rowsChanged || 0} rows; ${ai.phoneCellsFilled || 0} phone cells completed, ${ai.phoneStillPending || 0} phones still pending; ${ai.unresolvedSlots || 0} slots unresolved. Models [${(ai.actualModels || []).join(', ') || 'none'}]. Credential source: env-only direct API. Direct providers [${(ai.directProvidersUsed || []).join(', ') || 'none'}]; OmniRoute calls 0; direct attempt audit ${(ai.directAttemptAudit || []).length}. Big Pickle per-row fallback was suppressed to preserve the whole-run AI-call cap.${errors.length ? ` AI diagnostics: ${errors.join(' | ')}.` : ''}${audit.length ? ` Samples: ${audit.join('; ')}.` : ''}`;
+    return `${primary} Bounded AI batch rescue: ${ai.modelCalls || 0} successful model responses from ${ai.modelAttempts || 0}/${ai.maxCalls || 3} whole-run logical attempts (${ai.contextCalls || 0} context, ${ai.selectionCalls || 0} selection, ${ai.reviewerCalls || 0} reviewer); ${ai.modelFailures || 0} model/routing failures; ${ai.rowsOfferedForSelection || 0} rows and ${ai.slotsOfferedForSelection || 0} POC targets offered; ${ai.aiSelectionsProposed || 0} selections proposed, ${ai.aiSelectionsAccepted || 0} Apollo-verified selections accepted (${ai.newPeopleSelected || 0} new POCs, ${ai.existingRepairsAccepted || 0} existing POC repairs), ${ai.aiSelectionRejects || 0} rejected by deterministic identity/employer/write safety; ${ai.employersResolvedByAi || 0} employers recovered from supplied row evidence; ${ai.candidatesDiscovered || 0} Apollo candidates discovered; ${ai.hydrationAttempts || 0} final hydration attempts/${ai.hydrationFailures || 0} failures; rescue changed ${ai.cellsChanged || 0} cells across ${ai.rowsChanged || 0} rows; ${ai.phoneCellsFilled || 0} phone cells completed, ${ai.phoneStillPending || 0} phones still pending; ${ai.unresolvedSlots || 0} slots unresolved. Models [${(ai.actualModels || []).join(', ') || 'none'}]. Credential source: env-only direct API. Direct providers [${(ai.directProvidersUsed || []).join(', ') || 'none'}]; OmniRoute calls 0; direct attempt audit ${(ai.directAttemptAudit || []).length}. Last-resort POC-2 fallback: \${fb?.attempted ? 'attempted after manual + direct AI residue' : 'not needed'}; POC-3 was excluded from expensive fallback.${errors.length ? ` AI diagnostics: ${errors.join(' | ')}.` : ''}${audit.length ? ` Samples: ${audit.join('; ')}.` : ''}`;
   }
   if (!fb?.enabled) return `${primary} Primary execution remained fully deterministic; Big Pickle fallback was disabled. AI/model calls: 0.`;
   const model = fb.fallback || {};
