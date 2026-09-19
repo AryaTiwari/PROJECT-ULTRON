@@ -300,11 +300,14 @@ async function startWaterfall(result) {
 }
 
 
-async function pollPhoneRequest(requestId) {
+async function pollPhoneRequest(requestId, options = {}) {
   const apiKey = apollo.setting('APOLLO_API_KEY');
   if (!apiKey || !requestId) return { state: 'error', phone: null, payload: null };
 
-  const polls = phonePolls();
+  const requestedPolls = Number(options.polls);
+  const polls = Number.isFinite(requestedPolls)
+    ? Math.max(0, Math.min(8, Math.floor(requestedPolls)))
+    : phonePolls();
   for (let attempt = 0; attempt <= polls; attempt++) {
     const response = await fetch(`${APOLLO_WEBHOOK_RESULT}/${encodeURIComponent(String(requestId))}`, {
       headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' },
@@ -412,7 +415,13 @@ async function improveVerifiedPhone(result) {
     }
     if (polled.state === 'pending') {
       runState.phoneWaterfallPending++;
-      return { ...result, phoneStatus: 'pending', phoneWaterfallPending: true, phoneWaterfallStatus: 'pending' };
+      return {
+        ...result,
+        phoneStatus: 'waterfall_pending',
+        phoneWaterfallPending: true,
+        phoneWaterfallStatus: 'pending',
+        phoneWaterfallRequestId: pendingId,
+      };
     }
     saveWaterfallState(result, {
       threePocPhoneWaterfallStatus: polled.state === 'not_found' ? 'not_found' : 'terminal',
@@ -457,7 +466,13 @@ async function improveVerifiedPhone(result) {
         threePocPhoneWaterfallRequestId: waterfall.requestId,
         threePocPhoneWaterfallStatus: 'pending',
       });
-      return { ...result, phoneStatus: 'pending', phoneWaterfallPending: true, phoneWaterfallStatus: 'pending' };
+      return {
+        ...result,
+        phoneStatus: 'waterfall_pending',
+        phoneWaterfallPending: true,
+        phoneWaterfallStatus: 'pending',
+        phoneWaterfallRequestId: waterfall.requestId,
+      };
     }
 
     if (waterfall.state === 'unavailable') {
