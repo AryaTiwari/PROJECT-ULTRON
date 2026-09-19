@@ -380,7 +380,9 @@ async function startPhoneWaterfall(result) {
   if (waterfallStatus === 'failed') return { state: 'unavailable', phone: null, requestId, payload: data };
   if (!requestId) return { state: 'not_found', phone: null, requestId: '', payload: data };
 
-  const polled = await pollPhoneRequest(requestId);
+  // Do not serialize multi-second polling inside each person hydration. The
+  // sheet operator batches all pending request IDs after row processing.
+  const polled = await pollPhoneRequest(requestId, { polls: 0 });
   return { ...polled, requestId, payload: polled.payload || data };
 }
 
@@ -401,7 +403,7 @@ async function improveVerifiedPhone(result) {
 
   const pendingId = String(record.threePocPhoneWaterfallRequestId || '').trim();
   if (pendingId && record.threePocPhoneWaterfallStatus === 'pending') {
-    const polled = await pollPhoneRequest(pendingId);
+    const polled = await pollPhoneRequest(pendingId, { polls: 0 });
     if (polled.state === 'found' && polled.phone) {
       runState.phoneWaterfallSucceeded++;
       apollo.recordPhoneResult(result?.apolloPersonId || result?.id, polled.phone);
