@@ -104,11 +104,11 @@ function providerName(model) {
 }
 
 function allowedDirectProviders() {
-  const configured = String(process.env.ULTRON_M3_UNIVERSAL_AI_DIRECT_PROVIDERS || 'xai,gemini,nvidia')
+  const configured = String(process.env.ULTRON_M3_UNIVERSAL_AI_DIRECT_PROVIDERS || 'gemini,groq,nvidia')
     .split(',')
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean)
-    .map((value) => value === 'grok' ? 'xai' : value);
+    .map((value) => value === 'grok' ? 'groq' : value);
   return [...new Set(configured)];
 }
 
@@ -126,10 +126,10 @@ function orderedDirectCandidates(candidates, purpose, stats) {
 
   const previouslyUsed = new Set((stats.directProvidersUsed || []).map((value) => text(value).toLowerCase()).filter(Boolean));
   const purposePreference = purpose === 'context'
-    ? ['gemini', 'xai', 'nvidia']
+    ? ['gemini', 'groq', 'nvidia']
     : purpose === 'selection'
-      ? ['xai', 'nvidia', 'gemini']
-      : ['nvidia', 'xai', 'gemini'];
+      ? ['groq', 'nvidia', 'gemini']
+      : ['nvidia', 'groq', 'gemini'];
 
   return [...firstPerProvider.entries()]
     .map(([provider, model], index) => {
