@@ -50,7 +50,8 @@ assert.match(rescueSource, /\? \['groq', 'gemini', 'nvidia'\]/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
 
 assert.match(targetedSource, /targetOrdinals: \[2\]/);
+assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
-assert.match(targetedSource, /POC-3 is never sent here/);
+assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);
 
 console.log('Universal POC priority self-test passed: POC-1 completion is non-negotiable, POC-2 uses priority-first Apollo discovery plus up to three verified hydration attempts before AI, only exact deferred POC-2 rows may enter AI rescue, POC-3 gets one cheap manual attempt, direct AI falls Groq -> Gemini -> NVIDIA, and last-resort fallback remains bounded to unresolved POC-2.');
