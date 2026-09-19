@@ -118,7 +118,7 @@ assert.match(rescueSource, /employer-unresolved/);
 assert.match(rescueSource, /no-verified-candidates/);
 assert.match(rescueSource, /selection-rejected-after-verification/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
-assert.match(rescueSource, /apollo\.resolveDecisionMaker/);
+assert.match(rescueSource, /base\.hydrateDecisionMakerVerified/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_HYDRATION_FALLBACK_CANDIDATES/);
 assert.match(rescueSource, /post-ai-hydration-fallback/);
 assert.match(rescueSource, /hydrationFallbackAttempts/);
