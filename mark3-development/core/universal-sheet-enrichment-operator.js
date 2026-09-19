@@ -687,16 +687,65 @@ function existingContactSearchName(value) {
     .trim();
 }
 
+function existingContactRole(value) {
+  const raw = text(value);
+  const dash = raw.match(/\s+[—–]\s+(.+)$/);
+  if (dash?.[1]) return text(dash[1]);
+  const paren = raw.match(/\(([^)]{2,120})\)\s*$/);
+  return text(paren?.[1] || '');
+}
+
+function roleEvidenceMatches(expectedRole, actualRole) {
+  const expected = ranker.normalize(expectedRole || '');
+  const actual = ranker.normalize(actualRole || '');
+  if (!expected) return false;
+  if (!actual) return false;
+  if (expected === actual || expected.includes(actual) || actual.includes(expected)) return true;
+  const stop = new Set(['the','of','and','at','for','a','an','senior','sr','junior','jr','associate']);
+  const tokens = (value) => new Set(value.split(/\s+/).filter((token) => token.length >= 3 && !stop.has(token)));
+  const left = tokens(expected);
+  const right = tokens(actual);
+  let overlap = 0;
+  for (const token of left) if (right.has(token)) overlap++;
+  return overlap >= 1 && overlap / Math.max(1, Math.min(left.size, right.size)) >= 0.34;
+}
+
+function existingIdentityVerified(snapshot, person, companyContext, verificationPath = '') {
+  if (!person || person.noMatch || person.ambiguous || person.identityVerified === false) return false;
+  if (!planner.samePerson(snapshot?.values || {}, person)) return false;
+
+  // Existing sheet identity is user-owned evidence. For CONTACT COMPLETION we
+  // need to verify the exact human, not rediscover who they should have been.
+  // Exact LinkedIn and exact business-email matches are authoritative.
+  if (verificationPath === 'exact-linkedin' || verificationPath === 'apollo-business-email') return true;
+
+  // Same-employer remains strong evidence when available.
+  if (ranker.sameEmployer(person, companyContext)) return true;
+
+  // POC-2/3 often have no LinkedIn column. Their embedded designation is the
+  // second identity factor. Exact name + compatible role is sufficient to fill
+  // only missing phone/email fields; it never authorizes replacing the identity.
+  const expectedRole = existingContactRole(snapshot?.values?.name || '');
+  return roleEvidenceMatches(expectedRole, person?.title || person?.headline || '');
+}
+
 async function repairExistingContactFromPublicIndex(item, companyContext, stats, options = {}) {
   if (!publicIndexFallbackEnabled(options)) return null;
   const snapshot = item?.snapshot || {};
   const name = existingContactSearchName(snapshot?.values?.name || '');
+  const role = existingContactRole(snapshot?.values?.name || '');
   const company = text(companyContext?.company || companyContext?.domain || '').replace(/"/g, '').trim();
-  if (!name || !company) return null;
+  if (!name) return null;
 
+  const safeName = name.replace(/"/g, '');
+  const safeRole = role.replace(/"/g, '');
   const queries = [
-    `site:linkedin.com/in "${name.replace(/"/g, '')}" "${company}"`,
-    `site:linkedin.com/in "${name.replace(/"/g, '')}" ${company}`,
+    ...(company ? [
+      `site:linkedin.com/in "${safeName}" "${company}"`,
+      `site:linkedin.com/in "${safeName}" ${company}`,
+    ] : []),
+    ...(safeRole ? [`site:linkedin.com/in "${safeName}" "${safeRole}"`] : []),
+    `site:linkedin.com/in "${safeName}"`,
   ];
   const refs = new Map();
   const addItems = (items, provider) => {
@@ -744,9 +793,7 @@ async function repairExistingContactFromPublicIndex(item, companyContext, stats,
         needPhone,
         force: true,
       });
-      if (!person || person.noMatch || person.ambiguous || person.identityVerified === false) continue;
-      if (!planner.samePerson(snapshot.values, person)) continue;
-      if (!ranker.sameEmployer(person, companyContext)) continue;
+      if (!existingIdentityVerified(snapshot, person, companyContext, 'public-index-exact')) continue;
       stats.existingPublicIndexVerified = Number(stats.existingPublicIndexVerified || 0) + 1;
       return person;
     } catch {}
@@ -804,13 +851,11 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       resolved = null;
     }
 
-    const directVerified = Boolean(
-      resolved
-      && !resolved.noMatch
-      && !resolved.ambiguous
-      && resolved.identityVerified !== false
-      && ranker.sameEmployer(resolved, verificationContext)
-      && planner.samePerson(snapshot.values, resolved)
+    const directVerified = existingIdentityVerified(
+      snapshot,
+      resolved,
+      verificationContext,
+      verificationPath,
     );
 
     if (!directVerified) {
@@ -2715,6 +2760,9 @@ module.exports = {
   candidateAlreadyPresent,
   existingPersonVerificationContext,
   existingContactSearchName,
+  existingContactRole,
+  roleEvidenceMatches,
+  existingIdentityVerified,
   repairExistingContactFromPublicIndex,
   needsEmbeddedDesignationRepair,
   candidateFillTargets,
