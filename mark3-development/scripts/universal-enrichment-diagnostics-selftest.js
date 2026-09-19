@@ -57,6 +57,11 @@ assert.match(operatorSource, /company URNs/);
 assert.match(targetedSource, /MANDATORY_DATA_EXHAUSTED/);
 assert.match(targetedSource, /FINAL_AUDIT_FAILED/);
 assert.match(targetedSource, /AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL|ai-skipped-no-verified-candidate-pool/);
+assert.match(targetedSource, /ULTRON_DIAGNOSTICS/);
+assert.match(targetedSource, /ROOT_CAUSE:/);
+assert.match(targetedSource, /MANDATORY_BLOCKERS:/);
+assert.match(targetedSource, /REPAIR_OR_PENDING:/);
+assert.match(targetedSource, /terminalScopes/);
 assert.match(targetedSource, /Problems:/);
 
 console.log('Universal enrichment diagnostics self-test passed: mandatory blockers, repair residue, pending callbacks, optional work, AI skips, and true terminal exhaustion now have separate stable problem codes.');
