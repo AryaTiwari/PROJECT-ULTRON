@@ -1263,7 +1263,7 @@ function safetyBudgetBlock(safety = policy.status()) {
 function missionCallBudget() {
   const safety = policy.status();
   const maximum = safety.localBudgetBypass
-    ? Math.max(1, Number(safety.testMissionToolMax || safety.missionToolMax || 1))
+    ? Number.MAX_SAFE_INTEGER
     : Math.max(0, Math.min(
       safety.missionToolMax,
       safety.burstMax - safety.burstUsed,
@@ -1786,12 +1786,10 @@ async function companyMission(request) {
   const reconsidered = reconsiderRejectedCandidates(request);
   const records = reconsidered.slice();
   const budget = missionCallBudget();
-  if (request.resumeExistingPool) {
-    // Saved-first continuations may use the full currently-safe burst. The
-    // account policy already bounds this by burst/hour/day limits, so an
-    // additional 8-call cap only slowed long-running target missions.
+  if (request.resumeExistingPool && !budget.localBudgetBypass) {
+    // Normal mode stays safety-bounded. Explicit emergency/local-budget bypass
+    // must never be silently turned back off by resume logic.
     budget.maximum = Math.min(budget.maximum, Number(policy.settings().burstMax || 12));
-    budget.localBudgetBypass = false;
   }
   // Zero live-call budget does not mean zero useful work. Rejected candidates
   // and compatible saved discovery may still satisfy part or all of the mission.
@@ -1826,7 +1824,7 @@ async function companyMission(request) {
   if (request.hiring) {
     const plan = jobSearchPlan(request);
     const normalSearchAllowance = budget.localBudgetBypass
-      ? Math.min(plan.length, Number(policy.settings().testJobSearchMax || 20))
+      ? plan.length
       : Math.min(plan.length, queryStrategist.searchAllowance(budget, Math.max(0, request.count - acceptedCompanies.size)));
     // Even with zero fresh-call budget, enter one search step. missionRunner.call
     // will replay saved discovery at zero cost; if no cache exists, budgetedCall
