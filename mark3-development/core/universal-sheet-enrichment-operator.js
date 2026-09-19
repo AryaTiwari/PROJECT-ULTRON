@@ -51,9 +51,11 @@ function loadBackgroundPhoneAssignments() {
     if (!fs.existsSync(PHONE_ASSIGNMENTS_FILE)) return 0;
     const parsed = JSON.parse(fs.readFileSync(PHONE_ASSIGNMENTS_FILE, 'utf8'));
     for (const item of Array.isArray(parsed?.assignments) ? parsed.assignments : []) {
-      const key = text(item?.key);
-      if (!key || !item?.spreadsheetId || !item?.sheetName || !Number.isInteger(Number(item?.rowNumber)) || !Number.isInteger(Number(item?.columnIndex)) || !item?.apolloPersonId) continue;
+      if (!item?.spreadsheetId || !item?.sheetName || !Number.isInteger(Number(item?.rowNumber)) || !Number.isInteger(Number(item?.columnIndex)) || !item?.apolloPersonId) continue;
       const { key: _ignored, ...value } = item;
+      const key = `${item.spreadsheetId}|${item.sheetName}|${Number(item.rowNumber)}|${Number(item.columnIndex)}`;
+      // Latest persisted owner for a cell wins. Old person-id-qualified keys are
+      // deliberately collapsed so one phone cell cannot accumulate callbacks.
       backgroundPhoneAssignments.set(key, value);
     }
   } catch {}
@@ -345,18 +347,28 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   const queue = options?.pendingPhoneQueue;
   if (!Array.isArray(queue) || !Number.isInteger(rowNumber) || !group?.fields?.phone) return;
   if (text(snapshot?.values?.phone)) return;
+
   const apolloPersonId = text(person?.apolloPersonId || person?.id);
-  if (!apolloPersonId || text(person?.phone) || person?.phoneStatus !== 'pending') return;
-  const key = `${rowNumber}|${group.fields.phone.index}|${apolloPersonId}`;
-  if (queue.some((item) => item.key === key)) return;
-  queue.push({
+  const phoneStatus = text(person?.phoneStatus);
+  const phoneWaterfallRequestId = text(person?.phoneWaterfallRequestId);
+  const isNativePending = phoneStatus === 'pending';
+  const isWaterfallPending = phoneStatus === 'waterfall_pending' && Boolean(phoneWaterfallRequestId);
+  if (!apolloPersonId || text(person?.phone) || (!isNativePending && !isWaterfallPending)) return;
+
+  const key = `${rowNumber}|${group.fields.phone.index}`;
+  const item = {
     key,
     rowNumber,
     columnIndex: group.fields.phone.index,
     groupId: group.id,
     apolloPersonId,
     personName: text(person?.name),
-  });
+    phoneMode: isWaterfallPending ? 'waterfall' : 'webhook',
+    phoneWaterfallRequestId: isWaterfallPending ? phoneWaterfallRequestId : '',
+  };
+  const existingIndex = queue.findIndex((entry) => entry.key === key);
+  if (existingIndex >= 0) queue[existingIndex] = item;
+  else queue.push(item);
 }
 
 function phoneSyncPolls(options = {}) {
@@ -371,7 +383,7 @@ function phoneSyncWaitMs(options = {}) {
 
 
 function backgroundPhoneKey(source, item) {
-  return `${source.spreadsheetId}|${source.sheetName}|${item.rowNumber}|${item.columnIndex}|${item.apolloPersonId}`;
+  return `${source.spreadsheetId}|${source.sheetName}|${item.rowNumber}|${item.columnIndex}`;
 }
 
 function registerBackgroundPhoneAssignments(source, items = []) {
@@ -391,14 +403,17 @@ function registerBackgroundPhoneAssignments(source, items = []) {
 
 async function syncBackgroundPhoneAssignments() {
   loadBackgroundPhoneAssignments();
-  if (!backgroundPhoneAssignments.size) return { resolved: 0, pending: 0 };
-  const results = await apollo.fetchPhoneResults();
-  if (!Array.isArray(results) || !results.length) {
-    return { resolved: 0, pending: backgroundPhoneAssignments.size };
+  if (!backgroundPhoneAssignments.size) return { resolved: 0, written: 0, pending: 0 };
+
+  const items = [...backgroundPhoneAssignments.entries()];
+  const webhookItems = items.filter(([, item]) => item.phoneMode !== 'waterfall');
+  let nativeResults = [];
+  if (webhookItems.length) {
+    try { nativeResults = await apollo.fetchPhoneResults(); } catch {}
   }
 
   const byId = new Map();
-  for (const result of results) {
+  for (const result of Array.isArray(nativeResults) ? nativeResults : []) {
     const id = text(result?.apollo_person_id);
     if (id) byId.set(id, result);
   }
@@ -406,12 +421,34 @@ async function syncBackgroundPhoneAssignments() {
   let resolved = 0;
   let written = 0;
   const handledIds = new Set();
-  for (const [key, item] of [...backgroundPhoneAssignments.entries()]) {
-    const result = byId.get(item.apolloPersonId);
-    if (!result) continue;
-    const phone = apollo.validPhone(result?.phone);
-    apollo.recordPhoneResult(item.apolloPersonId, phone);
-    handledIds.add(item.apolloPersonId);
+
+  for (const [key, item] of items) {
+    let phone = null;
+    let terminal = false;
+
+    if (item.phoneMode === 'waterfall' && item.phoneWaterfallRequestId) {
+      try {
+        const quality = require('./apollo-three-poc-quality');
+        const polled = await quality.pollPhoneRequest(item.phoneWaterfallRequestId, { polls: 0 });
+        phone = apollo.validPhone(polled?.phone);
+        terminal = ['found', 'not_found', 'terminal'].includes(text(polled?.state));
+        if (phone) apollo.recordPhoneResult(item.apolloPersonId, phone);
+      } catch (error) {
+        item.lastError = text(error?.message || error).slice(0, 300);
+        item.lastAttemptAt = new Date().toISOString();
+        backgroundPhoneAssignments.set(key, item);
+        continue;
+      }
+    } else {
+      const result = byId.get(item.apolloPersonId);
+      if (!result) continue;
+      phone = apollo.validPhone(result?.phone);
+      apollo.recordPhoneResult(item.apolloPersonId, phone);
+      handledIds.add(item.apolloPersonId);
+      terminal = true;
+    }
+
+    if (!terminal) continue;
 
     try {
       const range = sheets.cellRange(item.sheetName, item.rowNumber, item.columnIndex);
@@ -431,7 +468,7 @@ async function syncBackgroundPhoneAssignments() {
 
   for (const id of handledIds) {
     const stillPendingForId = [...backgroundPhoneAssignments.values()]
-      .some((item) => item.apolloPersonId === id);
+      .some((item) => item.phoneMode !== 'waterfall' && item.apolloPersonId === id);
     if (!stillPendingForId) {
       try { await apollo.consumePhoneResult(id); } catch {}
     }
@@ -484,7 +521,26 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   stats.pendingPhoneRequests = pending.length;
   if (!pending.length) return;
 
-  const unresolved = new Map(pending.map((item) => [item.key, item]));
+  const waterfallPending = pending.filter((item) => item.phoneMode === 'waterfall' && item.phoneWaterfallRequestId);
+  const nativePending = pending.filter((item) => item.phoneMode !== 'waterfall');
+
+  // Waterfall requests were already polled during verified enrichment. Persist
+  // them immediately for zero-wait background polling instead of asking the
+  // unrelated webhook result store for an ID it will never receive.
+  if (waterfallPending.length) {
+    stats.phoneWaterfallPendingAssignments = waterfallPending.length;
+    registerBackgroundPhoneAssignments(source, waterfallPending);
+    startBackgroundPhoneWatcher();
+    stats.backgroundPhoneWatcher = true;
+  }
+
+  if (!nativePending.length) {
+    stats.phoneStillPending = waterfallPending.length;
+    stats.backgroundPhonePending = backgroundPhoneAssignments.size;
+    return;
+  }
+
+  const unresolved = new Map(nativePending.map((item) => [item.key, item]));
   const handledProviderIds = new Set();
   const polls = phoneSyncPolls(options);
   const waitMs = phoneSyncWaitMs(options);
@@ -547,12 +603,13 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   for (const apolloPersonId of handledProviderIds) {
     try { await apollo.consumePhoneResult(apolloPersonId); } catch {}
   }
-  stats.phoneStillPending = unresolved.size;
+  stats.phoneStillPending = unresolved.size + waterfallPending.length;
   if (unresolved.size && options.backgroundPhoneWatcher !== false) {
-    stats.backgroundPhonePending = registerBackgroundPhoneAssignments(source, [...unresolved.values()]);
+    registerBackgroundPhoneAssignments(source, [...unresolved.values()]);
     startBackgroundPhoneWatcher();
     stats.backgroundPhoneWatcher = true;
   }
+  stats.backgroundPhonePending = backgroundPhoneAssignments.size;
 }
 
 function existingPersonVerificationContext(item, fallbackContext = {}) {
@@ -1598,6 +1655,7 @@ function freshStats() {
     phoneNotFound: 0,
     phoneWriteSkippedPopulated: 0,
     phoneStillPending: 0,
+    phoneWaterfallPendingAssignments: 0,
     candidatesRanked: 0,
     existingVerificationAttempts: 0,
     existingVerificationFailures: 0,
