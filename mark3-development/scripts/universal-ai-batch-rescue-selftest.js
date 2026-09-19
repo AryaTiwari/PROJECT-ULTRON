@@ -119,6 +119,10 @@ assert.match(rescueSource, /no-verified-candidates/);
 assert.match(rescueSource, /selection-rejected-after-verification/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
 assert.match(rescueSource, /apollo\.resolveDecisionMaker/);
+assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_HYDRATION_FALLBACK_CANDIDATES/);
+assert.match(rescueSource, /post-ai-hydration-fallback/);
+assert.match(rescueSource, /hydrationFallbackAttempts/);
+assert.match(rescueSource, /hydrationFallbackAccepted/);
 assert.match(rescueSource, /ranker\.sameEmployer/);
 assert.match(rescueSource, /planner\.safeWritesForGroup/);
 assert.match(rescueSource, /stats\.modelAttempts >= stats\.maxCalls/);
@@ -162,4 +166,4 @@ assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? 
 assert.match(directSource, /async function candidates\(taskType = 'general', \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
 assert.match(directSource, /async function chat\(\{ messages, model, tools = null, taskType = 'general', timeoutMs = null, envOnly: forceEnvOnly = false \} = \{\}\)/);
 
-console.log('Universal bounded AI batch rescue self-test passed: AI rescue is limited to exact empty POC-2 residue rows, unresolved rows retain explicit reasons, compact/tolerant output parsing accepts only supplied candidates, direct selection can fall Groq -> Gemini -> NVIDIA, every remaining mandatory POC-2 row continues into exact-row last resort regardless of sibling progress, and live-sheet completion audit decides whether the run may close.');
+console.log('Universal bounded AI batch rescue self-test passed: AI rescue is limited to exact empty POC-2 residue rows, supplied candidates only are accepted, Groq can fall through Gemini/NVIDIA, a failed AI-selected hydration can try the next bounded verified shortlist candidates without another model call, and unresolved mandatory POC-2 rows continue into exact-row last resort before the live-sheet completion gate closes.');
