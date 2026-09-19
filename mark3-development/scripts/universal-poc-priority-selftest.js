@@ -275,7 +275,7 @@ assert.match(operatorSource, /const requestedPoc3 = !phaseOrdinal && requestedPe
 assert.match(operatorSource, /markLeftover\(stats, rowNumber, 'requested-poc3-unresolved'/);
 assert.match(operatorSource, /requestedPoc3Deferred/);
 assert.match(approvalSource, /expectedPersonGroups: payload\.expectedPersonGroups \|\| undefined/);
-assert.match(qualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL', '0'/);
+assert.match(qualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
 assert.match(qualitySource, /Native Apollo reveal \+ webhook settlement is the production default/);
 assert.match(operatorSource, /Mandatory POC-2 residue must always enter the deterministic leftover/);
 assert.match(operatorSource, /Fast sweep deferred deeper deterministic discovery\/hydration until all rows are processed/);
