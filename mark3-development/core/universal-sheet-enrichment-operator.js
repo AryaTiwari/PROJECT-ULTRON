@@ -931,6 +931,55 @@ function collectLinkedInCompanySlugs(value, out = new Set()) {
   return out;
 }
 
+function collectLinkedInCompanyUrns(value, out = new Set()) {
+  if (value == null) return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectLinkedInCompanyUrns(item, out);
+    return out;
+  }
+  if (typeof value === 'object') {
+    if (
+      text(value.kind).toLowerCase() === 'company_urn'
+      && /^\d+$/.test(text(value.value))
+    ) {
+      out.add(text(value.value));
+    }
+    for (const item of Object.values(value)) collectLinkedInCompanyUrns(item, out);
+  }
+  return out;
+}
+
+function companySlugCandidates(companyContext = {}) {
+  const out = new Set();
+  const company = text(companyContext?.company).toLowerCase();
+  const normalizedCompany = company
+    .replace(/&/g, ' ')
+    .replace(/\b(?:private|pvt|limited|ltd|llp|inc|corporation|corp)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-');
+  if (normalizedCompany) out.add(normalizedCompany);
+
+  const brand = companyBrandFromDomain(companyContext?.domain || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-');
+  if (brand) out.add(brand);
+  return [...out].slice(0, 2);
+}
+
+function linkedinCompanyProfileMatches(profile, companyContext = {}) {
+  const about = text(profile?.sections?.about || profile?.sections?.main_profile || '');
+  const expectedCompany = ranker.companyKey(companyContext?.company || '');
+  const domain = websiteDomain(companyContext?.domain || '');
+  const haystack = ranker.normalize(about);
+  if (expectedCompany && haystack.includes(expectedCompany)) return true;
+  if (domain && haystack.includes(domain)) return true;
+  const brand = ranker.companyKey(companyBrandFromDomain(domain));
+  return Boolean(brand && haystack.includes(brand));
+}
+
 async function verifyLinkedInCompanyEmployee(linkedinUrl, companyContext, stats) {
   const slug = linkedinSlug(linkedinUrl);
   if (!slug) return null;
@@ -1000,39 +1049,14 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
 
   const personUrls = new Set();
 
-  // Strong path for sparse/small companies:
-  // company search -> exact LinkedIn company slug -> company employees page.
+  // Deep sparse-company path:
+  // company search -> exact/derived slug -> verified company profile -> company URN
+  // -> current_company people search -> employee page. Generic people search is last.
+  let slugs = [];
   try {
     const companySearch = await linkedinMcp.callTool('search_companies', { keywords: queryBrand });
     stats.linkedinFallbackCompanySearches = Number(stats.linkedinFallbackCompanySearches || 0) + 1;
-    const slugs = [...collectLinkedInCompanySlugs(companySearch)].slice(0, 2);
-
-    for (const slug of slugs) {
-      if (personUrls.size >= 8) break;
-      try {
-        const employees = await linkedinMcp.callTool('get_company_employees', {
-          company_name: slug,
-          keywords: 'recruiter talent acquisition human resources HR founder director owner manager',
-        });
-        stats.linkedinFallbackEmployeeSearches = Number(stats.linkedinFallbackEmployeeSearches || 0) + 1;
-        collectLinkedInPersonUrls(employees, personUrls);
-
-        // Tiny companies may have no recruiter titles. One unfiltered employee
-        // page is a safer fallback than inventing a POC or giving up after zero.
-        if (!personUrls.size) {
-          const allEmployees = await linkedinMcp.callTool('get_company_employees', { company_name: slug });
-          stats.linkedinFallbackEmployeeSearches = Number(stats.linkedinFallbackEmployeeSearches || 0) + 1;
-          collectLinkedInPersonUrls(allEmployees, personUrls);
-        }
-      } catch (error) {
-        stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
-        stats.discoveryDiagnostics.push({
-          company: queryBrand,
-          code: String(error?.code || 'LINKEDIN_COMPANY_EMPLOYEE_SEARCH_FAILED'),
-          message: String(error?.message || error || '').slice(0, 300),
-        });
-      }
-    }
+    slugs = [...collectLinkedInCompanySlugs(companySearch)].slice(0, 2);
   } catch (error) {
     stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
     stats.discoveryDiagnostics.push({
@@ -1040,6 +1064,79 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
       code: String(error?.code || 'LINKEDIN_COMPANY_SEARCH_FAILED'),
       message: String(error?.message || error || '').slice(0, 300),
     });
+  }
+
+  if (!slugs.length) slugs = companySlugCandidates(companyContext);
+
+  for (const slug of slugs.slice(0, 2)) {
+    if (personUrls.size >= 8) break;
+    let companyProfile = null;
+    try {
+      companyProfile = await linkedinMcp.callTool('get_company_profile', { company_name: slug });
+      stats.linkedinFallbackCompanyProfiles = Number(stats.linkedinFallbackCompanyProfiles || 0) + 1;
+    } catch (error) {
+      stats.discoveryDiagnostics.push({
+        company: queryBrand,
+        code: String(error?.code || 'LINKEDIN_COMPANY_PROFILE_FAILED'),
+        message: String(error?.message || error || '').slice(0, 300),
+      });
+    }
+
+    const profileVerified = companyProfile && linkedinCompanyProfileMatches(companyProfile, companyContext);
+    if (companyProfile && !profileVerified) {
+      stats.discoveryDiagnostics.push({
+        company: queryBrand,
+        code: 'LINKEDIN_DERIVED_COMPANY_SLUG_MISMATCH',
+        message: `LinkedIn company profile for slug ${slug} did not match the verified row employer.`,
+      });
+      continue;
+    }
+
+    if (profileVerified) {
+      const urns = [...collectLinkedInCompanyUrns(companyProfile)].slice(0, 1);
+      stats.linkedinFallbackCompanyUrns = Number(stats.linkedinFallbackCompanyUrns || 0) + urns.length;
+      for (const urn of urns) {
+        if (personUrls.size >= 8) break;
+        try {
+          const constrained = await linkedinMcp.callTool('search_people', {
+            keywords: 'recruiter talent acquisition human resources HR founder director owner manager',
+            current_company: urn,
+            ...(options.location ? { location: String(options.location) } : {}),
+          });
+          stats.linkedinFallbackCurrentCompanySearches = Number(stats.linkedinFallbackCurrentCompanySearches || 0) + 1;
+          collectLinkedInPersonUrls(constrained, personUrls);
+        } catch (error) {
+          stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
+          stats.discoveryDiagnostics.push({
+            company: queryBrand,
+            code: String(error?.code || 'LINKEDIN_CURRENT_COMPANY_SEARCH_FAILED'),
+            message: String(error?.message || error || '').slice(0, 300),
+          });
+        }
+      }
+    }
+
+    try {
+      const employees = await linkedinMcp.callTool('get_company_employees', {
+        company_name: slug,
+        keywords: 'recruiter talent acquisition human resources HR founder director owner manager',
+      });
+      stats.linkedinFallbackEmployeeSearches = Number(stats.linkedinFallbackEmployeeSearches || 0) + 1;
+      collectLinkedInPersonUrls(employees, personUrls);
+
+      if (!personUrls.size) {
+        const allEmployees = await linkedinMcp.callTool('get_company_employees', { company_name: slug });
+        stats.linkedinFallbackEmployeeSearches = Number(stats.linkedinFallbackEmployeeSearches || 0) + 1;
+        collectLinkedInPersonUrls(allEmployees, personUrls);
+      }
+    } catch (error) {
+      stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
+      stats.discoveryDiagnostics.push({
+        company: queryBrand,
+        code: String(error?.code || 'LINKEDIN_COMPANY_EMPLOYEE_SEARCH_FAILED'),
+        message: String(error?.message || error || '').slice(0, 300),
+      });
+    }
   }
 
   // Fallback when LinkedIn does not expose a company slug/people page.
@@ -1179,7 +1276,8 @@ async function hydrateDecisionMakerVerified(candidate, companyContext, stats, op
 async function discoverPriorityPeopleFast(companyContext, cache, stats, options = {}) {
   const company = text(companyContext?.company);
   const domain = websiteDomain(companyContext?.domain || '');
-  const key = `priority-fast-v2|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
+  const discoveryMode = options.primarySweep ? 'sweep' : 'deep';
+  const key = `priority-fast-v3|${discoveryMode}|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
   if (cache.has(key)) {
     stats.candidateCacheHits++;
     return cache.get(key);
@@ -1215,7 +1313,17 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     });
   }
 
-  // 2. If title-targeting produced nothing, do one bounded broad search.
+  // Results-first primary sweep never cascades down a long waterfall on one row.
+  // One targeted search is enough to decide whether this row proceeds now or is
+  // queued for the post-sweep deterministic recheck.
+  if (options.primarySweep) {
+    stats.candidatesDiscovered += merged.length;
+    if (merged.length) cache.set(key, merged);
+    else cache.delete(key);
+    return merged;
+  }
+
+  // 2. Deep leftover pass: if title-targeting produced nothing, do one bounded broad search.
   if (!merged.length) {
     try {
       const broad = await apollo.searchCompanyPeopleBroad({
@@ -1682,6 +1790,9 @@ function freshStats() {
     candidatesDiscovered: 0,
     linkedinFallbackSearches: 0,
     linkedinFallbackCompanySearches: 0,
+    linkedinFallbackCompanyProfiles: 0,
+    linkedinFallbackCompanyUrns: 0,
+    linkedinFallbackCurrentCompanySearches: 0,
     linkedinFallbackEmployeeSearches: 0,
     linkedinFallbackProfileVerifications: 0,
     linkedinFallbackFailures: 0,
@@ -1718,6 +1829,12 @@ function freshStats() {
     lowConfidenceCandidates: 0,
     deferredOpenGroups: 0,
     deferredPoc2Rows: [],
+    leftoverQueue: [],
+    primarySweepDeferredRows: [],
+    deterministicRecheckAttempted: false,
+    deterministicRecheckRows: [],
+    deterministicRecheckResolvedRows: [],
+    deterministicRecheckRemainingRows: [],
     manualPoc2Attempts: 0,
     manualPoc2Filled: 0,
     manualPoc3Attempts: 0,
@@ -1748,6 +1865,79 @@ function freshStats() {
   };
 }
 
+function markLeftover(stats, rowNumber, reason, details = {}) {
+  const row = Number(rowNumber);
+  if (!Number.isInteger(row)) return;
+  const groupOrdinal = Number(details.groupOrdinal || 0) || null;
+  const key = `${row}|${groupOrdinal || ''}|${text(reason)}`;
+  const existing = new Set((stats.leftoverQueue || []).map((item) =>
+    `${Number(item.rowNumber)}|${Number(item.groupOrdinal || 0) || ''}|${text(item.reason)}`
+  ));
+  if (!existing.has(key)) {
+    stats.leftoverQueue.push({
+      rowNumber: row,
+      groupOrdinal,
+      reason: text(reason || 'unresolved'),
+      company: text(details.company || ''),
+      detail: text(details.detail || '').slice(0, 300),
+    });
+  }
+  if (!stats.primarySweepDeferredRows.includes(row)) stats.primarySweepDeferredRows.push(row);
+}
+
+function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
+  const additive = [
+    'rowsChanged','cellsChanged','candidateSearches','candidateBroadSearches','candidatePrioritySearches',
+    'candidatePrioritySearchFailures','candidateCacheHits','candidatesDiscovered','linkedinFallbackSearches',
+    'linkedinFallbackCompanySearches','linkedinFallbackCompanyProfiles','linkedinFallbackCompanyUrns',
+    'linkedinFallbackCurrentCompanySearches','linkedinFallbackEmployeeSearches','linkedinFallbackProfileVerifications',
+    'linkedinFallbackFailures','linkedinFallbackProfilesFound','linkedinFallbackVerifiedCandidates',
+    'linkedinHydrationRecoveryAttempts','linkedinHydrationRecoverySuccesses','linkedinHydrationRecoveryFailures',
+    'postHydrationDuplicates','existingVerificationAttempts','existingGroupsRepaired','embeddedDesignationWrites',
+    'newPeopleSelected','hydrationAttempts','hydrationFailures','manualPoc2Attempts','manualPoc2Filled',
+    'manualPoc3Attempts','manualPoc3Filled','optionalPoc3Deferred','orphanContactTargets','orphanContactVerified',
+    'orphanContactBlocked','orphanContactMismatches','phoneCellsFilled','phoneRowsChanged','phoneNotFound',
+    'phoneWriteSkippedPopulated','phoneSyncPolls','phoneSyncErrors'
+  ];
+  for (const field of additive) {
+    primary[field] = Number(primary[field] || 0) + Number(recheck?.[field] || 0);
+  }
+
+  primary.discoveryDiagnostics = [...(primary.discoveryDiagnostics || []), ...(recheck?.discoveryDiagnostics || [])];
+  primary.existingRepairAudit = [...(primary.existingRepairAudit || []), ...(recheck?.existingRepairAudit || [])];
+  primary.selectionAudit = [...(primary.selectionAudit || []), ...(recheck?.selectionAudit || [])];
+  primary.rowFailureAudit = [...(primary.rowFailureAudit || []), ...(recheck?.rowFailureAudit || [])];
+  primary.rowFailures = Number(primary.rowFailures || 0) + Number(recheck?.rowFailures || 0);
+  primary.recoverableRowFailures = Number(primary.recoverableRowFailures || 0) + Number(recheck?.recoverableRowFailures || 0);
+  primary.transientProviderFailures = Number(primary.transientProviderFailures || 0) + Number(recheck?.transientProviderFailures || 0);
+  primary.transientProviderContinuations = Number(primary.transientProviderContinuations || 0) + Number(recheck?.transientProviderContinuations || 0);
+
+  // The recheck is authoritative for unresolved state because it re-read the live sheet.
+  primary.deferredPoc2Rows = [...new Set((recheck?.deferredPoc2Rows || []).map(Number).filter(Number.isInteger))];
+  primary.deferredOpenGroups = Number(recheck?.deferredOpenGroups || 0);
+  primary.unfilledOpenGroups = Number(recheck?.unfilledOpenGroups || 0);
+  primary.rowsWithoutEmployer = Number(recheck?.rowsWithoutEmployer || 0);
+  primary.existingVerificationFailures = Number(recheck?.existingVerificationFailures || 0);
+  primary.leftoverQueue = Array.isArray(recheck?.leftoverQueue) ? recheck.leftoverQueue : [];
+  primary.phoneStillPending = Number(recheck?.phoneStillPending ?? primary.phoneStillPending ?? 0);
+  primary.backgroundPhonePending = Number(recheck?.backgroundPhonePending ?? primary.backgroundPhonePending ?? 0);
+  primary.backgroundPhoneWatcher = Boolean(primary.backgroundPhoneWatcher || recheck?.backgroundPhoneWatcher);
+
+  const remaining = new Set((primary.leftoverQueue || []).map((item) => Number(item.rowNumber)).filter(Number.isInteger));
+  primary.deterministicRecheckAttempted = true;
+  primary.deterministicRecheckRows = [...new Set(targetRows.map(Number).filter(Number.isInteger))];
+  primary.deterministicRecheckRemainingRows = primary.deterministicRecheckRows.filter((row) => remaining.has(row));
+  primary.deterministicRecheckResolvedRows = primary.deterministicRecheckRows.filter((row) => !remaining.has(row));
+
+  if (recheck?.haltedEarly) {
+    primary.haltedEarly = true;
+    primary.systemicHalts = Number(primary.systemicHalts || 0) + Number(recheck.systemicHalts || 1);
+    primary.haltAtRow = recheck.haltAtRow;
+    primary.haltError = recheck.haltError;
+  }
+  return primary;
+}
+
 async function run(request = {}, options = {}) {
   const sheetUrl = request.sheetUrl || request.url;
   if (!sheetUrl) throw new Error('Universal enrichment requires a Google Sheet URL.');
@@ -1762,44 +1952,49 @@ async function run(request = {}, options = {}) {
   }
 
   const stats = freshStats();
+  const internalRecheck = Boolean(options.recheckPass);
 
-  // Resume Apollo phone callbacks from earlier runs/restarts before doing new
-  // enrichment work. Ownership is persisted by exact sheet/row/column/person id.
-  stats.resumedPhoneAssignments = loadBackgroundPhoneAssignments();
-  if (backgroundPhoneAssignments.size) {
+  if (!internalRecheck) {
+    // Resume Apollo phone callbacks from earlier runs/restarts before doing new
+    // enrichment work. Ownership is persisted by exact sheet/row/column/person id.
+    stats.resumedPhoneAssignments = loadBackgroundPhoneAssignments();
+    if (backgroundPhoneAssignments.size) {
+      try {
+        const replay = await syncBackgroundPhoneAssignments();
+        stats.resumedPhoneResolved = Number(replay?.resolved || 0);
+        stats.resumedPhoneCellsFilled = Number(replay?.written || 0);
+        stats.phoneCellsFilled += stats.resumedPhoneCellsFilled;
+        stats.cellsChanged += stats.resumedPhoneCellsFilled;
+      } catch {}
+      if (backgroundPhoneAssignments.size) startBackgroundPhoneWatcher();
+    }
+
+    // Persist continuity-recovered headers only once, before the primary sweep.
+    await applyRecoveredHeaderRepairs(source, stats);
+
     try {
-      const replay = await syncBackgroundPhoneAssignments();
-      stats.resumedPhoneResolved = Number(replay?.resolved || 0);
-      stats.resumedPhoneCellsFilled = Number(replay?.written || 0);
-      stats.phoneCellsFilled += stats.resumedPhoneCellsFilled;
-      stats.cellsChanged += stats.resumedPhoneCellsFilled;
+      const quality = require('./apollo-three-poc-quality');
+      quality.install();
+      quality.startRun();
     } catch {}
-    if (backgroundPhoneAssignments.size) startBackgroundPhoneWatcher();
+    try {
+      const discovery = require('./three-poc-candidate-discovery-policy');
+      discovery.install?.();
+      discovery.startRun();
+    } catch {}
   }
 
-  // Persist continuity-recovered headers only after the approved run begins and
-  // only into cells that are still blank. This makes the restored contact layout
-  // self-describing for later runs without risking overwrite of user data.
-  await applyRecoveredHeaderRepairs(source, stats);
-
-  // Make contact-quality/discovery wrappers self-sufficient in this runtime.
-  // Do not rely on some earlier bootstrap path having happened to install them.
-  try {
-    const quality = require('./apollo-three-poc-quality');
-    quality.install();
-    quality.startRun();
-  } catch {}
-  try {
-    const discovery = require('./three-poc-candidate-discovery-policy');
-    discovery.install?.();
-    discovery.startRun();
-  } catch {}
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const pendingPhoneQueue = [];
   const runOptions = { ...options, discoveryCache: cache, pendingPhoneQueue };
+  const targetRows = Array.isArray(options.targetRows)
+    ? new Set(options.targetRows.map((value) => Number(value)).filter(Number.isInteger))
+    : null;
+
   for (const record of analysis.rowPlans) {
-    stats.rowsSeen++;
     const { row, rowNumber, plan } = record;
+    if (targetRows && !targetRows.has(Number(rowNumber))) continue;
+    stats.rowsSeen++;
     if (!plan.anchor) { stats.rowsWithoutAnchor++; continue; }
 
     try {
@@ -1824,7 +2019,7 @@ async function run(request = {}, options = {}) {
       // LinkedIn employer scraping is the slow fallback, never the default. Use it
       // only when neither row evidence nor Apollo's exact anchor profile resolved
       // a usable hiring organization.
-      if (!companyContext?.company && plan.anchor.type === 'person') {
+      if (!companyContext?.company && plan.anchor.type === 'person' && !options.resultsFirstSweep) {
         try {
           const linkedinEmployerContext = await resolvePersonAnchor(plan, row, { ...options, allowLinkedInEmployerFallback: true });
           if (linkedinEmployerContext?.company) companyContext = linkedinEmployerContext;
@@ -1854,6 +2049,12 @@ async function run(request = {}, options = {}) {
           stats.deferredOpenGroups++;
           stats.unfilledOpenGroups++;
           if (!stats.deferredPoc2Rows.includes(rowNumber)) stats.deferredPoc2Rows.push(rowNumber);
+          markLeftover(stats, rowNumber, 'employer-unresolved', {
+            groupOrdinal: 2,
+            detail: options.resultsFirstSweep
+              ? 'Fast sweep deferred employer recovery to the deterministic leftover pass.'
+              : 'No verified employer remained after deterministic recovery.',
+          });
         }
         const byColumn = new Map();
         for (const write of writes) if (!byColumn.has(write.columnIndex)) byColumn.set(write.columnIndex, write);
@@ -1876,7 +2077,14 @@ async function run(request = {}, options = {}) {
       // Verify them directly by LinkedIn or exact name+company before spending any
       // Apollo people-search calls. This is especially important for missing phones.
       const repairOptions = { ...runOptions, rowNumber, candidatePool: [] };
+      const verificationFailuresBefore = Number(stats.existingVerificationFailures || 0);
       writes.push(...await repairExistingGroups(row, plan, companyContext, stats, repairOptions));
+      if (Number(stats.existingVerificationFailures || 0) > verificationFailuresBefore) {
+        markLeftover(stats, rowNumber, 'existing-contact-repair-unresolved', {
+          company: companyContext.company,
+          detail: 'At least one existing contact could not be exactly re-verified/repaired in this pass.',
+        });
+      }
 
       // Mandatory POC-2 always gets the deterministic/manual discovery path first.
       // AI is rescue only. POC-3 may reuse this same pool but never triggers its own search.
@@ -1888,6 +2096,7 @@ async function run(request = {}, options = {}) {
             location: plan.context?.location || '',
             priorityCandidateLimit: options.manualPriorityCandidateLimit ?? 20,
             adaptiveBroadCandidateLimit: options.adaptiveBroadCandidateLimit ?? 30,
+            primarySweep: Boolean(options.resultsFirstSweep),
           });
         } catch (error) {
           stats.candidatePrioritySearchFailures++;
@@ -1908,8 +2117,10 @@ async function run(request = {}, options = {}) {
           ...rowOptions,
           ordinal: 2,
           claimed: manualClaimed,
-          maxHydrationAttempts: options.poc2HydrationAttempts
-            ?? Number(process.env.ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS || 5),
+          maxHydrationAttempts: options.resultsFirstSweep
+            ? Number(process.env.ULTRON_M3_UNIVERSAL_PRIMARY_POC2_HYDRATION_ATTEMPTS || 1)
+            : (options.poc2HydrationAttempts
+              ?? Number(process.env.ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS || 5)),
           fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26,
         });
         writes.push(...result.writes);
@@ -1919,6 +2130,13 @@ async function run(request = {}, options = {}) {
           stats.deferredOpenGroups += poc2Targets.length;
           stats.unfilledOpenGroups += poc2Targets.length;
           if (!stats.deferredPoc2Rows.includes(rowNumber)) stats.deferredPoc2Rows.push(rowNumber);
+          markLeftover(stats, rowNumber, people.length ? 'poc2-verification-unresolved' : 'poc2-no-candidates', {
+            groupOrdinal: 2,
+            company: companyContext.company,
+            detail: options.resultsFirstSweep
+              ? 'Fast sweep deferred deeper discovery/hydration until all rows are processed.'
+              : 'Deep deterministic pass still has no safe verified POC-2.',
+          });
         } else {
           stats.unfilledOpenGroups += poc2Targets.length;
         }
@@ -1964,6 +2182,9 @@ async function run(request = {}, options = {}) {
       if (isRecoverableRowFailure(typed)) {
         stats.recoverableRowFailures++;
         stats.consecutiveTransientProviderFailures = 0;
+        markLeftover(stats, rowNumber, 'recoverable-row-failure', {
+          detail: typed.code || typed.message || 'row-local failure',
+        });
         stats.rowsProcessed++;
         continue;
       }
@@ -2000,6 +2221,27 @@ async function run(request = {}, options = {}) {
     stats.phoneSyncLastError = typedFailureSummary(error, { stage: error?.stage || 'apollo-phone-result-sync' });
   }
 
+  // Results-first contract: finish the fast sweep before spending deep discovery
+  // on difficult rows. Re-read the live sheet, then re-run only the queued rows
+  // with the full deterministic waterfall. AI/last-resort sees only residue after
+  // this pass, never a row that merely failed the cheap first attempt.
+  if (options.resultsFirstSweep && !options.recheckPass && !stats.haltedEarly) {
+    const leftoverRows = [...new Set((stats.leftoverQueue || [])
+      .map((item) => Number(item.rowNumber))
+      .filter(Number.isInteger))];
+
+    if (leftoverRows.length) {
+      const recheck = await run(request, {
+        ...options,
+        resultsFirstSweep: false,
+        recheckPass: true,
+        targetRows: leftoverRows,
+        discoveryCache: cache,
+      });
+      mergeDeterministicRecheckStats(stats, recheck.stats || {}, leftoverRows);
+    }
+  }
+
   return {
     ok: true,
     deterministic: true,
@@ -2033,7 +2275,7 @@ function formatResult(result) {
   const haltText = s.haltError
     ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
     : '';
-  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally; ${(schema.continuityRecoveries || []).length} contact groups recovered by explicit schema continuity. Header continuity repair: ${s.headerRepairsWritten || 0}/${s.headerRepairsPlanned || 0} missing headers restored into blank cells, ${s.headerRepairsSkippedPopulated || 0} skipped because populated. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} contact cells across ${s.rowsChanged} data rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); LinkedIn zero-result fallback ${s.linkedinFallbackSearches || 0} searches, ${s.linkedinFallbackProfilesFound || 0} profile refs, ${s.linkedinFallbackVerifiedCandidates || 0} Apollo-verified candidates, ${s.linkedinFallbackFailures || 0} failures; ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; exact LinkedIn employer recovery ${s.linkedinHydrationRecoverySuccesses || 0}/${s.linkedinHydrationRecoveryAttempts || 0} succeeded (${s.linkedinHydrationRecoveryFailures || 0} failed); ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts (business-email exact match preferred when available), ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Final-POC contact waterfall: phone ${contactQuality.phoneWaterfallStarted || 0} started/${contactQuality.phoneWaterfallSucceeded || 0} found/${contactQuality.phoneWaterfallPending || 0} pending/${contactQuality.phoneWaterfallNotFound || 0} not-found/${contactQuality.phoneWaterfallUnavailable || 0} unavailable/${contactQuality.phoneWaterfallBudgetSkips || 0} budget-skipped; email ${contactQuality.waterfallStarted || 0} started/${contactQuality.waterfallSucceeded || 0} found/${contactQuality.waterfallPending || 0} pending/${contactQuality.waterfallBudgetSkips || 0} budget-skipped. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked; resumed ${s.resumedPhoneAssignments || 0} persisted callback assignments from earlier runs, resolved ${s.resumedPhoneResolved || 0}, wrote ${s.resumedPhoneCellsFilled || 0} recovered phone cells; ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Priority routing: POC-1 exact anchor completion always runs first; existing POC-2 exact repair runs deterministically; empty POC-2 manual hydration attempts ${s.manualPoc2Attempts || 0} (skipped when batch AI owns selection), manual fills ${s.manualPoc2Filled || 0}, unresolved POC-2 deferred to AI ${s.deferredOpenGroups || 0} across ${(s.deferredPoc2Rows || []).length} exact rows; optional POC-3 manual attempts ${s.manualPoc3Attempts || 0}, strong-confidence fills ${s.manualPoc3Filled || 0}, left optional ${s.optionalPoc3Deferred || 0}. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; row-evidence employers resolved ${s.rowEvidenceEmployersResolved || 0}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
+  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally; ${(schema.continuityRecoveries || []).length} contact groups recovered by explicit schema continuity. Header continuity repair: ${s.headerRepairsWritten || 0}/${s.headerRepairsPlanned || 0} missing headers restored into blank cells, ${s.headerRepairsSkippedPopulated || 0} skipped because populated. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} contact cells across ${s.rowsChanged} data rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); LinkedIn zero-result fallback ${s.linkedinFallbackSearches || 0} searches, ${s.linkedinFallbackProfilesFound || 0} profile refs, ${s.linkedinFallbackVerifiedCandidates || 0} Apollo-verified candidates, ${s.linkedinFallbackFailures || 0} failures; ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; exact LinkedIn employer recovery ${s.linkedinHydrationRecoverySuccesses || 0}/${s.linkedinHydrationRecoveryAttempts || 0} succeeded (${s.linkedinHydrationRecoveryFailures || 0} failed); ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts (business-email exact match preferred when available), ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Final-POC contact waterfall: phone ${contactQuality.phoneWaterfallStarted || 0} started/${contactQuality.phoneWaterfallSucceeded || 0} found/${contactQuality.phoneWaterfallPending || 0} pending/${contactQuality.phoneWaterfallNotFound || 0} not-found/${contactQuality.phoneWaterfallUnavailable || 0} unavailable/${contactQuality.phoneWaterfallBudgetSkips || 0} budget-skipped; email ${contactQuality.waterfallStarted || 0} started/${contactQuality.waterfallSucceeded || 0} found/${contactQuality.waterfallPending || 0} pending/${contactQuality.waterfallBudgetSkips || 0} budget-skipped. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked; resumed ${s.resumedPhoneAssignments || 0} persisted callback assignments from earlier runs, resolved ${s.resumedPhoneResolved || 0}, wrote ${s.resumedPhoneCellsFilled || 0} recovered phone cells; ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Priority routing: POC-1 exact anchor completion always runs first; existing POC-2 exact repair runs deterministically; empty POC-2 manual hydration attempts ${s.manualPoc2Attempts || 0} (skipped when batch AI owns selection), manual fills ${s.manualPoc2Filled || 0}, unresolved POC-2 deferred to AI ${s.deferredOpenGroups || 0} across ${(s.deferredPoc2Rows || []).length} exact rows; optional POC-3 manual attempts ${s.manualPoc3Attempts || 0}, strong-confidence fills ${s.manualPoc3Filled || 0}, left optional ${s.optionalPoc3Deferred || 0}. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; row-evidence employers resolved ${s.rowEvidenceEmployersResolved || 0}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. Results-first routing: fast sweep deferred ${(s.primarySweepDeferredRows || []).length} row${(s.primarySweepDeferredRows || []).length === 1 ? '' : 's'}; deterministic leftover recheck ${s.deterministicRecheckAttempted ? `ran on ${(s.deterministicRecheckRows || []).length} row${(s.deterministicRecheckRows || []).length === 1 ? '' : 's'}, resolved ${(s.deterministicRecheckResolvedRows || []).length}, remaining ${(s.deterministicRecheckRemainingRows || []).length}` : 'was not needed'}. AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -2069,6 +2311,9 @@ module.exports = {
   companyBrandFromDomain,
   collectLinkedInPersonUrls,
   collectLinkedInCompanySlugs,
+  collectLinkedInCompanyUrns,
+  companySlugCandidates,
+  linkedinCompanyProfileMatches,
   discoverLinkedInFallbackPeople,
   verifyLinkedInCompanyEmployee,
   hydrateDecisionMakerVerified,
@@ -2083,6 +2328,8 @@ module.exports = {
   isTransientProviderRowFailure,
   formatFailureSummary,
   freshStats,
+  markLeftover,
+  mergeDeterministicRecheckStats,
   run,
   formatResult,
 };
