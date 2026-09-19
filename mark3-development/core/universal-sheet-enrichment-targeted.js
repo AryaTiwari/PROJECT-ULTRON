@@ -472,7 +472,9 @@ async function run(request = {}, options = {}) {
     // From this point onward, a successful deterministic primary is authoritative.
     // Optional fallback/decorating failures must never invalidate verified writes
     // that base.run() already committed to the worksheet.
-    const primary = await runPocPhasePipeline(exact.request, runOptions);
+    const primary = phasedExecution
+      ? await runPocPhasePipeline(exact.request, runOptions)
+      : await base.run(exact.request, runOptions);
     const primaryStats = { ...(primary.stats || {}) };
     const providerRetryReasons = providerRetryReasonsFromPrimary(primaryStats);
     let result = primary;
