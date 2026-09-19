@@ -87,6 +87,21 @@ assert.equal(controller.parseContactPhaseOrdinal('Fill POC-1 only in Arya 2'), 1
 assert.equal(controller.parseContactPhaseOrdinal('Only second POC for this sheet'), 2);
 assert.equal(controller.parseContactPhaseOrdinal('3rd POC only'), 3);
 assert.equal(controller.parseContactPhaseOrdinal('Fill POC-1 then POC-2 then POC-3'), null);
+assert.equal(
+  controller.parseContactPhaseOrdinal('POC-2 identity discovery should be necessary only where F is actually blank.'),
+  null,
+  '"only where" must not activate POC-2-only diagnostic mode',
+);
+assert.equal(
+  controller.parseContactPhaseOrdinal('POC-3 identity discovery should be necessary only where I is actually blank.'),
+  null,
+  '"only where" must not activate POC-3-only diagnostic mode',
+);
+assert.equal(
+  controller.parseContactPhaseOrdinal('Enrich POC-1, POC-2 and POC-3 together. POC-2 discovery is necessary only where F is blank and POC-3 discovery only where I is blank.'),
+  null,
+  'all-POC production wording must remain coordinated mode',
+);
 
 
 const operator = require('../core/universal-sheet-enrichment-operator');
@@ -139,6 +154,7 @@ assert.match(operatorSource, /phaseOrdinal === 3/);
 assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?\[\.\.\.poc2Targets, \.\.\.poc3Targets\]/);
 assert.match(operatorSource, /targetOrdinals: phaseOrdinals/);
 
+assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline === true \|\| Boolean\(options\.contactPhaseOrdinal\)/);
 assert.match(targetedSource, /async function runPocPhasePipeline/);
 assert.match(targetedSource, /ordinal: 1/);
 assert.match(targetedSource, /ordinal: 2/);
