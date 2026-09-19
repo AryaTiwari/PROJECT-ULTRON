@@ -757,9 +757,13 @@ async function repairExistingContactFromPublicIndex(item, companyContext, stats,
 async function repairExistingGroups(row, plan, companyContext, stats, options = {}) {
   const writes = [];
   const targets = new Map();
-  for (const item of plan.groups?.partial || []) if (!item.isAnchor) targets.set(item.group.id, item);
+  const targetOrdinals = Array.isArray(options.targetOrdinals)
+    ? new Set(options.targetOrdinals.map((value) => Number(value)).filter(Number.isFinite))
+    : null;
+  const allowed = (item) => !targetOrdinals || targetOrdinals.has(Number(item?.group?.ordinal || 0));
+  for (const item of plan.groups?.partial || []) if (!item.isAnchor && allowed(item)) targets.set(item.group.id, item);
   for (const item of plan.groups?.existing || []) {
-    if (needsEmbeddedDesignationRepair(item)) targets.set(item.group.id, item);
+    if (allowed(item) && needsEmbeddedDesignationRepair(item)) targets.set(item.group.id, item);
   }
 
   for (const item of targets.values()) {
@@ -2232,6 +2236,8 @@ function freshStats() {
     headerRepairsWritten: 0,
     headerRepairsSkippedPopulated: 0,
     modelCalls: 0,
+    contactPhaseOrdinal: null,
+    contactPhaseLabel: '',
   };
 }
 
@@ -2343,6 +2349,10 @@ async function run(request = {}, options = {}) {
 
   const stats = freshStats();
   const internalRecheck = Boolean(options.recheckPass);
+  const phaseOrdinal = Number(options.contactPhaseOrdinal || 0) || null;
+  const phaseOrdinals = phaseOrdinal ? [phaseOrdinal] : null;
+  stats.contactPhaseOrdinal = phaseOrdinal;
+  stats.contactPhaseLabel = phaseOrdinal ? `POC-${phaseOrdinal}` : 'ALL';
 
   if (!internalRecheck) {
     // Resume Apollo phone callbacks from earlier runs/restarts before doing new
@@ -2421,20 +2431,26 @@ async function run(request = {}, options = {}) {
 
       if (companyContext?.source && /^row-/.test(companyContext.source)) stats.rowEvidenceEmployersResolved++;
       const writes = [];
-      const openPersonTargets = (plan.groups?.open || []).filter((target) => !target.isAnchor);
+      const openPersonTargets = (plan.groups?.open || []).filter((target) =>
+        !target.isAnchor
+        && (!phaseOrdinal || Number(target.group?.ordinal || 0) === phaseOrdinal)
+      );
       const aiFallbackEnabled = Boolean(options.deferOpenGroupSelectionToAi);
 
-      // POC-1 is non-negotiable and remains tied to the exact anchor identity.
-      // POC-2/3 may target a different explicit hiring organization from the post.
+      // Strict phase pipeline: POC-1 phase touches only the exact anchor group.
+      // POC-2 and POC-3 phases never rewrite POC-1.
       const anchorContext = anchorCompanyContext?.anchorPerson
         ? anchorCompanyContext
         : { ...(anchorCompanyContext || {}), anchorPerson: anchorCompanyContext?.anchorProfile || null };
-      const earlyRowOptions = { ...runOptions, rowNumber, candidatePool: [] };
-      writes.push(...await enrichAnchorGroup(row, plan, anchorContext, stats, earlyRowOptions));
+      const earlyRowOptions = { ...runOptions, rowNumber, candidatePool: [], targetOrdinals: phaseOrdinals };
+      if (!phaseOrdinal || phaseOrdinal === 1) {
+        writes.push(...await enrichAnchorGroup(row, plan, anchorContext, stats, earlyRowOptions));
+      }
 
       if (!companyContext || companyContext.unresolved || !companyContext.company) {
         stats.rowsWithoutEmployer++;
-        const unresolvedPoc2 = openPersonTargets.some((target) => Number(target.group?.ordinal || 0) === 2);
+        const unresolvedPoc2 = (!phaseOrdinal || phaseOrdinal === 2)
+          && openPersonTargets.some((target) => Number(target.group?.ordinal || 0) === 2);
         if (unresolvedPoc2 && aiFallbackEnabled) {
           stats.deferredOpenGroups++;
           stats.unfilledOpenGroups++;
@@ -2466,7 +2482,7 @@ async function run(request = {}, options = {}) {
       // Existing/partial POCs are exact-person repair jobs, not discovery jobs.
       // Verify them directly by LinkedIn or exact name+company before spending any
       // Apollo people-search calls. This is especially important for missing phones.
-      const repairOptions = { ...runOptions, rowNumber, candidatePool: [] };
+      const repairOptions = { ...runOptions, rowNumber, candidatePool: [], targetOrdinals: phaseOrdinals };
       const verificationFailuresBefore = Number(stats.existingVerificationFailures || 0);
       writes.push(...await repairExistingGroups(row, plan, companyContext, stats, repairOptions));
       if (Number(stats.existingVerificationFailures || 0) > verificationFailuresBefore) {
@@ -2479,7 +2495,8 @@ async function run(request = {}, options = {}) {
       // Mandatory POC-2 always gets the deterministic/manual discovery path first.
       // AI is rescue only. POC-3 may reuse this same pool but never triggers its own search.
       let people = [];
-      if (poc2Targets.length) {
+      const discoveryTargets = phaseOrdinal === 3 ? poc3Targets : poc2Targets;
+      if (discoveryTargets.length) {
         try {
           people = await discoverPriorityPeopleFast(companyContext, cache, stats, {
             ...runOptions,
@@ -2513,7 +2530,7 @@ async function run(request = {}, options = {}) {
       const rowOptions = { ...runOptions, rowNumber, candidatePool: people };
       const manualClaimed = new Set();
 
-      if (poc2Targets.length) {
+      if ((!phaseOrdinal || phaseOrdinal === 2) && poc2Targets.length) {
         stats.manualPoc2Attempts += poc2Targets.length;
         const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
           ...rowOptions,
@@ -2546,7 +2563,7 @@ async function run(request = {}, options = {}) {
 
       // POC-3 gets exactly one cheap manual hydration opportunity from the same
       // discovery pool. No extra discovery and no AI rescue unless explicitly enabled.
-      if (poc3Targets.length) {
+      if ((!phaseOrdinal || phaseOrdinal === 3) && poc3Targets.length) {
         if (people.length) {
           stats.manualPoc3Attempts += poc3Targets.length;
           const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
@@ -2639,6 +2656,7 @@ async function run(request = {}, options = {}) {
         recheckPass: true,
         targetRows: leftoverRows,
         discoveryCache: cache,
+        contactPhaseOrdinal: phaseOrdinal,
       });
       mergeDeterministicRecheckStats(stats, recheck.stats || {}, leftoverRows);
     }
@@ -2656,6 +2674,8 @@ async function run(request = {}, options = {}) {
     sheetName: source.sheetName,
     schema: engine.schemaSummary(source.schema),
     analysis: analysis.stats,
+    contactPhaseOrdinal: phaseOrdinal,
+    contactPhaseLabel: stats.contactPhaseLabel,
     stats,
   };
 }
@@ -2668,9 +2688,10 @@ function formatResult(result) {
   const groups = Array.isArray(schema.personGroups) ? schema.personGroups.length : 0;
   const companies = Array.isArray(schema.companyGroups) ? schema.companyGroups.length : 0;
   const ordinalRecovered = Array.isArray(schema.ordinalContactRecoveries) ? schema.ordinalContactRecoveries.length : 0;
+  const phaseText = s.contactPhaseOrdinal ? ` Contact phase: POC-${s.contactPhaseOrdinal} only.` : '';
   const status = s.haltedEarly
-    ? `Universal deterministic enrichment PARTIALLY completed on ${result.sheetName}; execution halted safely at row ${s.haltAtRow} after preserving all earlier verified writes.`
-    : `Universal deterministic enrichment finished on ${result.sheetName}.`;
+    ? `Universal deterministic enrichment PARTIALLY completed on ${result.sheetName}; execution halted safely at row ${s.haltAtRow} after preserving all earlier verified writes.${phaseText}`
+    : `Universal deterministic enrichment finished on ${result.sheetName}.${phaseText}`;
   const rowFailureText = s.rowFailures
     ? ` Row fault containment: ${s.rowFailures} row failure${Number(s.rowFailures) === 1 ? '' : 's'} captured, ${s.recoverableRowFailures || 0} ordinary row-local failure${Number(s.recoverableRowFailures || 0) === 1 ? '' : 's'} continued, ${s.transientProviderContinuations || 0} transient Apollo transport failure${Number(s.transientProviderContinuations || 0) === 1 ? '' : 's'} continued under the circuit breaker, ${s.systemicHalts || 0} systemic halt${Number(s.systemicHalts || 0) === 1 ? '' : 's'}.`
     : ' Row fault containment: no row failures.';
