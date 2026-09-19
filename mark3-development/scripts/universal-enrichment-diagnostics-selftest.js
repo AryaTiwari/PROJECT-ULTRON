@@ -7,6 +7,7 @@ const path = require('path');
 const diagnostics = require('../core/universal-enrichment-diagnostics');
 const typedErrors = require('../core/spreadsheet-enrichment-errors');
 const targeted = require('../core/universal-sheet-enrichment-targeted');
+const fallbackPass = require('../core/universal-big-pickle-fallback-pass');
 
 const queue = [
   { rowNumber: 5, groupOrdinal: 2, reason: 'poc2-no-candidates', company: 'Hanvitt Consulting & Solutions' },
@@ -54,6 +55,11 @@ capError.subsystem = 'LINKEDIN';
 const typedCap = typedErrors.normalize(capError, { stage: 'candidate-discovery' });
 assert.equal(typedCap.type, 'RATE_LIMIT');
 assert.match(typedCap.hint, /daily safety budget/i);
+
+const fallbackStatsShape = fallbackPass.freshStats();
+assert.ok(Array.isArray(fallbackStatsShape.discoveryDiagnostics), 'Big Pickle stats must initialize discoveryDiagnostics before base discovery helpers push into it');
+assert.ok(Array.isArray(fallbackStatsShape.rankingThresholds), 'Big Pickle stats must inherit base ranking arrays');
+assert.ok(Array.isArray(fallbackStatsShape.selectionAudit), 'Big Pickle stats must inherit base selection audit');
 
 const recursionError = new RangeError('Maximum call stack size exceeded');
 const typedRecursion = typedErrors.normalize(recursionError, { stage: 'candidate-discovery' });
