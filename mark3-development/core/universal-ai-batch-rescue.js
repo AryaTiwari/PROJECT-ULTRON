@@ -28,7 +28,7 @@ function maxCalls(options = {}) {
   return Number.isFinite(raw) ? Math.max(1, Math.min(3, Math.floor(raw))) : 3;
 }
 function candidateLimit(options = {}) {
-  const raw = Number(options.aiCandidateLimit ?? process.env.ULTRON_M3_UNIVERSAL_AI_BATCH_CANDIDATES ?? 12);
+  const raw = Number(options.aiCandidateLimit ?? process.env.ULTRON_M3_UNIVERSAL_AI_BATCH_CANDIDATES ?? 8);
   return Number.isFinite(raw) ? Math.max(6, Math.min(18, Math.floor(raw))) : 12;
 }
 function parseJson(value) {
@@ -128,8 +128,8 @@ function orderedDirectCandidates(candidates, purpose, stats) {
   const purposePreference = purpose === 'context'
     ? ['gemini', 'groq', 'nvidia']
     : purpose === 'selection'
-      ? ['groq', 'nvidia', 'gemini']
-      : ['nvidia', 'groq', 'gemini'];
+      ? ['groq', 'gemini', 'nvidia']
+      : ['nvidia', 'gemini', 'groq'];
 
   return [...firstPerProvider.entries()]
     .map(([provider, model], index) => {
@@ -330,14 +330,14 @@ function shortlistCandidates(candidates, context, limit) {
 }
 
 function rescueTargets(plan) {
+  const wantedOrdinal = 2;
   const open = (plan?.groups?.open || [])
-    .filter((item) => !item.isAnchor)
+    .filter((item) => !item.isAnchor && Number(item.group?.ordinal || 0) === wantedOrdinal)
     .map((item) => ({ ...item, rescueMode: 'fill' }));
   const repair = (plan?.groups?.partial || [])
-    .filter((item) => !item.isAnchor && item.snapshot?.hasIdentity)
+    .filter((item) => !item.isAnchor && item.snapshot?.hasIdentity && Number(item.group?.ordinal || 0) === wantedOrdinal)
     .map((item) => ({ ...item, rescueMode: 'repair' }));
-  return [...repair, ...open]
-    .sort((a, b) => (a.group.ordinal || 999) - (b.group.ordinal || 999));
+  return [...repair, ...open];
 }
 
 function exactRepairCandidate(target, candidate) {
@@ -377,34 +377,64 @@ function existingIdentitySet(plan) {
   return base.existingIdentityKeys(plan);
 }
 
+function assignmentRows(output) {
+  if (Array.isArray(output)) return output;
+  for (const key of ['rows', 'results', 'selections', 'items']) {
+    if (Array.isArray(output?.[key])) return output[key];
+  }
+  return [];
+}
+
 function validateAssignments(output, rowPackages) {
-  const rows = Array.isArray(output?.rows) ? output.rows : [];
+  const rows = assignmentRows(output);
   const validated = new Map();
+
   for (const item of rows) {
-    const rowNumber = Number(item?.rowNumber);
+    const rowNumber = Number(item?.rowNumber ?? item?.row ?? item?.row_number);
     const pkg = rowPackages.get(rowNumber);
-    if (!pkg) continue;
-    const allowed = new Map(pkg.candidates.map((candidate) => [
-      text(candidate.apolloPersonId || candidate.id || candidate.linkedinUrl || candidate.linkedin_url),
+    if (!pkg || pkg.targets.length !== 1) continue;
+
+    const target = pkg.targets[0];
+    const allowedEntries = pkg.candidates.map((candidate) => ({
+      key: text(candidate.apolloPersonId || candidate.id || candidate.linkedinUrl || candidate.linkedin_url),
       candidate,
-    ]));
-    const slots = new Map(pkg.targets.map((target) => [String(target.group.ordinal || target.group.id), target]));
+      name: planner.normalizeName(candidate?.name || ''),
+    })).filter((entry) => entry.key);
+    const byKey = new Map(allowedEntries.map((entry) => [entry.key.toLowerCase(), entry]));
+
+    let proposals = Array.isArray(item?.assignments) ? item.assignments : null;
+    if (!proposals) {
+      proposals = [{
+        candidateKey: item?.candidateKey ?? item?.candidate_id ?? item?.candidateId ?? item?.id,
+        candidateName: item?.candidateName ?? item?.name,
+        confidence: item?.confidence,
+        reason: item?.reason,
+      }];
+    }
+
     const assignments = [];
-    const claimed = new Set();
-    for (const proposal of Array.isArray(item?.assignments) ? item.assignments : []) {
-      const slotKey = String(proposal?.slot ?? proposal?.ordinal ?? '');
-      const target = slots.get(slotKey);
-      const candidateKey = text(proposal?.candidateKey);
-      const candidate = allowed.get(candidateKey);
-      if (!target || !candidate || claimed.has(candidateKey)) continue;
-      claimed.add(candidateKey);
+    for (const proposal of proposals) {
+      let candidateKey = text(proposal?.candidateKey ?? proposal?.candidate_id ?? proposal?.candidateId ?? proposal?.id);
+      let entry = candidateKey ? byKey.get(candidateKey.toLowerCase()) : null;
+
+      if (!entry) {
+        const wantedName = planner.normalizeName(proposal?.candidateName ?? proposal?.name ?? '');
+        const matches = wantedName ? allowedEntries.filter((candidate) => candidate.name === wantedName) : [];
+        if (matches.length === 1) {
+          entry = matches[0];
+          candidateKey = entry.key;
+        }
+      }
+      if (!entry) continue;
+
       assignments.push({
         target,
-        candidate,
+        candidate: entry.candidate,
         candidateKey,
-        confidence: Math.max(0, Math.min(1, Number(proposal?.confidence || 0))),
+        confidence: Math.max(0, Math.min(1, Number(proposal?.confidence || 0.7))),
         reason: text(proposal?.reason).slice(0, 500),
       });
+      break;
     }
     validated.set(rowNumber, assignments);
   }
@@ -471,24 +501,26 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
   if (!rowRecords.size) return stats;
 
-  // PASS 1: one batch interpretation call for every unresolved row.
-  const contextResult = await batchChat([
-    {
-      role: 'system',
-      content: [
-        'You are ULTRON Spreadsheet Context Analyst.',
-        'Analyze ALL supplied rows in one batch.',
-        'For each row, identify the TARGET HIRING ORGANIZATION whose employees should become the additional POCs, and summarize the hiring context.',
-        'The post author\'s current employer and the target hiring organization may be different. If the row explicitly says a role is for/join/at another company, prefer that explicit hiring company for POC discovery.',
-        'If knownCompany is supplied, use it as strong evidence but you may override it only when a different hiring company is explicitly named in the supplied row fields.',
-        'If knownCompany is empty, choose a company ONLY when its wording is directly supported by the supplied row fields.',
-        'Never infer a company from general knowledge.',
-        'Return strict JSON only: {"rows":[{"rowNumber":2,"company":"","hiringContext":"","confidence":0.0,"reason":""}]}.',
-      ].join(' '),
-    },
-    { role: 'user', content: JSON.stringify({ rows: contextInput }) },
-  ], 'context', stats, options);
-  const contextMap = contextRowsFromOutput(parseJson(resultText(contextResult)) || {});
+  // Context AI is optional. If deterministic anchor evidence already resolved the
+  // employer, skip this entire model call and go straight to POC-2 selection.
+  const unresolvedContextInput = contextInput.filter((item) => item.unresolvedEmployer);
+  let contextMap = new Map();
+  if (unresolvedContextInput.length) {
+    const contextResult = await batchChat([
+      {
+        role: 'system',
+        content: [
+          'You are ULTRON Spreadsheet Context Analyst.',
+          'Analyze only rows whose employer is unresolved.',
+          'For each row, identify the target hiring organization from the supplied spreadsheet evidence only.',
+          'Never invent a company from general knowledge.',
+          'Return strict JSON only: {"rows":[{"rowNumber":2,"company":"","hiringContext":"","confidence":0.0,"reason":""}]}.',
+        ].join(' '),
+      },
+      { role: 'user', content: JSON.stringify({ rows: unresolvedContextInput }) },
+    ], 'context', stats, options);
+    contextMap = contextRowsFromOutput(parseJson(resultText(contextResult)) || {});
+  }
 
   const rowPackages = new Map();
   const discoveryStats = base.freshStats();
@@ -571,25 +603,30 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.slotsOfferedForSelection = [...rowPackages.values()].reduce((sum, pkg) => sum + pkg.targets.length, 0);
   if (!rowPackages.size || stats.modelAttempts >= stats.maxCalls) return stats;
 
-  const selectionInput = [...rowPackages.entries()].map(([rowNumber, pkg]) => ({
-    rowNumber,
-    company: pkg.companyContext.company,
-    hiringContext: pkg.hiringContext,
-    anchor: {
-      name: text(pkg.plan?.anchor?.snapshot?.values?.name),
-      linkedin: text(pkg.plan?.anchor?.snapshot?.values?.linkedin),
-    },
-    existingPeople: [...existingIdentitySet(pkg.plan).names],
-    targets: pkg.targets.map((target) => ({
-      slot: String(target.group.ordinal || target.group.id),
-      ordinal: target.group.ordinal || null,
-      mode: target.rescueMode,
-      existingName: text(target.snapshot?.values?.name),
-      existingLinkedin: text(target.snapshot?.values?.linkedin),
-      missingFields: target.snapshot?.missingFields || [],
-    })),
-    candidates: pkg.candidates.map(compactCandidate),
-  }));
+  const selectionInput = [...rowPackages.entries()].map(([rowNumber, pkg]) => {
+    const target = pkg.targets[0];
+    return {
+      rowNumber,
+      company: pkg.companyContext.company,
+      hiringContext: pkg.hiringContext,
+      existingPeople: [...existingIdentitySet(pkg.plan).names],
+      target: {
+        mode: target.rescueMode,
+        existingName: text(target.snapshot?.values?.name),
+        existingLinkedin: text(target.snapshot?.values?.linkedin),
+        missingFields: target.snapshot?.missingFields || [],
+      },
+      candidates: pkg.candidates.map((candidate) => {
+        const compact = compactCandidate(candidate);
+        return {
+          candidateKey: compact.candidateKey,
+          name: compact.name,
+          title: compact.title,
+          seniority: compact.seniority,
+        };
+      }),
+    };
+  });
 
   // PASS 2: one batch selection call for all unresolved slots.
   const selectionResult = await batchChat([
@@ -597,16 +634,12 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       role: 'system',
       content: [
         'You are ULTRON Batch POC Selector.',
-        'Handle unresolved workplace POC targets for ALL supplied rows.',
+        'Select exactly one POC-2 candidate for each supplied row when a safe choice exists.',
         'You may choose ONLY candidateKey values supplied inside that same row.',
-        'Each target has mode=fill or mode=repair.',
-        'For mode=fill: never select the anchor or any person already listed in existingPeople.',
-        'For mode=repair: select a candidate ONLY when it is the same real person as existingName/existingLinkedin; otherwise abstain for that target.',
-        'Prefer people who can realistically influence or own hiring for fill targets.',
-        'Use company size cues, recruiting/HR responsibility, functional relevance and seniority together; do not blindly follow prestige.',
-        'A recruiter owning the vacancy may beat a distant executive; a founder/director may be right for a smaller company.',
-        'Assign unique people to unique slots.',
-        'Return strict JSON only: {"rows":[{"rowNumber":2,"assignments":[{"slot":"2","candidateKey":"...","confidence":0.0,"reason":""}]}]}.',
+        'For mode=fill: never choose anyone already listed in existingPeople.',
+        'For mode=repair: choose only the candidate representing the exact existing person.',
+        'Priority: Founder/Director/Owner, then recruiting/talent/HR Head or Manager, then Recruiter, while respecting real hiring relevance.',
+        'Return compact strict JSON only: {"rows":[{"rowNumber":2,"candidateKey":"...","confidence":0.0,"reason":""}]}.',
       ].join(' '),
     },
     { role: 'user', content: JSON.stringify({ rows: selectionInput }) },
@@ -616,7 +649,8 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.aiSelectionsProposed = [...assignments.values()].reduce((sum, list) => sum + list.length, 0);
 
   // PASS 3: reviewer only when selection is incomplete/weak and budget allows it.
-  if (stats.modelAttempts < stats.maxCalls && reviewerNeeded(assignments, rowPackages)) {
+  const reviewerEnabled = /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_AI_REVIEWER || '0'));
+  if (reviewerEnabled && stats.modelAttempts < stats.maxCalls && reviewerNeeded(assignments, rowPackages)) {
     stats.reviewerTriggered = true;
     const reviewRows = [...rowPackages.entries()].filter(([rowNumber, pkg]) => {
       const selected = assignments.get(rowNumber) || [];
@@ -801,6 +835,7 @@ module.exports = {
   rescueTargets,
   exactRepairCandidate,
   candidatePoolForTargets,
+  assignmentRows,
   validateAssignments,
   reviewerNeeded,
   allowedDirectProviders,
