@@ -173,9 +173,15 @@ function inferHiringCompanyFromEvidence(plan, row = []) {
 
   const domain = firstBusinessEmailDomain(evidence);
   if (domain) {
+    const brand = domain
+      .split('.')[0]
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     return {
-      company: domain,
+      company: brand || domain,
       domain,
+      companyAliases: [...new Set([brand, domain].filter(Boolean))],
       source: 'row-business-email-domain',
       evidenceConfidence: 0.93,
       anchorLinkedin: text(plan?.anchor?.snapshot?.values?.linkedin),
