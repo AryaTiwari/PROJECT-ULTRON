@@ -425,10 +425,20 @@ async function improveVerifiedPhone(result) {
         phoneWaterfallRequestId: pendingId,
       };
     }
+    if (polled.state === 'not_found' || polled.state === 'terminal') {
+      runState.phoneWaterfallNotFound++;
+      saveWaterfallState(result, {
+        threePocPhoneWaterfallStatus: 'not_found',
+        threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+      });
+      return { ...result, phoneWaterfallStatus: 'not_found' };
+    }
+    runState.phoneWaterfallErrors++;
     saveWaterfallState(result, {
-      threePocPhoneWaterfallStatus: polled.state === 'not_found' ? 'not_found' : 'terminal',
+      threePocPhoneWaterfallStatus: 'error',
       threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
     });
+    return { ...result, phoneWaterfallStatus: 'error' };
   }
 
   if (recentPhoneAttempt(record)) {
@@ -550,10 +560,20 @@ async function improveVerifiedEmail(result) {
       runState.waterfallPending++;
       return { ...result, emailWaterfallPending: true, emailWaterfallStatus: 'pending' };
     }
+    if (polled.state === 'not_found' || polled.state === 'terminal') {
+      runState.waterfallNotFound++;
+      saveWaterfallState(result, {
+        threePocEmailWaterfallStatus: 'not_found',
+        threePocEmailWaterfallResolvedAt: new Date().toISOString(),
+      });
+      return { ...result, emailWaterfallStatus: 'not_found' };
+    }
+    runState.waterfallErrors++;
     saveWaterfallState(result, {
-      threePocEmailWaterfallStatus: polled.state === 'not_found' ? 'not_found' : 'terminal',
+      threePocEmailWaterfallStatus: 'error',
       threePocEmailWaterfallResolvedAt: new Date().toISOString(),
     });
+    return { ...result, emailWaterfallStatus: 'error' };
   }
 
   if (recentAttempt(record)) {
