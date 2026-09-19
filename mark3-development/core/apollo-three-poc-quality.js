@@ -230,11 +230,14 @@ function recentPhoneAttempt(record) {
   return Date.now() - at < phoneCooldownDays() * 86400000;
 }
 
-async function pollRequest(requestId) {
+async function pollRequest(requestId, options = {}) {
   const apiKey = apollo.setting('APOLLO_API_KEY');
   if (!apiKey || !requestId) return { state: 'error', email: null, payload: null };
 
-  const polls = maxPolls();
+  const requestedPolls = Number(options.polls);
+  const polls = Number.isFinite(requestedPolls)
+    ? Math.max(0, Math.min(8, Math.floor(requestedPolls)))
+    : maxPolls();
   for (let attempt = 0; attempt <= polls; attempt++) {
     const response = await fetch(`${APOLLO_WEBHOOK_RESULT}/${encodeURIComponent(String(requestId))}`, {
       headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' },
@@ -636,7 +639,12 @@ async function improveVerifiedEmail(result) {
     }
     if (polled.state === 'pending') {
       runState.waterfallPending++;
-      return { ...result, emailWaterfallPending: true, emailWaterfallStatus: 'pending' };
+      return {
+        ...result,
+        emailWaterfallPending: true,
+        emailWaterfallStatus: 'pending',
+        emailWaterfallRequestId: pendingId,
+      };
     }
     if (polled.state === 'not_found' || polled.state === 'terminal') {
       runState.waterfallNotFound++;
@@ -691,7 +699,12 @@ async function improveVerifiedEmail(result) {
         threePocEmailWaterfallRequestId: waterfall.requestId,
         threePocEmailWaterfallStatus: 'pending',
       });
-      return { ...result, emailWaterfallPending: true, emailWaterfallStatus: 'pending' };
+      return {
+        ...result,
+        emailWaterfallPending: true,
+        emailWaterfallStatus: 'pending',
+        emailWaterfallRequestId: waterfall.requestId,
+      };
     }
 
     if (waterfall.state === 'not_found' || waterfall.state === 'terminal') {
@@ -812,6 +825,7 @@ module.exports = {
   improveVerifiedContacts,
   recordPhoneWaterfallOutcome,
   pendingPhoneWaterfallRequestId,
+  pollEmailRequest: pollRequest,
   emailFromPayload,
   phoneFromPayload,
   pollPhoneRequest,
