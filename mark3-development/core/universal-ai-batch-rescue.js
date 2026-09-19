@@ -338,37 +338,8 @@ function rescueTargets(plan) {
     .map((item) => ({ ...item, rescueMode: 'fill' }));
 }
 
-function exactRepairCandidate(target, candidate) {
-  if (target?.rescueMode !== 'repair') return false;
-  const existingName = planner.normalizeName(target?.snapshot?.values?.name || '');
-  const candidateName = planner.normalizeName(candidate?.name || '');
-  const existingLinkedin = ranker.linkedinKey(target?.snapshot?.values?.linkedin || '');
-  const candidateLinkedin = ranker.linkedinKey(candidate?.linkedinUrl || candidate?.linkedin_url || '');
-  if (existingLinkedin && candidateLinkedin) return existingLinkedin === candidateLinkedin;
-  return Boolean(existingName && candidateName && existingName === candidateName);
-}
-
 function candidatePoolForTargets(candidates, targets, context, limit) {
-  const chosen = [];
-  const seen = new Set();
-  const keyOf = (candidate) => text(candidate?.apolloPersonId || candidate?.id || candidate?.linkedinUrl || candidate?.linkedin_url).toLowerCase();
-  const add = (candidate) => {
-    const key = keyOf(candidate);
-    if (!key || seen.has(key) || chosen.length >= limit) return;
-    seen.add(key);
-    chosen.push(candidate);
-  };
-
-  // Existing partial POCs get first-class representation in the AI batch even
-  // when their titles are not high enough to survive authority pre-ranking.
-  for (const target of targets || []) {
-    if (target?.rescueMode !== 'repair') continue;
-    for (const candidate of candidates || []) {
-      if (exactRepairCandidate(target, candidate)) add(candidate);
-    }
-  }
-  for (const candidate of shortlistCandidates(candidates, context, limit)) add(candidate);
-  return chosen.slice(0, limit);
+  return shortlistCandidates(candidates, context, limit);
 }
 
 function existingIdentitySet(plan) {
@@ -671,9 +642,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       hiringContext: pkg.hiringContext,
       targets: pkg.targets.map((target) => ({
         slot: String(target.group.ordinal || target.group.id),
-        mode: target.rescueMode,
-        existingName: text(target.snapshot?.values?.name),
-        existingLinkedin: text(target.snapshot?.values?.linkedin),
+        mode: 'fill',
         missingFields: target.snapshot?.missingFields || [],
       })),
       firstPass: (assignments.get(rowNumber) || []).map((item) => ({
@@ -692,8 +661,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           'Review only the supplied weak/incomplete rows.',
           'Select ONLY supplied candidateKey values. Never invent people.',
           'Return the strongest complete target assignments you can justify from the row hiring context.',
-          'For repair targets, preserve identity: choose only the candidate that is genuinely the same existing person.',
-          'For fill targets, do not reuse an existing row identity.',
+          'Do not reuse an existing row identity.',
           'Keep unique people per row and abstain rather than fabricate.',
           'Return strict JSON only in the exact same {"rows":[...]} schema as the first selector.',
         ].join(' '),
@@ -747,13 +715,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
       const nameKey = ranker.normalize(person.name || '');
       const linkedinKey = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
-      const repairMode = assignment.target.rescueMode === 'repair';
-      if (repairMode) {
-        if (!planner.samePerson(assignment.target.snapshot?.values || {}, person)) {
-          stats.aiSelectionRejects++;
-          continue;
-        }
-      } else if ((nameKey && existing.names.has(nameKey)) || (linkedinKey && existing.linkedins.has(linkedinKey))) {
+      if ((nameKey && existing.names.has(nameKey)) || (linkedinKey && existing.linkedins.has(linkedinKey))) {
         stats.identityDuplicatesSkipped++;
         stats.aiSelectionRejects++;
         continue;
@@ -775,8 +737,8 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       );
       const queuedPendingPhone = pendingPhoneQueue.length > queueBefore;
 
-      // A repair can be valuable even when Apollo's phone is asynchronous and
-      // there is no immediate email/name write. Keep the verified assignment alive
+      // A selected fill can still be useful when Apollo's phone is asynchronous
+      // and there is no immediate phone write. Keep the verified assignment alive
       // so the end-of-run webhook sync can complete the phone cell.
       if (!writePlan.writes.length && !queuedPendingPhone) {
         stats.aiSelectionRejects++;
@@ -794,15 +756,14 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         changedRows.add(rowNumber);
         stats.cellsChanged += changes.length;
       }
-      if (repairMode) stats.existingRepairsAccepted++;
-      else stats.newPeopleSelected++;
+      stats.newPeopleSelected++;
       stats.aiSelectionsAccepted++;
       stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
       stats.selectionAudit.push({
         rowNumber,
         groupId: assignment.target.group.id,
         slot: assignment.target.group.ordinal || null,
-        mode: assignment.target.rescueMode,
+        mode: 'fill',
         candidateKey: assignment.candidateKey,
         name: text(person.name),
         title: text(person.title),
@@ -841,7 +802,6 @@ module.exports = {
   companySupported,
   shortlistCandidates,
   rescueTargets,
-  exactRepairCandidate,
   candidatePoolForTargets,
   assignmentRows,
   validateAssignments,
