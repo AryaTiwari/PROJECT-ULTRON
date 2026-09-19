@@ -574,14 +574,45 @@ async function run(request = {}, options = {}) {
   });
 }
 
+function collapseDiagnosticBlockers(issues = []) {
+  const blockers = diagnostics.uniqueIssues(issues || [])
+    .filter((item) => item.blocking || item.severity === 'BLOCKER');
+  const genericLifecycleCodes = new Set([
+    'APOLLO_DISCOVERY_FAILED_FOR_POC2',
+    'POC2_LAST_RESORT_RETRYABLE_FAILURE',
+    'POC2_NO_DISCOVERY_CANDIDATES',
+    'POC2_CANDIDATES_FAILED_VERIFICATION',
+    'ROW_LOCAL_RECOVERABLE_FAILURE',
+  ]);
+  const byScope = new Map();
+  for (const item of blockers) {
+    const scope = `${item.rowNumber ?? ''}|${item.target || item.groupOrdinal || ''}`;
+    if (!byScope.has(scope)) byScope.set(scope, []);
+    byScope.get(scope).push(item);
+  }
+
+  const out = [];
+  for (const scoped of byScope.values()) {
+    const specific = scoped.filter((item) => !genericLifecycleCodes.has(text(item.code).toUpperCase()));
+    const chosen = specific.length ? specific : scoped;
+    const seen = new Set();
+    for (const item of chosen) {
+      const key = `${item.rowNumber ?? ''}|${item.target || item.groupOrdinal || ''}|${text(item.code).toUpperCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+  }
+  return out;
+}
+
 function formatDiagnosticFooter(result) {
   const gate = result?.completionGate || {};
   const allIssues = diagnostics.uniqueIssues(result?.diagnostics || gate?.issues || []);
-  const gateBlockers = diagnostics.uniqueIssues(gate?.issues || [])
-    .filter((item) => item.blocking || item.severity === 'BLOCKER');
+  const gateBlockers = collapseDiagnosticBlockers(gate?.issues || []);
   const blockers = gateBlockers.length
     ? gateBlockers
-    : allIssues.filter((item) => item.blocking || item.severity === 'BLOCKER');
+    : collapseDiagnosticBlockers(allIssues);
   const pending = allIssues.filter((item) => item.severity === 'PENDING' || item.category === 'repair');
   const warnings = allIssues.filter((item) => item.severity === 'WARNING' && item.category !== 'repair');
   const infos = allIssues.filter((item) => item.severity === 'INFO');
@@ -618,7 +649,7 @@ function formatResult(result) {
     );
     const errors = (ai.errors || []).slice(0, 3).map((item) => `${item.purpose || 'ai'}:${item.code || 'ERROR'} ${item.message || ''}`);
     const gate = result?.completionGate || {};
-    const gateIssues = diagnostics.uniqueIssues(gate.issues || []);
+    const gateIssues = collapseDiagnosticBlockers(gate.issues || []);
     const gateText = ` Completion gate: ${gate.statusCode || gate.status || 'UNKNOWN'}; mandatory rows checked ${gate.mandatoryRowsChecked || 0}; unresolved mandatory rows [${(gate.unresolvedRows || []).join(', ') || 'none'}]; terminal rows [${(gate.terminalRows || []).join(', ') || 'none'}]; retryable rows [${(gate.retryableRows || []).join(', ') || 'none'}]. Problems: ${gateIssues.map(diagnostics.formatIssue).join(' | ') || '[INFO] NO_MANDATORY_BLOCKERS'}.`;
     const noCandidatePool = Number(ai.rowsOfferedForSelection || 0) === 0 && Number(ai.modelAttempts || 0) === 0;
     const aiSkipExplanation = noCandidatePool
@@ -663,6 +694,7 @@ module.exports = {
   formatResult,
   diagnostics,
   formatDiagnosticFooter,
+  collapseDiagnosticBlockers,
   resolveExactRequest,
   syntheticResolution,
   withExactTargetGuards,
