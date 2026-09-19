@@ -609,18 +609,28 @@ function install() {
   const originalResolvePersonByNameCompany = apollo.resolvePersonByNameCompany.bind(apollo);
   const originalResolvePersonByBusinessEmail = apollo.resolvePersonByBusinessEmail.bind(apollo);
 
+  function baseOptionsForQuality(options = {}) {
+    // When phone waterfall is active, do not also buy/start the native async phone
+    // reveal for the same final POC. Identity/email hydration stays normal, then
+    // the quality layer performs one deliberate waterfall phone lookup.
+    if (options.needPhone !== false && phoneWaterfallEnabled()) {
+      return { ...options, needPhone: false };
+    }
+    return options;
+  }
+
   apollo.resolveDecisionMaker = async function resultsFirstResolveDecisionMaker(candidate, company, domain, options = {}) {
-    const result = await originalResolveDecisionMaker(candidate, company, domain, options);
+    const result = await originalResolveDecisionMaker(candidate, company, domain, baseOptionsForQuality(options));
     return improveVerifiedContacts(result, options);
   };
 
   apollo.resolvePersonByNameCompany = async function resultsFirstResolvePersonByNameCompany(name, company, domain, options = {}) {
-    const result = await originalResolvePersonByNameCompany(name, company, domain, options);
+    const result = await originalResolvePersonByNameCompany(name, company, domain, baseOptionsForQuality(options));
     return improveVerifiedContacts(result, options);
   };
 
   apollo.resolvePersonByBusinessEmail = async function resultsFirstResolvePersonByBusinessEmail(email, company, domain, options = {}) {
-    const result = await originalResolvePersonByBusinessEmail(email, company, domain, options);
+    const result = await originalResolvePersonByBusinessEmail(email, company, domain, baseOptionsForQuality(options));
     return improveVerifiedContacts(result, options);
   };
 
