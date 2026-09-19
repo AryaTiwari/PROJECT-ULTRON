@@ -95,10 +95,22 @@ function freshStats() {
     phoneWriteSkippedPopulated: 0,
     phoneStillPending: 0,
     unresolvedSlots: 0,
+    unresolvedRows: [],
+    unresolvedReasons: [],
     selectionAudit: [],
     errors: [],
     personalApiFallbacks: 0,
   };
+}
+
+function markUnresolved(stats, rowNumber, reason, detail = '') {
+  const row = Number(rowNumber);
+  if (Number.isInteger(row) && !stats.unresolvedRows.includes(row)) stats.unresolvedRows.push(row);
+  stats.unresolvedReasons.push({
+    rowNumber: Number.isInteger(row) ? row : null,
+    reason: text(reason || 'unresolved'),
+    detail: text(detail).slice(0, 300),
+  });
 }
 
 function providerName(model) {
@@ -544,6 +556,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     if (!companyContext?.company) {
       stats.employerAbstains++;
       stats.unresolvedSlots += record.targets.length;
+      markUnresolved(stats, rowNumber, 'employer-unresolved', 'No verified hiring employer could be resolved from deterministic or supplied row evidence.');
       continue;
     }
 
@@ -556,6 +569,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     } catch (error) {
       stats.errors.push({ purpose: 'discovery', rowNumber, code: text(error?.code), message: text(error?.message).slice(0, 300) });
       stats.unresolvedSlots += record.targets.length;
+      markUnresolved(stats, rowNumber, 'apollo-discovery-failed', text(error?.message || error));
       continue;
     }
 
@@ -567,6 +581,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     const shortlisted = candidatePoolForTargets(people || [], record.targets, { hiringContext }, candidateLimit(options));
     if (!shortlisted.length) {
       stats.unresolvedSlots += record.targets.length;
+      markUnresolved(stats, rowNumber, 'no-verified-candidates', 'Apollo discovery returned no candidate that survived the POC-2 shortlist.');
       continue;
     }
 
@@ -583,7 +598,14 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.candidatesDiscovered = uniqueCandidateKeys.size;
   stats.rowsOfferedForSelection = rowPackages.size;
   stats.slotsOfferedForSelection = [...rowPackages.values()].reduce((sum, pkg) => sum + pkg.targets.length, 0);
-  if (!rowPackages.size || stats.modelAttempts >= stats.maxCalls) return stats;
+  if (!rowPackages.size || stats.modelAttempts >= stats.maxCalls) {
+    for (const rowNumber of exactResidueRows) {
+      if (!rowPackages.has(rowNumber) && !stats.unresolvedRows.includes(rowNumber)) {
+        markUnresolved(stats, rowNumber, 'not-offered-to-selection', 'POC-2 residue could not reach candidate selection.');
+      }
+    }
+    return stats;
+  }
 
   const selectionInput = [...rowPackages.entries()].map(([rowNumber, pkg]) => {
     const target = pkg.targets[0];
@@ -779,10 +801,26 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     }
 
     const acceptedForRow = stats.selectionAudit.filter((item) => item.rowNumber === rowNumber).length;
-    stats.unresolvedSlots += Math.max(0, pkg.targets.length - acceptedForRow);
+    const remaining = Math.max(0, pkg.targets.length - acceptedForRow);
+    stats.unresolvedSlots += remaining;
+    if (remaining > 0) {
+      const proposedForRow = proposed.length;
+      markUnresolved(
+        stats,
+        rowNumber,
+        proposedForRow ? 'selection-rejected-after-verification' : 'ai-selection-abstained',
+        proposedForRow
+          ? 'AI proposed a supplied Apollo candidate, but deterministic hydration/identity/employer/write verification did not accept it.'
+          : 'Direct AI returned no accepted supplied candidate for this POC-2 target.',
+      );
+    }
   }
 
   stats.rowsChanged = changedRows.size;
+
+  const acceptedRows = new Set(stats.selectionAudit.map((item) => Number(item.rowNumber)).filter(Number.isInteger));
+  stats.unresolvedRows = stats.unresolvedRows.filter((rowNumber) => !acceptedRows.has(Number(rowNumber)));
+  stats.unresolvedReasons = stats.unresolvedReasons.filter((item) => !acceptedRows.has(Number(item.rowNumber)));
 
   try {
     await base.syncPendingPhoneAssignments(source, pendingPhoneQueue, stats, options);
