@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 
 const base = require('../core/universal-sheet-enrichment-operator');
+const ranker = require('../core/universal-authority-ranker');
+const apollo = require('../core/apollo-enrichment');
 
 const companyContext = { company: 'Example Technologies Pvt Ltd', domain: 'example.com' };
 const existing = { names: new Set(['anchor person']), linkedins: new Set() };
@@ -39,8 +41,13 @@ const peopleClick = base.inferHiringCompanyFromEvidence({
     postDetails: 'IT Recruiter | Recruitment & Talent Acquisition\nInterested candidates can share at akilandeshwari.s@people-click.com',
   },
 });
+assert.equal(peopleClick?.company, 'people click');
 assert.equal(peopleClick?.domain, 'people-click.com');
 assert.equal(peopleClick?.source, 'row-business-email-domain');
+assert.equal(ranker.sameEmployer(
+  { organizationName: 'People Click Techno Solutions Pvt Ltd', organizationDomain: '' },
+  peopleClick,
+), true, 'domain-derived brand alias must match the Apollo organization label');
 
 const sutherland = base.inferHiringCompanyFromEvidence({
   anchor: { snapshot: { values: { linkedin: 'https://www.linkedin.com/in/example/' } } },
@@ -56,6 +63,32 @@ const existingPocContext = base.existingPersonVerificationContext({
 }, { company: 'Sutherland', domain: '' });
 assert.equal(existingPocContext.domain, 'sutherlandglobal.com');
 assert.equal(existingPocContext.source, 'existing-poc-business-email-domain');
+
+const hydratedPeopleClick = {
+  id: 'apollo-people-click-1',
+  organization_name: 'People Click Techno Solutions Private Limited',
+  organization: {},
+};
+const discoveredPeopleClick = {
+  id: 'apollo-people-click-1',
+  organizationName: 'People Click Techno Solutions Pvt Ltd',
+  organizationDomain: 'people-click.com',
+};
+assert.equal(
+  apollo.hydratedEmployerMatchesCandidate(hydratedPeopleClick, discoveredPeopleClick, 'people click', 'people-click.com'),
+  true,
+  'same Apollo candidate must survive harmless hydrated employer alias drift',
+);
+assert.equal(
+  apollo.hydratedEmployerMatchesCandidate(
+    { id: 'apollo-people-click-1', organization_name: 'Completely Different Staffing', organization: {} },
+    discoveredPeopleClick,
+    'people click',
+    'people-click.com',
+  ),
+  false,
+  'hydration must still reject a clearly different employer',
+);
 
 assert.equal(base.anchorNeedsHydration({
   anchor: {
