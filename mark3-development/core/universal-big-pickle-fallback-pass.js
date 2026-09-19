@@ -234,6 +234,10 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
       if (!ranking.ranked.length) {
         stats.unresolvedTargets += targets.length;
+        stats.unresolvedRows = stats.unresolvedRows || [];
+        stats.unresolvedReasons = stats.unresolvedReasons || [];
+        if (!stats.unresolvedRows.includes(rowNumber)) stats.unresolvedRows.push(rowNumber);
+        stats.unresolvedReasons.push({ rowNumber, reason: 'no-verified-candidates-after-last-resort' });
       } else {
         const excluded = new Set();
         for (const target of targets) {
@@ -329,6 +333,10 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       if (recoverable) {
         stats.recoverableRowFailures++;
         stats.unresolvedTargets += targets.length + (repairEligible ? 1 : 0);
+        stats.unresolvedRows = stats.unresolvedRows || [];
+        stats.unresolvedReasons = stats.unresolvedReasons || [];
+        if (!stats.unresolvedRows.includes(rowNumber)) stats.unresolvedRows.push(rowNumber);
+        stats.unresolvedReasons.push({ rowNumber, reason: 'recoverable-last-resort-failure', detail: typed.code });
         continue;
       }
 
@@ -336,6 +344,10 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       stats.haltedEarly = true;
       stats.haltAtRow = rowNumber;
       stats.haltError = typed;
+      stats.unresolvedRows = stats.unresolvedRows || [];
+      stats.unresolvedReasons = stats.unresolvedReasons || [];
+      if (!stats.unresolvedRows.includes(rowNumber)) stats.unresolvedRows.push(rowNumber);
+      stats.unresolvedReasons.push({ rowNumber, reason: 'systemic-last-resort-halt', detail: typed.code });
       break;
     }
   }
