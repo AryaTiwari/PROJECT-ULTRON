@@ -170,10 +170,14 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   });
   const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema });
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
+  const targetRows = Array.isArray(runOptions.targetRows)
+    ? new Set(runOptions.targetRows.map((value) => Number(value)).filter(Number.isInteger))
+    : null;
 
   for (const record of analysis.rowPlans) {
     stats.rowsSeen++;
     const { row, rowNumber, plan } = record;
+    if (targetRows && !targetRows.has(Number(rowNumber))) continue;
     if (!plan.anchor) continue;
     const allowedOrdinals = Array.isArray(runOptions.targetOrdinals)
       ? new Set(runOptions.targetOrdinals.map((value) => Number(value)).filter(Number.isFinite))
@@ -195,6 +199,10 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       const companyContext = await companyContextFor(plan, row, runOptions, stats);
       if (!companyContext?.company) {
         stats.unresolvedTargets += targets.length + (repairEligible ? 1 : 0);
+        stats.unresolvedRows = stats.unresolvedRows || [];
+        stats.unresolvedReasons = stats.unresolvedReasons || [];
+        if (!stats.unresolvedRows.includes(rowNumber)) stats.unresolvedRows.push(rowNumber);
+        stats.unresolvedReasons.push({ rowNumber, reason: 'employer-unresolved-after-last-resort' });
         continue;
       }
 
@@ -289,6 +297,10 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           }
           if (!filled) {
             stats.unresolvedTargets++;
+            stats.unresolvedRows = stats.unresolvedRows || [];
+            stats.unresolvedReasons = stats.unresolvedReasons || [];
+            if (!stats.unresolvedRows.includes(rowNumber)) stats.unresolvedRows.push(rowNumber);
+            stats.unresolvedReasons.push({ rowNumber, reason: 'no-verified-poc2-after-last-resort' });
             if (orphanTarget) stats.orphanContactBlocked++;
           }
         }
