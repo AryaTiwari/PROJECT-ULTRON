@@ -42,6 +42,7 @@ function typeFor(error, subsystem) {
   if (/AUTH|UNAUTHENTICATED|INVALID_GRANT|TOKEN|CREDENTIAL/.test(`${code} ${value}`)) return 'AUTH';
   if (/FORBIDDEN|PERMISSION|ACCESS_REQUIRED|ACCESS DENIED/.test(`${code} ${value}`)) return 'PERMISSION';
   if (/RATE_LIMIT|RESOURCE_EXHAUSTED|429|QUOTA|DAILY_CAP|HOURLY_CAP|SAFETY_CAP/.test(`${code} ${value}`)) return 'RATE_LIMIT';
+  if (/MAXIMUM CALL STACK SIZE EXCEEDED|STACK OVERFLOW|RANGEERROR/.test(`${code} ${value}`)) return 'RECURSION';
   if (/TIMEOUT|TIMEDOUT|DEADLINE_EXCEEDED/.test(`${code} ${value}`)) return 'TIMEOUT';
   if (NETWORK_PATTERN.test(combined(error))) return 'NETWORK';
   if (/RANGE_INVALID|INVALID_RANGE|PARSE RANGE/.test(`${code} ${value}`)) return 'INVALID_RANGE';
@@ -63,12 +64,14 @@ function defaultCode(error, subsystem, type) {
   if (subsystem === 'LINKEDIN' && type === 'NETWORK') return 'LINKEDIN_NETWORK_ERROR';
   if (subsystem === 'BIG_PICKLE' && type === 'NETWORK') return 'BIG_PICKLE_NETWORK_ERROR';
   if (type === 'NETWORK') return 'SPREADSHEET_NETWORK_ERROR';
+  if (type === 'RECURSION') return 'UNIVERSAL_RECURSION_STACK_OVERFLOW';
   return 'UNIVERSAL_INTERNAL_UNCLASSIFIED';
 }
 
 function hintFor(subsystem, type, code) {
   if (String(code || '').toUpperCase() === 'LINKEDIN_DAILY_CAP') return 'LinkedIn daily safety budget is exhausted. Do not bypass the cap; resume after the daily safety window resets.';
   if (String(code || '').toUpperCase() === 'LINKEDIN_HOURLY_CAP') return 'LinkedIn hourly safety budget is exhausted. Do not bypass the cap; resume after the hourly safety window resets.';
+  if (type === 'RECURSION') return 'A recursive wrapper/helper loop exhausted the JavaScript call stack. Inspect recent monkey-patches, wrappers and diagnostic helpers before retrying providers.';
   if (type === 'NETWORK') return `${subsystem} could not be reached after automatic retry. Check internet, DNS, firewall/proxy and provider availability.`;
   if (type === 'AUTH') return `Refresh or re-authorize ${subsystem} credentials, then rerun the same operation.`;
   if (type === 'PERMISSION') return `The connected ${subsystem} identity lacks permission for this operation or resource.`;
