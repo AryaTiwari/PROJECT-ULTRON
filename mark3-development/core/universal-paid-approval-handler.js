@@ -80,7 +80,10 @@ async function execute(decision) {
       rowLimit: payload.rowLimit || undefined,
       schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
       allowLinkedInEmployerFallback: true,
-      pocPhasePipeline: true,
+      // Explicit "POC-N only" requests stay isolated for diagnostics. Ordinary
+      // enrichment returns to the coordinated all-POC production path so bounded
+      // Gemini/Groq/NVIDIA rescue can operate after deterministic enrichment.
+      pocPhasePipeline: Boolean(payload.contactPhaseOrdinal),
       contactPhaseOrdinal: payload.contactPhaseOrdinal || undefined,
     }));
 
