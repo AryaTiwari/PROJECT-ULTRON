@@ -82,6 +82,7 @@ async function execute(decision) {
       apolloApproved: true,
       rowLimit: payload.rowLimit || undefined,
       schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
+      expectedPersonGroups: payload.expectedPersonGroups || undefined,
       allowLinkedInEmployerFallback: true,
       // Explicit "POC-N only" requests stay isolated for diagnostics. Ordinary
       // enrichment returns to the coordinated all-POC production path so bounded
