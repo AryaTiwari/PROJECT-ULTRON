@@ -451,7 +451,11 @@ function mergePrimaryAndAiRescue(primary, rescue) {
 async function run(request = {}, options = {}) {
   const exact = await resolveExactRequest(request);
   const sharedDiscoveryCache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
-  const boundedAiEnabled = aiBatchRescue.enabled() && options.apolloApproved === true && !options.dryRun;
+  const phasedExecution = options.pocPhasePipeline !== false && !options.contactPhaseOrdinal;
+  const boundedAiEnabled = !phasedExecution
+    && aiBatchRescue.enabled()
+    && options.apolloApproved === true
+    && !options.dryRun;
   const runOptions = {
     ...options,
     discoveryCache: sharedDiscoveryCache,
@@ -486,6 +490,26 @@ async function run(request = {}, options = {}) {
           attempted: false,
           skippedReason: 'primary-systemic-halt',
           modelCalls: 0,
+          fallback: fallback.snapshot(),
+        };
+      } else if (phasedExecution) {
+        aiRescue = {
+          enabled: aiBatchRescue.enabled(),
+          attempted: false,
+          skippedReason: 'poc-phase-deterministic-only',
+          modelCalls: 0,
+          modelAttempts: 0,
+          rowsOfferedForSelection: 0,
+          unresolvedRows: [...new Set(primaryStats.deferredPoc2Rows || [])],
+          unresolvedReasons: [],
+        };
+        fb = {
+          enabled: fallback.enabled(),
+          attempted: false,
+          skippedReason: 'poc-phase-deterministic-only',
+          modelCalls: 0,
+          unresolvedRows: [...new Set(primaryStats.deferredPoc2Rows || [])],
+          unresolvedReasons: [],
           fallback: fallback.snapshot(),
         };
       } else if (providerRetryReasons.length) {
