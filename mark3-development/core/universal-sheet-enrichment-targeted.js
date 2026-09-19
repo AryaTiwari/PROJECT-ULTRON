@@ -281,7 +281,8 @@ function providerRetryReasonsFromPrimary(stats = {}) {
   const reasons = [];
   for (const item of stats.discoveryDiagnostics || []) {
     const code = text(item?.code).toUpperCase();
-    const rowNumber = Number(item?.rowNumber);
+    const hasRowNumber = item?.rowNumber !== null && item?.rowNumber !== undefined && item?.rowNumber !== '';
+    const rowNumber = hasRowNumber ? Number(item.rowNumber) : NaN;
     if (!Number.isInteger(rowNumber) || !unresolvedRows.has(rowNumber)) continue;
     if (!/^LINKEDIN_(?:DAILY|HOURLY)_CAP$/.test(code)) continue;
 
@@ -633,6 +634,9 @@ function formatResult(result) {
   if (fb.skippedReason === 'fallback-error') {
     const e = fb.error || {};
     return `${primary} Primary deterministic work was preserved. Big Pickle fallback stopped independently with [${e.subsystem || 'BIG_PICKLE'}/${e.type || 'INTERNAL'}] ${e.code || 'BIG_PICKLE_FALLBACK_FAILED'} @ ${e.stage || 'big-pickle-fallback-pass'}: ${e.message || 'unknown fallback failure'}. ${e.hint || ''} Personal API fallbacks 0.${diagnosticFooter}`;
+  }
+  if (fb.skippedReason === 'provider-retry-required') {
+    return `${primary} Primary engine: deterministic. AI selection and last-resort fallback were intentionally skipped because a required provider safety window is exhausted; retry only the affected mandatory row after the provider window resets. AI/model calls: 0.${diagnosticFooter}`;
   }
   if (!fb.attempted) {
     return `${primary} Primary engine: deterministic. Big Pickle fallback was available but not needed because the deterministic pass left no eligible ambiguity to resolve. AI/model calls: 0.${diagnosticFooter}`;
