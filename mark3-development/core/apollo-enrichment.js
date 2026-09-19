@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
+const companyIdentity = require('./company-identity');
 
 const APOLLO_MATCH = 'https://api.apollo.io/api/v1/people/match';
 const APOLLO_PEOPLE_SEARCH = 'https://api.apollo.io/api/v1/mixed_people/api_search';
@@ -297,9 +298,7 @@ function personOrganization(person = {}) {
 }
 
 function domainBrand(value) {
-  const host = hostname(value);
-  if (!host) return '';
-  return normalizedWords((host.split('.')[0] || '').replace(/[-_]+/g, ' '));
+  return companyIdentity.domainBrand(value);
 }
 
 function organizationNameOf(person = {}) {
@@ -324,36 +323,16 @@ function organizationDomainOf(person = {}) {
 }
 
 function organizationNameMatches(expectedValue, actualValue) {
-  const expected = normalizedWords(expectedValue).split(' ').filter((token) => token && token !== 'com');
-  const actual = normalizedWords(actualValue).split(' ').filter((token) => token && token !== 'com');
-  if (!expected.length || !actual.length) return false;
-  const a = new Set(expected);
-  const b = new Set(actual);
-  const overlap = [...a].filter((token) => b.has(token)).length;
-  return overlap / Math.max(1, Math.min(a.size, b.size)) >= 0.8;
+  return companyIdentity.nameMatch(expectedValue, actualValue);
 }
 
 function sameOrganization(person, company, domain = '') {
-  const expectedDomain = hostname(domain);
-  const actualDomain = organizationDomainOf(person);
-  if (
-    expectedDomain
-    && actualDomain
-    && (
-      actualDomain === expectedDomain
-      || actualDomain.endsWith(`.${expectedDomain}`)
-      || expectedDomain.endsWith(`.${actualDomain}`)
-    )
-  ) return true;
-
-  const actualName = organizationNameOf(person);
-  if (organizationNameMatches(company, actualName)) return true;
-
-  const expectedBrand = domainBrand(expectedDomain);
-  if (expectedBrand && organizationNameMatches(expectedBrand, actualName)) return true;
-  if (expectedBrand && actualDomain && organizationNameMatches(expectedBrand, domainBrand(actualDomain))) return true;
-
-  return false;
+  return companyIdentity.sameOrganization({
+    expectedCompany: company,
+    expectedDomain: domain,
+    actualCompany: organizationNameOf(person),
+    actualDomain: organizationDomainOf(person),
+  });
 }
 
 function searchCandidateFromPerson(person, cleanCompany, cleanDomain) {
