@@ -186,7 +186,8 @@ async function run(request = {}, options = {}) {
         // fallback attempt per remaining POC-2 target. POC-3 is never sent here.
         const unresolvedPoc2 = Number(aiRescue?.unresolvedSlots ?? primary?.stats?.deferredOpenGroups ?? 0);
         const lastResortEnabled = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_LAST_RESORT_POC2 || '1'));
-        if (unresolvedPoc2 > 0 && lastResortEnabled && fallback.enabled()) {
+        const directAiNeedsLastResort = Number(aiRescue?.modelFailures || 0) > 0 || Number(aiRescue?.aiSelectionsAccepted || 0) === 0;
+        if (unresolvedPoc2 > 0 && directAiNeedsLastResort && lastResortEnabled && fallback.enabled()) {
           try {
             fb = await fallbackPass.run(exact.request, result, {
               ...runOptions,
@@ -217,7 +218,11 @@ async function run(request = {}, options = {}) {
           fb = {
             enabled: fallback.enabled(),
             attempted: false,
-            skippedReason: unresolvedPoc2 > 0 ? 'last-resort-disabled' : 'poc2-resolved-before-last-resort',
+            skippedReason: unresolvedPoc2 <= 0
+              ? 'poc2-resolved-before-last-resort'
+              : !directAiNeedsLastResort
+                ? 'direct-ai-made-progress'
+                : 'last-resort-disabled',
             modelCalls: 0,
             fallback: fallback.snapshot(),
           };
