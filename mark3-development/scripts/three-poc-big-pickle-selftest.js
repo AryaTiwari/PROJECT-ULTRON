@@ -58,7 +58,7 @@ assert.match(fallbackSource, /Use ONLY the supplied LinkedIn-profile evidence/);
 
 // Fallback post-pass still relies on deterministic Apollo hydration, same-employer
 // verification, orphan-contact proof and safeWritesForGroup before any cell write.
-assert.match(fallbackPassSource, /apollo\.resolveDecisionMaker/);
+assert.match(fallbackPassSource, /base\.hydrateDecisionMakerVerified/);
 assert.match(fallbackPassSource, /ranker\.sameEmployer/);
 assert.match(fallbackPassSource, /orphanPolicy\.verify/);
 assert.match(fallbackPassSource, /planner\.safeWritesForGroup/);
