@@ -2697,19 +2697,23 @@ async function run(request = {}, options = {}) {
         writes.push(...result.writes);
         if (result.filled) {
           stats.manualPoc2Filled++;
-        } else if (aiFallbackEnabled) {
-          stats.deferredOpenGroups += poc2Targets.length;
+        } else {
           stats.unfilledOpenGroups += poc2Targets.length;
-          if (!stats.deferredPoc2Rows.includes(rowNumber)) stats.deferredPoc2Rows.push(rowNumber);
+          if (aiFallbackEnabled) {
+            stats.deferredOpenGroups += poc2Targets.length;
+            if (!stats.deferredPoc2Rows.includes(rowNumber)) stats.deferredPoc2Rows.push(rowNumber);
+          }
+
+          // Mandatory POC-2 residue must always enter the deterministic leftover
+          // queue. Phased execution intentionally disables AI/Big Pickle, but that
+          // must not also disable the deep Apollo/LinkedIn/public-index recheck.
           markLeftover(stats, rowNumber, people.length ? 'poc2-verification-unresolved' : 'poc2-no-candidates', {
             groupOrdinal: 2,
             company: companyContext.company,
             detail: options.resultsFirstSweep
-              ? 'Fast sweep deferred deeper discovery/hydration until all rows are processed.'
+              ? 'Fast sweep deferred deeper deterministic discovery/hydration until all rows are processed.'
               : 'Deep deterministic pass still has no safe verified POC-2.',
           });
-        } else {
-          stats.unfilledOpenGroups += poc2Targets.length;
         }
       }
 
