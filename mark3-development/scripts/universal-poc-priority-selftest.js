@@ -51,6 +51,12 @@ const sutherland = base.inferHiringCompanyFromEvidence({
 assert.equal(sutherland?.company, 'Sutherland', 'explicit hiring-company wording must beat a staffing/application email domain');
 assert.equal(sutherland?.source, 'row-company-is-hiring');
 
+const existingPocContext = base.existingPersonVerificationContext({
+  snapshot: { values: { name: 'Satish Mandula — Director - Talent Acquisition', email: 'satish@sutherlandglobal.com' } },
+}, { company: 'Sutherland', domain: '' });
+assert.equal(existingPocContext.domain, 'sutherlandglobal.com');
+assert.equal(existingPocContext.source, 'existing-poc-business-email-domain');
+
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
@@ -72,6 +78,7 @@ assert.match(operatorSource, /priorityCandidateLimit: options\.manualPriorityCan
 assert.doesNotMatch(operatorSource, /candidateLimit: options\.manualCandidateLimit \?\? 40/);
 assert.match(operatorSource, /preferredHiringCompanyContext/);
 assert.match(operatorSource, /row-business-email-domain/);
+assert.match(operatorSource, /existing-poc-business-email-domain/);
 
 const runSource = operatorSource.slice(operatorSource.indexOf('async function run(request = {}, options = {})'));
 const exactRepairIndex = runSource.indexOf('repairExistingGroups(row, plan, companyContext, stats, repairOptions)');
