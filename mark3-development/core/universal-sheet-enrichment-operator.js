@@ -792,6 +792,83 @@ function collectLinkedInPersonUrls(value, out = new Set()) {
   return out;
 }
 
+
+function collectLinkedInCompanySlugs(value, out = new Set()) {
+  if (value == null) return out;
+  if (typeof value === 'string') {
+    const raw = value;
+    for (const match of raw.matchAll(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/company\/([A-Za-z0-9._~-]+)\/?/gi)) {
+      const slug = text(match[1]).toLowerCase();
+      if (slug && !['search','feed','jobs'].includes(slug)) out.add(slug);
+    }
+    for (const match of raw.matchAll(/(?:^|[\s"'(])\/company\/([A-Za-z0-9._~-]+)\/?/gi)) {
+      const slug = text(match[1]).toLowerCase();
+      if (slug && !['search','feed','jobs'].includes(slug)) out.add(slug);
+    }
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectLinkedInCompanySlugs(item, out);
+    return out;
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) collectLinkedInCompanySlugs(item, out);
+  }
+  return out;
+}
+
+async function verifyLinkedInCompanyEmployee(linkedinUrl, companyContext, stats) {
+  let profile = null;
+  try {
+    profile = await linkedinMcp.callTool('get_person_profile', {
+      linkedin_username: linkedinUrl,
+      sections: 'experience',
+      max_scrolls: 3,
+    });
+    stats.linkedinFallbackProfileVerifications = Number(stats.linkedinFallbackProfileVerifications || 0) + 1;
+  } catch (error) {
+    stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
+    stats.discoveryDiagnostics.push({
+      company: companyContext?.company || companyContext?.domain || '',
+      code: String(error?.code || 'LINKEDIN_FALLBACK_PROFILE_VERIFY_FAILED'),
+      message: String(error?.message || error || '').slice(0, 300),
+    });
+    return null;
+  }
+
+  const employer = profileParser.resolveCurrentEmployer(profile);
+  if (!employer?.resolved || !employer.company) return null;
+  if (!apollo.sameOrganization(
+    { organization_name: employer.company },
+    companyContext?.company || '',
+    companyContext?.domain || '',
+  )) return null;
+
+  let person = null;
+  try {
+    person = await apollo.resolvePersonProfile(linkedinUrl, { needEmail: false, needPhone: false });
+  } catch {}
+  if (!person || person.noMatch || person.ambiguous || person.identityVerified === false) return null;
+
+  return {
+    id: text(person.apolloPersonId || person.id) || null,
+    apolloPersonId: text(person.apolloPersonId || person.id) || null,
+    name: text(person.name),
+    title: text(person.title || employer.title),
+    headline: text(person.headline),
+    linkedinUrl,
+    organizationName: text(employer.company),
+    organizationDomain: websiteDomain(companyContext?.domain || person.organizationDomain || ''),
+    seniority: text(person.seniority),
+    departments: Array.isArray(person.departments) ? person.departments : [],
+    functions: Array.isArray(person.functions) ? person.functions : [],
+    linkedinFallback: true,
+    linkedinEmployerVerified: true,
+    linkedinEmployerCompany: text(employer.company),
+    linkedinEmployerSource: text(employer.source),
+  };
+}
+
 function linkedinZeroResultFallbackEnabled(options = {}) {
   if (options.linkedinZeroResultFallback === false) return false;
   return !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_LINKEDIN_ZERO_RESULT_FALLBACK ?? '1').trim());
@@ -805,62 +882,93 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
   const queryBrand = cleanedCompanyEvidence(brand || company || domain);
   if (!queryBrand) return [];
 
-  const keywords = `${queryBrand} recruiter talent acquisition HR director founder`;
-  let result = null;
+  const personUrls = new Set();
+
+  // Strong path for sparse/small companies:
+  // company search -> exact LinkedIn company slug -> company employees page.
   try {
-    result = await linkedinMcp.callTool('search_people', {
-      keywords,
-      ...(options.location ? { location: String(options.location) } : {}),
-    });
-    stats.linkedinFallbackSearches = Number(stats.linkedinFallbackSearches || 0) + 1;
+    const companySearch = await linkedinMcp.callTool('search_companies', { keywords: queryBrand });
+    stats.linkedinFallbackCompanySearches = Number(stats.linkedinFallbackCompanySearches || 0) + 1;
+    const slugs = [...collectLinkedInCompanySlugs(companySearch)].slice(0, 2);
+
+    for (const slug of slugs) {
+      if (personUrls.size >= 8) break;
+      try {
+        const employees = await linkedinMcp.callTool('get_company_employees', {
+          company_name: slug,
+          keywords: 'recruiter talent acquisition human resources HR founder director owner manager',
+        });
+        stats.linkedinFallbackEmployeeSearches = Number(stats.linkedinFallbackEmployeeSearches || 0) + 1;
+        collectLinkedInPersonUrls(employees, personUrls);
+
+        // Tiny companies may have no recruiter titles. One unfiltered employee
+        // page is a safer fallback than inventing a POC or giving up after zero.
+        if (!personUrls.size) {
+          const allEmployees = await linkedinMcp.callTool('get_company_employees', { company_name: slug });
+          stats.linkedinFallbackEmployeeSearches = Number(stats.linkedinFallbackEmployeeSearches || 0) + 1;
+          collectLinkedInPersonUrls(allEmployees, personUrls);
+        }
+      } catch (error) {
+        stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
+        stats.discoveryDiagnostics.push({
+          company: queryBrand,
+          code: String(error?.code || 'LINKEDIN_COMPANY_EMPLOYEE_SEARCH_FAILED'),
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
+    }
   } catch (error) {
     stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
     stats.discoveryDiagnostics.push({
       company: queryBrand,
-      code: String(error?.code || 'LINKEDIN_ZERO_RESULT_SEARCH_FAILED'),
+      code: String(error?.code || 'LINKEDIN_COMPANY_SEARCH_FAILED'),
       message: String(error?.message || error || '').slice(0, 300),
     });
-    return [];
   }
 
-  const urls = [...collectLinkedInPersonUrls(result)];
+  // Fallback when LinkedIn does not expose a company slug/people page.
+  if (!personUrls.size) {
+    const queries = [
+      `${queryBrand} recruiter`,
+      `${queryBrand} talent acquisition human resources`,
+      `${queryBrand} founder director owner manager`,
+    ];
+    for (const keywords of queries) {
+      if (personUrls.size >= 8) break;
+      try {
+        const result = await linkedinMcp.callTool('search_people', {
+          keywords,
+          ...(options.location ? { location: String(options.location) } : {}),
+        });
+        stats.linkedinFallbackSearches = Number(stats.linkedinFallbackSearches || 0) + 1;
+        collectLinkedInPersonUrls(result, personUrls);
+      } catch (error) {
+        stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
+        stats.discoveryDiagnostics.push({
+          company: queryBrand,
+          code: String(error?.code || 'LINKEDIN_ZERO_RESULT_SEARCH_FAILED'),
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
+    }
+  }
+
+  const urls = [...personUrls];
   stats.linkedinFallbackProfilesFound = Number(stats.linkedinFallbackProfilesFound || 0) + urls.length;
   if (!urls.length) return [];
 
   const limit = integer(
     options.linkedinFallbackVerifyLimit ?? process.env.ULTRON_M3_UNIVERSAL_LINKEDIN_FALLBACK_VERIFY_LIMIT,
-    6,
+    5,
     1,
-    10,
+    8,
   );
 
   const verified = [];
   for (const linkedinUrl of urls.slice(0, limit)) {
-    try {
-      const person = await apollo.resolvePersonProfile(linkedinUrl, { needEmail: false, needPhone: false });
-      if (
-        !person
-        || person.noMatch
-        || person.ambiguous
-        || person.identityVerified === false
-        || !person.title
-        || !ranker.sameEmployer(person, companyContext)
-      ) continue;
-      verified.push({
-        id: text(person.apolloPersonId || person.id) || null,
-        apolloPersonId: text(person.apolloPersonId || person.id) || null,
-        name: text(person.name),
-        title: text(person.title),
-        headline: text(person.headline),
-        linkedinUrl,
-        organizationName: text(person.organizationName || person.organization?.name),
-        organizationDomain: websiteDomain(person.organizationDomain || person.organization?.website_url || ''),
-        seniority: text(person.seniority),
-        departments: Array.isArray(person.departments) ? person.departments : [],
-        functions: Array.isArray(person.functions) ? person.functions : [],
-        linkedinFallback: true,
-      });
-    } catch {}
+    const candidate = await verifyLinkedInCompanyEmployee(linkedinUrl, companyContext, stats);
+    if (!candidate?.id || !candidate?.title) continue;
+    verified.push(candidate);
   }
 
   stats.linkedinFallbackVerifiedCandidates = Number(stats.linkedinFallbackVerifiedCandidates || 0) + verified.length;
@@ -1340,6 +1448,9 @@ function freshStats() {
     candidateCacheHits: 0,
     candidatesDiscovered: 0,
     linkedinFallbackSearches: 0,
+    linkedinFallbackCompanySearches: 0,
+    linkedinFallbackEmployeeSearches: 0,
+    linkedinFallbackProfileVerifications: 0,
     linkedinFallbackFailures: 0,
     linkedinFallbackProfilesFound: 0,
     linkedinFallbackVerifiedCandidates: 0,
