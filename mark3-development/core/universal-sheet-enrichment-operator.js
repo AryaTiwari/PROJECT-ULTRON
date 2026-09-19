@@ -1689,7 +1689,7 @@ async function run(request = {}, options = {}) {
 
       if (companyContext?.source && /^row-/.test(companyContext.source)) stats.rowEvidenceEmployersResolved++;
       const writes = [];
-      const fillTargets = candidateFillTargets(plan);
+      const openPersonTargets = (plan.groups?.open || []).filter((target) => !target.isAnchor);
       const aiFallbackEnabled = Boolean(options.deferOpenGroupSelectionToAi);
 
       // POC-1 is non-negotiable and remains tied to the exact anchor identity.
@@ -1702,7 +1702,7 @@ async function run(request = {}, options = {}) {
 
       if (!companyContext || companyContext.unresolved || !companyContext.company) {
         stats.rowsWithoutEmployer++;
-        const unresolvedPoc2 = fillTargets.some((target) => Number(target.group?.ordinal || 0) === 2);
+        const unresolvedPoc2 = openPersonTargets.some((target) => Number(target.group?.ordinal || 0) === 2);
         if (unresolvedPoc2 && aiFallbackEnabled) {
           stats.deferredOpenGroups++;
           stats.unfilledOpenGroups++;
@@ -1722,8 +1722,8 @@ async function run(request = {}, options = {}) {
 
       stats.anchorsResolved++;
 
-      const poc2Targets = fillTargets.filter((target) => Number(target.group?.ordinal || 0) === 2);
-      const poc3Targets = fillTargets.filter((target) => Number(target.group?.ordinal || 0) >= 3);
+      const poc2Targets = openPersonTargets.filter((target) => Number(target.group?.ordinal || 0) === 2);
+      const poc3Targets = openPersonTargets.filter((target) => Number(target.group?.ordinal || 0) >= 3);
 
       // Existing/partial POCs are exact-person repair jobs, not discovery jobs.
       // Verify them directly by LinkedIn or exact name+company before spending any
