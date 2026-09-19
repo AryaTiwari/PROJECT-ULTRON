@@ -249,7 +249,11 @@ function classifyLeftovers(queue = []) {
     issues,
     blockingRows: rowsFor((item) => item.blocking),
     repairRows: rowsFor((item) => item.category === 'repair'),
-    warningRows: rowsFor((item) => !item.blocking && ['WARNING', 'PENDING'].includes(item.severity)),
+    warningRows: rowsFor((item) =>
+      !item.blocking
+      && item.category !== 'repair'
+      && ['WARNING', 'PENDING'].includes(item.severity)
+    ),
     retryableRows: rowsFor((item) => item.retryable),
   };
 }
