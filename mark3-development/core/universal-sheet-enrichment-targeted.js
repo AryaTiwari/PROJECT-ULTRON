@@ -482,7 +482,17 @@ async function run(request = {}, options = {}) {
 function formatDiagnosticFooter(result) {
   const gate = result?.completionGate || {};
   const allIssues = diagnostics.uniqueIssues(result?.diagnostics || gate?.issues || []);
-  const blockers = allIssues.filter((item) => item.blocking || item.severity === 'BLOCKER');
+  const terminalScopes = new Set(allIssues
+    .filter((item) => (item.blocking || item.severity === 'BLOCKER') && item.retryable === false)
+    .map((item) => `${item.rowNumber ?? ''}|${item.target || item.groupOrdinal || ''}`));
+  const blockers = allIssues.filter((item) => {
+    if (!(item.blocking || item.severity === 'BLOCKER')) return false;
+    const scope = `${item.rowNumber ?? ''}|${item.target || item.groupOrdinal || ''}`;
+    // A final non-retryable blocker supersedes earlier retryable lifecycle blockers
+    // for the same row/target. Keep the history elsewhere, but root cause stays singular.
+    if (item.retryable !== false && terminalScopes.has(scope)) return false;
+    return true;
+  });
   const pending = allIssues.filter((item) => item.severity === 'PENDING' || item.category === 'repair');
   const warnings = allIssues.filter((item) => item.severity === 'WARNING' && item.category !== 'repair');
   const infos = allIssues.filter((item) => item.severity === 'INFO');
