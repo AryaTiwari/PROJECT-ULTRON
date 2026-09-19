@@ -455,7 +455,7 @@ function mergePrimaryAndAiRescue(primary, rescue) {
 async function run(request = {}, options = {}) {
   const exact = await resolveExactRequest(request);
   const sharedDiscoveryCache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
-  const phasedExecution = options.pocPhasePipeline !== false;
+  const phasedExecution = options.pocPhasePipeline === true || Boolean(options.contactPhaseOrdinal);
   const boundedAiEnabled = !phasedExecution
     && aiBatchRescue.enabled()
     && options.apolloApproved === true
