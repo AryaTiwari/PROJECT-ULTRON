@@ -64,6 +64,7 @@ assert.match(fallbackPassSource, /orphanPolicy\.verify/);
 assert.match(fallbackPassSource, /planner\.safeWritesForGroup/);
 assert.match(fallbackPassSource, /base\.repairExistingGroups/);
 assert.match(fallbackPassSource, /base\.inferHiringCompanyFromEvidence\(plan, row\)/);
+assert.match(fallbackPassSource, /base\.discoverPriorityPeopleFast/);
 assert.match(fallbackPassSource, /allowLinkedInEmployerFallback: false/);
 
 // Historical 3-POC wording may still reach the compatibility controller, but any
