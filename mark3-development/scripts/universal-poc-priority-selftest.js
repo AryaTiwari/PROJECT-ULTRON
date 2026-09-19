@@ -104,7 +104,7 @@ assert.match(operatorSource, /LINKEDIN_ZERO_RESULT_SEARCH_FAILED/);
 assert.match(operatorSource, /linkedinMcp\.callTool\('search_people'/);
 assert.match(operatorSource, /apollo\.resolvePersonProfile/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_LINKEDIN_ZERO_RESULT_FALLBACK/);
-assert.match(operatorSource, /priority-fast\|/);
+assert.match(operatorSource, /priority-fast-v2\|/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /ordinal: 2/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
