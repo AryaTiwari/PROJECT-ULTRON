@@ -269,6 +269,9 @@ assert.ok(anchorCompletionIndex >= 0, 'POC-1 anchor completion call must exist')
 assert.ok(unresolvedEmployerGuardIndex >= 0, 'employer-resolution guard must exist');
 assert.ok(anchorCompletionIndex < unresolvedEmployerGuardIndex, 'POC-1 completion must execute before employer gating');
 assert.match(operatorSource, /discoverPriorityPeopleFast/);
+assert.match(operatorSource, /Mandatory POC-2 residue must always enter the deterministic leftover/);
+assert.match(operatorSource, /Fast sweep deferred deeper deterministic discovery\/hydration until all rows are processed/);
+assert.match(operatorSource, /markLeftover\(stats, rowNumber, people\.length \? 'poc2-verification-unresolved' : 'poc2-no-candidates'/);
 assert.match(operatorSource, /companyBrandFromDomain/);
 assert.match(operatorSource, /adaptiveBroadCandidateLimit/);
 assert.match(operatorSource, /APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED/);
