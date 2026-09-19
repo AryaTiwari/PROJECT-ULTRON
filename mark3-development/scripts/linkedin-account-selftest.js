@@ -492,6 +492,12 @@ assert.equal(policy.eventCountsTowardSafety({ errorKind: 'auth' }), false);
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'rate-limit' }), true);
 
 const schedulerNow = Date.now();
+const schedulerRuntimeBypass = process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
+const schedulerTestBypass = process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
+// This assertion validates NORMAL safety scheduling, so isolate it from an
+// emergency runtime override inherited from the shell running this self-test.
+delete process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
+delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 const schedulerLimit = policy.settings().dailyMax;
 const schedulerEvents = Array.from({ length: schedulerLimit + 2 }, (_, index) => ({
   at: schedulerNow - (20 * 60 * 60 * 1000) + (index * 1000),
@@ -512,6 +518,10 @@ assert.equal(
   expectedReady,
   'When usage is above the daily cap, nextEligibleAt must jump until enough events expire to get below the cap.'
 );
+if (schedulerRuntimeBypass == null) delete process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
+else process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS = schedulerRuntimeBypass;
+if (schedulerTestBypass == null) delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
+else process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = schedulerTestBypass;
 
 assert.equal(mcp.isTransientTransportError(transientTimeout), true);
 assert.equal(mcp.shouldRetryTransient(transientTimeout), false);
