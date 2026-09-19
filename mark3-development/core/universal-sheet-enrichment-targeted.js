@@ -145,8 +145,12 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
       }
     }
 
-    const openPoc2 = base.candidateFillTargets(plan)
-      .some((target) => Number(target.group?.ordinal || 0) === 2);
+    // Mandatory POC-2 identity is unresolved only when the ordinal-2 group is
+    // genuinely empty. A known POC-2 with missing phone/email is a contact repair
+    // target, not a missing-person target, and must never be sent back through
+    // candidate discovery merely because a callback is still pending.
+    const openPoc2 = (plan.groups?.open || [])
+      .some((target) => !target.isAnchor && Number(target.group?.ordinal || 0) === 2);
     if (openPoc2) poc2OpenRows.push(rowNumber);
   }
 
