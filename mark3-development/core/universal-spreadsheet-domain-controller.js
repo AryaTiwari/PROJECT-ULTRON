@@ -66,16 +66,39 @@ function parseExpectedPersonGroups(message) {
 
 function parseContactPhaseOrdinal(message) {
   const value = String(message || '');
-  const patterns = [
-    /\b(?:poc\s*[- ]?1|1st\s+poc|first\s+poc)\b[^\n]{0,40}\b(?:only|first)\b/i,
-    /\b(?:only|just)\b[^\n]{0,40}\b(?:poc\s*[- ]?1|1st\s+poc|first\s+poc)\b/i,
-    /\b(?:poc\s*[- ]?2|2nd\s+poc|second\s+poc)\b[^\n]{0,40}\bonly\b/i,
-    /\b(?:only|just)\b[^\n]{0,40}\b(?:poc\s*[- ]?2|2nd\s+poc|second\s+poc)\b/i,
-    /\b(?:poc\s*[- ]?3|3rd\s+poc|third\s+poc)\b[^\n]{0,40}\bonly\b/i,
-    /\b(?:only|just)\b[^\n]{0,40}\b(?:poc\s*[- ]?3|3rd\s+poc|third\s+poc)\b/i,
+
+  // Diagnostic phase selection must be explicit. Do not infer "POC-2 only"
+  // from production sentences such as "POC-2 discovery is necessary only
+  // where F is blank".
+  const definitions = [
+    {
+      ordinal: 1,
+      patterns: [
+        /\b(?:poc\s*[- ]?1|1st\s+poc|first\s+poc)\s+only\b/i,
+        /\bonly\s+(?:the\s+)?(?:poc\s*[- ]?1|1st\s+poc|first\s+poc)\b/i,
+        /\bjust\s+(?:the\s+)?(?:poc\s*[- ]?1|1st\s+poc|first\s+poc)\b/i,
+      ],
+    },
+    {
+      ordinal: 2,
+      patterns: [
+        /\b(?:poc\s*[- ]?2|2nd\s+poc|second\s+poc)\s+only\b/i,
+        /\bonly\s+(?:the\s+)?(?:poc\s*[- ]?2|2nd\s+poc|second\s+poc)\b/i,
+        /\bjust\s+(?:the\s+)?(?:poc\s*[- ]?2|2nd\s+poc|second\s+poc)\b/i,
+      ],
+    },
+    {
+      ordinal: 3,
+      patterns: [
+        /\b(?:poc\s*[- ]?3|3rd\s+poc|third\s+poc)\s+only\b/i,
+        /\bonly\s+(?:the\s+)?(?:poc\s*[- ]?3|3rd\s+poc|third\s+poc)\b/i,
+        /\bjust\s+(?:the\s+)?(?:poc\s*[- ]?3|3rd\s+poc|third\s+poc)\b/i,
+      ],
+    },
   ];
-  for (let i = 0; i < patterns.length; i += 2) {
-    if (patterns[i].test(value) || patterns[i + 1].test(value)) return (i / 2) + 1;
+
+  for (const definition of definitions) {
+    if (definition.patterns.some((pattern) => pattern.test(value))) return definition.ordinal;
   }
   return null;
 }
