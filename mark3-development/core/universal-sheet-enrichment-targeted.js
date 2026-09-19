@@ -165,28 +165,58 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     const rowNumber = Number(item?.rowNumber);
     if (!Number.isInteger(rowNumber)) continue;
     if (!reasonMap.has(rowNumber)) reasonMap.set(rowNumber, []);
-    reasonMap.get(rowNumber).push(text(item.reason || item.detail || 'unresolved'));
+    reasonMap.get(rowNumber).push({
+      reason: text(item?.reason || item?.detail || 'unresolved'),
+      detail: text(item?.detail || ''),
+      typed: item?.typed || null,
+    });
   }
 
   for (const issue of poc1IdentityIssues) {
     if (!reasonMap.has(issue.rowNumber)) reasonMap.set(issue.rowNumber, []);
-    if (!reasonMap.get(issue.rowNumber).includes(issue.reason)) reasonMap.get(issue.rowNumber).push(issue.reason);
+    const existingReasons = reasonMap.get(issue.rowNumber).map((entry) => text(entry?.reason));
+    if (!existingReasons.includes(issue.reason)) {
+      reasonMap.get(issue.rowNumber).push({ reason: issue.reason, detail: '', typed: null });
+    }
   }
   for (const rowNumber of poc2OpenRows) {
     if (!reasonMap.has(rowNumber)) {
-      reasonMap.set(rowNumber, ['no-safe-verified-poc2-after-all-strategies']);
+      reasonMap.set(rowNumber, [{
+        reason: 'no-safe-verified-poc2-after-all-strategies',
+        detail: '',
+        typed: null,
+      }]);
     }
   }
 
   const issues = [];
   for (const rowNumber of unresolvedRows) {
-    const reasons = reasonMap.get(rowNumber) || ['no-safe-verified-poc2-after-all-strategies'];
+    const reasons = reasonMap.get(rowNumber) || [{
+      reason: 'no-safe-verified-poc2-after-all-strategies',
+      detail: '',
+      typed: null,
+    }];
     const isPoc1 = poc1IdentityIssues.some((item) => Number(item.rowNumber) === rowNumber);
-    for (const reason of reasons) {
-      issues.push(diagnostics.issueFromReason(reason, {
+    for (const entry of reasons) {
+      const target = isPoc1 ? 'POC-1' : 'POC-2';
+      const groupOrdinal = isPoc1 ? 1 : 2;
+      if (entry?.typed?.code) {
+        issues.push(diagnostics.typedIssue(entry.typed, {
+          category: 'provider',
+          severity: 'BLOCKER',
+          blocking: true,
+          retryable: true,
+          rowNumber,
+          groupOrdinal,
+          target,
+        }));
+        continue;
+      }
+      issues.push(diagnostics.issueFromReason(entry?.reason, {
         rowNumber,
-        groupOrdinal: isPoc1 ? 1 : 2,
-        target: isPoc1 ? 'POC-1' : 'POC-2',
+        groupOrdinal,
+        target,
+        detail: entry?.detail || '',
       }));
     }
   }
@@ -215,7 +245,14 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     complete,
     status: complete ? 'COMPLETE' : (terminalRows.length ? 'TERMINAL_EXHAUSTED' : 'RETRY_REQUIRED'),
     statusCode,
-    reasons: Object.fromEntries([...reasonMap.entries()]),
+    reasons: Object.fromEntries([...reasonMap.entries()].map(([rowNumber, entries]) => [
+      rowNumber,
+      entries.map((entry) => ({
+        reason: entry?.reason || 'unresolved',
+        detail: entry?.detail || '',
+        typedCode: entry?.typed?.code || null,
+      })),
+    ])),
     issues: uniqueIssues,
   };
 }
@@ -482,17 +519,11 @@ async function run(request = {}, options = {}) {
 function formatDiagnosticFooter(result) {
   const gate = result?.completionGate || {};
   const allIssues = diagnostics.uniqueIssues(result?.diagnostics || gate?.issues || []);
-  const terminalScopes = new Set(allIssues
-    .filter((item) => (item.blocking || item.severity === 'BLOCKER') && item.retryable === false)
-    .map((item) => `${item.rowNumber ?? ''}|${item.target || item.groupOrdinal || ''}`));
-  const blockers = allIssues.filter((item) => {
-    if (!(item.blocking || item.severity === 'BLOCKER')) return false;
-    const scope = `${item.rowNumber ?? ''}|${item.target || item.groupOrdinal || ''}`;
-    // A final non-retryable blocker supersedes earlier retryable lifecycle blockers
-    // for the same row/target. Keep the history elsewhere, but root cause stays singular.
-    if (item.retryable !== false && terminalScopes.has(scope)) return false;
-    return true;
-  });
+  const gateBlockers = diagnostics.uniqueIssues(gate?.issues || [])
+    .filter((item) => item.blocking || item.severity === 'BLOCKER');
+  const blockers = gateBlockers.length
+    ? gateBlockers
+    : allIssues.filter((item) => item.blocking || item.severity === 'BLOCKER');
   const pending = allIssues.filter((item) => item.severity === 'PENDING' || item.category === 'repair');
   const warnings = allIssues.filter((item) => item.severity === 'WARNING' && item.category !== 'repair');
   const infos = allIssues.filter((item) => item.severity === 'INFO');
