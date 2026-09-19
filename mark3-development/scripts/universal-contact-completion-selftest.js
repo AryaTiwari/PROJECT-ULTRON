@@ -81,6 +81,8 @@ const fallbackSource = fs.readFileSync(path.join(root, 'universal-big-pickle-fal
 assert.doesNotMatch(operatorSource, /existingRepairNeedsDiscovery/);
 assert.doesNotMatch(operatorSource, /exactCandidateForExisting/);
 assert.match(operatorSource, /existingPersonVerificationContext/);
+assert.match(operatorSource, /apollo-business-email/);
+assert.match(operatorSource, /apollo\.resolvePersonByBusinessEmail/);
 assert.match(operatorSource, /apollo-name-company/);
 assert.match(operatorSource, /apollo\.fetchPhoneResults\(\)/);
 assert.match(operatorSource, /apollo\.recordPhoneResult/);
@@ -176,7 +178,7 @@ async function run() {
     sheets.writeCells = originals.writeCells;
   }
 
-  console.log('Universal contact completion self-test passed: existing POCs verify by exact LinkedIn or exact name+business-domain, fresh pending Apollo phone requests are reused briefly while stale pending requests become retryable, callback ownership stays bound to the exact row/cell/person across restarts, verified callbacks write only blank phone cells, and Big Pickle control failures fail closed.');
+  console.log('Universal contact completion self-test passed: existing POCs verify by exact LinkedIn, then exact business email, then exact name+business-domain, fresh pending Apollo phone requests are reused briefly while stale pending requests become retryable, callback ownership stays bound to the exact row/cell/person across restarts, verified callbacks write only blank phone cells, and Big Pickle control failures fail closed.');
 }
 
 if (require.main === module) {
