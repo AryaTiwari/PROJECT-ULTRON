@@ -3,6 +3,9 @@
 // Universal deterministic spreadsheet enrichment executor.
 // No model/router dependency is permitted in this file.
 
+const fs = require('fs');
+const path = require('path');
+const config = require('./config');
 const sheets = require('./google-sheets-operator');
 const apollo = require('./apollo-enrichment');
 const linkedinMcp = require('./linkedin-mcp-client');
@@ -22,9 +25,40 @@ function integer(value, fallback, min = 1, max = 100000) {
 }
 function websiteDomain(value) { return ranker.hostname(value); }
 
+const PHONE_ASSIGNMENTS_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'pending-phone-assignments.json');
 const backgroundPhoneAssignments = new Map();
 let backgroundPhoneWatcher = null;
 let backgroundPhoneWatcherRemaining = 0;
+let backgroundPhoneAssignmentsLoaded = false;
+
+function persistBackgroundPhoneAssignments() {
+  try {
+    fs.mkdirSync(path.dirname(PHONE_ASSIGNMENTS_FILE), { recursive: true });
+    const payload = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      assignments: [...backgroundPhoneAssignments.entries()].map(([key, value]) => ({ key, ...value })),
+    };
+    fs.writeFileSync(PHONE_ASSIGNMENTS_FILE, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(PHONE_ASSIGNMENTS_FILE, 0o600); } catch {}
+  } catch {}
+}
+
+function loadBackgroundPhoneAssignments() {
+  if (backgroundPhoneAssignmentsLoaded) return backgroundPhoneAssignments.size;
+  backgroundPhoneAssignmentsLoaded = true;
+  try {
+    if (!fs.existsSync(PHONE_ASSIGNMENTS_FILE)) return 0;
+    const parsed = JSON.parse(fs.readFileSync(PHONE_ASSIGNMENTS_FILE, 'utf8'));
+    for (const item of Array.isArray(parsed?.assignments) ? parsed.assignments : []) {
+      const key = text(item?.key);
+      if (!key || !item?.spreadsheetId || !item?.sheetName || !Number.isInteger(Number(item?.rowNumber)) || !Number.isInteger(Number(item?.columnIndex)) || !item?.apolloPersonId) continue;
+      const { key: _ignored, ...value } = item;
+      backgroundPhoneAssignments.set(key, value);
+    }
+  } catch {}
+  return backgroundPhoneAssignments.size;
+}
 function linkedinSlug(value) {
   const normalized = apollo.normalizeLinkedIn(value);
   if (!normalized) return '';
@@ -370,10 +404,12 @@ function registerBackgroundPhoneAssignments(source, items = []) {
       registeredAt: new Date().toISOString(),
     });
   }
+  persistBackgroundPhoneAssignments();
   return backgroundPhoneAssignments.size;
 }
 
 async function syncBackgroundPhoneAssignments() {
+  loadBackgroundPhoneAssignments();
   if (!backgroundPhoneAssignments.size) return { resolved: 0, pending: 0 };
   const results = await apollo.fetchPhoneResults();
   if (!Array.isArray(results) || !results.length) {
@@ -418,10 +454,12 @@ async function syncBackgroundPhoneAssignments() {
     }
   }
 
+  persistBackgroundPhoneAssignments();
   return { resolved, pending: backgroundPhoneAssignments.size };
 }
 
 function startBackgroundPhoneWatcher() {
+  loadBackgroundPhoneAssignments();
   if (backgroundPhoneWatcher || !backgroundPhoneAssignments.size) return;
   backgroundPhoneWatcherRemaining = Math.max(
     1,
@@ -1393,6 +1431,14 @@ async function run(request = {}, options = {}) {
 
   const stats = freshStats();
 
+  // Resume Apollo phone callbacks from earlier runs/restarts before doing new
+  // enrichment work. Ownership is persisted by exact sheet/row/column/person id.
+  loadBackgroundPhoneAssignments();
+  if (backgroundPhoneAssignments.size) {
+    try { await syncBackgroundPhoneAssignments(); } catch {}
+    if (backgroundPhoneAssignments.size) startBackgroundPhoneWatcher();
+  }
+
   // Persist continuity-recovered headers only after the approved run begins and
   // only into cells that are still blank. This makes the restored contact layout
   // self-describing for later runs without risking overwrite of user data.
@@ -1657,6 +1703,8 @@ module.exports = {
   registerBackgroundPhoneAssignments,
   syncBackgroundPhoneAssignments,
   startBackgroundPhoneWatcher,
+  loadBackgroundPhoneAssignments,
+  persistBackgroundPhoneAssignments,
   backgroundPhoneStatus,
   syncPendingPhoneAssignments,
   repairExistingGroups,
