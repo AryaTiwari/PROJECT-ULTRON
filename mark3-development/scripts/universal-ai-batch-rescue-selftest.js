@@ -201,20 +201,18 @@ assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS/);
 assert.match(operatorSource, /phaseOrdinal === 3 \? 5 : \(!phaseOrdinal \? 3 : 1\)/);
 assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?\[\.\.\.poc2Targets, \.\.\.poc3Targets\]/);
-assert.match(controllerSource, /Maximum 3 direct env-backed AI attempts for the entire run, not per row/);
-assert.match(controllerSource, /Priority contract: execution is sheet-wide and phase-ordered/);
-assert.match(controllerSource, /Phase 1 completes POC-1 contact fields/);
-assert.match(controllerSource, /Phase 2 re-reads the live sheet, completes existing POC-2 identities first/);
-assert.match(controllerSource, /discovers a new POC-2 only when the POC-2 name cell is actually blank/);
-assert.match(controllerSource, /Phase 3 re-reads again, completes existing POC-3 identities first/);
-assert.match(controllerSource, /Existing identities are contact-completion jobs/);
+assert.match(controllerSource, /Maximum 3 direct env-backed AI attempts apply to the entire run, not per row/);
+assert.match(controllerSource, /ordinary production enrichment is coordinated across POC-1, POC-2 and POC-3 in one sheet run/);
+assert.match(controllerSource, /POC-1 exact-anchor contact completion runs first within each row/);
+assert.match(controllerSource, /existing POC-2\/POC-3 identities remain contact-completion jobs/);
+assert.match(controllerSource, /Explicit requests such as POC-1 only, POC-2 only or POC-3 only switch to isolated deterministic diagnostic phases/);
 assert.match(controllerSource, /employer verification remains mandatory whenever ULTRON selects a new person/);
 assert.match(controllerSource, /results-first waterfall: targeted Apollo -> bounded broad Apollo -> brand\/domain variants -> authenticated read-only LinkedIn/);
 assert.match(controllerSource, /pragmatic same-company HR\/talent\/staffing\/placement\/people\/leadership fallback/);
 assert.match(controllerSource, /FINAL verified POC whose phone is still blank/);
 assert.match(controllerSource, /phone waterfall with poll_only\/request-id polling/);
 assert.match(controllerSource, /never waterfalls discovery candidates/);
-assert.match(controllerSource, /Selection prefers Groq, then Gemini, then NVIDIA on failure/);
+assert.match(controllerSource, /Gemini is preferred for unresolved row\/company context, Groq for candidate assignment, and NVIDIA for optional independent review/);
 assert.match(controllerSource, /OmniRoute is not used by the direct batch path/);
 
 assert.match(directSource, /async function allCredentialEntries\(provider, \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
