@@ -221,9 +221,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     writes.push(...await base.repairExistingGroups(row, plan, companyContext, stats, rowOptions));
 
     if (targets.length) {
-      const people = await base.discoverCompanyPeople(companyContext, cache, stats, {
+      const people = await base.discoverPriorityPeopleFast(companyContext, cache, stats, {
         ...runOptions,
         location: plan.context?.location || '',
+        priorityCandidateLimit: runOptions.manualPriorityCandidateLimit ?? 20,
+        adaptiveBroadCandidateLimit: runOptions.adaptiveBroadCandidateLimit ?? 30,
       });
       const existing = existingKeys(plan);
       const available = (people || []).filter((candidate) => !candidateAlreadyPresent(candidate, existing));
