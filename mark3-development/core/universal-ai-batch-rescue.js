@@ -80,6 +80,11 @@ function freshStats() {
     linkedinFallbackFailures: 0,
     linkedinFallbackProfilesFound: 0,
     linkedinFallbackVerifiedCandidates: 0,
+    publicIndexSearchCalls: 0,
+    publicIndexProfilesFound: 0,
+    publicIndexApolloVerificationAttempts: 0,
+    publicIndexApolloVerifiedCandidates: 0,
+    publicIndexFailures: 0,
     rowsOfferedForSelection: 0,
     slotsOfferedForSelection: 0,
     aiSelectionsProposed: 0,
@@ -643,6 +648,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.linkedinFallbackFailures = discoveryStats.linkedinFallbackFailures || 0;
   stats.linkedinFallbackProfilesFound = discoveryStats.linkedinFallbackProfilesFound || 0;
   stats.linkedinFallbackVerifiedCandidates = discoveryStats.linkedinFallbackVerifiedCandidates || 0;
+  stats.publicIndexSearchCalls = discoveryStats.publicIndexSearchCalls || 0;
+  stats.publicIndexProfilesFound = discoveryStats.publicIndexProfilesFound || 0;
+  stats.publicIndexApolloVerificationAttempts = discoveryStats.publicIndexApolloVerificationAttempts || 0;
+  stats.publicIndexApolloVerifiedCandidates = discoveryStats.publicIndexApolloVerifiedCandidates || 0;
+  stats.publicIndexFailures = discoveryStats.publicIndexFailures || 0;
   stats.rowsOfferedForSelection = rowPackages.size;
   stats.slotsOfferedForSelection = [...rowPackages.values()].reduce((sum, pkg) => sum + pkg.targets.length, 0);
   if (!rowPackages.size || stats.modelAttempts >= stats.maxCalls) {
