@@ -84,6 +84,10 @@ assert.ok(anchorCompletionIndex >= 0, 'POC-1 anchor completion call must exist')
 assert.ok(unresolvedEmployerGuardIndex >= 0, 'employer-resolution guard must exist');
 assert.ok(anchorCompletionIndex < unresolvedEmployerGuardIndex, 'POC-1 completion must execute before employer gating');
 assert.match(operatorSource, /discoverPriorityPeopleFast/);
+assert.match(operatorSource, /companyBrandFromDomain/);
+assert.match(operatorSource, /adaptiveBroadCandidateLimit/);
+assert.match(operatorSource, /APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED/);
+assert.match(operatorSource, /APOLLO_BRAND_KEYWORD_SEARCH_FAILED/);
 assert.match(operatorSource, /priority-fast\|/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /ordinal: 2/);
