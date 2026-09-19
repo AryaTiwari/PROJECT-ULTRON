@@ -230,11 +230,18 @@ async function resolveRequestedTarget(sheetUrl, requestedSheetName = '', options
     sheetName: requestedSheetName || undefined,
     explicitNameAuthoritative: Boolean(options.explicitNameAuthoritative),
   });
+  if (!resolution.target?.name) {
+    const error = new Error('An exact worksheet name or worksheet gid is required before universal enrichment can inspect or edit a multi-tab workbook.');
+    error.code = 'UNIVERSAL_SHEET_TARGET_REQUIRED';
+    error.stage = 'sheet-target-resolution';
+    error.availableTabs = (resolution.tabs || []).map((tab) => tab.name).filter(Boolean);
+    throw error;
+  }
   return {
     spreadsheetId,
     spreadsheetTitle: meta?.properties?.title || '',
     resolution,
-    sheetName: resolution.target?.name || '',
+    sheetName: resolution.target.name,
     sheetId: resolution.target?.sheetId ?? null,
     targetSource: resolution.targetSource,
   };
