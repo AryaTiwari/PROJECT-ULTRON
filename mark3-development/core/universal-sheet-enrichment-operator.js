@@ -641,6 +641,120 @@ function rowCompanyMetadata(plan) {
   };
 }
 
+
+function manualPriorityCandidates(candidates = [], companyContext = {}, existing = { names: new Set(), linkedins: new Set() }) {
+  const rows = [];
+  for (const candidate of candidates || []) {
+    if (!candidate || !ranker.sameEmployer(candidate, companyContext)) continue;
+    if (candidateAlreadyPresent(candidate, existing)) continue;
+    const priority = Number(apollo.decisionPriority(candidate.title || candidate.headline || ''));
+    if (priority >= 99) continue;
+    const scored = ranker.scoreCandidate(candidate, {
+      company: companyContext.company,
+      companyDomain: companyContext.domain,
+    }, candidates || []);
+    rows.push({ candidate, priority, score: Number(scored?.score || 0) });
+  }
+  return rows
+    .sort((a, b) => a.priority - b.priority || b.score - a.score || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || '')))
+    .map((item) => item.candidate);
+}
+
+async function fillManualPriorityGroup(row, plan, companyContext, candidates, stats, options = {}) {
+  const ordinal = Number(options.ordinal || 0);
+  if (!ordinal) return { writes: [], filled: false, selected: null };
+  const target = candidateFillTargets(plan).find((item) => Number(item.group?.ordinal || 0) === ordinal);
+  if (!target) return { writes: [], filled: false, selected: null };
+
+  const existing = existingIdentityKeys(plan);
+  const claimed = options.claimed instanceof Set ? options.claimed : new Set();
+  const priorityPool = manualPriorityCandidates(candidates, companyContext, existing)
+    .filter((candidate) => {
+      const key = candidateDiscoveryKey(candidate);
+      return key && !claimed.has(key);
+    });
+
+  // If the canonical title ladder has no candidate, append the strongest
+  // deterministic evidence-ranked candidates. This keeps functional hiring
+  // authorities available without making the common path expensive.
+  const fallbackRanking = ranker.rankCandidates(
+    (candidates || []).filter((candidate) => !candidateAlreadyPresent(candidate, existing)),
+    {
+      ...plan.context,
+      company: companyContext.company,
+      companyDomain: companyContext.domain,
+      anchorApolloPersonId: companyContext.anchorApolloPersonId,
+      anchorLinkedin: companyContext.anchorLinkedin,
+    },
+    { minimumScore: Number(options.fallbackMinimumScore ?? 28) },
+  ).ranked.map((item) => item.candidate);
+
+  const pool = mergeCandidatePools(priorityPool, fallbackRanking)
+    .filter((candidate) => {
+      const key = candidateDiscoveryKey(candidate);
+      return key && !claimed.has(key);
+    });
+
+  const maxAttempts = integer(options.maxHydrationAttempts, ordinal === 2 ? 3 : 1, 1, 5);
+  for (let attempt = 0; attempt < Math.min(maxAttempts, pool.length); attempt++) {
+    const raw = pool[attempt];
+    const rawKey = candidateDiscoveryKey(raw);
+    stats.hydrationAttempts++;
+    let person = null;
+    try {
+      person = await apollo.resolveDecisionMaker(raw, companyContext.company, companyContext.domain, {
+        needEmail: Boolean(target.group.fields.email),
+        needPhone: Boolean(target.group.fields.phone),
+      });
+    } catch {
+      stats.hydrationFailures++;
+      claimed.add(rawKey);
+      continue;
+    }
+
+    if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) {
+      stats.hydrationFailures++;
+      claimed.add(rawKey);
+      continue;
+    }
+
+    const hydratedName = ranker.normalize(person.name || '');
+    const hydratedLinkedin = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
+    if ((hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) {
+      stats.postHydrationDuplicates++;
+      claimed.add(rawKey);
+      continue;
+    }
+
+    queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, person);
+    const writePlan = planner.safeWritesForGroup(row, target.group, person);
+    if (!writePlan.allowed || (!writePlan.writes.length && person.phoneStatus !== 'pending')) {
+      stats.identityConflicts++;
+      claimed.add(rawKey);
+      continue;
+    }
+
+    claimed.add(rawKey);
+    if (hydratedName) existing.names.add(hydratedName);
+    if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
+    stats.newPeopleSelected++;
+    stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
+    stats.selectionAudit.push({
+      groupId: target.group.id,
+      ordinal,
+      strategy: 'manual-priority',
+      priority: apollo.decisionPriority(person.title || raw.title || ''),
+      apolloPersonId: text(person.apolloPersonId || person.id),
+      name: person.name || '',
+      title: person.title || '',
+      fields: writePlan.writes.map((write) => write.field),
+    });
+    return { writes: writePlan.writes, filled: true, selected: person };
+  }
+
+  return { writes: [], filled: false, selected: null };
+}
+
 async function fillOpenGroups(row, plan, companyContext, candidates, stats, options = {}) {
   const allowedOrdinals = Array.isArray(options.targetOrdinals)
     ? new Set(options.targetOrdinals.map((value) => Number(value)).filter(Number.isFinite))
@@ -994,8 +1108,8 @@ async function run(request = {}, options = {}) {
         people = await discoverCompanyPeople(companyContext, cache, stats, {
           ...runOptions,
           location: plan.context?.location || '',
-          candidateLimit: options.manualCandidateLimit ?? 60,
-          priorityCandidateLimit: options.manualPriorityCandidateLimit ?? 30,
+          candidateLimit: options.manualCandidateLimit ?? 40,
+          priorityCandidateLimit: options.manualPriorityCandidateLimit ?? 20,
         });
       }
 
@@ -1005,36 +1119,36 @@ async function run(request = {}, options = {}) {
       const poc2Targets = fillTargets.filter((target) => Number(target.group?.ordinal || 0) === 2);
       const poc3Targets = fillTargets.filter((target) => Number(target.group?.ordinal || 0) >= 3);
 
+      const manualClaimed = new Set();
+
       if (poc2Targets.length) {
         stats.manualPoc2Attempts += poc2Targets.length;
-        const before = stats.newPeopleSelected;
-        writes.push(...await fillOpenGroups(row, plan, companyContext, people, stats, {
+        const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
           ...rowOptions,
-          targetOrdinals: [2],
-          minimumScore: options.poc2MinimumScore ?? 30,
-          poc2MinimumConfidence: options.poc2MinimumConfidence ?? 0.46,
-        }));
-        const filled = Math.max(0, stats.newPeopleSelected - before);
-        stats.manualPoc2Filled += filled;
-        if (filled < poc2Targets.length && aiFallbackEnabled) {
-          stats.deferredOpenGroups += (poc2Targets.length - filled);
-        }
+          ordinal: 2,
+          claimed: manualClaimed,
+          maxHydrationAttempts: options.poc2HydrationAttempts ?? 3,
+          fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26,
+        });
+        writes.push(...result.writes);
+        if (result.filled) stats.manualPoc2Filled++;
+        else if (aiFallbackEnabled) stats.deferredOpenGroups++;
       }
 
-      // POC-3 is useful but optional: only take it when deterministic evidence is
-      // already strong. Never spend AI budget merely to manufacture a third contact.
+      // POC-3 gets exactly one cheap manual hydration opportunity from the same
+      // discovery pool. No extra discovery and no AI rescue unless explicitly enabled.
       if (poc3Targets.length) {
         stats.manualPoc3Attempts += poc3Targets.length;
-        const before = stats.newPeopleSelected;
-        writes.push(...await fillOpenGroups(row, plan, companyContext, people, stats, {
+        const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
           ...rowOptions,
-          targetOrdinals: [...new Set(poc3Targets.map((target) => Number(target.group?.ordinal || 0)))],
-          minimumScore: options.poc3MinimumScore ?? 42,
-          poc3MinimumConfidence: options.poc3MinimumConfidence ?? 0.66,
-        }));
-        const filled = Math.max(0, stats.newPeopleSelected - before);
-        stats.manualPoc3Filled += filled;
-        stats.optionalPoc3Deferred += Math.max(0, poc3Targets.length - filled);
+          ordinal: 3,
+          claimed: manualClaimed,
+          maxHydrationAttempts: options.poc3HydrationAttempts ?? 1,
+          fallbackMinimumScore: options.poc3FallbackMinimumScore ?? 42,
+        });
+        writes.push(...result.writes);
+        if (result.filled) stats.manualPoc3Filled++;
+        else stats.optionalPoc3Deferred += poc3Targets.length;
       }
 
       const byColumn = new Map();
@@ -1152,6 +1266,8 @@ module.exports = {
   companyPriorityTitles,
   companyPriorityCandidate,
   discoverCompanyPeople,
+  manualPriorityCandidates,
+  fillManualPriorityGroup,
   fillOpenGroups,
   applyRecoveredHeaderRepairs,
   typedFailureSummary,
