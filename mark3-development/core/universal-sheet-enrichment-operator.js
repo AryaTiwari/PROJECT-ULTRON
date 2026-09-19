@@ -1364,7 +1364,7 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
       } else {
         stats.hydrationAttempts++;
         try {
-          person = await apollo.resolveDecisionMaker(raw, companyContext.company, companyContext.domain, {
+          person = await hydrateDecisionMakerVerified(raw, companyContext, stats, {
             needEmail: Boolean(target.group.fields.email),
             needPhone: Boolean(target.group.fields.phone),
           });
@@ -1549,6 +1549,9 @@ function freshStats() {
     linkedinFallbackFailures: 0,
     linkedinFallbackProfilesFound: 0,
     linkedinFallbackVerifiedCandidates: 0,
+    linkedinHydrationRecoveryAttempts: 0,
+    linkedinHydrationRecoverySuccesses: 0,
+    linkedinHydrationRecoveryFailures: 0,
     postHydrationDuplicates: 0,
     discoveryDiagnostics: [],
     pendingPhoneRequests: 0,
