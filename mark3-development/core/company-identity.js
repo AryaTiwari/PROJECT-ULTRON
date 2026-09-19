@@ -4,7 +4,7 @@ const LEGAL_SUFFIXES = new Set([
   'pvt','private','ltd','limited','llp','plc','inc','incorporated','corp','corporation',
   'company','co','llc','gmbh','sa','ag','bv','pte','holdings','holding','group',
 ]);
-const TLD_TOKENS = new Set(['com','in','net','org','io','co','ai','tech','global']);
+const TLD_TOKENS = new Set(['com','in','net','org','io','co']);
 
 function normalize(value) {
   return String(value || '')
