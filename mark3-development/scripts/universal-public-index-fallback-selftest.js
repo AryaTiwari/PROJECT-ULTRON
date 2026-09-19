@@ -103,6 +103,59 @@ async function runTinyFishCase() {
   assert.equal(stats.publicIndexApolloVerifiedCandidates, 1);
 }
 
+async function runExistingRepairCase() {
+  const stats = operator.freshStats();
+
+  leadSources.status = () => ({ serpApiConfigured: true });
+  leadSources.serpSearch = async () => ({
+    results: [{
+      title: 'Jane Example - Talent Acquisition Manager - Hanvitt Consulting & Solutions | LinkedIn',
+      snippet: 'Jane Example works in talent acquisition at Hanvitt Consulting & Solutions.',
+      url: LINKEDIN,
+    }],
+  });
+  web.status = () => ({ configured: false });
+  apollo.resolvePersonProfile = async (linkedinUrl) => ({
+    ok: true,
+    identityVerified: true,
+    apolloPersonId: 'apollo-existing-jane',
+    name: 'Jane Example',
+    title: 'Talent Acquisition Manager',
+    linkedinUrl,
+    organizationName: COMPANY,
+    organizationDomain: '',
+    email: 'jane@example-hanvitt.invalid',
+    phone: null,
+  });
+
+  const person = await operator.repairExistingContactFromPublicIndex({
+    group: {
+      id: 'poc2',
+      ordinal: 2,
+      fields: {
+        name: { index: 1 },
+        linkedin: { index: 2 },
+        email: { index: 3 },
+        phone: { index: 4 },
+      },
+    },
+    snapshot: {
+      hasIdentity: true,
+      values: {
+        name: 'Jane Example — Talent Acquisition Manager',
+        linkedin: '',
+        email: '',
+        phone: '',
+      },
+    },
+  }, { company: COMPANY, domain: '' }, stats, {});
+
+  assert.ok(person, 'existing named contact should be recoverable through exact-name public index + Apollo verification');
+  assert.equal(person.apolloPersonId, 'apollo-existing-jane');
+  assert.ok(stats.existingPublicIndexSearches >= 1);
+  assert.equal(stats.existingPublicIndexVerified, 1);
+}
+
 async function runMismatchCase() {
   const stats = operator.freshStats();
 
@@ -160,6 +213,7 @@ async function runMismatchCase() {
 
     await runSerpCase();
     await runTinyFishCase();
+    await runExistingRepairCase();
     await runMismatchCase();
     console.log('Universal public-index fallback self-test passed: SerpApi and TinyFish can supply LinkedIn person refs, Apollo remains the exact identity/employer authority, and mismatched employers are rejected.');
   } finally {
