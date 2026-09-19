@@ -136,14 +136,15 @@ assert.match(operatorSource, /contactPhaseOrdinal/);
 assert.match(operatorSource, /phaseOrdinal === 1/);
 assert.match(operatorSource, /phaseOrdinal === 2/);
 assert.match(operatorSource, /phaseOrdinal === 3/);
-assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3 \? poc3Targets : poc2Targets/);
+assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?\[\.\.\.poc2Targets, \.\.\.poc3Targets\]/);
 assert.match(operatorSource, /targetOrdinals: phaseOrdinals/);
 
 assert.match(targetedSource, /async function runPocPhasePipeline/);
 assert.match(targetedSource, /ordinal: 1/);
 assert.match(targetedSource, /ordinal: 2/);
 assert.match(targetedSource, /ordinal: 3/);
-assert.match(targetedSource, /runPocPhasePipeline\(exact\.request, runOptions\)/);
+assert.match(targetedSource, /\? await runPocPhasePipeline\(exact\.request, runOptions\)/);
+assert.match(targetedSource, /: await base\.run\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /POC-phase pipeline:/);
 assert.match(targetedSource, /poc-phase-deterministic-only/);
 assert.match(targetedSource, /const phaseOrdinal = Number\(options\.contactPhaseOrdinal \|\| 0\) \|\| null/);
