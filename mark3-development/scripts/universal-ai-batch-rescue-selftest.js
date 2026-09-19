@@ -50,13 +50,18 @@ const targets = rescue.rescueTargets({
     existing: [anchor],
   },
 });
-assert.equal(targets.length, 1, 'Legacy AI rescue must include only empty unresolved POC-2; POC-3 is owned by its dedicated deterministic phase');
-assert.equal(targets[0].group.ordinal, 2);
-assert.equal(targets[0].rescueMode, 'fill');
+assert.equal(targets.length, 2, 'Production AI rescue must cover every open secondary POC slot in ordinal order');
+assert.deepEqual(targets.map((item) => item.group.ordinal), [2, 3]);
+assert.ok(targets.every((item) => item.rescueMode === 'fill'));
 
 const target2 = { group: { id: 'person_2', ordinal: 2 }, snapshot: { empty: true } };
+const target3 = { group: { id: 'person_3', ordinal: 3 }, snapshot: { empty: true } };
 const rowPackages = new Map([[2, {
   targets: [target2],
+  candidates,
+}]]);
+const multiRowPackages = new Map([[2, {
+  targets: [target2, target3],
   candidates,
 }]]);
 
@@ -87,6 +92,31 @@ const invented = rescue.validateAssignments({
 }, rowPackages);
 assert.equal(invented.get(2).length, 0, 'invented candidate keys must still be rejected');
 
+const multi = rescue.validateAssignments({
+  rows: [{
+    rowNumber: 2,
+    assignments: [
+      { slot: '2', candidateKey: 'founder', confidence: 0.9, reason: 'leadership' },
+      { slot: '3', candidateKey: 'manager', confidence: 0.84, reason: 'talent authority' },
+    ],
+  }],
+}, multiRowPackages);
+assert.equal(multi.get(2).length, 2, 'multi-slot response should safely validate distinct supplied candidates');
+assert.deepEqual(multi.get(2).map((item) => item.target.group.ordinal), [2, 3]);
+assert.deepEqual(multi.get(2).map((item) => item.candidateKey), ['founder', 'manager']);
+assert.equal(rescue.reviewerNeeded(multi, multiRowPackages), false);
+
+const duplicateCandidate = rescue.validateAssignments({
+  rows: [{
+    rowNumber: 2,
+    assignments: [
+      { slot: '2', candidateKey: 'founder' },
+      { slot: '3', candidateKey: 'founder' },
+    ],
+  }],
+}, multiRowPackages);
+assert.equal(duplicateCandidate.get(2).length, 1, 'one person must never occupy two POC slots in the same row');
+
 assert.equal(rescue.reviewerNeeded(valid, rowPackages), false);
 
 const root = path.join(__dirname, '..', 'core');
@@ -105,12 +135,13 @@ assert.match(rescueSource, /envOnly: true/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_DIRECT_PROVIDERS/);
 assert.match(rescueSource, /gemini,groq,nvidia/);
 assert.doesNotMatch(rescueSource, /omniroute|omniFallback|omniDiversity|chatOmniRouteOnly/i);
-assert.match(rescueSource, /Select exactly one POC-2 candidate for each supplied row/);
+assert.match(rescueSource, /Fill as many supplied secondary POC targets as can be safely justified/);
+assert.match(rescueSource, /Return at most one candidate per target slot and never reuse the same candidate twice/);
 assert.match(rescueSource, /candidateKey values supplied inside that same row/);
 assert.match(rescueSource, /unresolvedContextInput/);
 assert.match(rescueSource, /base\.inferHiringCompanyFromEvidence\(plan, row\)/);
-assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
-assert.match(rescueSource, /no-primary-poc2-residue/);
+assert.match(rescueSource, /rescueTargets\(record\.plan\)\.length > 0/);
+assert.match(rescueSource, /no-open-secondary-poc-residue/);
 assert.match(rescueSource, /if \(!residueSet\.has\(Number\(rowNumber\)\)\) continue/);
 assert.match(rescueSource, /unresolvedRows: \[\]/);
 assert.match(rescueSource, /function markUnresolved/);
@@ -139,6 +170,9 @@ assert.doesNotMatch(rescueSource, /planner\.samePerson/);
 assert.doesNotMatch(rescueSource, /omniroute|big-pickle|opencode/i);
 
 assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline !== false/);
+assert.match(targetedSource, /const primary = phasedExecution/);
+assert.match(targetedSource, /\? await runPocPhasePipeline\(exact\.request, runOptions\)/);
+assert.match(targetedSource, /: await base\.run\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /poc-phase-deterministic-only/);
 assert.match(targetedSource, /async function runPocPhasePipeline/);
 assert.match(targetedSource, /ordinal: 1/);
@@ -165,8 +199,8 @@ assert.match(operatorSource, /else cache\.delete\(key\)/);
 assert.match(operatorSource, /optionalPoc3Deferred/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS/);
-assert.match(operatorSource, /phaseOrdinal === 3 \? 5 : 1/);
-assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3 \? poc3Targets : poc2Targets/);
+assert.match(operatorSource, /phaseOrdinal === 3 \? 5 : \(!phaseOrdinal \? 3 : 1\)/);
+assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?\[\.\.\.poc2Targets, \.\.\.poc3Targets\]/);
 assert.match(controllerSource, /Maximum 3 direct env-backed AI attempts for the entire run, not per row/);
 assert.match(controllerSource, /Priority contract: execution is sheet-wide and phase-ordered/);
 assert.match(controllerSource, /Phase 1 completes POC-1 contact fields/);
@@ -188,4 +222,4 @@ assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? 
 assert.match(directSource, /async function candidates\(taskType = 'general', \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
 assert.match(directSource, /async function chat\(\{ messages, model, tools = null, taskType = 'general', timeoutMs = null, envOnly: forceEnvOnly = false \} = \{\}\)/);
 
-console.log('Universal bounded AI batch rescue self-test passed: phased execution stays deterministic-only, legacy AI rescue remains limited to exact empty POC-2 residue rows, supplied candidates only are accepted, POC-3 owns deep discovery/hydration in its dedicated phase, and legacy unresolved mandatory POC-2 rows still continue into exact-row last resort before the live-sheet completion gate closes.');
+console.log('Universal bounded AI batch rescue self-test passed: explicit phased execution stays deterministic-only, coordinated production mode can run bounded Gemini/Groq/NVIDIA rescue across multiple open secondary POC slots, only supplied candidates are accepted, one person cannot occupy two slots, and unresolved mandatory POC-2 rows still continue into exact-row last resort before the completion gate closes.');
