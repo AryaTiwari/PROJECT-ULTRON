@@ -262,6 +262,8 @@ const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
 const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
+const approvalSource = fs.readFileSync(path.join(root, 'universal-paid-approval-handler.js'), 'utf8');
+const qualitySource = fs.readFileSync(path.join(root, 'apollo-three-poc-quality.js'), 'utf8');
 
 const anchorCompletionIndex = operatorSource.indexOf('writes.push(...await enrichAnchorGroup');
 const unresolvedEmployerGuardIndex = operatorSource.indexOf('if (!companyContext || companyContext.unresolved || !companyContext.company)');
@@ -269,6 +271,12 @@ assert.ok(anchorCompletionIndex >= 0, 'POC-1 anchor completion call must exist')
 assert.ok(unresolvedEmployerGuardIndex >= 0, 'employer-resolution guard must exist');
 assert.ok(anchorCompletionIndex < unresolvedEmployerGuardIndex, 'POC-1 completion must execute before employer gating');
 assert.match(operatorSource, /discoverPriorityPeopleFast/);
+assert.match(operatorSource, /const requestedPoc3 = !phaseOrdinal && requestedPersonGroups >= 3/);
+assert.match(operatorSource, /markLeftover\(stats, rowNumber, 'requested-poc3-unresolved'/);
+assert.match(operatorSource, /requestedPoc3Deferred/);
+assert.match(approvalSource, /expectedPersonGroups: payload\.expectedPersonGroups \|\| undefined/);
+assert.match(qualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL', '0'/);
+assert.match(qualitySource, /Native Apollo reveal \+ webhook settlement is the production default/);
 assert.match(operatorSource, /Mandatory POC-2 residue must always enter the deterministic leftover/);
 assert.match(operatorSource, /Fast sweep deferred deeper deterministic discovery\/hydration until all rows are processed/);
 assert.match(operatorSource, /markLeftover\(stats, rowNumber, people\.length \? 'poc2-verification-unresolved' : 'poc2-no-candidates'/);
