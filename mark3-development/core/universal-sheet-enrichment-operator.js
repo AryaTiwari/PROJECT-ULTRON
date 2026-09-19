@@ -523,6 +523,20 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   }
 }
 
+function existingPersonVerificationContext(item, fallbackContext = {}) {
+  const snapshot = item?.snapshot || {};
+  const emailDomain = firstBusinessEmailDomain(snapshot?.values?.email || '');
+  if (emailDomain) {
+    return {
+      ...fallbackContext,
+      company: fallbackContext?.company || emailDomain,
+      domain: emailDomain,
+      source: 'existing-poc-business-email-domain',
+    };
+  }
+  return fallbackContext;
+}
+
 async function repairExistingGroups(row, plan, companyContext, stats, options = {}) {
   const writes = [];
   const targets = new Map();
@@ -538,6 +552,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     if (!snapshot.hasIdentity) continue;
     const needEmail = Boolean(group.fields.email && !snapshot.values.email);
     const needPhone = Boolean(group.fields.phone && !snapshot.values.phone);
+    const verificationContext = existingPersonVerificationContext(item, companyContext);
     let resolved = null;
     let verificationPath = '';
     stats.existingVerificationAttempts++;
@@ -546,15 +561,15 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       if (snapshot.linkedinKind === 'linkedin_person') {
         verificationPath = 'exact-linkedin';
         resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone });
-      } else if (snapshot.values.name && companyContext.company) {
-        const exactCandidate = exactCandidateForExisting(item, candidatePool, companyContext);
+      } else if (snapshot.values.name && (verificationContext.company || verificationContext.domain)) {
+        const exactCandidate = exactCandidateForExisting(item, candidatePool, verificationContext);
         if (exactCandidate) {
           verificationPath = 'same-company-discovery-exact-name';
           stats.existingDiscoveryIdentityMatches++;
-          resolved = await apollo.resolveDecisionMaker(exactCandidate, companyContext.company, companyContext.domain, { needEmail, needPhone });
+          resolved = await apollo.resolveDecisionMaker(exactCandidate, verificationContext.company, verificationContext.domain, { needEmail, needPhone });
         } else {
           verificationPath = 'apollo-name-company';
-          resolved = await apollo.resolvePersonByNameCompany(snapshot.values.name, companyContext.company, companyContext.domain, { needEmail, needPhone });
+          resolved = await apollo.resolvePersonByNameCompany(snapshot.values.name, verificationContext.company, verificationContext.domain, { needEmail, needPhone });
         }
       }
     } catch (error) {
@@ -571,7 +586,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       continue;
     }
 
-    if (!resolved || resolved.noMatch || resolved.ambiguous || resolved.identityVerified === false || !ranker.sameEmployer(resolved, companyContext)) {
+    if (!resolved || resolved.noMatch || resolved.ambiguous || resolved.identityVerified === false || !ranker.sameEmployer(resolved, verificationContext)) {
       stats.existingVerificationFailures++;
       stats.existingRepairAudit.push({
         rowNumber: options.rowNumber || null,
@@ -1379,6 +1394,7 @@ module.exports = {
   resolvePersonAnchor,
   existingIdentityKeys,
   candidateAlreadyPresent,
+  existingPersonVerificationContext,
   needsEmbeddedDesignationRepair,
   candidateFillTargets,
   existingRepairNeedsDiscovery,
