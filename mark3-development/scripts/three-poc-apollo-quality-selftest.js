@@ -49,8 +49,13 @@ assert.doesNotMatch(source, /apollo\.enrich\s*=/, 'generic Apollo enrich must no
 assert.match(controller, /apollo-three-poc-quality/);
 assert.match(controller, /apolloQuality\.startRun\(\)/);
 
+const previousEmailWaterfallMax = process.env.ULTRON_M3_THREE_POC_EMAIL_WATERFALL_MAX;
 const previousPhoneWaterfall = process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL;
+
+// This self-test verifies code defaults, not deployment-specific .env overrides.
+delete process.env.ULTRON_M3_THREE_POC_EMAIL_WATERFALL_MAX;
 delete process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL;
+
 quality.startRun();
 const stats = quality.stats();
 assert.equal(stats.maxWaterfalls, 30);
@@ -58,6 +63,10 @@ assert.equal(stats.personalEmailReveal, false);
 assert.equal(stats.phoneWaterfall, false);
 assert.equal(stats.scope, 'final-verified-pocs-only');
 assert.equal(stats.waterfallStarted, 0);
+
+if (previousEmailWaterfallMax == null) delete process.env.ULTRON_M3_THREE_POC_EMAIL_WATERFALL_MAX;
+else process.env.ULTRON_M3_THREE_POC_EMAIL_WATERFALL_MAX = previousEmailWaterfallMax;
+
 if (previousPhoneWaterfall == null) delete process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL;
 else process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL = previousPhoneWaterfall;
 
