@@ -43,6 +43,37 @@ assert.equal(verificationContext.domain, 'sunrisesys.com');
 assert.equal(verificationContext.source, 'existing-poc-business-email-domain');
 
 assert.equal(
+  operator.emailLocalPartMatchesAnchor('apoorva.r@sunrisebiztechsys.com', 'Apoorva Wanegaon'),
+  true,
+  'author-name business email should be accepted as exact row contact evidence',
+);
+assert.equal(
+  operator.emailLocalPartMatchesAnchor('careers@onmogsoftsol.com', 'Donthala Yaswanthi'),
+  false,
+  'generic careers mailbox must never be treated as exact person evidence',
+);
+assert.equal(
+  operator.emailLocalPartMatchesAnchor('hr@a3nity.com', 'Arika Mishra'),
+  false,
+  'generic HR mailbox must never be treated as exact person evidence',
+);
+
+const rowEvidencePlan = {
+  anchor: {
+    type: 'person',
+    snapshot: { values: { name: 'Apoorva Wanegaon', email: '', phone: '' } },
+    group: { fields: { email: { index: 4 }, phone: { index: 3 } } },
+  },
+  context: {
+    post: 'Interested candidates can DM me their updated resume on 6366856630 OR apoorva.r@sunrisebiztechsys.com',
+  },
+};
+const rowContact = operator.extractAnchorContactEvidence(rowEvidencePlan);
+assert.equal(rowContact.email, 'apoorva.r@sunrisebiztechsys.com');
+assert.equal(rowContact.phone, '6366856630');
+assert.equal(rowContact.source, 'row-author-contact-evidence');
+
+assert.equal(
   contactQuality.phoneFromPayload({
     people: [{
       waterfall: {
@@ -124,6 +155,9 @@ const contactQualitySource = fs.readFileSync(path.join(root, 'apollo-three-poc-q
 assert.doesNotMatch(operatorSource, /existingRepairNeedsDiscovery/);
 assert.doesNotMatch(operatorSource, /exactCandidateForExisting/);
 assert.match(operatorSource, /existingPersonVerificationContext/);
+assert.match(operatorSource, /extractAnchorContactEvidence/);
+assert.match(operatorSource, /emailLocalPartMatchesAnchor/);
+assert.match(operatorSource, /row-author-contact-evidence/);
 assert.match(operatorSource, /apollo-business-email/);
 assert.match(operatorSource, /apollo\.resolvePersonByBusinessEmail/);
 assert.match(operatorSource, /apollo-name-company/);
@@ -150,6 +184,8 @@ assert.match(operatorSource, /item\.phoneMode === 'waterfall'/);
 assert.match(operatorSource, /quality\.pollPhoneRequest\(item\.phoneWaterfallRequestId, \{ polls: 0 \}\)/);
 assert.match(operatorSource, /backgroundPhoneKey\(source, item\)/);
 assert.match(contactQualitySource, /originalResolvePersonByBusinessEmail/);
+assert.match(contactQualitySource, /runState\.phoneWaterfallNotFound\+\+/);
+assert.match(contactQualitySource, /runState\.waterfallNotFound\+\+/);
 assert.match(contactQualitySource, /originalResolvePersonProfile/);
 assert.match(contactQualitySource, /apollo\.resolvePersonProfile = async function resultsFirstResolvePersonProfile/);
 assert.match(contactQualitySource, /return improveVerifiedContacts\(result, options\)/);
