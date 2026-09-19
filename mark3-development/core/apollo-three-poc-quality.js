@@ -625,6 +625,7 @@ function install() {
   const originalResolveDecisionMaker = apollo.resolveDecisionMaker.bind(apollo);
   const originalResolvePersonByNameCompany = apollo.resolvePersonByNameCompany.bind(apollo);
   const originalResolvePersonByBusinessEmail = apollo.resolvePersonByBusinessEmail.bind(apollo);
+  const originalResolvePersonProfile = apollo.resolvePersonProfile.bind(apollo);
 
   function baseOptionsForQuality(options = {}) {
     // When phone waterfall is active, do not also buy/start the native async phone
@@ -648,6 +649,14 @@ function install() {
 
   apollo.resolvePersonByBusinessEmail = async function resultsFirstResolvePersonByBusinessEmail(email, company, domain, options = {}) {
     const result = await originalResolvePersonByBusinessEmail(email, company, domain, baseOptionsForQuality(options));
+    return improveVerifiedContacts(result, options);
+  };
+
+  // Exact LinkedIn anchors (POC-1 and any existing POC with a profile URL) must
+  // use the same final-contact quality layer as name/company and business-email
+  // resolution. Historically this path bypassed phone/email waterfalls entirely.
+  apollo.resolvePersonProfile = async function resultsFirstResolvePersonProfile(linkedinUrl, options = {}) {
+    const result = await originalResolvePersonProfile(linkedinUrl, baseOptionsForQuality(options));
     return improveVerifiedContacts(result, options);
   };
 
