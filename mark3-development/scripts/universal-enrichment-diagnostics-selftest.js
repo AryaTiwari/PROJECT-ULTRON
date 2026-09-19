@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 
 const diagnostics = require('../core/universal-enrichment-diagnostics');
+const typedErrors = require('../core/spreadsheet-enrichment-errors');
+const targeted = require('../core/universal-sheet-enrichment-targeted');
 
 const queue = [
   { rowNumber: 5, groupOrdinal: 2, reason: 'poc2-no-candidates', company: 'Hanvitt Consulting & Solutions' },
@@ -43,6 +45,30 @@ assert.ok(runtime.some((item) => item.code === 'OPTIONAL_POC3_UNRESOLVED' && ite
 assert.ok(runtime.some((item) => item.code === 'IDENTITY_CONFLICT_WRITE_BLOCKED' && item.severity === 'WARNING'));
 assert.ok(runtime.every((item) => item.blocking === false), 'pending contact work and optional POC-3 must not masquerade as mandatory failure');
 
+const globalPending = diagnostics.formatIssue(diagnostics.issueFromReason('phone-callback-pending'));
+assert.doesNotMatch(globalPending, /\[ROW 0\]/, 'global diagnostics must never coerce null row scope into row 0');
+
+const capError = new Error('LinkedIn daily safety cap reached (100/100). Resume tomorrow rather than pushing the account harder.');
+capError.code = 'LINKEDIN_DAILY_CAP';
+capError.subsystem = 'LINKEDIN';
+const typedCap = typedErrors.normalize(capError, { stage: 'candidate-discovery' });
+assert.equal(typedCap.type, 'RATE_LIMIT');
+assert.match(typedCap.hint, /daily safety budget/i);
+
+const providerReasons = targeted.providerRetryReasonsFromPrimary({
+  deferredPoc2Rows: [5],
+  discoveryDiagnostics: [{
+    rowNumber: 5,
+    groupOrdinal: 2,
+    code: 'LINKEDIN_DAILY_CAP',
+    message: 'LinkedIn daily safety cap reached (100/100). Resume tomorrow rather than pushing the account harder.',
+  }],
+});
+assert.equal(providerReasons.length, 1);
+assert.equal(providerReasons[0].rowNumber, 5);
+assert.equal(providerReasons[0].typed.code, 'LINKEDIN_DAILY_CAP');
+assert.equal(providerReasons[0].typed.type, 'RATE_LIMIT');
+
 const rendered = diagnostics.formatIssue(exhausted);
 assert.match(rendered, /^\[BLOCKER\]\[ROW 5\]\[POC-2\] POC2_NO_VERIFIED_CANDIDATE_AFTER_ALL_STRATEGIES:/);
 
@@ -61,7 +87,9 @@ assert.match(targetedSource, /ULTRON_DIAGNOSTICS/);
 assert.match(targetedSource, /ROOT_CAUSE:/);
 assert.match(targetedSource, /MANDATORY_BLOCKERS:/);
 assert.match(targetedSource, /REPAIR_OR_PENDING:/);
-assert.match(targetedSource, /terminalScopes/);
+assert.match(targetedSource, /providerRetryReasonsFromPrimary/);
+assert.match(targetedSource, /provider-retry-required/);
+assert.match(targetedSource, /const gateBlockers/);
 assert.match(targetedSource, /Problems:/);
 
-console.log('Universal enrichment diagnostics self-test passed: mandatory blockers, repair residue, pending callbacks, optional work, AI skips, and true terminal exhaustion now have separate stable problem codes.');
+console.log('Universal enrichment diagnostics self-test passed: row scopes remain accurate, LinkedIn safety caps classify as retryable rate-limit root causes, rescue stops when the safety window is exhausted, and mandatory blockers remain separate from repair/pending/optional work.');
