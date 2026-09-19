@@ -579,6 +579,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     try {
       people = await base.discoverPriorityPeopleFast(companyContext, discoveryCache, discoveryStats, {
         ...options,
+        rowNumber,
         location: record.plan?.context?.location || '',
         priorityCandidateLimit: options.manualPriorityCandidateLimit ?? 20,
         adaptiveBroadCandidateLimit: options.adaptiveBroadCandidateLimit ?? 30,
