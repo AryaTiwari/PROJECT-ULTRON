@@ -13,6 +13,7 @@ const fallback = require('./universal-big-pickle-fallback');
 const aiBatchRescue = require('./universal-ai-batch-rescue');
 const engine = require('./universal-enrichment-engine');
 const typedErrors = require('./spreadsheet-enrichment-errors');
+const diagnostics = require('./universal-enrichment-diagnostics');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 
@@ -177,8 +178,31 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     }
   }
 
-  const terminalRows = unresolvedRows.filter((rowNumber) => reasonMap.has(rowNumber));
-  const retryableRows = [];
+  const issues = [];
+  for (const rowNumber of unresolvedRows) {
+    const reasons = reasonMap.get(rowNumber) || ['no-safe-verified-poc2-after-all-strategies'];
+    const isPoc1 = poc1IdentityIssues.some((item) => Number(item.rowNumber) === rowNumber);
+    for (const reason of reasons) {
+      issues.push(diagnostics.issueFromReason(reason, {
+        rowNumber,
+        groupOrdinal: isPoc1 ? 1 : 2,
+        target: isPoc1 ? 'POC-1' : 'POC-2',
+      }));
+    }
+  }
+  const uniqueIssues = diagnostics.uniqueIssues(issues);
+  const terminalRows = [...new Set(uniqueIssues
+    .filter((issue) => issue.blocking && issue.retryable === false)
+    .map((issue) => Number(issue.rowNumber))
+    .filter(Number.isInteger))].sort((a, b) => a - b);
+  const retryableRows = [...new Set(uniqueIssues
+    .filter((issue) => issue.blocking && issue.retryable === true)
+    .map((issue) => Number(issue.rowNumber))
+    .filter(Number.isInteger))].sort((a, b) => a - b);
+  const complete = unresolvedRows.length === 0;
+  const statusCode = complete
+    ? 'RUN_COMPLETE'
+    : (terminalRows.length ? 'MANDATORY_DATA_EXHAUSTED' : 'MANDATORY_RETRY_REQUIRED');
 
   return {
     checkedRows,
@@ -188,9 +212,11 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     unresolvedRows,
     terminalRows,
     retryableRows,
-    complete: unresolvedRows.length === 0,
-    status: unresolvedRows.length === 0 ? 'COMPLETE' : 'TERMINAL_EXHAUSTED',
+    complete,
+    status: complete ? 'COMPLETE' : (terminalRows.length ? 'TERMINAL_EXHAUSTED' : 'RETRY_REQUIRED'),
+    statusCode,
     reasons: Object.fromEntries([...reasonMap.entries()]),
+    issues: uniqueIssues,
   };
 }
 
@@ -390,10 +416,23 @@ async function run(request = {}, options = {}) {
     } catch (error) {
       completionGate = {
         status: 'AUDIT_FAILED',
+        statusCode: 'FINAL_AUDIT_FAILED',
         complete: false,
         unresolvedRows: [],
         terminalRows: [],
         retryableRows: [],
+        issues: [{
+          code: 'FINAL_AUDIT_FAILED',
+          category: 'system',
+          severity: 'BLOCKER',
+          blocking: true,
+          retryable: true,
+          rowNumber: null,
+          target: 'FINAL-AUDIT',
+          message: 'The final live-sheet mandatory completion audit failed.',
+          detail: text(error?.message || error),
+          nextAction: 'Fix the audit/read failure and rerun the final audit before trusting completion status.',
+        }],
         error: text(error?.message || error),
       };
     }
@@ -410,6 +449,14 @@ async function run(request = {}, options = {}) {
       aiBatchRescue: aiRescue,
       bigPickleFallback: fb,
       completionGate,
+      diagnostics: diagnostics.uniqueIssues([
+        ...(completionGate?.issues || []),
+        ...diagnostics.classifyLeftovers(primaryStats?.leftoverQueue || []).issues,
+        ...diagnostics.runtimeIssues(primaryStats || {}),
+        ...(Number(aiRescue?.rowsOfferedForSelection || 0) === 0 && Number(aiRescue?.modelAttempts || 0) === 0 && aiRescue?.attempted
+          ? [diagnostics.issueFromReason('ai-skipped-no-verified-candidate-pool')]
+          : []),
+      ]),
       postPrimaryError,
       completedFully: !postPrimaryError && completionGate?.complete === true,
       partialCompletion: Boolean(postPrimaryError || completionGate?.complete !== true || result?.partialCompletion),
@@ -443,10 +490,11 @@ function formatResult(result) {
     );
     const errors = (ai.errors || []).slice(0, 3).map((item) => `${item.purpose || 'ai'}:${item.code || 'ERROR'} ${item.message || ''}`);
     const gate = result?.completionGate || {};
-    const gateText = ` Completion gate: ${gate.status || 'UNKNOWN'}; mandatory rows checked ${gate.mandatoryRowsChecked || 0}; unresolved mandatory rows [${(gate.unresolvedRows || []).join(', ') || 'none'}]; terminal rows [${(gate.terminalRows || []).join(', ') || 'none'}]; retryable rows [${(gate.retryableRows || []).join(', ') || 'none'}].`;
+    const gateIssues = diagnostics.uniqueIssues(gate.issues || []);
+    const gateText = ` Completion gate: ${gate.statusCode || gate.status || 'UNKNOWN'}; mandatory rows checked ${gate.mandatoryRowsChecked || 0}; unresolved mandatory rows [${(gate.unresolvedRows || []).join(', ') || 'none'}]; terminal rows [${(gate.terminalRows || []).join(', ') || 'none'}]; retryable rows [${(gate.retryableRows || []).join(', ') || 'none'}]. Problems: ${gateIssues.map(diagnostics.formatIssue).join(' | ') || '[INFO] NO_MANDATORY_BLOCKERS'}.`;
     const noCandidatePool = Number(ai.rowsOfferedForSelection || 0) === 0 && Number(ai.modelAttempts || 0) === 0;
     const aiSkipExplanation = noCandidatePool
-      ? ' AI selection was intentionally skipped because no verified candidate pool survived deterministic discovery; models were not called and candidate invention remains prohibited.'
+      ? ` ${diagnostics.formatIssue(diagnostics.issueFromReason('ai-skipped-no-verified-candidate-pool'))}`
       : '';
     return `${primary} Bounded AI batch rescue: ${ai.modelCalls || 0} successful model responses from ${ai.modelAttempts || 0}/${ai.maxCalls || 3} whole-run logical attempts (${ai.contextCalls || 0} context, ${ai.selectionCalls || 0} selection, ${ai.reviewerCalls || 0} reviewer); ${ai.modelFailures || 0} model/routing failures; ${ai.rowsOfferedForSelection || 0} rows and ${ai.slotsOfferedForSelection || 0} POC targets offered; ${ai.aiSelectionsProposed || 0} selections proposed, ${ai.aiSelectionsAccepted || 0} Apollo-verified selections accepted (${ai.newPeopleSelected || 0} new POCs, ${ai.existingRepairsAccepted || 0} existing POC repairs), ${ai.aiSelectionRejects || 0} rejected by deterministic identity/employer/write safety; ${ai.employersResolvedByAi || 0} employers recovered from supplied row evidence; ${ai.candidatesDiscovered || 0} verified candidates discovered; Apollo discovery calls ${ai.candidateSearches || 0}; LinkedIn sparse-company fallback ${ai.linkedinFallbackCompanySearches || 0} company searches/${ai.linkedinFallbackCompanyProfiles || 0} company profiles/${ai.linkedinFallbackCompanyUrns || 0} company URNs/${ai.linkedinFallbackCurrentCompanySearches || 0} current-company people searches/${ai.linkedinFallbackEmployeeSearches || 0} employee-page searches/${ai.linkedinFallbackSearches || 0} generic people searches/${ai.linkedinFallbackProfilesFound || 0} profile refs/${ai.linkedinFallbackProfileVerifications || 0} current-employer profile verifications/${ai.linkedinFallbackVerifiedCandidates || 0} Apollo identities accepted; ${ai.hydrationAttempts || 0} final hydration attempts/${ai.hydrationFailures || 0} failures; ${ai.hydrationFallbackAttempts || 0} bounded post-selection fallback hydration attempts/${ai.hydrationFallbackAccepted || 0} accepted; rescue changed ${ai.cellsChanged || 0} cells across ${ai.rowsChanged || 0} rows; ${ai.phoneCellsFilled || 0} phone cells completed, ${ai.phoneStillPending || 0} phones still pending; ${ai.unresolvedSlots || 0} slots unresolved. Models [${(ai.actualModels || []).join(', ') || 'none'}]. Credential source: env-only direct API. Direct providers [${(ai.directProvidersUsed || []).join(', ') || 'none'}]; OmniRoute calls 0; direct attempt audit ${(ai.directAttemptAudit || []).length}.${aiSkipExplanation} Last-resort POC-2 fallback: ${fb?.attempted ? 'attempted for every exact unresolved POC-2 row' : 'not needed'}; POC-3 was excluded from expensive fallback.${gateText}${errors.length ? ` AI diagnostics: ${errors.join(' | ')}.` : ''}${audit.length ? ` Samples: ${audit.join('; ')}.` : ''}`;
   }
@@ -482,6 +530,7 @@ module.exports = {
   ...base,
   run,
   formatResult,
+  diagnostics,
   resolveExactRequest,
   syntheticResolution,
   withExactTargetGuards,
