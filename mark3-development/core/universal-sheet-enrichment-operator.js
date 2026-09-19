@@ -1545,27 +1545,33 @@ async function run(request = {}, options = {}) {
       const manualClaimed = new Set();
 
       if (poc2Targets.length) {
-        stats.manualPoc2Attempts += poc2Targets.length;
-        const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
-          ...rowOptions,
-          ordinal: 2,
-          claimed: manualClaimed,
-          maxHydrationAttempts: options.poc2HydrationAttempts ?? 3,
-          fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26,
-        });
-        writes.push(...result.writes);
-        if (result.filled) stats.manualPoc2Filled++;
-        else if (aiFallbackEnabled) {
-          stats.deferredOpenGroups++;
-          stats.unfilledOpenGroups++;
+        if (aiFallbackEnabled) {
+          // Empty POC-2 selection belongs to one compact batch AI pass. The primary
+          // still owns employer resolution + discovery/cache, but does not burn up to
+          // three hydration calls before asking the selector to choose from the same pool.
+          stats.deferredOpenGroups += poc2Targets.length;
+          stats.unfilledOpenGroups += poc2Targets.length;
           if (!stats.deferredPoc2Rows.includes(rowNumber)) stats.deferredPoc2Rows.push(rowNumber);
+        } else {
+          stats.manualPoc2Attempts += poc2Targets.length;
+          const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
+            ...rowOptions,
+            ordinal: 2,
+            claimed: manualClaimed,
+            maxHydrationAttempts: options.poc2HydrationAttempts ?? 3,
+            fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26,
+          });
+          writes.push(...result.writes);
+          if (result.filled) stats.manualPoc2Filled++;
         }
       }
 
       // POC-3 gets exactly one cheap manual hydration opportunity from the same
       // discovery pool. No extra discovery and no AI rescue unless explicitly enabled.
       if (poc3Targets.length) {
-        if (people.length) {
+        if (aiFallbackEnabled && poc2Targets.length) {
+          stats.optionalPoc3Deferred += poc3Targets.length;
+        } else if (people.length) {
           stats.manualPoc3Attempts += poc3Targets.length;
           const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
             ...rowOptions,
