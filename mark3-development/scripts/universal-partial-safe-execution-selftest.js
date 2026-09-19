@@ -83,7 +83,7 @@ assert.match(handlerSource, /reportFormattingError/);
 assert.match(handlerSource, /return response\(true, body/);
 assert.match(handlerSource, /EXECUTION_CONTRACT = 'universal-poc-phase-contact-completion-v3'/);
 assert.match(handlerSource, /executionContract: EXECUTION_CONTRACT/);
-assert.match(handlerSource, /pocPhasePipeline: true/);
+assert.match(handlerSource, /pocPhasePipeline: Boolean\(payload\.contactPhaseOrdinal\)/);
 assert.match(handlerSource, /contactPhaseOrdinal: payload\.contactPhaseOrdinal \|\| undefined/);
 assert.match(controlSource, /executionContract: 'universal-poc-phase-contact-completion-v3'/);
 assert.match(controlSource, /typedErrors\.normalize\(error/);
@@ -91,4 +91,4 @@ for (const source of [baseSource, targetedSource, fallbackSource, handlerSource,
   assert.doesNotMatch(source, /UNIVERSAL_SPREADSHEET_EXECUTION_FAILED/, 'generic execution failure must not survive the partial-safe contract');
 }
 
-console.log('Universal partial-safe execution self-test passed: row-local failures continue, isolated Apollo network faults use a bounded circuit breaker, repeated/systemic failures halt safely with earlier writes preserved, POC-phase v3 approval routing survives re-entry, post-primary/reporting failures cannot erase deterministic work, control-plane errors stay typed, generic UNIVERSAL_SPREADSHEET_EXECUTION_FAILED is banned, and reruns remain resume-safe.');
+console.log('Universal partial-safe execution self-test passed: row-local failures continue, isolated Apollo network faults use a bounded circuit breaker, repeated/systemic failures halt safely with earlier writes preserved, all-POC production routing and explicit POC-phase diagnostics survive approval re-entry, post-primary/reporting failures cannot erase deterministic work, control-plane errors stay typed, generic UNIVERSAL_SPREADSHEET_EXECUTION_FAILED is banned, and reruns remain resume-safe.');
