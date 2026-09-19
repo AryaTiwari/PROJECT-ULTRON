@@ -157,7 +157,7 @@ assert.ok(aiDeferIndex > manualSelectorIndex, 'manual POC-2 must run before AI d
 assert.match(operatorSource, /if \(merged\.length\) cache\.set\(key, merged\)/);
 assert.match(operatorSource, /else cache\.delete\(key\)/);
 assert.match(operatorSource, /optionalPoc3Deferred/);
-assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
+assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
 assert.match(controllerSource, /Maximum 3 direct env-backed AI attempts for the entire run, not per row/);
 assert.match(controllerSource, /Priority contract: POC-1 is non-negotiable/);
