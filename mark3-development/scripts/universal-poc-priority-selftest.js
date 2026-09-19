@@ -29,7 +29,11 @@ const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichme
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
 const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
 
-assert.match(operatorSource, /POC-1 is non-negotiable/);
+const anchorCompletionIndex = operatorSource.indexOf('writes.push(...await enrichAnchorGroup');
+const unresolvedEmployerGuardIndex = operatorSource.indexOf('if (!companyContext || companyContext.unresolved || !companyContext.company)');
+assert.ok(anchorCompletionIndex >= 0, 'POC-1 anchor completion call must exist');
+assert.ok(unresolvedEmployerGuardIndex >= 0, 'employer-resolution guard must exist');
+assert.ok(anchorCompletionIndex < unresolvedEmployerGuardIndex, 'POC-1 completion must execute before employer gating');
 assert.match(operatorSource, /discoverPriorityPeopleFast/);
 assert.match(operatorSource, /priority-fast\|/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
@@ -37,14 +41,13 @@ assert.match(operatorSource, /ordinal: 2/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
 assert.match(operatorSource, /ordinal: 3/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
-assert.match(operatorSource, /POC-3 gets exactly one cheap manual hydration opportunity/);
 assert.match(operatorSource, /priorityCandidateLimit: options\.manualPriorityCandidateLimit \?\? 20/);
 assert.doesNotMatch(operatorSource, /candidateLimit: options\.manualCandidateLimit \?\? 40/);
 
 assert.match(rescueSource, /Number\(item\.group\?\.ordinal \|\| 0\) === wantedOrdinal/);
 assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
 assert.match(rescueSource, /no-primary-poc2-residue/);
-assert.match(rescueSource, /Select exactly one POC-2 candidate/);
+assert.match(rescueSource, /const wantedOrdinal = 2/);
 assert.match(rescueSource, /unresolvedContextInput/);
 assert.match(rescueSource, /\? \['groq', 'gemini', 'nvidia'\]/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
