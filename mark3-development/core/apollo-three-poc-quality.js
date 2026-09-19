@@ -1,13 +1,10 @@
 // Balanced Apollo contact-quality policy for the first-class 3-POC domain.
 //
-// Discovery remains on the 0-credit People API Search path. This module only
-// deepens EMAIL enrichment after ULTRON has already verified a final POC via
-// Apollo identity + employer evidence. It never waterfalls the candidate pool,
-// never enables personal-email reveal, and never enables phone waterfall.
-//
-// The module wraps only the two exact-person helpers used by anchored 3-POC
-// POC-2/POC-3 verification/selection. Generic lead enrichment remains on the
-// original credit-saver policy.
+// Discovery remains on the 0-credit People API Search path. This module deepens
+// contact enrichment only AFTER ULTRON has verified a final POC via exact identity
+// + employer evidence. Email waterfall and phone waterfall are therefore applied
+// only to final verified people, never to candidate pools. Personal-email reveal
+// remains disabled.
 
 const apollo = require('./apollo-enrichment');
 
@@ -28,6 +25,15 @@ function freshRunState() {
     waterfallBudgetSkips: 0,
     waterfallCooldownSkips: 0,
     waterfallErrors: 0,
+    phoneWaterfallStarted: 0,
+    phoneWaterfallCacheHits: 0,
+    phoneWaterfallSucceeded: 0,
+    phoneWaterfallPending: 0,
+    phoneWaterfallNotFound: 0,
+    phoneWaterfallBudgetSkips: 0,
+    phoneWaterfallCooldownSkips: 0,
+    phoneWaterfallErrors: 0,
+    phoneWaterfallUnavailable: 0,
   };
 }
 
@@ -41,6 +47,26 @@ function maxWaterfalls() {
   // Balanced default. Discovery is still free and unlimited by this budget;
   // this cap applies only to final, verified POCs whose email is still missing.
   return Math.floor(numberSetting('ULTRON_M3_THREE_POC_EMAIL_WATERFALL_MAX', 30, 0, 150));
+}
+
+function phoneWaterfallEnabled() {
+  return !/^(0|false|no|off)$/i.test(String(apollo.setting('ULTRON_M3_THREE_POC_PHONE_WATERFALL', '1')).trim());
+}
+
+function maxPhoneWaterfalls() {
+  return Math.floor(numberSetting('ULTRON_M3_THREE_POC_PHONE_WATERFALL_MAX', 20, 0, 100));
+}
+
+function phoneCooldownDays() {
+  return numberSetting('ULTRON_M3_THREE_POC_PHONE_WATERFALL_COOLDOWN_DAYS', 7, 1, 90);
+}
+
+function phonePolls() {
+  return Math.floor(numberSetting('ULTRON_M3_THREE_POC_PHONE_WATERFALL_POLLS', 3, 0, 8));
+}
+
+function phonePollWaitMs() {
+  return Math.floor(numberSetting('ULTRON_M3_THREE_POC_PHONE_WATERFALL_MAX_WAIT_MS', 1800, 250, 10000));
 }
 
 function cooldownDays() {
@@ -110,6 +136,60 @@ function emailFromPayload(payload) {
   return null;
 }
 
+function phoneFromEntry(entry) {
+  if (!entry) return null;
+  if (typeof entry === 'string') return apollo.validPhone(entry);
+  if (typeof entry !== 'object') return null;
+
+  const direct = apollo.validPhone(
+    entry.sanitized_number
+    || entry.raw_number
+    || entry.phone_number
+    || entry.phone
+    || entry.number
+    || entry.value
+    || ''
+  );
+  if (direct) return direct;
+
+  for (const number of Array.isArray(entry.phone_numbers) ? entry.phone_numbers : []) {
+    const phone = phoneFromEntry(number);
+    if (phone) return phone;
+  }
+  for (const vendor of Array.isArray(entry.vendors) ? entry.vendors : []) {
+    for (const number of Array.isArray(vendor?.phone_numbers) ? vendor.phone_numbers : []) {
+      const phone = phoneFromEntry(number);
+      if (phone) return phone;
+    }
+  }
+  return null;
+}
+
+function phoneFromPayload(payload) {
+  const roots = [];
+  if (payload?.person) roots.push(payload.person);
+  if (payload?.contact) roots.push(payload.contact);
+  if (Array.isArray(payload?.people)) roots.push(...payload.people);
+  if (Array.isArray(payload?.matches)) roots.push(...payload.matches);
+
+  for (const person of roots) {
+    const direct = phoneFromEntry(person);
+    if (direct) return direct;
+
+    for (const entry of Array.isArray(person?.phone_numbers) ? person.phone_numbers : []) {
+      const phone = phoneFromEntry(entry);
+      if (phone) return phone;
+    }
+
+    const waterfall = person?.waterfall;
+    for (const entry of Array.isArray(waterfall?.phone_numbers) ? waterfall.phone_numbers : []) {
+      const phone = phoneFromEntry(entry);
+      if (phone) return phone;
+    }
+  }
+  return null;
+}
+
 function cacheEntryFor(result) {
   const linkedIn = apollo.normalizeLinkedIn(result?.linkedinUrl || result?.returnedLinkedIn || '');
   const id = String(result?.apolloPersonId || result?.id || '').trim();
@@ -136,6 +216,12 @@ function recentAttempt(record) {
   const at = Date.parse(record?.threePocEmailWaterfallAttemptedAt || '');
   if (!Number.isFinite(at)) return false;
   return Date.now() - at < cooldownDays() * 86400000;
+}
+
+function recentPhoneAttempt(record) {
+  const at = Date.parse(record?.threePocPhoneWaterfallAttemptedAt || '');
+  if (!Number.isFinite(at)) return false;
+  return Date.now() - at < phoneCooldownDays() * 86400000;
 }
 
 async function pollRequest(requestId) {
@@ -211,6 +297,207 @@ async function startWaterfall(result) {
   if (!requestId) return { state: 'not_found', email: null, requestId: '', payload: data };
   const polled = await pollRequest(requestId);
   return { ...polled, requestId, payload: polled.payload || data };
+}
+
+
+async function pollPhoneRequest(requestId) {
+  const apiKey = apollo.setting('APOLLO_API_KEY');
+  if (!apiKey || !requestId) return { state: 'error', phone: null, payload: null };
+
+  const polls = phonePolls();
+  for (let attempt = 0; attempt <= polls; attempt++) {
+    const response = await fetch(`${APOLLO_WEBHOOK_RESULT}/${encodeURIComponent(String(requestId))}`, {
+      headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' },
+    });
+    const raw = await response.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+
+    if (response.ok) {
+      const phone = phoneFromPayload(data);
+      return { state: phone ? 'found' : 'not_found', phone, payload: data };
+    }
+
+    const code = String(data?.error_code || data?.code || '').toLowerCase();
+    if (response.status === 404 && code === 'result_pending') {
+      if (attempt >= polls) return { state: 'pending', phone: null, payload: data };
+      const seconds = Number(data?.retry_after_seconds || 1);
+      const wait = Math.min(phonePollWaitMs(), Math.max(250, (Number.isFinite(seconds) ? seconds : 1) * 1000));
+      await sleep(wait);
+      continue;
+    }
+
+    if (
+      (response.status === 404 && code === 'request_id_unknown')
+      || (response.status === 410 && code === 'request_id_expired')
+      || (response.status === 400 && code === 'invalid_request_id')
+    ) return { state: 'terminal', phone: null, payload: data };
+
+    return { state: 'error', phone: null, payload: data };
+  }
+  return { state: 'pending', phone: null, payload: null };
+}
+
+async function startPhoneWaterfall(result) {
+  const apiKey = apollo.setting('APOLLO_API_KEY');
+  const id = String(result?.apolloPersonId || result?.id || '').trim();
+  const linkedin = apollo.normalizeLinkedIn(result?.linkedinUrl || result?.returnedLinkedIn || '');
+  const email = validBusinessEmail(result?.email || '');
+  if (!apiKey || (!id && !linkedin && !email)) return { state: 'error', phone: null, requestId: '' };
+
+  const url = new URL(APOLLO_MATCH);
+  if (id) url.searchParams.set('id', id);
+  else if (linkedin) url.searchParams.set('linkedin_url', linkedin);
+  else url.searchParams.set('email', email);
+
+  url.searchParams.set('run_waterfall_email', 'false');
+  url.searchParams.set('run_waterfall_phone', 'true');
+  url.searchParams.set('reveal_personal_emails', 'false');
+  url.searchParams.set('reveal_phone_number', 'false');
+  url.searchParams.set('poll_only', 'true');
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache',
+    },
+  });
+  const raw = await response.text();
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch {}
+  if (!response.ok) return { state: 'error', phone: null, requestId: '', payload: data };
+
+  const immediate = phoneFromPayload(data);
+  const requestId = requestIdFromRaw(raw, data);
+  const waterfallStatus = String(data?.waterfall?.status || '').toLowerCase();
+  if (immediate) return { state: 'found', phone: immediate, requestId, payload: data };
+  if (waterfallStatus === 'failed') return { state: 'unavailable', phone: null, requestId, payload: data };
+  if (!requestId) return { state: 'not_found', phone: null, requestId: '', payload: data };
+
+  const polled = await pollPhoneRequest(requestId);
+  return { ...polled, requestId, payload: polled.payload || data };
+}
+
+async function improveVerifiedPhone(result) {
+  if (!phoneWaterfallEnabled()) return result;
+  if (!result || result.noMatch || result.ambiguous || result.identityVerified === false) return result;
+
+  const immediate = apollo.validPhone(result.phone || '');
+  if (immediate) return { ...result, phone: immediate, phoneStatus: 'found' };
+
+  const found = cacheEntryFor(result);
+  const record = found.record || {};
+  const cachedPhone = apollo.validPhone(record.phone || '');
+  if (cachedPhone) {
+    runState.phoneWaterfallCacheHits++;
+    return { ...result, phone: cachedPhone, phoneStatus: 'found', phoneWaterfallStatus: 'cached' };
+  }
+
+  const pendingId = String(record.threePocPhoneWaterfallRequestId || '').trim();
+  if (pendingId && record.threePocPhoneWaterfallStatus === 'pending') {
+    const polled = await pollPhoneRequest(pendingId);
+    if (polled.state === 'found' && polled.phone) {
+      runState.phoneWaterfallSucceeded++;
+      apollo.recordPhoneResult(result?.apolloPersonId || result?.id, polled.phone);
+      saveWaterfallState(result, {
+        phone: polled.phone,
+        phoneStatus: 'found',
+        threePocPhoneWaterfallStatus: 'found',
+        threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+      });
+      return { ...result, phone: polled.phone, phoneStatus: 'found', phoneWaterfallStatus: 'found' };
+    }
+    if (polled.state === 'pending') {
+      runState.phoneWaterfallPending++;
+      return { ...result, phoneStatus: 'pending', phoneWaterfallPending: true, phoneWaterfallStatus: 'pending' };
+    }
+    saveWaterfallState(result, {
+      threePocPhoneWaterfallStatus: polled.state === 'not_found' ? 'not_found' : 'terminal',
+      threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+    });
+  }
+
+  if (recentPhoneAttempt(record)) {
+    runState.phoneWaterfallCooldownSkips++;
+    return { ...result, phoneWaterfallStatus: record.threePocPhoneWaterfallStatus || 'cooldown' };
+  }
+
+  if (runState.phoneWaterfallStarted >= maxPhoneWaterfalls()) {
+    runState.phoneWaterfallBudgetSkips++;
+    return { ...result, phoneWaterfallStatus: 'budget_cap' };
+  }
+
+  runState.phoneWaterfallStarted++;
+  saveWaterfallState(result, {
+    threePocPhoneWaterfallAttemptedAt: new Date().toISOString(),
+    threePocPhoneWaterfallStatus: 'starting',
+  });
+
+  try {
+    const waterfall = await startPhoneWaterfall(result);
+    if (waterfall.state === 'found' && waterfall.phone) {
+      runState.phoneWaterfallSucceeded++;
+      apollo.recordPhoneResult(result?.apolloPersonId || result?.id, waterfall.phone);
+      saveWaterfallState(result, {
+        phone: waterfall.phone,
+        phoneStatus: 'found',
+        threePocPhoneWaterfallRequestId: waterfall.requestId || null,
+        threePocPhoneWaterfallStatus: 'found',
+        threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+      });
+      return { ...result, phone: waterfall.phone, phoneStatus: 'found', phoneWaterfallStatus: 'found' };
+    }
+
+    if (waterfall.state === 'pending') {
+      runState.phoneWaterfallPending++;
+      saveWaterfallState(result, {
+        threePocPhoneWaterfallRequestId: waterfall.requestId,
+        threePocPhoneWaterfallStatus: 'pending',
+      });
+      return { ...result, phoneStatus: 'pending', phoneWaterfallPending: true, phoneWaterfallStatus: 'pending' };
+    }
+
+    if (waterfall.state === 'unavailable') {
+      runState.phoneWaterfallUnavailable++;
+      saveWaterfallState(result, {
+        threePocPhoneWaterfallRequestId: waterfall.requestId || null,
+        threePocPhoneWaterfallStatus: 'unavailable',
+        threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+      });
+      return { ...result, phoneWaterfallStatus: 'unavailable' };
+    }
+
+    if (waterfall.state === 'not_found' || waterfall.state === 'terminal') {
+      runState.phoneWaterfallNotFound++;
+      saveWaterfallState(result, {
+        threePocPhoneWaterfallRequestId: waterfall.requestId || null,
+        threePocPhoneWaterfallStatus: 'not_found',
+        threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+      });
+      return { ...result, phoneWaterfallStatus: 'not_found' };
+    }
+
+    runState.phoneWaterfallErrors++;
+    saveWaterfallState(result, {
+      threePocPhoneWaterfallRequestId: waterfall.requestId || null,
+      threePocPhoneWaterfallStatus: 'error',
+    });
+    return { ...result, phoneWaterfallStatus: 'error' };
+  } catch {
+    runState.phoneWaterfallErrors++;
+    saveWaterfallState(result, { threePocPhoneWaterfallStatus: 'error' });
+    return { ...result, phoneWaterfallStatus: 'error' };
+  }
+}
+
+async function improveVerifiedContacts(result, options = {}) {
+  let next = result;
+  if (options.needEmail !== false) next = await improveVerifiedEmail(next);
+  if (options.needPhone !== false) next = await improveVerifiedPhone(next);
+  return next;
 }
 
 async function improveVerifiedEmail(result) {
@@ -317,24 +604,31 @@ function install() {
 
   const originalResolveDecisionMaker = apollo.resolveDecisionMaker.bind(apollo);
   const originalResolvePersonByNameCompany = apollo.resolvePersonByNameCompany.bind(apollo);
+  const originalResolvePersonByBusinessEmail = apollo.resolvePersonByBusinessEmail.bind(apollo);
 
-  apollo.resolveDecisionMaker = async function balancedResolveDecisionMaker(candidate, company, domain, options = {}) {
+  apollo.resolveDecisionMaker = async function resultsFirstResolveDecisionMaker(candidate, company, domain, options = {}) {
     const result = await originalResolveDecisionMaker(candidate, company, domain, options);
-    if (options.needEmail === false) return result;
-    return improveVerifiedEmail(result);
+    return improveVerifiedContacts(result, options);
   };
 
-  apollo.resolvePersonByNameCompany = async function balancedResolvePersonByNameCompany(name, company, domain, options = {}) {
+  apollo.resolvePersonByNameCompany = async function resultsFirstResolvePersonByNameCompany(name, company, domain, options = {}) {
     const result = await originalResolvePersonByNameCompany(name, company, domain, options);
-    if (options.needEmail === false) return result;
-    return improveVerifiedEmail(result);
+    return improveVerifiedContacts(result, options);
+  };
+
+  apollo.resolvePersonByBusinessEmail = async function resultsFirstResolvePersonByBusinessEmail(email, company, domain, options = {}) {
+    const result = await originalResolvePersonByBusinessEmail(email, company, domain, options);
+    return improveVerifiedContacts(result, options);
   };
 
   const api = Object.freeze({
     startRun,
     stats,
     improveVerifiedEmail,
+    improveVerifiedPhone,
+    improveVerifiedContacts,
     maxWaterfalls,
+    maxPhoneWaterfalls,
   });
   globalThis[INSTALL_FLAG] = api;
   return api;
@@ -352,7 +646,9 @@ function stats() {
     cooldownDays: cooldownDays(),
     maxPolls: maxPolls(),
     personalEmailReveal: false,
-    phoneWaterfall: false,
+    phoneWaterfall: phoneWaterfallEnabled(),
+    maxPhoneWaterfalls: maxPhoneWaterfalls(),
+    phonePolls: phonePolls(),
     scope: 'final-verified-pocs-only',
   };
 }
@@ -362,6 +658,11 @@ module.exports = {
   startRun,
   stats,
   improveVerifiedEmail,
+  improveVerifiedPhone,
+  improveVerifiedContacts,
   emailFromPayload,
+  phoneFromPayload,
+  pollPhoneRequest,
+  startPhoneWaterfall,
   requestIdFromRaw,
 };
