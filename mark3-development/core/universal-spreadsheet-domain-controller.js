@@ -189,6 +189,23 @@ function approvalSummary(inspection) {
   ].join(' ');
 }
 
+function recoverMentionedSheetName(meta = {}, sourceText = '') {
+  const haystack = String(sourceText || '').toLocaleLowerCase();
+  if (!haystack) return '';
+  const tabs = targetResolver.tabsFromMetadata(meta);
+  const matches = tabs.filter((tab) => {
+    const name = text(tab?.name);
+    if (!name) return false;
+    const folded = name.toLocaleLowerCase();
+    return haystack.includes(`"${folded}"`)
+      || haystack.includes(`'${folded}'`)
+      || haystack.includes(`${folded} worksheet`)
+      || haystack.includes(`${folded} sheet`)
+      || haystack.includes(`${folded} tab`);
+  });
+  return matches.length === 1 ? matches[0].name : '';
+}
+
 function metadataFallbackTarget(sheetUrl, requestedSheetName) {
   const requestedGid = targetResolver.parseGid(sheetUrl);
   const sheetId = Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null;
@@ -226,9 +243,10 @@ async function resolveRequestedTarget(sheetUrl, requestedSheetName = '', options
       targetSource: resolution.targetSource,
     };
   }
+  const recoveredSheetName = requestedSheetName || recoverMentionedSheetName(meta, options.sourceText || '');
   const resolution = targetResolver.resolveTabs(meta, sheetUrl, {
-    sheetName: requestedSheetName || undefined,
-    explicitNameAuthoritative: Boolean(options.explicitNameAuthoritative),
+    sheetName: recoveredSheetName || undefined,
+    explicitNameAuthoritative: Boolean(options.explicitNameAuthoritative || recoveredSheetName),
   });
   if (!resolution.target?.name) {
     const error = new Error('An exact worksheet name or worksheet gid is required before universal enrichment can inspect or edit a multi-tab workbook.');
@@ -248,7 +266,10 @@ async function resolveRequestedTarget(sheetUrl, requestedSheetName = '', options
 }
 
 async function inspect(sheetUrl, sheetName, rowLimit, options = {}) {
-  const target = await resolveRequestedTarget(sheetUrl, sheetName, options);
+  const target = await resolveRequestedTarget(sheetUrl, sheetName, {
+    ...options,
+    sourceText: options.sourceText || '',
+  });
   const inspection = await inspector.inspectExact({
     spreadsheetId: target.spreadsheetId,
     spreadsheetTitle: target.spreadsheetTitle,
@@ -297,6 +318,7 @@ async function handle(message, context = {}) {
   try {
     inspection = await inspect(sheetUrl, requestedSheetName, rowLimit, {
       explicitNameAuthoritative,
+      sourceText: original,
       schema: expectedPersonGroups ? { expectedPersonGroups } : {},
     });
   } catch (error) {
@@ -387,6 +409,7 @@ module.exports = {
   schemaReadable,
   approvalSummary,
   metadataFallbackTarget,
+  recoverMentionedSheetName,
   typedFailure,
   installApprovalHandler: approvalHandler.install,
 };
