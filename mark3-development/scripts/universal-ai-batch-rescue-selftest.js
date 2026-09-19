@@ -111,6 +111,11 @@ assert.match(rescueSource, /unresolvedContextInput/);
 assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
 assert.match(rescueSource, /no-primary-poc2-residue/);
 assert.match(rescueSource, /if \(!residueSet\.has\(Number\(rowNumber\)\)\) continue/);
+assert.match(rescueSource, /unresolvedRows: \[\]/);
+assert.match(rescueSource, /function markUnresolved/);
+assert.match(rescueSource, /employer-unresolved/);
+assert.match(rescueSource, /no-verified-candidates/);
+assert.match(rescueSource, /selection-rejected-after-verification/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
 assert.match(rescueSource, /apollo\.resolveDecisionMaker/);
 assert.match(rescueSource, /ranker\.sameEmployer/);
@@ -128,7 +133,11 @@ assert.doesNotMatch(rescueSource, /omniroute|big-pickle|opencode/i);
 
 assert.match(targetedSource, /deferOpenGroupSelectionToAi: boundedAiEnabled/);
 assert.match(targetedSource, /targetOrdinals: \[2\]/);
+assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
+assert.match(targetedSource, /mandatoryCompletionAudit/);
+assert.match(targetedSource, /Completion beats "made progress"/);
+assert.match(targetedSource, /TERMINAL_EXHAUSTED/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /manualPoc2Filled/);
 assert.match(operatorSource, /optionalPoc3Deferred/);
@@ -146,4 +155,4 @@ assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? 
 assert.match(directSource, /async function candidates\(taskType = 'general', \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
 assert.match(directSource, /async function chat\(\{ messages, model, tools = null, taskType = 'general', timeoutMs = null, envOnly: forceEnvOnly = false \} = \{\}\)/);
 
-console.log('Universal bounded AI batch rescue self-test passed: AI rescue is limited to the exact empty POC-2 rows deferred by the deterministic primary, compact/tolerant output parsing accepts only supplied candidates, deterministic employer context skips unnecessary context calls, Groq can fall through to Gemini/NVIDIA, reviewer is off by default, Apollo verification remains mandatory, and one bounded last-resort POC-2 fallback is available after manual + direct AI residue.');
+console.log('Universal bounded AI batch rescue self-test passed: AI rescue is limited to exact empty POC-2 residue rows, unresolved rows retain explicit reasons, compact/tolerant output parsing accepts only supplied candidates, direct selection can fall Groq -> Gemini -> NVIDIA, every remaining mandatory POC-2 row continues into exact-row last resort regardless of sibling progress, and live-sheet completion audit decides whether the run may close.');
