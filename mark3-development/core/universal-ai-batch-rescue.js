@@ -83,6 +83,8 @@ function freshStats() {
     reviewerRows: 0,
     hydrationAttempts: 0,
     hydrationFailures: 0,
+    hydrationFallbackAttempts: 0,
+    hydrationFallbackAccepted: 0,
     identityDuplicatesSkipped: 0,
     rowsChanged: 0,
     cellsChanged: 0,
@@ -715,9 +717,37 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     const existing = existingIdentitySet(pkg.plan);
     const claimed = new Set();
 
-    for (const assignment of proposed) {
-      if (claimed.has(assignment.candidateKey)) continue;
+    const primaryAssignment = proposed[0] || null;
+    const target = primaryAssignment?.target || pkg.targets[0];
+    const primaryKey = text(primaryAssignment?.candidateKey).toLowerCase();
+    const fallbackLimit = Math.max(
+      1,
+      Math.min(4, Number(options.aiHydrationFallbackCandidates ?? process.env.ULTRON_M3_UNIVERSAL_AI_HYDRATION_FALLBACK_CANDIDATES ?? 3)),
+    );
+
+    const attemptAssignments = [];
+    if (primaryAssignment) attemptAssignments.push(primaryAssignment);
+    for (const candidate of pkg.candidates || []) {
+      if (attemptAssignments.length >= fallbackLimit) break;
+      const key = text(candidate?.apolloPersonId || candidate?.id || candidate?.linkedinUrl || candidate?.linkedin_url);
+      if (!key || key.toLowerCase() === primaryKey) continue;
+      if (!ranker.sameEmployer(candidate, pkg.companyContext)) continue;
+      attemptAssignments.push({
+        target,
+        candidate,
+        candidateKey: key,
+        confidence: 0.55,
+        reason: 'post-ai-hydration-fallback',
+        fallbackAfterAi: true,
+      });
+    }
+
+    let rowAccepted = false;
+    for (const assignment of attemptAssignments) {
+      if (rowAccepted || claimed.has(assignment.candidateKey)) continue;
+      if (assignment.fallbackAfterAi) stats.hydrationFallbackAttempts++;
       stats.hydrationAttempts++;
+
       let person = null;
       try {
         person = await apollo.resolveDecisionMaker(
@@ -733,18 +763,20 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         stats.hydrationFailures++;
         stats.aiSelectionRejects++;
         stats.errors.push({
-          purpose: 'hydration',
+          purpose: assignment.fallbackAfterAi ? 'hydration-fallback' : 'hydration',
           rowNumber,
           candidateKey: assignment.candidateKey,
           code: text(error?.code),
           message: text(error?.message).slice(0, 300),
         });
+        claimed.add(assignment.candidateKey);
         continue;
       }
 
       if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, pkg.companyContext)) {
         stats.hydrationFailures++;
         stats.aiSelectionRejects++;
+        claimed.add(assignment.candidateKey);
         continue;
       }
 
@@ -753,12 +785,14 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       if ((nameKey && existing.names.has(nameKey)) || (linkedinKey && existing.linkedins.has(linkedinKey))) {
         stats.identityDuplicatesSkipped++;
         stats.aiSelectionRejects++;
+        claimed.add(assignment.candidateKey);
         continue;
       }
 
       const writePlan = planner.safeWritesForGroup(pkg.row, assignment.target.group, person);
       if (!writePlan.allowed) {
         stats.aiSelectionRejects++;
+        claimed.add(assignment.candidateKey);
         continue;
       }
 
@@ -772,11 +806,9 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       );
       const queuedPendingPhone = pendingPhoneQueue.length > queueBefore;
 
-      // A selected fill can still be useful when Apollo's phone is asynchronous
-      // and there is no immediate phone write. Keep the verified assignment alive
-      // so the end-of-run webhook sync can complete the phone cell.
       if (!writePlan.writes.length && !queuedPendingPhone) {
         stats.aiSelectionRejects++;
+        claimed.add(assignment.candidateKey);
         continue;
       }
 
@@ -791,8 +823,10 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         changedRows.add(rowNumber);
         stats.cellsChanged += changes.length;
       }
+
       stats.newPeopleSelected++;
       stats.aiSelectionsAccepted++;
+      if (assignment.fallbackAfterAi) stats.hydrationFallbackAccepted++;
       stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
       stats.selectionAudit.push({
         rowNumber,
@@ -808,9 +842,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           ? writePlan.writes.map((write) => write.field)
           : (queuedPendingPhone ? ['phone-pending'] : []),
       });
+
       claimed.add(assignment.candidateKey);
       if (nameKey) existing.names.add(nameKey);
       if (linkedinKey) existing.linkedins.add(linkedinKey);
+      rowAccepted = true;
     }
 
     const acceptedForRow = stats.selectionAudit.filter((item) => item.rowNumber === rowNumber).length;
