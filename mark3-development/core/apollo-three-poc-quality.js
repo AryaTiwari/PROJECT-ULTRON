@@ -520,6 +520,50 @@ async function improveVerifiedPhone(result) {
   }
 }
 
+function recordPhoneWaterfallOutcome(identity = {}, outcome = {}) {
+  const state = String(outcome?.state || '').trim().toLowerCase();
+  const phone = apollo.validPhone(outcome?.phone || '');
+  const result = {
+    apolloPersonId: String(identity?.apolloPersonId || identity?.id || '').trim(),
+    id: String(identity?.apolloPersonId || identity?.id || '').trim(),
+    linkedinUrl: identity?.linkedinUrl || identity?.returnedLinkedIn || '',
+  };
+
+  if (phone) {
+    apollo.recordPhoneResult(result.apolloPersonId, phone);
+    saveWaterfallState(result, {
+      phone,
+      phoneStatus: 'found',
+      threePocPhoneWaterfallStatus: 'found',
+      threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+    });
+    return 'found';
+  }
+
+  if (state === 'not_found' || state === 'terminal' || state === 'unavailable') {
+    saveWaterfallState(result, {
+      threePocPhoneWaterfallStatus: state === 'unavailable' ? 'unavailable' : 'not_found',
+      threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+    });
+    return state;
+  }
+
+  if (state === 'pending') {
+    saveWaterfallState(result, {
+      threePocPhoneWaterfallStatus: 'pending',
+    });
+    return 'pending';
+  }
+
+  if (state) {
+    saveWaterfallState(result, {
+      threePocPhoneWaterfallStatus: 'error',
+      threePocPhoneWaterfallResolvedAt: new Date().toISOString(),
+    });
+  }
+  return state || 'unknown';
+}
+
 async function improveVerifiedContacts(result, options = {}) {
   let next = result;
   // Phone is operationally higher-value for this lead workflow and the user
@@ -686,6 +730,7 @@ function install() {
     improveVerifiedEmail,
     improveVerifiedPhone,
     improveVerifiedContacts,
+    recordPhoneWaterfallOutcome,
     maxWaterfalls,
     maxPhoneWaterfalls,
   });
@@ -719,6 +764,7 @@ module.exports = {
   improveVerifiedEmail,
   improveVerifiedPhone,
   improveVerifiedContacts,
+  recordPhoneWaterfallOutcome,
   emailFromPayload,
   phoneFromPayload,
   pollPhoneRequest,
