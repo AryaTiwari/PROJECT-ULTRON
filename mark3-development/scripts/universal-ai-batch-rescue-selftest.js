@@ -143,7 +143,7 @@ assert.match(operatorSource, /manualPoc2Filled/);
 assert.match(operatorSource, /optionalPoc3Deferred/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
-assert.match(controllerSource, /maximum 3 direct AI attempts for the entire run, not per row/);
+assert.match(controllerSource, /Maximum 3 direct env-backed AI attempts for the entire run, not per row/);
 assert.match(controllerSource, /Priority contract: POC-1 is non-negotiable/);
 assert.match(controllerSource, /POC-2 is the primary additional contact/);
 assert.match(controllerSource, /POC-3 is optional and receives only one cheap manual attempt/);
