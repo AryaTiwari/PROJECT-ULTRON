@@ -132,6 +132,32 @@ async function runMismatchCase() {
 (async () => {
   try {
     assert.ok(operator.publicIndexQueries({ company: COMPANY }).every((query) => /site:linkedin\.com\/in/i.test(query)));
+
+    const structuredCompanyProfile = {
+      sections: {
+        main_profile: {
+          name: COMPANY,
+          linkedin_url: 'https://www.linkedin.com/company/hanvitt-consulting-solutions/',
+        },
+        about: {
+          description: 'Hanvitt Consulting & Solutions provides technology consulting services.',
+        },
+      },
+      references: {
+        company: [{ kind: 'company_urn', value: '123456789' }],
+      },
+    };
+    assert.equal(
+      operator.linkedinCompanyProfileMatches(structuredCompanyProfile, { company: COMPANY, domain: '' }),
+      true,
+      'nested MCP company profile sections must match the verified employer instead of coercing to [object Object]'
+    );
+    assert.deepEqual(
+      [...operator.collectLinkedInCompanyUrns(structuredCompanyProfile)],
+      ['123456789'],
+      'company URN must remain extractable from structured MCP references'
+    );
+
     await runSerpCase();
     await runTinyFishCase();
     await runMismatchCase();
