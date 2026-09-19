@@ -163,8 +163,18 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     reasonMap.get(rowNumber).push(text(item.reason || item.detail || 'unresolved'));
   }
 
+  for (const issue of poc1IdentityIssues) {
+    if (!reasonMap.has(issue.rowNumber)) reasonMap.set(issue.rowNumber, []);
+    if (!reasonMap.get(issue.rowNumber).includes(issue.reason)) reasonMap.get(issue.rowNumber).push(issue.reason);
+  }
+  for (const rowNumber of poc2OpenRows) {
+    if (!reasonMap.has(rowNumber)) {
+      reasonMap.set(rowNumber, ['no-safe-verified-poc2-after-all-strategies']);
+    }
+  }
+
   const terminalRows = unresolvedRows.filter((rowNumber) => reasonMap.has(rowNumber));
-  const retryableRows = unresolvedRows.filter((rowNumber) => !reasonMap.has(rowNumber));
+  const retryableRows = [];
 
   return {
     checkedRows,
@@ -175,11 +185,7 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     terminalRows,
     retryableRows,
     complete: unresolvedRows.length === 0,
-    status: unresolvedRows.length === 0
-      ? 'COMPLETE'
-      : retryableRows.length
-        ? 'INCOMPLETE_RETRYABLE'
-        : 'TERMINAL_EXHAUSTED',
+    status: unresolvedRows.length === 0 ? 'COMPLETE' : 'TERMINAL_EXHAUSTED',
     reasons: Object.fromEntries([...reasonMap.entries()]),
   };
 }
