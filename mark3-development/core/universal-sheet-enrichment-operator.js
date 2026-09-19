@@ -1177,7 +1177,6 @@ async function run(request = {}, options = {}) {
       if (companyContext?.source && /^row-/.test(companyContext.source)) stats.rowEvidenceEmployersResolved++;
       const writes = [];
       const fillTargets = candidateFillTargets(plan);
-      const repairDiscoveryNeeded = existingRepairNeedsDiscovery(plan);
       const aiFallbackEnabled = Boolean(options.deferOpenGroupSelectionToAi);
 
       // POC-1 is non-negotiable and remains tied to the exact anchor identity.
@@ -1210,10 +1209,19 @@ async function run(request = {}, options = {}) {
 
       stats.anchorsResolved++;
 
-      // Fast path: query only the canonical POC authority/recruiting titles first.
-      // Broad discovery is deferred until AI genuinely needs a harder unresolved POC-2.
+      const poc2Targets = fillTargets.filter((target) => Number(target.group?.ordinal || 0) === 2);
+      const poc3Targets = fillTargets.filter((target) => Number(target.group?.ordinal || 0) >= 3);
+
+      // Existing/partial POCs are exact-person repair jobs, not discovery jobs.
+      // Verify them directly by LinkedIn or exact name+company before spending any
+      // Apollo people-search calls. This is especially important for missing phones.
+      const repairOptions = { ...runOptions, rowNumber, candidatePool: [] };
+      writes.push(...await repairExistingGroups(row, plan, companyContext, stats, repairOptions));
+
+      // Discovery exists for mandatory POC-2 only. POC-3 may reuse this pool for
+      // one cheap attempt, but POC-3 alone must never trigger a new people search.
       let people = [];
-      if (repairDiscoveryNeeded || fillTargets.length) {
+      if (poc2Targets.length) {
         try {
           people = await discoverPriorityPeopleFast(companyContext, cache, stats, {
             ...runOptions,
@@ -1231,11 +1239,6 @@ async function run(request = {}, options = {}) {
       }
 
       const rowOptions = { ...runOptions, rowNumber, candidatePool: people };
-      writes.push(...await repairExistingGroups(row, plan, companyContext, stats, rowOptions));
-
-      const poc2Targets = fillTargets.filter((target) => Number(target.group?.ordinal || 0) === 2);
-      const poc3Targets = fillTargets.filter((target) => Number(target.group?.ordinal || 0) >= 3);
-
       const manualClaimed = new Set();
 
       if (poc2Targets.length) {
@@ -1259,17 +1262,21 @@ async function run(request = {}, options = {}) {
       // POC-3 gets exactly one cheap manual hydration opportunity from the same
       // discovery pool. No extra discovery and no AI rescue unless explicitly enabled.
       if (poc3Targets.length) {
-        stats.manualPoc3Attempts += poc3Targets.length;
-        const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
-          ...rowOptions,
-          ordinal: 3,
-          claimed: manualClaimed,
-          maxHydrationAttempts: options.poc3HydrationAttempts ?? 1,
-          fallbackMinimumScore: options.poc3FallbackMinimumScore ?? 42,
-        });
-        writes.push(...result.writes);
-        if (result.filled) stats.manualPoc3Filled++;
-        else stats.optionalPoc3Deferred += poc3Targets.length;
+        if (people.length) {
+          stats.manualPoc3Attempts += poc3Targets.length;
+          const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
+            ...rowOptions,
+            ordinal: 3,
+            claimed: manualClaimed,
+            maxHydrationAttempts: options.poc3HydrationAttempts ?? 1,
+            fallbackMinimumScore: options.poc3FallbackMinimumScore ?? 42,
+          });
+          writes.push(...result.writes);
+          if (result.filled) stats.manualPoc3Filled++;
+          else stats.optionalPoc3Deferred += poc3Targets.length;
+        } else {
+          stats.optionalPoc3Deferred += poc3Targets.length;
+        }
       }
 
       const byColumn = new Map();
