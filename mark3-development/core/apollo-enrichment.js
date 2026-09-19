@@ -108,6 +108,17 @@ function isFresh(record) {
   return Number.isFinite(checked) && Date.now() - checked < cacheDays(record) * 86400000;
 }
 
+function pendingPhoneRequestFresh(record) {
+  if (record?.phoneStatus !== 'pending') return false;
+  const requestedAt = Date.parse(record?.phoneRequestedAt || record?.checkedAt || '');
+  if (!Number.isFinite(requestedAt)) return false;
+  const retryMinutes = Math.max(
+    1,
+    Math.min(60, numericSetting('ULTRON_M3_APOLLO_PENDING_PHONE_RETRY_MINUTES', 3)),
+  );
+  return Date.now() - requestedAt < retryMinutes * 60_000;
+}
+
 function satisfies(record, { needEmail, needPhone }) {
   if (!record || !isFresh(record)) return false;
   if (record.noMatch || record.ambiguous) return true;
@@ -116,6 +127,7 @@ function satisfies(record, { needEmail, needPhone }) {
   if (needPhone) {
     if (!['found', 'not_found', 'pending'].includes(record.phoneStatus)) return false;
     if (record.phoneStatus === 'found' && !validPhone(record.phone)) return false;
+    if (record.phoneStatus === 'pending' && !pendingPhoneRequestFresh(record)) return false;
   }
   return true;
 }
@@ -960,6 +972,7 @@ module.exports = {
   readCache,
   saveCache,
   cacheDays,
+  pendingPhoneRequestFresh,
   status,
   enrich,
   resolvePersonProfile,
