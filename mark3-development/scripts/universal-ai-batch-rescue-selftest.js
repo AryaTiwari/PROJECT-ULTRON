@@ -105,8 +105,9 @@ const controllerSource = fs.readFileSync(path.join(root, 'universal-spreadsheet-
 assert.match(rescueSource, /Maximum logical model calls are capped for the WHOLE run/);
 assert.match(rescueSource, /runInternalInference\('spreadsheet-enrichment'/);
 assert.match(rescueSource, /direct-provider-router/);
-assert.match(rescueSource, /direct\.candidates\('research'\)/);
+assert.match(rescueSource, /direct\.candidates\('research', \{ envOnly: true \}\)/);
 assert.match(rescueSource, /direct\.chat\(/);
+assert.match(rescueSource, /envOnly: true/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_DIRECT_PROVIDERS/);
 assert.match(rescueSource, /xai,gemini,nvidia/);
 assert.doesNotMatch(rescueSource, /omniroute|omniFallback|omniDiversity|chatOmniRouteOnly/i);
@@ -133,4 +134,4 @@ assert.match(operatorSource, /repairDiscoveryNeeded \|\| \(!deferOpenSelection &
 assert.doesNotMatch(operatorSource, /if \(fillTargets\.length \|\| repairDiscoveryNeeded\) \{\s*people = await discoverCompanyPeople/);
 assert.match(controllerSource, /maximum 3 logical AI calls for the entire run, not per row/);
 
-console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, only env-backed direct xAI/Gemini/NVIDIA providers are eligible, one best model per provider is considered inside the hard 3-attempt budget, OmniRoute is absent from the batch path, partial and empty POCs share the same batch, Apollo verification remains mandatory, and per-row Big Pickle is suppressed while batch rescue is active.');
+console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, only env-backed direct xAI/Gemini/NVIDIA providers are eligible, candidates and inference both force envOnly=true, one best model per provider is considered inside the hard 3-attempt budget, OmniRoute is absent from the batch path, partial and empty POCs share the same batch, Apollo verification remains mandatory, and per-row Big Pickle is suppressed while batch rescue is active.');
