@@ -565,9 +565,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
     let people = [];
     try {
-      people = await base.discoverCompanyPeople(companyContext, discoveryCache, discoveryStats, {
+      people = await base.discoverPriorityPeopleFast(companyContext, discoveryCache, discoveryStats, {
         ...options,
         location: record.plan?.context?.location || '',
+        priorityCandidateLimit: options.manualPriorityCandidateLimit ?? 20,
+        adaptiveBroadCandidateLimit: options.adaptiveBroadCandidateLimit ?? 30,
       });
     } catch (error) {
       stats.errors.push({ purpose: 'discovery', rowNumber, code: text(error?.code), message: text(error?.message).slice(0, 300) });
