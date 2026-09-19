@@ -171,7 +171,7 @@ assert.doesNotMatch(rescueSource, /rescueMode === 'repair'/);
 assert.doesNotMatch(rescueSource, /planner\.samePerson/);
 assert.doesNotMatch(rescueSource, /omniroute|big-pickle|opencode/i);
 
-assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline !== false/);
+assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline === true \|\| Boolean\(options\.contactPhaseOrdinal\)/);
 assert.match(targetedSource, /const primary = phasedExecution/);
 assert.match(targetedSource, /\? await runPocPhasePipeline\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /: await base\.run\(exact\.request, runOptions\)/);
