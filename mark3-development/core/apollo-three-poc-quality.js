@@ -434,7 +434,11 @@ async function improveVerifiedPhone(result) {
     return { ...result, phone: cachedPhone, phoneStatus: 'found', phoneWaterfallStatus: 'cached' };
   }
 
-  const pendingId = String(record.threePocPhoneWaterfallRequestId || '').trim();
+  const pendingId = String(
+    result?.phoneWaterfallRequestId
+    || record.threePocPhoneWaterfallRequestId
+    || ''
+  ).trim();
   if (pendingId && record.threePocPhoneWaterfallStatus === 'pending') {
     const polled = await pollPhoneRequest(pendingId, { polls: 0 });
     if (polled.state === 'found' && polled.phone) {
@@ -748,39 +752,50 @@ function install() {
     return options;
   }
 
+  function carryLegacyPhoneRequest(result, requestId) {
+    if (!requestId || apollo.validPhone(result?.phone || '')) return result;
+    return {
+      ...result,
+      phoneStatus: 'waterfall_pending',
+      phoneWaterfallPending: true,
+      phoneWaterfallStatus: 'pending',
+      phoneWaterfallRequestId: requestId,
+    };
+  }
+
   apollo.resolveDecisionMaker = async function resultsFirstResolveDecisionMaker(candidate, company, domain, options = {}) {
-    const result = await originalResolveDecisionMaker(candidate, company, domain, baseOptionsForQuality(options, {
+    const identity = {
       ...candidate,
       organizationName: candidate?.organizationName || company,
       organizationDomain: candidate?.organizationDomain || domain,
-    }));
-    return improveVerifiedContacts(result, options);
+    };
+    const legacyPhoneRequestId = options.needPhone === false ? '' : pendingPhoneWaterfallRequestId(identity);
+    const result = await originalResolveDecisionMaker(candidate, company, domain, baseOptionsForQuality(options, identity));
+    return improveVerifiedContacts(carryLegacyPhoneRequest(result, legacyPhoneRequestId), options);
   };
 
   apollo.resolvePersonByNameCompany = async function resultsFirstResolvePersonByNameCompany(name, company, domain, options = {}) {
-    const result = await originalResolvePersonByNameCompany(name, company, domain, baseOptionsForQuality(options, {
-      name,
-      organizationName: company,
-      organizationDomain: domain,
-    }));
-    return improveVerifiedContacts(result, options);
+    const identity = { name, organizationName: company, organizationDomain: domain };
+    const legacyPhoneRequestId = options.needPhone === false ? '' : pendingPhoneWaterfallRequestId(identity);
+    const result = await originalResolvePersonByNameCompany(name, company, domain, baseOptionsForQuality(options, identity));
+    return improveVerifiedContacts(carryLegacyPhoneRequest(result, legacyPhoneRequestId), options);
   };
 
   apollo.resolvePersonByBusinessEmail = async function resultsFirstResolvePersonByBusinessEmail(email, company, domain, options = {}) {
-    const result = await originalResolvePersonByBusinessEmail(email, company, domain, baseOptionsForQuality(options, {
-      email,
-      organizationName: company,
-      organizationDomain: domain,
-    }));
-    return improveVerifiedContacts(result, options);
+    const identity = { email, organizationName: company, organizationDomain: domain };
+    const legacyPhoneRequestId = options.needPhone === false ? '' : pendingPhoneWaterfallRequestId(identity);
+    const result = await originalResolvePersonByBusinessEmail(email, company, domain, baseOptionsForQuality(options, identity));
+    return improveVerifiedContacts(carryLegacyPhoneRequest(result, legacyPhoneRequestId), options);
   };
 
-  // Exact LinkedIn anchors (POC-1 and any existing POC with a profile URL) must
-  // use the same final-contact quality layer as name/company and business-email
-  // resolution. Historically this path bypassed phone/email waterfalls entirely.
+  // Exact LinkedIn anchors (POC-1 and any existing POC with a profile URL) use
+  // the same final-contact quality layer. New phone requests use Apollo's native
+  // reveal/webhook path; already-paid legacy waterfall IDs are carried forward.
   apollo.resolvePersonProfile = async function resultsFirstResolvePersonProfile(linkedinUrl, options = {}) {
-    const result = await originalResolvePersonProfile(linkedinUrl, baseOptionsForQuality(options, { linkedinUrl }));
-    return improveVerifiedContacts(result, options);
+    const identity = { linkedinUrl };
+    const legacyPhoneRequestId = options.needPhone === false ? '' : pendingPhoneWaterfallRequestId(identity);
+    const result = await originalResolvePersonProfile(linkedinUrl, baseOptionsForQuality(options, identity));
+    return improveVerifiedContacts(carryLegacyPhoneRequest(result, legacyPhoneRequestId), options);
   };
 
   const api = Object.freeze({
