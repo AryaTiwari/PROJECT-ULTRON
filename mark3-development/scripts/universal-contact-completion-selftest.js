@@ -37,31 +37,9 @@ const existing = {
   isAnchor: false,
 };
 
-const candidates = [
-  {
-    id: 'apollo-hemanth',
-    name: 'Hemanth Raj',
-    title: 'Associate Team Lead - Talent Acquisition',
-    organizationName: 'Sunrise Systems, Inc',
-    organizationDomain: 'sunrisesys.com',
-  },
-  {
-    id: 'apollo-other',
-    name: 'Other Recruiter',
-    title: 'Recruiter',
-    organizationName: 'Sunrise Systems, Inc',
-    organizationDomain: 'sunrisesys.com',
-  },
-];
-
-const exact = operator.exactCandidateForExisting(existing, candidates, company);
-assert.equal(exact?.id, 'apollo-hemanth', 'existing POC name should resolve to the unique same-employer discovery candidate');
-
-const ambiguous = operator.exactCandidateForExisting(existing, [...candidates, { ...candidates[0], id: 'duplicate-hemanth' }], company);
-assert.equal(ambiguous, null, 'duplicate exact-name candidates must not be guessed');
-
-const wrongEmployer = operator.exactCandidateForExisting(existing, [{ ...candidates[0], organizationName: 'Other Corp', organizationDomain: 'other.example' }], company);
-assert.equal(wrongEmployer, null, 'same-name candidate at a different employer must be rejected');
+const verificationContext = operator.existingPersonVerificationContext(existing, company);
+assert.equal(verificationContext.domain, 'sunrisesys.com');
+assert.equal(verificationContext.source, 'existing-poc-business-email-domain');
 
 const queue = [];
 operator.queuePendingPhone(
@@ -100,9 +78,10 @@ const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichme
 const bootstrapSource = fs.readFileSync(path.join(root, 'universal-deterministic-bootstrap.js'), 'utf8');
 const fallbackSource = fs.readFileSync(path.join(root, 'universal-big-pickle-fallback.js'), 'utf8');
 
-assert.match(operatorSource, /existingRepairNeedsDiscovery/);
-assert.match(operatorSource, /candidatePool: people/);
-assert.match(operatorSource, /same-company-discovery-exact-name/);
+assert.doesNotMatch(operatorSource, /existingRepairNeedsDiscovery/);
+assert.doesNotMatch(operatorSource, /exactCandidateForExisting/);
+assert.match(operatorSource, /existingPersonVerificationContext/);
+assert.match(operatorSource, /apollo-name-company/);
 assert.match(operatorSource, /apollo\.fetchPhoneResults\(\)/);
 assert.match(operatorSource, /apollo\.recordPhoneResult/);
 assert.match(operatorSource, /sheets\.readCell/);
@@ -110,6 +89,10 @@ assert.match(operatorSource, /sheets\.isBlank/);
 assert.match(operatorSource, /syncPendingPhoneAssignments\(source, pendingPhoneQueue/);
 assert.match(operatorSource, /existingRepairAudit/);
 assert.match(operatorSource, /phoneStillPending/);
+assert.match(operatorSource, /pending-phone-assignments\.json/);
+assert.match(operatorSource, /persistBackgroundPhoneAssignments/);
+assert.match(operatorSource, /loadBackgroundPhoneAssignments/);
+assert.match(operatorSource, /resumedPhoneAssignments/);
 
 assert.match(bootstrapSource, /apollo-three-poc-quality/);
 assert.match(bootstrapSource, /three-poc-candidate-discovery-policy/);
@@ -173,7 +156,7 @@ async function run() {
     sheets.writeCells = originals.writeCells;
   }
 
-  console.log('Universal contact completion self-test passed: existing POC names reuse unique same-employer Apollo discovery identities, verified pending phone callbacks write the exact blank POC phone cell without overwriting populated cells, universal verified-email/high-recall wrappers are installed, and Big Pickle control failures fail closed.');
+  console.log('Universal contact completion self-test passed: existing POCs verify by exact LinkedIn or exact name+business-domain, pending phone ownership stays bound to the exact row/cell/person, callback assignments persist across restarts, verified callbacks write only blank phone cells, and Big Pickle control failures fail closed.');
 }
 
 if (require.main === module) {
