@@ -1094,6 +1094,7 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
       companyProfile = await linkedinMcp.callTool('get_company_profile', { company_name: slug });
       stats.linkedinFallbackCompanyProfiles = Number(stats.linkedinFallbackCompanyProfiles || 0) + 1;
     } catch (error) {
+      stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
       pushLinkedInDiagnostic({
         company: queryBrand,
         code: String(error?.code || 'LINKEDIN_COMPANY_PROFILE_FAILED'),
@@ -2144,7 +2145,6 @@ async function run(request = {}, options = {}) {
             primarySweep: Boolean(options.resultsFirstSweep),
           });
         } catch (error) {
-          stats.candidatePrioritySearchFailures++;
           const typed = typedFailureSummary(error, {
             stage: error?.stage || 'candidate-discovery',
           });
@@ -2159,6 +2159,9 @@ async function run(request = {}, options = {}) {
             message: typed.message.slice(0, 300),
             hint: typed.hint,
           });
+          if (typed.subsystem === 'APOLLO') {
+            stats.candidatePrioritySearchFailures++;
+          }
         }
       }
 
