@@ -253,8 +253,40 @@ function classifyLeftovers(queue = []) {
   };
 }
 
+function typedIssue(value = {}, context = {}) {
+  const code = text(value.code || context.code || 'UNCLASSIFIED_SYSTEM_ERROR').toUpperCase();
+  const subsystem = text(value.subsystem || context.subsystem || 'UNIVERSAL').toUpperCase();
+  const type = text(value.type || context.type || 'INTERNAL').toUpperCase();
+  const stage = text(value.stage || context.stage || 'unspecified-stage');
+  const message = text(value.message || context.message || 'A typed system/provider error occurred.');
+  return {
+    code,
+    category: text(context.category || 'system'),
+    severity: text(context.severity || 'BLOCKER'),
+    blocking: context.blocking !== false,
+    retryable: context.retryable !== false,
+    rawReason: code,
+    rowNumber: Number.isInteger(Number(context.rowNumber)) ? Number(context.rowNumber) : null,
+    groupOrdinal: Number(context.groupOrdinal || 0) || null,
+    target: text(context.target || subsystem),
+    company: text(context.company),
+    detail: `[${subsystem}/${type}] @ ${stage}: ${message}`.slice(0, 500),
+    message,
+    nextAction: text(value.hint || context.nextAction || 'Fix the typed subsystem error, then retry only the affected stage.'),
+  };
+}
+
 function runtimeIssues(stats = {}) {
   const issues = [];
+  if (stats.haltedEarly && stats.haltError) {
+    issues.push(typedIssue(stats.haltError, {
+      severity: 'BLOCKER',
+      blocking: true,
+      retryable: true,
+      rowNumber: stats.haltAtRow,
+      target: 'SYSTEM-HALT',
+    }));
+  }
   if (Number(stats.phoneStillPending || 0) > 0 || Number(stats.backgroundPhonePending || 0) > 0) {
     issues.push(issueFromReason('phone-callback-pending', {
       detail: `${Number(stats.phoneStillPending || 0)} same-run pending; ${Number(stats.backgroundPhonePending || 0)} persisted background assignments.`,
@@ -273,6 +305,22 @@ function runtimeIssues(stats = {}) {
   if (Number(stats.identityConflicts || 0) > 0) {
     issues.push(issueFromReason('identity-conflict', {
       detail: `${Number(stats.identityConflicts || 0)} unsafe write(s) blocked.`,
+    }));
+  }
+  for (const item of (stats.discoveryDiagnostics || []).slice(0, 8)) {
+    if (!item?.code && !item?.message) continue;
+    issues.push(typedIssue({
+      code: item.code || 'DISCOVERY_DIAGNOSTIC',
+      subsystem: /LINKEDIN/i.test(text(item.code)) ? 'LINKEDIN' : (/APOLLO/i.test(text(item.code)) ? 'APOLLO' : 'DISCOVERY'),
+      type: 'API',
+      stage: 'candidate-discovery',
+      message: item.message || item.code,
+    }, {
+      severity: 'WARNING',
+      blocking: false,
+      retryable: true,
+      company: item.company || '',
+      target: 'DISCOVERY',
     }));
   }
   return issues;
@@ -304,6 +352,7 @@ function formatIssue(issue = {}) {
 module.exports = {
   ISSUE_CATALOG,
   issueFromReason,
+  typedIssue,
   classifyLeftovers,
   runtimeIssues,
   uniqueIssues,
