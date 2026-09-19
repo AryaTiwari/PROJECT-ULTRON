@@ -101,6 +101,7 @@ const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.
 const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const controllerSource = fs.readFileSync(path.join(root, 'universal-spreadsheet-domain-controller.js'), 'utf8');
+const directSource = fs.readFileSync(path.join(root, 'direct-provider-router.js'), 'utf8');
 
 assert.match(rescueSource, /Maximum logical model calls are capped for the WHOLE run/);
 assert.match(rescueSource, /runInternalInference\('spreadsheet-enrichment'/);
@@ -133,5 +134,10 @@ assert.match(operatorSource, /options\.deferOpenGroupSelectionToAi/);
 assert.match(operatorSource, /repairDiscoveryNeeded \|\| \(!deferOpenSelection && fillTargets\.length\)/);
 assert.doesNotMatch(operatorSource, /if \(fillTargets\.length \|\| repairDiscoveryNeeded\) \{\s*people = await discoverCompanyPeople/);
 assert.match(controllerSource, /maximum 3 logical AI calls for the entire run, not per row/);
+
+assert.match(directSource, /async function allCredentialEntries\(provider, \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
+assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? \{\} : await storedCredentials\(\)/);
+assert.match(directSource, /async function candidates\(taskType = 'general', \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
+assert.match(directSource, /async function chat\(\{ messages, model, tools = null, taskType = 'general', timeoutMs = null, envOnly: forceEnvOnly = false \} = \{\}\)/);
 
 console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, only env-backed direct xAI/Gemini/NVIDIA providers are eligible, candidates and inference both force envOnly=true, one best model per provider is considered inside the hard 3-attempt budget, OmniRoute is absent from the batch path, partial and empty POCs share the same batch, Apollo verification remains mandatory, and per-row Big Pickle is suppressed while batch rescue is active.');
