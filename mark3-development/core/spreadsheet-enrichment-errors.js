@@ -41,7 +41,7 @@ function typeFor(error, subsystem) {
   const value = combined(error).toUpperCase();
   if (/AUTH|UNAUTHENTICATED|INVALID_GRANT|TOKEN|CREDENTIAL/.test(`${code} ${value}`)) return 'AUTH';
   if (/FORBIDDEN|PERMISSION|ACCESS_REQUIRED|ACCESS DENIED/.test(`${code} ${value}`)) return 'PERMISSION';
-  if (/RATE_LIMIT|RESOURCE_EXHAUSTED|429|QUOTA/.test(`${code} ${value}`)) return 'RATE_LIMIT';
+  if (/RATE_LIMIT|RESOURCE_EXHAUSTED|429|QUOTA|DAILY_CAP|HOURLY_CAP|SAFETY_CAP/.test(`${code} ${value}`)) return 'RATE_LIMIT';
   if (/TIMEOUT|TIMEDOUT|DEADLINE_EXCEEDED/.test(`${code} ${value}`)) return 'TIMEOUT';
   if (NETWORK_PATTERN.test(combined(error))) return 'NETWORK';
   if (/RANGE_INVALID|INVALID_RANGE|PARSE RANGE/.test(`${code} ${value}`)) return 'INVALID_RANGE';
@@ -67,6 +67,8 @@ function defaultCode(error, subsystem, type) {
 }
 
 function hintFor(subsystem, type, code) {
+  if (String(code || '').toUpperCase() === 'LINKEDIN_DAILY_CAP') return 'LinkedIn daily safety budget is exhausted. Do not bypass the cap; resume after the daily safety window resets.';
+  if (String(code || '').toUpperCase() === 'LINKEDIN_HOURLY_CAP') return 'LinkedIn hourly safety budget is exhausted. Do not bypass the cap; resume after the hourly safety window resets.';
   if (type === 'NETWORK') return `${subsystem} could not be reached after automatic retry. Check internet, DNS, firewall/proxy and provider availability.`;
   if (type === 'AUTH') return `Refresh or re-authorize ${subsystem} credentials, then rerun the same operation.`;
   if (type === 'PERMISSION') return `The connected ${subsystem} identity lacks permission for this operation or resource.`;
