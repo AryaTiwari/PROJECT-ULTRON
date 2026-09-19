@@ -247,7 +247,7 @@ assert.match(operatorSource, /priority-fast-v2\|/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /pragmaticSameEmployerCandidates/);
 assert.match(operatorSource, /ordinal: 2/);
-assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
+assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5/);
 assert.match(operatorSource, /ordinal: 3/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
 assert.match(operatorSource, /priorityCandidateLimit: options\.manualPriorityCandidateLimit \?\? 20/);
