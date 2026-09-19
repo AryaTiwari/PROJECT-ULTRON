@@ -175,8 +175,19 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     stats.rowsSeen++;
     const { row, rowNumber, plan } = record;
     if (!plan.anchor) continue;
-    const targets = base.candidateFillTargets(plan);
-    const repairEligible = needsExistingRepair(plan);
+    const allowedOrdinals = Array.isArray(runOptions.targetOrdinals)
+      ? new Set(runOptions.targetOrdinals.map((value) => Number(value)).filter(Number.isFinite))
+      : null;
+    const targets = base.candidateFillTargets(plan).filter((target) =>
+      !allowedOrdinals || allowedOrdinals.has(Number(target.group?.ordinal || 0))
+    );
+    const repairEligible = needsExistingRepair(plan) && (
+      !allowedOrdinals
+      || (plan.groups?.partial || []).some((item) =>
+        allowedOrdinals.has(Number(item.group?.ordinal || 0))
+        && item.snapshot?.hasIdentity
+      )
+    );
     if (!targets.length && !repairEligible) continue;
     stats.rowsEligible++;
 
@@ -221,7 +232,8 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           const orphanTarget = orphanPolicy.isOrphanContactTarget(target);
           if (orphanTarget) stats.orphanContactTargets++;
           let filled = false;
-          for (let attempt = 0; attempt < 3 && !filled; attempt++) {
+          const maxCandidateFallbackAttempts = Math.max(1, Math.min(3, Number(runOptions.maxFallbackAttemptsPerTarget || 1)));
+          for (let attempt = 0; attempt < maxCandidateFallbackAttempts && !filled; attempt++) {
             stats.candidateFallbackAttempts++;
             const selection = await fallback.chooseCandidate({
               ranking,
