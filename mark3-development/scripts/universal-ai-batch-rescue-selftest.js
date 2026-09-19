@@ -28,16 +28,6 @@ const shortlist = rescue.shortlistCandidates(candidates, { hiringContext: 'Hirin
 assert.ok(shortlist.some((item) => item.id === 'founder'));
 assert.ok(shortlist.some((item) => item.id === 'recruiter'));
 
-const partialRepair = {
-  group: { id: 'person_2', ordinal: 2 },
-  snapshot: {
-    empty: false,
-    hasIdentity: true,
-    values: { name: 'Existing Recruiter — Talent Acquisition Specialist', linkedin: '', phone: '', email: '' },
-    missingFields: ['phone', 'email'],
-  },
-  isAnchor: false,
-};
 const openPoc2 = {
   group: { id: 'person_2_open', ordinal: 2 },
   snapshot: { empty: true, hasIdentity: false, values: {}, missingFields: ['name', 'phone', 'email'] },
@@ -55,22 +45,14 @@ const anchor = {
 };
 const targets = rescue.rescueTargets({
   groups: {
-    partial: [partialRepair],
+    partial: [],
     open: [openPoc2, openFill],
-    existing: [anchor, partialRepair],
+    existing: [anchor],
   },
 });
 assert.equal(targets.length, 1, 'AI rescue must include only empty unresolved POC-2; partial POC-2 repair stays deterministic and optional POC-3 stays manual-only');
 assert.equal(targets[0].group.ordinal, 2);
 assert.equal(targets[0].rescueMode, 'fill');
-
-const repairCandidates = [
-  { id: 'low-rank-exact', name: 'Existing Recruiter', title: 'Coordinator', organizationName: 'Example Co' },
-  ...candidates,
-];
-assert.equal(rescue.exactRepairCandidate({ ...partialRepair, rescueMode: 'repair' }, repairCandidates[0]), true);
-const targetAwarePool = rescue.candidatePoolForTargets(repairCandidates, [{ ...partialRepair, rescueMode: 'repair' }], { hiringContext: 'Hiring SAP consultant' }, 3);
-assert.ok(targetAwarePool.some((item) => item.id === 'low-rank-exact'), 'existing exact-name repair candidate must survive shortlist pruning');
 
 const target2 = { group: { id: 'person_2', ordinal: 2 }, snapshot: { empty: true } };
 const rowPackages = new Map([[2, {
@@ -138,9 +120,10 @@ assert.match(rescueSource, /stats\.modelCalls\+\+/);
 assert.match(rescueSource, /DIRECT_AI_EMPTY_RESPONSE/);
 assert.match(rescueSource, /DIRECT_PROVIDER_NOT_CONFIGURED/);
 assert.match(rescueSource, /reviewerNeeded/);
-assert.match(rescueSource, /rescueMode: 'repair'/);
 assert.match(rescueSource, /candidatePoolForTargets/);
-assert.match(rescueSource, /planner\.samePerson/);
+assert.doesNotMatch(rescueSource, /exactRepairCandidate/);
+assert.doesNotMatch(rescueSource, /rescueMode === 'repair'/);
+assert.doesNotMatch(rescueSource, /planner\.samePerson/);
 assert.doesNotMatch(rescueSource, /omniroute|big-pickle|opencode/i);
 
 assert.match(targetedSource, /deferOpenGroupSelectionToAi: boundedAiEnabled/);
