@@ -20,19 +20,22 @@ assert.ok(providerSource.includes('/big[-_ ]?pickle/i'), 'Big Pickle must remain
 // the primary executor so source/schema/planning/writes cannot become model-owned.
 assert.doesNotMatch(deterministicSource, /big-pickle|omniroute|model-router|chatOmniRouteOnly/i);
 
-// The exact-target wrapper now creates one shared discovery cache and passes the
-// resulting runOptions through both deterministic primary and bounded fallback.
-// Test the execution contract rather than the historical local variable spelling.
+// The exact-target wrapper owns a phased deterministic primary. In normal POC-phase
+// execution AI/Big Pickle are skipped; legacy non-phased compatibility branches remain
+// strictly behind the deterministic primary.
 assert.match(targetedSource, /const sharedDiscoveryCache = options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);
-assert.match(targetedSource, /deferOpenGroupSelectionToAi:\s*boundedAiEnabled/);
-assert.match(targetedSource, /const primary = await base\.run\(exact\.request, runOptions\)/);
+assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline !== false/);
+assert.match(targetedSource, /const primary = await runPocPhasePipeline\(exact\.request, runOptions\)/);
+assert.match(targetedSource, /skippedReason: 'poc-phase-deterministic-only'/);
 assert.match(targetedSource, /aiBatchRescue\.run\(exact\.request, primary, runOptions\)/);
 assert.match(targetedSource, /fallbackPass\.run\(exact\.request, primary, runOptions\)/);
-const primaryIndex = targetedSource.indexOf('const primary = await base.run(exact.request, runOptions)');
+const primaryIndex = targetedSource.indexOf('const primary = await runPocPhasePipeline(exact.request, runOptions)');
+const phaseSkipIndex = targetedSource.indexOf("skippedReason: 'poc-phase-deterministic-only'");
 const aiIndex = targetedSource.indexOf('aiBatchRescue.run(exact.request, primary, runOptions)');
 const fallbackIndex = targetedSource.indexOf('fallbackPass.run(exact.request, primary, runOptions)');
-assert.ok(primaryIndex >= 0 && aiIndex > primaryIndex, 'deterministic safety pass must execute before bounded AI batch rescue');
-assert.ok(fallbackIndex > primaryIndex, 'legacy Big Pickle fallback must remain behind deterministic primary when batch AI is disabled');
+assert.ok(primaryIndex >= 0 && phaseSkipIndex > primaryIndex, 'phased deterministic primary must execute before fallback orchestration is considered');
+assert.ok(aiIndex > primaryIndex, 'legacy AI rescue must remain behind deterministic primary');
+assert.ok(fallbackIndex > primaryIndex, 'legacy Big Pickle fallback must remain behind deterministic primary');
 assert.match(targetedSource, /targetOrdinals:\s*\[2\]/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget:\s*1/);
 assert.match(targetedSource, /targetRows:\s*unresolvedRows/);
@@ -85,4 +88,4 @@ assert.equal(fallback.ambiguityReason({ ranked: [{ score: 60, confidence: 0.4 }]
 assert.equal(fallback.ambiguityReason({ ranked: [{ score: 60, confidence: 0.7 }, { score: 57, confidence: 0.68 }] }, 0.54), 'close-score');
 assert.equal(fallback.ambiguityReason({ ranked: [{ score: 70, confidence: 0.72 }, { score: 50, confidence: 0.65 }] }, 0.54), null);
 
-console.log('Universal Big Pickle fallback self-test passed: deterministic/manual primary executes first, direct env AI may rescue unresolved POC-2, every exact unresolved POC-2 row continues into one bounded last-resort attempt regardless of sibling progress, completion is audited from the live sheet, Apollo verification still gates writes, and POC-3 never blocks completion.');
+console.log('Universal Big Pickle fallback self-test passed: phased deterministic execution skips AI/Big Pickle by default, legacy non-phased AI/Big Pickle branches remain strictly behind deterministic primary, exact unresolved POC-2 fallback stays bounded, completion is audited from the live sheet, and Apollo verification still gates writes.');
