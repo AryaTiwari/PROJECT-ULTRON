@@ -439,7 +439,12 @@ async function improveVerifiedPhone(result) {
     || record.threePocPhoneWaterfallRequestId
     || ''
   ).trim();
-  if (pendingId && record.threePocPhoneWaterfallStatus === 'pending') {
+  const pendingWasCarried = Boolean(
+    result?.phoneWaterfallPending
+    || result?.phoneStatus === 'waterfall_pending'
+    || result?.phoneWaterfallStatus === 'pending'
+  );
+  if (pendingId && (pendingWasCarried || record.threePocPhoneWaterfallStatus === 'pending')) {
     const polled = await pollPhoneRequest(pendingId, { polls: 0 });
     if (polled.state === 'found' && polled.phone) {
       runState.phoneWaterfallSucceeded++;
