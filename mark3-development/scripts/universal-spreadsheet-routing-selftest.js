@@ -71,6 +71,23 @@ const meta = {
   ],
 };
 
+assert.equal(
+  spreadsheetController.recoverMentionedSheetName(
+    meta,
+    'Enrich all POCs together on the "Arya 2" worksheet in the supplied Google Sheet.'
+  ),
+  'Arya 2',
+  'metadata-aware targeting must recover the exact mentioned worksheet even if phrase parsing misses',
+);
+assert.equal(
+  spreadsheetController.recoverMentionedSheetName(
+    meta,
+    'Enrich contacts on the workbook.'
+  ),
+  '',
+  'metadata-aware targeting must not guess a tab when no exact tab title is mentioned',
+);
+
 const aryaUrl = `${url}#gid=222`;
 const gidOnly = targetResolver.resolveTabs(meta, aryaUrl, {});
 assert.equal(gidOnly.targeted, true);
