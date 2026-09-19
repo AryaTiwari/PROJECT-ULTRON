@@ -64,6 +64,22 @@ function parseExpectedPersonGroups(message) {
   return valid.length ? Math.max(...valid) : 0;
 }
 
+function parseContactPhaseOrdinal(message) {
+  const value = String(message || '');
+  const patterns = [
+    /\b(?:poc\s*[- ]?1|1st\s+poc|first\s+poc)\b[^\n]{0,40}\b(?:only|first)\b/i,
+    /\b(?:only|just)\b[^\n]{0,40}\b(?:poc\s*[- ]?1|1st\s+poc|first\s+poc)\b/i,
+    /\b(?:poc\s*[- ]?2|2nd\s+poc|second\s+poc)\b[^\n]{0,40}\bonly\b/i,
+    /\b(?:only|just)\b[^\n]{0,40}\b(?:poc\s*[- ]?2|2nd\s+poc|second\s+poc)\b/i,
+    /\b(?:poc\s*[- ]?3|3rd\s+poc|third\s+poc)\b[^\n]{0,40}\bonly\b/i,
+    /\b(?:only|just)\b[^\n]{0,40}\b(?:poc\s*[- ]?3|3rd\s+poc|third\s+poc)\b/i,
+  ];
+  for (let i = 0; i < patterns.length; i += 2) {
+    if (patterns[i].test(value) || patterns[i + 1].test(value)) return (i / 2) + 1;
+  }
+  return null;
+}
+
 function configuredRowLimit() {
   const universalLimit = Number(process.env.ULTRON_M3_UNIVERSAL_ENRICHMENT_ROW_LIMIT || 0);
   if (Number.isFinite(universalLimit) && universalLimit > 0) return Math.floor(universalLimit);
@@ -241,6 +257,7 @@ async function handle(message, context = {}) {
 
   const requestedSheetName = parseSheetName(original);
   const expectedPersonGroups = parseExpectedPersonGroups(original);
+  const contactPhaseOrdinal = parseContactPhaseOrdinal(original);
   const explicitNameAuthoritative = Boolean(requestedSheetName);
   const rowLimit = configuredRowLimit();
   let inspection;
@@ -287,6 +304,7 @@ async function handle(message, context = {}) {
     explicitNameAuthoritative,
     rowLimit: rowLimit || null,
     expectedPersonGroups: expectedPersonGroups || null,
+    contactPhaseOrdinal: contactPhaseOrdinal || null,
     schemaFingerprint: summary.fingerprint || null,
     requestedAt: new Date().toISOString(),
   };
@@ -317,6 +335,7 @@ async function handle(message, context = {}) {
     boundedAiBatchAvailable: true,
     boundedAiBatchMaxCalls: Math.max(1, Math.min(3, Number(process.env.ULTRON_M3_UNIVERSAL_AI_BATCH_MAX_CALLS || 3))),
     expectedPersonGroups: expectedPersonGroups || null,
+    contactPhaseOrdinal: contactPhaseOrdinal || null,
     schemaContinuityRecoveries: summary.continuityRecoveries || [],
     plannedHeaderRepairs: summary.headerRepairs || [],
     modelCalls: 0,
@@ -329,6 +348,7 @@ module.exports = {
   resolveRequestedTarget,
   parseSheetName,
   parseExpectedPersonGroups,
+  parseContactPhaseOrdinal,
   configuredRowLimit,
   rowLimitNotice,
   schemaReadable,
