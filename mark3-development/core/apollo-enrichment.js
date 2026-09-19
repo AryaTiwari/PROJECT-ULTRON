@@ -649,13 +649,24 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
 
   const data = await apiCall({ id: candidate.id }, { needPhone });
   const person = data.person;
-  const linkedinUrl = normalizeLinkedIn(person?.linkedin_url);
+  const hydratedLinkedin = normalizeLinkedIn(person?.linkedin_url || person?.linkedin || '');
   const candidateLinkedin = normalizeLinkedIn(candidate.linkedinUrl || candidate.linkedin_url || '');
-  if (!person || String(person.id) !== String(candidate.id) || !linkedinUrl || (candidateLinkedin && candidateLinkedin !== linkedinUrl)) {
+  if (
+    !person
+    || String(person.id) !== String(candidate.id)
+    || (candidateLinkedin && hydratedLinkedin && candidateLinkedin !== hydratedLinkedin)
+  ) {
     const error = new Error('APOLLO_IDENTITY_MISMATCH');
     error.code = 'APOLLO_IDENTITY_MISMATCH';
+    error.candidateId = String(candidate.id || '');
+    error.hydratedId = String(person?.id || '');
+    error.candidateLinkedIn = candidateLinkedin || '';
+    error.hydratedLinkedIn = hydratedLinkedin || '';
     throw error;
   }
+  // Apollo person ID equality is exact identity evidence. Some match/reveal
+  // responses omit linkedin_url even when the search candidate already carried it.
+  const linkedinUrl = hydratedLinkedin || candidateLinkedin || null;
   if (!hydratedEmployerMatchesCandidate(person, candidate, company, domain)) {
     const error = new Error('APOLLO_COMPANY_MISMATCH_AFTER_HYDRATION');
     error.code = 'APOLLO_COMPANY_MISMATCH_AFTER_HYDRATION';
@@ -691,9 +702,11 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
     phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
     identityVerified: true,
   };
-  cache.people[linkedinUrl] = record;
-  saveCache(cache);
-  return { ...candidate, ...record, linkedinUrl, identityVerified: true };
+  if (linkedinUrl) {
+    cache.people[linkedinUrl] = record;
+    saveCache(cache);
+  }
+  return { ...candidate, ...record, linkedinUrl: linkedinUrl || candidateLinkedin || null, identityVerified: true };
 }
 
 async function resolvePersonByNameCompany(name, company, domain, options = {}) {
