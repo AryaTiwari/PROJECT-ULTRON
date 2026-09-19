@@ -9,7 +9,7 @@ const universal = require('./universal-sheet-enrichment-targeted');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 
 const OPERATION = 'universal-spreadsheet-enrichment';
-const EXECUTION_CONTRACT = 'universal-partial-safe-v2';
+const EXECUTION_CONTRACT = 'universal-poc-phase-contact-completion-v3';
 
 function response(ok, body, extra = {}) {
   return {
@@ -80,6 +80,7 @@ async function execute(decision) {
       rowLimit: payload.rowLimit || undefined,
       schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
       allowLinkedInEmployerFallback: true,
+      pocPhasePipeline: true,
     }));
 
     const enriched = {
