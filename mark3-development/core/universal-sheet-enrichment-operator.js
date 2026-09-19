@@ -2570,8 +2570,9 @@ async function run(request = {}, options = {}) {
             ...rowOptions,
             ordinal: 3,
             claimed: manualClaimed,
-            maxHydrationAttempts: options.poc3HydrationAttempts ?? 1,
-            fallbackMinimumScore: options.poc3FallbackMinimumScore ?? 42,
+            maxHydrationAttempts: options.poc3HydrationAttempts
+              ?? Number(process.env.ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS || (phaseOrdinal === 3 ? 5 : 1)),
+            fallbackMinimumScore: options.poc3FallbackMinimumScore ?? (phaseOrdinal === 3 ? 30 : 42),
           });
           writes.push(...result.writes);
           if (result.filled) stats.manualPoc3Filled++;
