@@ -53,8 +53,11 @@ function settings() {
 
   return {
     speedProfile,
-    localBudgetBypass: runtimeAllowsTestBypass()
-      && booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
+    // Explicit operator override. This bypasses ULTRON's own burst/hour/day
+    // counters only. Provider-side 429s, checkpoints, auth locks and cooldowns
+    // remain authoritative and are never bypassed here.
+    localBudgetBypass: booleanSetting('ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS', false)
+      || booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
     testMissionToolMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_MISSION_TOOL_MAX', 120, 12, 120),
     testJobSearchMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_JOB_SEARCH_MAX', 20, 4, 25),
 
