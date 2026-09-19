@@ -479,11 +479,40 @@ async function run(request = {}, options = {}) {
   });
 }
 
+function formatDiagnosticFooter(result) {
+  const gate = result?.completionGate || {};
+  const allIssues = diagnostics.uniqueIssues(result?.diagnostics || gate?.issues || []);
+  const blockers = allIssues.filter((item) => item.blocking || item.severity === 'BLOCKER');
+  const pending = allIssues.filter((item) => item.severity === 'PENDING' || item.category === 'repair');
+  const warnings = allIssues.filter((item) => item.severity === 'WARNING' && item.category !== 'repair');
+  const infos = allIssues.filter((item) => item.severity === 'INFO');
+
+  const formatList = (items, fallback = 'none') =>
+    items.length ? items.slice(0, 8).map(diagnostics.formatIssue).join(' | ') : fallback;
+
+  const statusCode = gate.statusCode || gate.status || (blockers.length ? 'RUN_WITH_BLOCKERS' : 'RUN_COMPLETE');
+  const rootCause = blockers.length === 1
+    ? blockers[0].code
+    : (blockers.length > 1 ? 'MULTIPLE_BLOCKERS' : 'NONE');
+
+  return [
+    '',
+    'ULTRON_DIAGNOSTICS',
+    `RUN_STATUS: ${statusCode}`,
+    `ROOT_CAUSE: ${rootCause}`,
+    `MANDATORY_BLOCKERS: ${formatList(blockers)}`,
+    `REPAIR_OR_PENDING: ${formatList(pending)}`,
+    `WARNINGS: ${formatList(warnings)}`,
+    `INFO: ${formatList(infos)}`,
+  ].join('\n');
+}
+
 function formatResult(result) {
   const primaryView = result?.primaryStats ? { ...result, stats: result.primaryStats } : result;
   const primary = base.formatResult(primaryView).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
   const ai = result?.aiBatchRescue;
   const fb = result?.bigPickleFallback;
+  const diagnosticFooter = formatDiagnosticFooter(result);
   if (ai?.attempted) {
     const audit = (ai.selectionAudit || []).slice(0, 6).map((item) =>
       `row ${item.rowNumber} POC-${item.slot || '?'} ${item.mode || 'fill'} ${item.name || item.candidateKey} (${item.fields?.join('/') || 'verified'})`
@@ -496,19 +525,19 @@ function formatResult(result) {
     const aiSkipExplanation = noCandidatePool
       ? ` ${diagnostics.formatIssue(diagnostics.issueFromReason('ai-skipped-no-verified-candidate-pool'))}`
       : '';
-    return `${primary} Bounded AI batch rescue: ${ai.modelCalls || 0} successful model responses from ${ai.modelAttempts || 0}/${ai.maxCalls || 3} whole-run logical attempts (${ai.contextCalls || 0} context, ${ai.selectionCalls || 0} selection, ${ai.reviewerCalls || 0} reviewer); ${ai.modelFailures || 0} model/routing failures; ${ai.rowsOfferedForSelection || 0} rows and ${ai.slotsOfferedForSelection || 0} POC targets offered; ${ai.aiSelectionsProposed || 0} selections proposed, ${ai.aiSelectionsAccepted || 0} Apollo-verified selections accepted (${ai.newPeopleSelected || 0} new POCs, ${ai.existingRepairsAccepted || 0} existing POC repairs), ${ai.aiSelectionRejects || 0} rejected by deterministic identity/employer/write safety; ${ai.employersResolvedByAi || 0} employers recovered from supplied row evidence; ${ai.candidatesDiscovered || 0} verified candidates discovered; Apollo discovery calls ${ai.candidateSearches || 0}; LinkedIn sparse-company fallback ${ai.linkedinFallbackCompanySearches || 0} company searches/${ai.linkedinFallbackCompanyProfiles || 0} company profiles/${ai.linkedinFallbackCompanyUrns || 0} company URNs/${ai.linkedinFallbackCurrentCompanySearches || 0} current-company people searches/${ai.linkedinFallbackEmployeeSearches || 0} employee-page searches/${ai.linkedinFallbackSearches || 0} generic people searches/${ai.linkedinFallbackProfilesFound || 0} profile refs/${ai.linkedinFallbackProfileVerifications || 0} current-employer profile verifications/${ai.linkedinFallbackVerifiedCandidates || 0} Apollo identities accepted; ${ai.hydrationAttempts || 0} final hydration attempts/${ai.hydrationFailures || 0} failures; ${ai.hydrationFallbackAttempts || 0} bounded post-selection fallback hydration attempts/${ai.hydrationFallbackAccepted || 0} accepted; rescue changed ${ai.cellsChanged || 0} cells across ${ai.rowsChanged || 0} rows; ${ai.phoneCellsFilled || 0} phone cells completed, ${ai.phoneStillPending || 0} phones still pending; ${ai.unresolvedSlots || 0} slots unresolved. Models [${(ai.actualModels || []).join(', ') || 'none'}]. Credential source: env-only direct API. Direct providers [${(ai.directProvidersUsed || []).join(', ') || 'none'}]; OmniRoute calls 0; direct attempt audit ${(ai.directAttemptAudit || []).length}.${aiSkipExplanation} Last-resort POC-2 fallback: ${fb?.attempted ? 'attempted for every exact unresolved POC-2 row' : 'not needed'}; POC-3 was excluded from expensive fallback.${gateText}${errors.length ? ` AI diagnostics: ${errors.join(' | ')}.` : ''}${audit.length ? ` Samples: ${audit.join('; ')}.` : ''}`;
+    return `${primary} Bounded AI batch rescue: ${ai.modelCalls || 0} successful model responses from ${ai.modelAttempts || 0}/${ai.maxCalls || 3} whole-run logical attempts (${ai.contextCalls || 0} context, ${ai.selectionCalls || 0} selection, ${ai.reviewerCalls || 0} reviewer); ${ai.modelFailures || 0} model/routing failures; ${ai.rowsOfferedForSelection || 0} rows and ${ai.slotsOfferedForSelection || 0} POC targets offered; ${ai.aiSelectionsProposed || 0} selections proposed, ${ai.aiSelectionsAccepted || 0} Apollo-verified selections accepted (${ai.newPeopleSelected || 0} new POCs, ${ai.existingRepairsAccepted || 0} existing POC repairs), ${ai.aiSelectionRejects || 0} rejected by deterministic identity/employer/write safety; ${ai.employersResolvedByAi || 0} employers recovered from supplied row evidence; ${ai.candidatesDiscovered || 0} verified candidates discovered; Apollo discovery calls ${ai.candidateSearches || 0}; LinkedIn sparse-company fallback ${ai.linkedinFallbackCompanySearches || 0} company searches/${ai.linkedinFallbackCompanyProfiles || 0} company profiles/${ai.linkedinFallbackCompanyUrns || 0} company URNs/${ai.linkedinFallbackCurrentCompanySearches || 0} current-company people searches/${ai.linkedinFallbackEmployeeSearches || 0} employee-page searches/${ai.linkedinFallbackSearches || 0} generic people searches/${ai.linkedinFallbackProfilesFound || 0} profile refs/${ai.linkedinFallbackProfileVerifications || 0} current-employer profile verifications/${ai.linkedinFallbackVerifiedCandidates || 0} Apollo identities accepted; ${ai.hydrationAttempts || 0} final hydration attempts/${ai.hydrationFailures || 0} failures; ${ai.hydrationFallbackAttempts || 0} bounded post-selection fallback hydration attempts/${ai.hydrationFallbackAccepted || 0} accepted; rescue changed ${ai.cellsChanged || 0} cells across ${ai.rowsChanged || 0} rows; ${ai.phoneCellsFilled || 0} phone cells completed, ${ai.phoneStillPending || 0} phones still pending; ${ai.unresolvedSlots || 0} slots unresolved. Models [${(ai.actualModels || []).join(', ') || 'none'}]. Credential source: env-only direct API. Direct providers [${(ai.directProvidersUsed || []).join(', ') || 'none'}]; OmniRoute calls 0; direct attempt audit ${(ai.directAttemptAudit || []).length}.${aiSkipExplanation} Last-resort POC-2 fallback: ${fb?.attempted ? 'attempted for every exact unresolved POC-2 row' : 'not needed'}; POC-3 was excluded from expensive fallback.${gateText}${errors.length ? ` AI diagnostics: ${errors.join(' | ')}.` : ''}${audit.length ? ` Samples: ${audit.join('; ')}.` : ''}${diagnosticFooter}`;
   }
-  if (!fb?.enabled) return `${primary} Primary execution remained fully deterministic; Big Pickle fallback was disabled. AI/model calls: 0.`;
+  if (!fb?.enabled) return `${primary} Primary execution remained fully deterministic; Big Pickle fallback was disabled. AI/model calls: 0.${diagnosticFooter}`;
   const model = fb.fallback || {};
   if (fb.skippedReason === 'primary-systemic-halt') {
-    return `${primary} Big Pickle fallback was not attempted because the deterministic primary halted safely on a systemic typed error. Earlier verified writes were preserved. AI/model calls: 0.`;
+    return `${primary} Big Pickle fallback was not attempted because the deterministic primary halted safely on a systemic typed error. Earlier verified writes were preserved. AI/model calls: 0.${diagnosticFooter}`;
   }
   if (fb.skippedReason === 'fallback-error') {
     const e = fb.error || {};
-    return `${primary} Primary deterministic work was preserved. Big Pickle fallback stopped independently with [${e.subsystem || 'BIG_PICKLE'}/${e.type || 'INTERNAL'}] ${e.code || 'BIG_PICKLE_FALLBACK_FAILED'} @ ${e.stage || 'big-pickle-fallback-pass'}: ${e.message || 'unknown fallback failure'}. ${e.hint || ''} Personal API fallbacks 0.`;
+    return `${primary} Primary deterministic work was preserved. Big Pickle fallback stopped independently with [${e.subsystem || 'BIG_PICKLE'}/${e.type || 'INTERNAL'}] ${e.code || 'BIG_PICKLE_FALLBACK_FAILED'} @ ${e.stage || 'big-pickle-fallback-pass'}: ${e.message || 'unknown fallback failure'}. ${e.hint || ''} Personal API fallbacks 0.${diagnosticFooter}`;
   }
   if (!fb.attempted) {
-    return `${primary} Primary engine: deterministic. Big Pickle fallback was available but not needed because the deterministic pass left no eligible ambiguity to resolve. AI/model calls: 0.`;
+    return `${primary} Primary engine: deterministic. Big Pickle fallback was available but not needed because the deterministic pass left no eligible ambiguity to resolve. AI/model calls: 0.${diagnosticFooter}`;
   }
   const combinedCells = Number(result?.primaryStats?.cellsChanged || 0) + Number(fb.cellsChanged || 0);
   const fallbackHalt = fb.haltedEarly && fb.haltError
@@ -523,7 +552,7 @@ function formatResult(result) {
       })()
     : '';
   const fallbackText = `Big Pickle fallback: ${fb.modelCalls || 0} model call${Number(fb.modelCalls || 0) === 1 ? '' : 's'}; ${fb.candidateFallbackSelections || 0} ambiguous candidate selection${Number(fb.candidateFallbackSelections || 0) === 1 ? '' : 's'} recovered; ${fb.employerFallbackSuccesses || 0}/${fb.employerFallbackAttempts || 0} employer ambiguities resolved; ${fb.existingGroupsRepaired || 0} existing group${Number(fb.existingGroupsRepaired || 0) === 1 ? '' : 's'} repaired after fallback employer verification; ${fb.embeddedDesignationWrites || 0} designation upgrade${Number(fb.embeddedDesignationWrites || 0) === 1 ? '' : 's'}; fallback changed ${fb.cellsChanged || 0} cells across ${fb.rowsChanged || 0} rows; combined cells changed ${combinedCells}; ${fb.candidateFallbackAbstains || 0} abstain${Number(fb.candidateFallbackAbstains || 0) === 1 ? '' : 's'}; models [${(model.actualModels || []).join(', ') || 'none'}]; personal API fallbacks 0.${fallbackRows}${fallbackHalt}`;
-  return `${primary} Primary engine: deterministic. ${fallbackText}`;
+  return `${primary} Primary engine: deterministic. ${fallbackText}${diagnosticFooter}`;
 }
 
 module.exports = {
@@ -531,6 +560,7 @@ module.exports = {
   run,
   formatResult,
   diagnostics,
+  formatDiagnosticFooter,
   resolveExactRequest,
   syntheticResolution,
   withExactTargetGuards,
