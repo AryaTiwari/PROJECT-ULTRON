@@ -38,6 +38,11 @@ const partialRepair = {
   },
   isAnchor: false,
 };
+const openPoc2 = {
+  group: { id: 'person_2_open', ordinal: 2 },
+  snapshot: { empty: true, hasIdentity: false, values: {}, missingFields: ['name', 'phone', 'email'] },
+  isAnchor: false,
+};
 const openFill = {
   group: { id: 'person_3', ordinal: 3 },
   snapshot: { empty: true, hasIdentity: false, values: {}, missingFields: ['name', 'phone', 'email'] },
@@ -51,20 +56,20 @@ const anchor = {
 const targets = rescue.rescueTargets({
   groups: {
     partial: [partialRepair],
-    open: [openFill],
+    open: [openPoc2, openFill],
     existing: [anchor, partialRepair],
   },
 });
-assert.equal(targets.length, 1, 'AI rescue must be limited to POC-2; optional POC-3 stays manual-only by default');
+assert.equal(targets.length, 1, 'AI rescue must include only empty unresolved POC-2; partial POC-2 repair stays deterministic and optional POC-3 stays manual-only');
 assert.equal(targets[0].group.ordinal, 2);
-assert.equal(targets[0].rescueMode, 'repair');
+assert.equal(targets[0].rescueMode, 'fill');
 
 const repairCandidates = [
   { id: 'low-rank-exact', name: 'Existing Recruiter', title: 'Coordinator', organizationName: 'Example Co' },
   ...candidates,
 ];
-assert.equal(rescue.exactRepairCandidate(targets[0], repairCandidates[0]), true);
-const targetAwarePool = rescue.candidatePoolForTargets(repairCandidates, targets, { hiringContext: 'Hiring SAP consultant' }, 3);
+assert.equal(rescue.exactRepairCandidate({ ...partialRepair, rescueMode: 'repair' }, repairCandidates[0]), true);
+const targetAwarePool = rescue.candidatePoolForTargets(repairCandidates, [{ ...partialRepair, rescueMode: 'repair' }], { hiringContext: 'Hiring SAP consultant' }, 3);
 assert.ok(targetAwarePool.some((item) => item.id === 'low-rank-exact'), 'existing exact-name repair candidate must survive shortlist pruning');
 
 const target2 = { group: { id: 'person_2', ordinal: 2 }, snapshot: { empty: true } };
@@ -121,6 +126,9 @@ assert.doesNotMatch(rescueSource, /omniroute|omniFallback|omniDiversity|chatOmni
 assert.match(rescueSource, /Select exactly one POC-2 candidate for each supplied row/);
 assert.match(rescueSource, /candidateKey values supplied inside that same row/);
 assert.match(rescueSource, /unresolvedContextInput/);
+assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
+assert.match(rescueSource, /no-primary-poc2-residue/);
+assert.match(rescueSource, /if \(!residueSet\.has\(Number\(rowNumber\)\)\) continue/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
 assert.match(rescueSource, /apollo\.resolveDecisionMaker/);
 assert.match(rescueSource, /ranker\.sameEmployer/);
@@ -155,4 +163,4 @@ assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? 
 assert.match(directSource, /async function candidates\(taskType = 'general', \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
 assert.match(directSource, /async function chat\(\{ messages, model, tools = null, taskType = 'general', timeoutMs = null, envOnly: forceEnvOnly = false \} = \{\}\)/);
 
-console.log('Universal bounded AI batch rescue self-test passed: AI rescue is limited to unresolved POC-2, compact/tolerant output parsing accepts only supplied candidates, deterministic employer context skips unnecessary context calls, Groq can fall through to Gemini/NVIDIA, reviewer is off by default, Apollo verification remains mandatory, and one bounded last-resort POC-2 fallback is available after manual + direct AI residue.');
+console.log('Universal bounded AI batch rescue self-test passed: AI rescue is limited to the exact empty POC-2 rows deferred by the deterministic primary, compact/tolerant output parsing accepts only supplied candidates, deterministic employer context skips unnecessary context calls, Groq can fall through to Gemini/NVIDIA, reviewer is off by default, Apollo verification remains mandatory, and one bounded last-resort POC-2 fallback is available after manual + direct AI residue.');
