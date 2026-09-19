@@ -11,6 +11,7 @@ const base = require('./universal-sheet-enrichment-operator');
 const fallbackPass = require('./universal-big-pickle-fallback-pass');
 const fallback = require('./universal-big-pickle-fallback');
 const aiBatchRescue = require('./universal-ai-batch-rescue');
+const engine = require('./universal-enrichment-engine');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
@@ -108,6 +109,81 @@ async function withExactTargetGuards(request, fn) {
   }
 }
 
+async function mandatoryCompletionAudit(request, options = {}, terminalEvidence = {}) {
+  const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
+    ...options,
+    sheetName: request.sheetName || options.sheetName,
+  });
+  const analysis = engine.analyzeSheet(source.rows, {
+    rowLimit: options.rowLimit,
+    schema: options.schema,
+  });
+
+  const poc1IdentityIssues = [];
+  const poc2OpenRows = [];
+  const checkedRows = [];
+
+  for (const record of analysis.rowPlans || []) {
+    const rowNumber = Number(record.rowNumber);
+    const plan = record.plan;
+    if (!Number.isInteger(rowNumber)) continue;
+    checkedRows.push(rowNumber);
+
+    if (!plan?.anchor) {
+      poc1IdentityIssues.push({ rowNumber, reason: 'missing-poc1-anchor' });
+      continue;
+    }
+
+    if (plan.anchor.type !== 'company') {
+      const anchorName = text(plan.anchor?.snapshot?.values?.name);
+      const anchorLinkedin = text(plan.anchor?.snapshot?.values?.linkedin);
+      if (!anchorName || !anchorLinkedin) {
+        poc1IdentityIssues.push({
+          rowNumber,
+          reason: !anchorName ? 'missing-poc1-name' : 'missing-poc1-linkedin',
+        });
+      }
+    }
+
+    const openPoc2 = base.candidateFillTargets(plan)
+      .some((target) => Number(target.group?.ordinal || 0) === 2);
+    if (openPoc2) poc2OpenRows.push(rowNumber);
+  }
+
+  const unresolvedRows = [...new Set([
+    ...poc1IdentityIssues.map((item) => item.rowNumber),
+    ...poc2OpenRows,
+  ])].sort((a, b) => a - b);
+
+  const reasonMap = new Map();
+  for (const item of terminalEvidence.reasons || []) {
+    const rowNumber = Number(item?.rowNumber);
+    if (!Number.isInteger(rowNumber)) continue;
+    if (!reasonMap.has(rowNumber)) reasonMap.set(rowNumber, []);
+    reasonMap.get(rowNumber).push(text(item.reason || item.detail || 'unresolved'));
+  }
+
+  const terminalRows = unresolvedRows.filter((rowNumber) => reasonMap.has(rowNumber));
+  const retryableRows = unresolvedRows.filter((rowNumber) => !reasonMap.has(rowNumber));
+
+  return {
+    checkedRows,
+    mandatoryRowsChecked: checkedRows.length,
+    poc1IdentityIssues,
+    poc2OpenRows,
+    unresolvedRows,
+    terminalRows,
+    retryableRows,
+    complete: unresolvedRows.length === 0,
+    status: unresolvedRows.length === 0
+      ? 'COMPLETE'
+      : retryableRows.length
+        ? 'INCOMPLETE_RETRYABLE'
+        : 'TERMINAL_EXHAUSTED',
+    reasons: Object.fromEntries([...reasonMap.entries()]),
+  };
+}
+
 function mergePrimaryAndFallback(primary, fb) {
   if (!fb?.attempted) return primary;
   const stats = { ...(primary.stats || {}) };
@@ -181,17 +257,22 @@ async function run(request = {}, options = {}) {
         aiRescue = await aiBatchRescue.run(exact.request, primary, runOptions);
         result = mergePrimaryAndAiRescue(primary, aiRescue);
 
-        // Manual/deterministic POC-2 is primary, direct env AI is secondary.
-        // If POC-2 is still unresolved, permit one tightly bounded last-resort
-        // fallback attempt per remaining POC-2 target. POC-3 is never sent here.
-        const unresolvedPoc2 = Number(aiRescue?.unresolvedSlots ?? primary?.stats?.deferredOpenGroups ?? 0);
+        // Completion beats "made progress". Any mandatory POC-2 residue continues
+        // into the next safe strategy, even when direct AI solved sibling rows.
+        const unresolvedRows = [...new Set(
+          (aiRescue?.unresolvedRows || [])
+            .map((value) => Number(value))
+            .filter(Number.isInteger)
+        )];
+        const unresolvedPoc2 = unresolvedRows.length;
         const lastResortEnabled = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_LAST_RESORT_POC2 || '1'));
-        const directAiNeedsLastResort = Number(aiRescue?.modelFailures || 0) > 0 || Number(aiRescue?.aiSelectionsAccepted || 0) === 0;
-        if (unresolvedPoc2 > 0 && directAiNeedsLastResort && lastResortEnabled && fallback.enabled()) {
+
+        if (unresolvedPoc2 > 0 && lastResortEnabled && fallback.enabled()) {
           try {
             fb = await fallbackPass.run(exact.request, result, {
               ...runOptions,
               targetOrdinals: [2],
+              targetRows: unresolvedRows,
               maxFallbackAttemptsPerTarget: 1,
             });
             result = mergePrimaryAndFallback(result, fb);
@@ -203,6 +284,7 @@ async function run(request = {}, options = {}) {
               haltedEarly: true,
               skippedReason: 'last-resort-fallback-error',
               modelCalls: 0,
+              unresolvedRows,
               error: {
                 code: typed.code,
                 subsystem: typed.subsystem,
@@ -220,10 +302,9 @@ async function run(request = {}, options = {}) {
             attempted: false,
             skippedReason: unresolvedPoc2 <= 0
               ? 'poc2-resolved-before-last-resort'
-              : !directAiNeedsLastResort
-                ? 'direct-ai-made-progress'
-                : 'last-resort-disabled',
+              : 'last-resort-disabled',
             modelCalls: 0,
+            unresolvedRows,
             fallback: fallback.snapshot(),
           };
         }
@@ -284,6 +365,26 @@ async function run(request = {}, options = {}) {
       };
     }
 
+    let completionGate = null;
+    try {
+      const terminalReasons = [
+        ...(aiRescue?.unresolvedReasons || []),
+        ...(fb?.unresolvedReasons || []),
+      ];
+      completionGate = await mandatoryCompletionAudit(exact.request, runOptions, {
+        reasons: terminalReasons,
+      });
+    } catch (error) {
+      completionGate = {
+        status: 'AUDIT_FAILED',
+        complete: false,
+        unresolvedRows: [],
+        terminalRows: [],
+        retryableRows: [],
+        error: text(error?.message || error),
+      };
+    }
+
     const modelCalls = Number(aiRescue?.modelCalls || 0) + Number(fb?.modelCalls || fb?.fallback?.calls || 0);
     const decorated = {
       ...result,
@@ -295,9 +396,10 @@ async function run(request = {}, options = {}) {
       modelCalls,
       aiBatchRescue: aiRescue,
       bigPickleFallback: fb,
+      completionGate,
       postPrimaryError,
-      completedFully: postPrimaryError ? false : result?.completedFully,
-      partialCompletion: Boolean(postPrimaryError || result?.partialCompletion),
+      completedFully: !postPrimaryError && completionGate?.complete === true,
+      partialCompletion: Boolean(postPrimaryError || completionGate?.complete !== true || result?.partialCompletion),
       resumeSafe: result?.resumeSafe !== false,
     };
     if (!exact.resolution) return decorated;
@@ -327,7 +429,9 @@ function formatResult(result) {
       `row ${item.rowNumber} POC-${item.slot || '?'} ${item.mode || 'fill'} ${item.name || item.candidateKey} (${item.fields?.join('/') || 'verified'})`
     );
     const errors = (ai.errors || []).slice(0, 3).map((item) => `${item.purpose || 'ai'}:${item.code || 'ERROR'} ${item.message || ''}`);
-    return `${primary} Bounded AI batch rescue: ${ai.modelCalls || 0} successful model responses from ${ai.modelAttempts || 0}/${ai.maxCalls || 3} whole-run logical attempts (${ai.contextCalls || 0} context, ${ai.selectionCalls || 0} selection, ${ai.reviewerCalls || 0} reviewer); ${ai.modelFailures || 0} model/routing failures; ${ai.rowsOfferedForSelection || 0} rows and ${ai.slotsOfferedForSelection || 0} POC targets offered; ${ai.aiSelectionsProposed || 0} selections proposed, ${ai.aiSelectionsAccepted || 0} Apollo-verified selections accepted (${ai.newPeopleSelected || 0} new POCs, ${ai.existingRepairsAccepted || 0} existing POC repairs), ${ai.aiSelectionRejects || 0} rejected by deterministic identity/employer/write safety; ${ai.employersResolvedByAi || 0} employers recovered from supplied row evidence; ${ai.candidatesDiscovered || 0} Apollo candidates discovered; ${ai.hydrationAttempts || 0} final hydration attempts/${ai.hydrationFailures || 0} failures; rescue changed ${ai.cellsChanged || 0} cells across ${ai.rowsChanged || 0} rows; ${ai.phoneCellsFilled || 0} phone cells completed, ${ai.phoneStillPending || 0} phones still pending; ${ai.unresolvedSlots || 0} slots unresolved. Models [${(ai.actualModels || []).join(', ') || 'none'}]. Credential source: env-only direct API. Direct providers [${(ai.directProvidersUsed || []).join(', ') || 'none'}]; OmniRoute calls 0; direct attempt audit ${(ai.directAttemptAudit || []).length}. Last-resort POC-2 fallback: ${fb?.attempted ? 'attempted after manual + direct AI residue' : 'not needed'}; POC-3 was excluded from expensive fallback.${errors.length ? ` AI diagnostics: ${errors.join(' | ')}.` : ''}${audit.length ? ` Samples: ${audit.join('; ')}.` : ''}`;
+    const gate = result?.completionGate || {};
+    const gateText = ` Completion gate: ${gate.status || 'UNKNOWN'}; mandatory rows checked ${gate.mandatoryRowsChecked || 0}; unresolved mandatory rows [${(gate.unresolvedRows || []).join(', ') || 'none'}]; terminal rows [${(gate.terminalRows || []).join(', ') || 'none'}]; retryable rows [${(gate.retryableRows || []).join(', ') || 'none'}].`;
+    return `${primary} Bounded AI batch rescue: ${ai.modelCalls || 0} successful model responses from ${ai.modelAttempts || 0}/${ai.maxCalls || 3} whole-run logical attempts (${ai.contextCalls || 0} context, ${ai.selectionCalls || 0} selection, ${ai.reviewerCalls || 0} reviewer); ${ai.modelFailures || 0} model/routing failures; ${ai.rowsOfferedForSelection || 0} rows and ${ai.slotsOfferedForSelection || 0} POC targets offered; ${ai.aiSelectionsProposed || 0} selections proposed, ${ai.aiSelectionsAccepted || 0} Apollo-verified selections accepted (${ai.newPeopleSelected || 0} new POCs, ${ai.existingRepairsAccepted || 0} existing POC repairs), ${ai.aiSelectionRejects || 0} rejected by deterministic identity/employer/write safety; ${ai.employersResolvedByAi || 0} employers recovered from supplied row evidence; ${ai.candidatesDiscovered || 0} Apollo candidates discovered; ${ai.hydrationAttempts || 0} final hydration attempts/${ai.hydrationFailures || 0} failures; rescue changed ${ai.cellsChanged || 0} cells across ${ai.rowsChanged || 0} rows; ${ai.phoneCellsFilled || 0} phone cells completed, ${ai.phoneStillPending || 0} phones still pending; ${ai.unresolvedSlots || 0} slots unresolved. Models [${(ai.actualModels || []).join(', ') || 'none'}]. Credential source: env-only direct API. Direct providers [${(ai.directProvidersUsed || []).join(', ') || 'none'}]; OmniRoute calls 0; direct attempt audit ${(ai.directAttemptAudit || []).length}. Last-resort POC-2 fallback: ${fb?.attempted ? 'attempted for every exact unresolved POC-2 row' : 'not needed'}; POC-3 was excluded from expensive fallback.${gateText}${errors.length ? ` AI diagnostics: ${errors.join(' | ')}.` : ''}${audit.length ? ` Samples: ${audit.join('; ')}.` : ''}`;
   }
   if (!fb?.enabled) return `${primary} Primary execution remained fully deterministic; Big Pickle fallback was disabled. AI/model calls: 0.`;
   const model = fb.fallback || {};
@@ -364,6 +468,7 @@ module.exports = {
   resolveExactRequest,
   syntheticResolution,
   withExactTargetGuards,
+  mandatoryCompletionAudit,
   mergePrimaryAndFallback,
   mergePrimaryAndAiRescue,
 };
