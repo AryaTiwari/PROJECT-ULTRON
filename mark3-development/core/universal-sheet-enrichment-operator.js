@@ -743,26 +743,130 @@ function rowCompanyMetadata(plan) {
 }
 
 
+function companyBrandFromDomain(value) {
+  const host = websiteDomain(value);
+  if (!host) return '';
+  const label = host.split('.')[0] || '';
+  return label.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 async function discoverPriorityPeopleFast(companyContext, cache, stats, options = {}) {
-  const key = `priority-fast|${ranker.companyKey(companyContext.company)}|${ranker.hostname(companyContext.domain)}|${ranker.normalize(options.location || '')}`;
+  const company = text(companyContext?.company);
+  const domain = websiteDomain(companyContext?.domain || '');
+  const key = `priority-fast-v2|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
   if (cache.has(key)) {
     stats.candidateCacheHits++;
     return cache.get(key);
   }
 
-  const result = await apollo.searchCompanyPeopleBroad({
-    company: companyContext.company,
-    domain: companyContext.domain,
-    location: options.location || '',
-    limit: integer(options.priorityCandidateLimit, 20, 6, 40),
-    titles: companyPriorityTitles(),
-  });
-  stats.candidateSearches++;
-  stats.candidatePrioritySearches++;
-  const people = Array.isArray(result?.people) ? result.people : [];
-  stats.candidatesDiscovered += people.length;
-  cache.set(key, people);
-  return people;
+  const merged = [];
+  const add = (people) => {
+    const combined = mergeCandidatePools(merged, people);
+    merged.length = 0;
+    merged.push(...combined);
+  };
+  const priorityLimit = integer(options.priorityCandidateLimit, 20, 6, 40);
+  const broadLimit = integer(options.adaptiveBroadCandidateLimit, 30, 10, 50);
+
+  // 1. Fast canonical title search against the strongest known organization identity.
+  try {
+    const priority = await apollo.searchCompanyPeopleBroad({
+      company,
+      domain,
+      location: options.location || '',
+      limit: priorityLimit,
+      titles: companyPriorityTitles(),
+    });
+    stats.candidateSearches++;
+    stats.candidatePrioritySearches++;
+    add(Array.isArray(priority?.people) ? priority.people : []);
+  } catch (error) {
+    stats.candidatePrioritySearchFailures++;
+    stats.discoveryDiagnostics.push({
+      company: company || domain,
+      code: String(error?.code || 'APOLLO_PRIORITY_FAST_SEARCH_FAILED'),
+      message: String(error?.message || error || '').slice(0, 300),
+    });
+  }
+
+  // 2. If title-targeting produced nothing, do one bounded broad search.
+  if (!merged.length) {
+    try {
+      const broad = await apollo.searchCompanyPeopleBroad({
+        company,
+        domain,
+        location: options.location || '',
+        limit: broadLimit,
+        titles: [],
+      });
+      stats.candidateSearches++;
+      stats.candidateBroadSearches++;
+      add(Array.isArray(broad?.people) ? broad.people : []);
+    } catch (error) {
+      stats.discoveryDiagnostics.push({
+        company: company || domain,
+        code: String(error?.code || 'APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED'),
+        message: String(error?.message || error || '').slice(0, 300),
+      });
+    }
+  }
+
+  // 3. Apollo sometimes has the organization but not under the supplied domain.
+  // Retry once by human-readable brand keyword rather than repeating the same
+  // empty domain filter. Example: people-click.com -> "people click".
+  if (!merged.length && domain) {
+    const brand = companyBrandFromDomain(domain);
+    if (brand && ranker.companyKey(brand) !== ranker.companyKey(company)) {
+      try {
+        const keyword = await apollo.searchCompanyPeopleBroad({
+          company: brand,
+          domain: '',
+          location: options.location || '',
+          limit: broadLimit,
+          titles: [],
+        });
+        stats.candidateSearches++;
+        stats.candidateBroadSearches++;
+        add(Array.isArray(keyword?.people) ? keyword.people : []);
+      } catch (error) {
+        stats.discoveryDiagnostics.push({
+          company: brand,
+          code: String(error?.code || 'APOLLO_BRAND_KEYWORD_SEARCH_FAILED'),
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
+    }
+  }
+
+  // 4. If company itself is just a domain string, also retry its readable brand.
+  if (!merged.length && company && websiteDomain(company) === company.toLowerCase()) {
+    const brand = companyBrandFromDomain(company);
+    if (brand) {
+      try {
+        const keyword = await apollo.searchCompanyPeopleBroad({
+          company: brand,
+          domain: '',
+          location: options.location || '',
+          limit: broadLimit,
+          titles: companyPriorityTitles(),
+        });
+        stats.candidateSearches++;
+        stats.candidatePrioritySearches++;
+        add(Array.isArray(keyword?.people) ? keyword.people : []);
+      } catch (error) {
+        stats.candidatePrioritySearchFailures++;
+        stats.discoveryDiagnostics.push({
+          company: brand,
+          code: String(error?.code || 'APOLLO_BRAND_PRIORITY_SEARCH_FAILED'),
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
+    }
+  }
+
+  stats.candidatesDiscovered += merged.length;
+  cache.set(key, merged);
+  return merged;
 }
 
 function manualPriorityCandidates(candidates = [], companyContext = {}, existing = { names: new Set(), linkedins: new Set() }) {
@@ -1451,6 +1555,7 @@ module.exports = {
   companyPriorityTitles,
   companyPriorityCandidate,
   discoverCompanyPeople,
+  companyBrandFromDomain,
   discoverPriorityPeopleFast,
   manualPriorityCandidates,
   fillManualPriorityGroup,
