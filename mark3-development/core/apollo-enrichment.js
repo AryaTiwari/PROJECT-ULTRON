@@ -538,6 +538,7 @@ async function apiCall(linkedinUrl, { needPhone }) {
   const url = new URL(APOLLO_MATCH);
   if (linkedinUrl && typeof linkedinUrl === 'object') {
     if (linkedinUrl.id) url.searchParams.set('id', String(linkedinUrl.id));
+    if (linkedinUrl.email) url.searchParams.set('email', String(linkedinUrl.email).trim());
     if (linkedinUrl.name) url.searchParams.set('name', String(linkedinUrl.name));
     if (linkedinUrl.domain) url.searchParams.set('domain', hostname(linkedinUrl.domain));
     if (linkedinUrl.organizationName) url.searchParams.set('organization_name', String(linkedinUrl.organizationName));
@@ -680,6 +681,7 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
     const hydrated = personOrganization(person);
     error.hydratedOrganizationName = hydrated.organizationName;
     error.hydratedOrganizationDomain = hydrated.organizationDomain;
+    error.hydratedLinkedIn = hydratedLinkedin || candidateLinkedin || '';
     throw error;
   }
 
@@ -710,6 +712,67 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
     saveCache(cache);
   }
   return { ...candidate, ...record, linkedinUrl: linkedinUrl || candidateLinkedin || null, identityVerified: true };
+}
+
+async function resolvePersonByBusinessEmail(email, company = '', domain = '', options = {}) {
+  const cleanEmail = validEmail(email);
+  if (!cleanEmail) {
+    const error = new Error('Apollo exact email verification requires a valid business email.');
+    error.code = 'APOLLO_PERSON_EMAIL_REQUIRED';
+    throw error;
+  }
+
+  const cleanCompany = String(company || '').trim();
+  const cleanDomain = hostname(domain || String(cleanEmail).split('@').pop() || '');
+  const needEmail = options.needEmail !== false;
+  const needPhone = options.needPhone !== false;
+  const data = await apiCall({ email: cleanEmail }, { needPhone });
+  const person = data.person;
+  const confidence = String(data?.match_confidence || person?.match_confidence || '').toLowerCase();
+  const returnedEmail = validEmail(person?.email || '');
+  const linkedinUrl = normalizeLinkedIn(person?.linkedin_url || person?.linkedin || '');
+
+  if (
+    !person?.id
+    || ['none', 'low'].includes(confidence)
+    || (returnedEmail && returnedEmail.toLowerCase() !== cleanEmail.toLowerCase())
+    || ((cleanCompany || cleanDomain) && !sameOrganization(person, cleanCompany, cleanDomain))
+  ) {
+    const error = new Error('APOLLO_PERSON_EMAIL_COMPANY_MISMATCH');
+    error.code = 'APOLLO_PERSON_EMAIL_COMPANY_MISMATCH';
+    throw error;
+  }
+
+  const organization = personOrganization(person);
+  const immediatePhone = validPhone(person.phone_number || person.sanitized_phone || '');
+  const record = {
+    name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || '').trim(),
+    title: String(person.title || '').trim(),
+    headline: String(person.headline || '').trim(),
+    organization: organization.organization,
+    organizationName: organization.organizationName,
+    organizationDomain: organization.organizationDomain,
+    apolloPersonId: String(person.id),
+    noMatch: false,
+    ambiguous: false,
+    emailKnown: true,
+    email: returnedEmail || cleanEmail,
+    phone: immediatePhone,
+    phoneStatus: needPhone ? (immediatePhone ? 'found' : 'pending') : null,
+    returnedLinkedIn: linkedinUrl,
+    checkedAt: new Date().toISOString(),
+    phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
+    identityVerified: true,
+    matchConfidence: confidence || null,
+    verifiedBy: 'business-email',
+  };
+
+  if (linkedinUrl) {
+    const cache = readCache();
+    cache.people[linkedinUrl] = record;
+    saveCache(cache);
+  }
+  return { ...record, id: String(person.id), linkedinUrl, identityVerified: true };
 }
 
 async function resolvePersonByNameCompany(name, company, domain, options = {}) {
@@ -974,6 +1037,7 @@ module.exports = {
   candidateEmployerContext,
   hydratedEmployerMatchesCandidate,
   resolveDecisionMaker,
+  resolvePersonByBusinessEmail,
   resolvePersonByNameCompany,
   readCache,
   saveCache,
