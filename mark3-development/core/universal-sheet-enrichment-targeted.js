@@ -274,6 +274,41 @@ function mergePrimaryAndFallback(primary, fb) {
 }
 
 
+function providerRetryReasonsFromPrimary(stats = {}) {
+  const unresolvedRows = new Set(
+    (stats.deferredPoc2Rows || []).map((value) => Number(value)).filter(Number.isInteger)
+  );
+  const reasons = [];
+  for (const item of stats.discoveryDiagnostics || []) {
+    const code = text(item?.code).toUpperCase();
+    const rowNumber = Number(item?.rowNumber);
+    if (!Number.isInteger(rowNumber) || !unresolvedRows.has(rowNumber)) continue;
+    if (!/^LINKEDIN_(?:DAILY|HOURLY)_CAP$/.test(code)) continue;
+
+    const error = new Error(text(item?.message || code));
+    error.code = code;
+    error.subsystem = 'LINKEDIN';
+    error.errorType = 'RATE_LIMIT';
+    error.stage = 'candidate-discovery';
+    const typed = typedErrors.normalize(error, { stage: 'candidate-discovery' });
+
+    reasons.push({
+      rowNumber,
+      reason: 'provider-retry-required',
+      detail: code,
+      typed: {
+        code: typed.code,
+        subsystem: typed.subsystem,
+        type: typed.type,
+        stage: typed.stage,
+        message: typed.message,
+        hint: typed.hint,
+      },
+    });
+  }
+  return reasons;
+}
+
 function mergePrimaryAndAiRescue(primary, rescue) {
   if (!rescue?.attempted) return primary;
   const stats = { ...(primary.stats || {}) };
@@ -308,6 +343,7 @@ async function run(request = {}, options = {}) {
     // that base.run() already committed to the worksheet.
     const primary = await base.run(exact.request, runOptions);
     const primaryStats = { ...(primary.stats || {}) };
+    const providerRetryReasons = providerRetryReasonsFromPrimary(primaryStats);
     let result = primary;
     let fb = null;
     let postPrimaryError = null;
@@ -327,6 +363,26 @@ async function run(request = {}, options = {}) {
           attempted: false,
           skippedReason: 'primary-systemic-halt',
           modelCalls: 0,
+          fallback: fallback.snapshot(),
+        };
+      } else if (providerRetryReasons.length) {
+        aiRescue = {
+          enabled: aiBatchRescue.enabled(),
+          attempted: false,
+          skippedReason: 'provider-retry-required',
+          modelCalls: 0,
+          modelAttempts: 0,
+          rowsOfferedForSelection: 0,
+          unresolvedRows: providerRetryReasons.map((item) => item.rowNumber),
+          unresolvedReasons: providerRetryReasons,
+        };
+        fb = {
+          enabled: fallback.enabled(),
+          attempted: false,
+          skippedReason: 'provider-retry-required',
+          modelCalls: 0,
+          unresolvedRows: providerRetryReasons.map((item) => item.rowNumber),
+          unresolvedReasons: providerRetryReasons,
           fallback: fallback.snapshot(),
         };
       } else if (!runOptions.dryRun && runOptions.apolloApproved === true && aiBatchRescue.enabled()) {
@@ -444,6 +500,7 @@ async function run(request = {}, options = {}) {
     let completionGate = null;
     try {
       const terminalReasons = [
+        ...providerRetryReasons,
         ...(aiRescue?.unresolvedReasons || []),
         ...(fb?.unresolvedReasons || []),
       ];
@@ -607,5 +664,6 @@ module.exports = {
   withExactTargetGuards,
   mandatoryCompletionAudit,
   mergePrimaryAndFallback,
+  providerRetryReasonsFromPrimary,
   mergePrimaryAndAiRescue,
 };
