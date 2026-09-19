@@ -24,6 +24,33 @@ assert.deepEqual(
   'manual POC selector must enforce Founder/Director/Owner > recruiting/HR Head/Manager > Recruiter and reject unrelated/wrong-employer people',
 );
 
+const hanvitt = base.inferHiringCompanyFromEvidence({
+  anchor: { snapshot: { values: { linkedin: 'https://www.linkedin.com/in/example/' } } },
+  context: {
+    postDetails: 'Founder @ Hanvitt Consulting & Solutions | IT Staffing\nInterested candidates: hello@hanvitt.com',
+  },
+});
+assert.equal(hanvitt?.company, 'Hanvitt Consulting & Solutions');
+assert.equal(hanvitt?.source, 'row-headline-employer');
+
+const peopleClick = base.inferHiringCompanyFromEvidence({
+  anchor: { snapshot: { values: { linkedin: 'https://www.linkedin.com/in/example/' } } },
+  context: {
+    postDetails: 'IT Recruiter | Recruitment & Talent Acquisition\nInterested candidates can share at akilandeshwari.s@people-click.com',
+  },
+});
+assert.equal(peopleClick?.domain, 'people-click.com');
+assert.equal(peopleClick?.source, 'row-business-email-domain');
+
+const sutherland = base.inferHiringCompanyFromEvidence({
+  anchor: { snapshot: { values: { linkedin: 'https://www.linkedin.com/in/example/' } } },
+  context: {
+    postDetails: 'Sutherland is looking for an experienced SAP FICO Senior Consultant.\nApply: hr@a3nity.com',
+  },
+});
+assert.equal(sutherland?.company, 'Sutherland', 'explicit hiring-company wording must beat a staffing/application email domain');
+assert.equal(sutherland?.source, 'row-company-is-hiring');
+
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
@@ -43,6 +70,15 @@ assert.match(operatorSource, /ordinal: 3/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
 assert.match(operatorSource, /priorityCandidateLimit: options\.manualPriorityCandidateLimit \?\? 20/);
 assert.doesNotMatch(operatorSource, /candidateLimit: options\.manualCandidateLimit \?\? 40/);
+assert.match(operatorSource, /preferredHiringCompanyContext/);
+assert.match(operatorSource, /row-business-email-domain/);
+
+const runSource = operatorSource.slice(operatorSource.indexOf('async function run(request = {}, options = {})'));
+const exactRepairIndex = runSource.indexOf('repairExistingGroups(row, plan, companyContext, stats, repairOptions)');
+const prioritySearchIndex = runSource.indexOf('discoverPriorityPeopleFast(companyContext, cache, stats');
+assert.ok(exactRepairIndex >= 0 && prioritySearchIndex > exactRepairIndex, 'existing POC exact repair must happen before candidate discovery');
+assert.match(runSource, /if \(poc2Targets\.length\) \{[\s\S]*?discoverPriorityPeopleFast/);
+assert.match(runSource, /if \(poc3Targets\.length\) \{[\s\S]*?if \(people\.length\)/);
 
 assert.match(rescueSource, /Number\(item\.group\?\.ordinal \|\| 0\) === wantedOrdinal/);
 assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
@@ -57,4 +93,4 @@ assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);
 
-console.log('Universal POC priority self-test passed: POC-1 completion is non-negotiable, POC-2 uses priority-first Apollo discovery plus up to three verified hydration attempts before AI, only exact deferred POC-2 rows may enter AI rescue, POC-3 gets one cheap manual attempt, direct AI falls Groq -> Gemini -> NVIDIA, and last-resort fallback remains bounded to unresolved POC-2.');
+console.log('Universal POC priority self-test passed: row evidence resolves hiring employers without AI, existing POCs repair before discovery, POC-2 alone may trigger priority Apollo discovery, POC-3 only reuses an existing POC-2 pool, exact deferred POC-2 rows alone enter AI rescue, and fallback remains POC-2-only.');
