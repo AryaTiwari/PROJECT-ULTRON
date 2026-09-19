@@ -627,6 +627,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.rowsOfferedForSelection = rowPackages.size;
   stats.slotsOfferedForSelection = [...rowPackages.values()].reduce((sum, pkg) => sum + pkg.targets.length, 0);
   if (!rowPackages.size || stats.modelAttempts >= stats.maxCalls) {
+    if (!rowPackages.size && stats.modelAttempts === 0) {
+      stats.skippedReason = 'AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL';
+    } else if (stats.modelAttempts >= stats.maxCalls) {
+      stats.skippedReason = 'AI_CALL_BUDGET_EXHAUSTED';
+    }
     for (const rowNumber of exactResidueRows) {
       if (!rowPackages.has(rowNumber) && !stats.unresolvedRows.includes(rowNumber)) {
         markUnresolved(stats, rowNumber, 'not-offered-to-selection', 'POC-2 residue could not reach candidate selection.');
