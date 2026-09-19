@@ -23,6 +23,7 @@ function linkedinSlug(value) {
 
 function freshStats() {
   return {
+    ...base.freshStats(),
     attempted: false,
     rowsSeen: 0,
     rowsEligible: 0,
