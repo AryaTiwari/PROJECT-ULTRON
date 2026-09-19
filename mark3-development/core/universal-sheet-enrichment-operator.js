@@ -1919,8 +1919,8 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
   primary.rowsWithoutEmployer = Number(recheck?.rowsWithoutEmployer || 0);
   primary.existingVerificationFailures = Number(recheck?.existingVerificationFailures || 0);
   primary.leftoverQueue = Array.isArray(recheck?.leftoverQueue) ? recheck.leftoverQueue : [];
-  primary.phoneStillPending = Number(recheck?.phoneStillPending ?? primary.phoneStillPending ?? 0);
-  primary.backgroundPhonePending = Number(recheck?.backgroundPhonePending ?? primary.backgroundPhonePending ?? 0);
+  primary.phoneStillPending = Math.max(Number(primary.phoneStillPending || 0), Number(recheck?.phoneStillPending || 0));
+  primary.backgroundPhonePending = Math.max(Number(primary.backgroundPhonePending || 0), Number(recheck?.backgroundPhonePending || 0));
   primary.backgroundPhoneWatcher = Boolean(primary.backgroundPhoneWatcher || recheck?.backgroundPhoneWatcher);
 
   const remaining = new Set((primary.leftoverQueue || []).map((item) => Number(item.rowNumber)).filter(Number.isInteger));
