@@ -203,13 +203,63 @@ function preferredHiringCompanyContext(plan, row, anchorContext = null) {
   return inferHiringCompanyFromEvidence(plan, row) || anchorContext;
 }
 
-function anchorNeedsHydration(plan = {}) {
+function anchorNameTokens(value) {
+  return ranker.normalize(value || '')
+    .split(/\s+/)
+    .map((token) => token.replace(/[^a-z0-9]/g, ''))
+    .filter((token) => token.length >= 3);
+}
+
+function emailLocalPartMatchesAnchor(email, name) {
+  const local = text(email).split('@')[0]?.toLowerCase().replace(/[^a-z0-9]+/g, ' ') || '';
+  if (!local) return false;
+  if (/^(?:hr|careers?|jobs?|hiring|hello|info|contact|admin|support|recruitment|recruiter|talent|people)$/i.test(local.replace(/\s+/g, ''))) return false;
+  const compact = local.replace(/\s+/g, '');
+  const tokens = anchorNameTokens(name);
+  if (!tokens.length) return false;
+  const matched = tokens.filter((token) => compact.includes(token));
+  if (matched.length >= 2) return true;
+  return matched.length === 1 && matched[0].length >= 5;
+}
+
+function extractAnchorContactEvidence(plan = {}) {
+  const anchor = plan?.anchor;
+  if (!anchor || anchor.type !== 'person') return { email: '', phone: '', source: '' };
+  const name = text(anchor.snapshot?.values?.name);
+  const evidence = contextEvidenceText(plan);
+  if (!name || !evidence) return { email: '', phone: '', source: '' };
+
+  const emailMatches = [...evidence.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)]
+    .map((match) => ({ value: text(match[0]), index: Number(match.index || 0) }))
+    .filter((item) => apollo.validEmail(item.value) && emailLocalPartMatchesAnchor(item.value, name));
+
+  if (!emailMatches.length) return { email: '', phone: '', source: '' };
+
+  const email = emailMatches[0];
+  const left = Math.max(0, email.index - 140);
+  const right = Math.min(evidence.length, email.index + email.value.length + 140);
+  const nearby = evidence.slice(left, right);
+  const phoneMatches = [...nearby.matchAll(/\+?\d[\d\s().-]{5,20}\d/g)]
+    .map((match) => text(match[0]))
+    .filter((value) => {
+      const digits = value.replace(/\D/g, '');
+      return digits.length >= 7 && digits.length <= 15 && Boolean(apollo.validPhone(value));
+    });
+
+  return {
+    email: email.value,
+    phone: phoneMatches[0] || '',
+    source: 'row-author-contact-evidence',
+  };
+}
+
+function anchorNeedsHydration(plan = {}, evidence = {}) {
   const anchor = plan?.anchor;
   if (!anchor || anchor.type !== 'person') return false;
   const values = anchor.snapshot?.values || {};
   const fields = anchor.group?.fields || {};
-  if (fields.phone && !text(values.phone)) return true;
-  if (fields.email && !text(values.email)) return true;
+  if (fields.phone && !text(values.phone) && !text(evidence.phone)) return true;
+  if (fields.email && !text(values.email) && !text(evidence.email)) return true;
   if (fields.role && !text(values.role)) return true;
   return false;
 }
@@ -244,8 +294,9 @@ async function resolvePersonAnchor(plan, row, options = {}) {
   const values = anchor.snapshot?.values || {};
   const group = anchor.group;
   const completeContacts = options.completeContacts !== false;
-  const needEmail = completeContacts && Boolean(group.fields.email && !values.email);
-  const needPhone = completeContacts && Boolean(group.fields.phone && !values.phone);
+  const contactEvidence = options.contactEvidence || {};
+  const needEmail = completeContacts && Boolean(group.fields.email && !values.email && !text(contactEvidence.email));
+  const needPhone = completeContacts && Boolean(group.fields.phone && !values.phone && !text(contactEvidence.phone));
   const normalizedLinkedin = apollo.normalizeLinkedIn(values.linkedin || '');
   let profile = null;
   let company = '';
@@ -290,12 +341,31 @@ async function resolvePersonAnchor(plan, row, options = {}) {
     }
   }
 
+  const exactEvidencePerson = (text(contactEvidence.email) || text(contactEvidence.phone))
+    ? {
+        name: values.name || profile?.name || '',
+        linkedinUrl: normalizedLinkedin || profile?.linkedinUrl || '',
+        email: text(profile?.email) || text(contactEvidence.email),
+        phone: text(profile?.phone) || text(contactEvidence.phone),
+        phoneStatus: text(profile?.phone) || text(contactEvidence.phone) ? 'found' : profile?.phoneStatus,
+        identityVerified: true,
+        apolloPersonId: text(profile?.apolloPersonId || profile?.id),
+      }
+    : null;
+
   if (!company) return {
     unresolved: true,
     anchorProfile: profile,
     anchorPerson: profile && profile.noMatch !== true && profile.ambiguous !== true && profile.identityVerified !== false
-      ? { ...profile, linkedinUrl: normalizedLinkedin || profile.linkedinUrl || '', identityVerified: true }
-      : null,
+      ? {
+          ...profile,
+          email: text(profile.email) || text(contactEvidence.email),
+          phone: text(profile.phone) || text(contactEvidence.phone),
+          phoneStatus: text(profile.phone) || text(contactEvidence.phone) ? 'found' : profile.phoneStatus,
+          linkedinUrl: normalizedLinkedin || profile.linkedinUrl || '',
+          identityVerified: true,
+        }
+      : exactEvidencePerson,
     anchorLinkedin: normalizedLinkedin || '',
   };
   return {
@@ -304,7 +374,16 @@ async function resolvePersonAnchor(plan, row, options = {}) {
     source,
     anchorLinkedin: normalizedLinkedin || apollo.normalizeLinkedIn(profile?.linkedinUrl || ''),
     anchorApolloPersonId: text(profile?.apolloPersonId || profile?.id),
-    anchorPerson: profile ? { ...profile, linkedinUrl: normalizedLinkedin || profile.linkedinUrl || '', identityVerified: profile?.ambiguous !== true && profile?.noMatch !== true && profile?.identityVerified !== false } : null,
+    anchorPerson: profile
+      ? {
+          ...profile,
+          email: text(profile.email) || text(contactEvidence.email),
+          phone: text(profile.phone) || text(contactEvidence.phone),
+          phoneStatus: text(profile.phone) || text(contactEvidence.phone) ? 'found' : profile.phoneStatus,
+          linkedinUrl: normalizedLinkedin || profile.linkedinUrl || '',
+          identityVerified: profile?.ambiguous !== true && profile?.noMatch !== true && profile?.identityVerified !== false,
+        }
+      : exactEvidencePerson,
   };
 }
 
@@ -2186,6 +2265,8 @@ function freshStats() {
     rowsWithoutAnchor: 0,
     rowsWithoutEmployer: 0,
     rowEvidenceEmployersResolved: 0,
+    rowEvidenceContactEmails: 0,
+    rowEvidenceContactPhones: 0,
     rowsChanged: 0,
     cellsChanged: 0,
     anchorsResolved: 0,
@@ -2445,16 +2526,29 @@ async function run(request = {}, options = {}) {
 
     try {
       const rowEvidenceContext = inferHiringCompanyFromEvidence(plan, row);
-      const anchorContactHydrationNeeded = (!phaseOrdinal || phaseOrdinal === 1) && anchorNeedsHydration(plan);
+      const anchorContactEvidence = (!phaseOrdinal || phaseOrdinal === 1)
+        ? extractAnchorContactEvidence(plan)
+        : { email: '', phone: '', source: '' };
+      const anchorHadBlankEmail = Boolean(plan.anchor?.group?.fields?.email && !text(plan.anchor?.snapshot?.values?.email));
+      const anchorHadBlankPhone = Boolean(plan.anchor?.group?.fields?.phone && !text(plan.anchor?.snapshot?.values?.phone));
+      if (anchorHadBlankEmail && text(anchorContactEvidence.email)) stats.rowEvidenceContactEmails++;
+      if (anchorHadBlankPhone && text(anchorContactEvidence.phone)) stats.rowEvidenceContactPhones++;
+      const anchorContactHydrationNeeded = (!phaseOrdinal || phaseOrdinal === 1)
+        && anchorNeedsHydration(plan, anchorContactEvidence);
       let anchorCompanyContext = null;
       if (plan.anchor.type === 'company') {
         anchorCompanyContext = companyFromCompanyAnchor(plan.anchor);
-      } else if (anchorContactHydrationNeeded || !rowEvidenceContext) {
+      } else if (
+        anchorContactHydrationNeeded
+        || ((!phaseOrdinal || phaseOrdinal === 1) && (text(anchorContactEvidence.email) || text(anchorContactEvidence.phone)))
+        || !rowEvidenceContext
+      ) {
         if (anchorContactHydrationNeeded) stats.hydrationAttempts++;
         anchorCompanyContext = await resolvePersonAnchor(plan, row, {
           ...options,
           allowLinkedInEmployerFallback: false,
-          completeContacts: anchorContactHydrationNeeded,
+          completeContacts: true,
+          contactEvidence: anchorContactEvidence,
         });
         if (anchorContactHydrationNeeded && !anchorCompanyContext?.anchorPerson) stats.hydrationFailures++;
       } else {
@@ -2766,6 +2860,9 @@ module.exports = {
   companyFromCompanyAnchor,
   inferHiringCompanyFromEvidence,
   preferredHiringCompanyContext,
+  anchorNameTokens,
+  emailLocalPartMatchesAnchor,
+  extractAnchorContactEvidence,
   anchorNeedsHydration,
   resolvePersonAnchor,
   existingIdentityKeys,
