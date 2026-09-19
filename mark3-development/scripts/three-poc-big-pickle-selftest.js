@@ -24,7 +24,7 @@ assert.doesNotMatch(deterministicSource, /big-pickle|omniroute|model-router|chat
 // use the phased deterministic pipeline, while ordinary production uses one coordinated
 // base pass so bounded direct AI can rescue residual secondary POC slots.
 assert.match(targetedSource, /const sharedDiscoveryCache = options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);
-assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline !== false/);
+assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline === true \|\| Boolean\(options\.contactPhaseOrdinal\)/);
 assert.match(targetedSource, /const primary = phasedExecution/);
 assert.match(targetedSource, /\? await runPocPhasePipeline\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /: await base\.run\(exact\.request, runOptions\)/);
