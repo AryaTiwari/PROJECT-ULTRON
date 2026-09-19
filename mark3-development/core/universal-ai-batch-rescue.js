@@ -149,7 +149,7 @@ async function batchChat(messages, purpose, stats, options = {}) {
 
   let candidates = [];
   try {
-    candidates = orderedDirectCandidates(await direct.candidates('research'), purpose, stats);
+    candidates = orderedDirectCandidates(await direct.candidates('research', { envOnly: true }), purpose, stats);
   } catch (error) {
     stats.modelFailures++;
     stats.errors.push({
@@ -182,6 +182,7 @@ async function batchChat(messages, purpose, stats, options = {}) {
           taskType: 'research',
           messages,
           timeoutMs: direct.timeoutFor('research'),
+          envOnly: true,
         });
 
         const body = resultText(result);
@@ -201,6 +202,7 @@ async function batchChat(messages, purpose, stats, options = {}) {
           model: actual,
           success: true,
           credentialSlot: text(result?.credentialSlot || ''),
+          envOnly: true,
         });
         stats.modelCalls++;
         return result;
