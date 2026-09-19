@@ -434,6 +434,7 @@ assert.equal(policy.settings().localBudgetBypass, true);
 delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS = '1';
 assert.equal(policy.settings().localBudgetBypass, true, 'explicit runtime local-budget bypass must work under normal npm start, not only self-test filenames');
+assert.match(String(policy.waitTurn), /localBudgetBypass/, 'waitTurn must short-circuit ULTRON local spacing when runtime bypass is enabled');
 assert.ok(policy.settings().testMissionToolMax >= 120);
 assert.ok(policy.settings().testJobSearchMax >= 20);
 if (previousBudgetBypass == null) delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
