@@ -120,6 +120,7 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     schema: options.schema,
   });
 
+  const phaseOrdinal = Number(options.contactPhaseOrdinal || 0) || null;
   const poc1IdentityIssues = [];
   const poc2OpenRows = [];
   const checkedRows = [];
@@ -131,11 +132,13 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     checkedRows.push(rowNumber);
 
     if (!plan?.anchor) {
-      poc1IdentityIssues.push({ rowNumber, reason: 'missing-poc1-anchor' });
+      if (!phaseOrdinal || phaseOrdinal === 1) {
+        poc1IdentityIssues.push({ rowNumber, reason: 'missing-poc1-anchor' });
+      }
       continue;
     }
 
-    if (plan.anchor.type !== 'company') {
+    if ((!phaseOrdinal || phaseOrdinal === 1) && plan.anchor.type !== 'company') {
       const anchorName = text(plan.anchor?.snapshot?.values?.name);
       const anchorLinkedin = text(plan.anchor?.snapshot?.values?.linkedin);
       if (!anchorName || !anchorLinkedin) {
@@ -150,8 +153,9 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     // genuinely empty. A known POC-2 with missing phone/email is a contact repair
     // target, not a missing-person target, and must never be sent back through
     // candidate discovery merely because a callback is still pending.
-    const openPoc2 = (plan.groups?.open || [])
-      .some((target) => !target.isAnchor && Number(target.group?.ordinal || 0) === 2);
+    const openPoc2 = (!phaseOrdinal || phaseOrdinal === 2)
+      && (plan.groups?.open || [])
+        .some((target) => !target.isAnchor && Number(target.group?.ordinal || 0) === 2);
     if (openPoc2) poc2OpenRows.push(rowNumber);
   }
 
