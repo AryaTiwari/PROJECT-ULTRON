@@ -82,6 +82,81 @@ async function readUniversalSheet(sheetUrl, options = {}) {
   return best;
 }
 
+
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com','googlemail.com','yahoo.com','yahoo.co.in','outlook.com','hotmail.com','live.com',
+  'icloud.com','me.com','proton.me','protonmail.com','aol.com','rediffmail.com',
+]);
+
+function cleanedCompanyEvidence(value) {
+  return text(value)
+    .replace(/^[\s:–—-]+|[\s:–—-]+$/g, '')
+    .replace(/\s+(?:\||•).*$/s, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function contextEvidenceText(plan = {}) {
+  return Object.values(plan?.context || {})
+    .filter((value) => typeof value === 'string' && text(value))
+    .join('\n');
+}
+
+function firstBusinessEmailDomain(value) {
+  const matches = String(value || '').match(/[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})/ig) || [];
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const domain = websiteDomain(String(matches[i]).split('@').pop() || '');
+    if (domain && !FREE_EMAIL_DOMAINS.has(domain)) return domain;
+  }
+  return '';
+}
+
+function inferHiringCompanyFromEvidence(plan, row = []) {
+  const evidence = contextEvidenceText(plan);
+  if (!evidence) return null;
+
+  const patterns = [
+    { source: 'row-join-company', confidence: 0.98, regex: /\bjoin\s+([A-Z][A-Za-z0-9&.'’()\- ]{2,100}?)\s+as\b/i },
+    { source: 'row-company-is-hiring', confidence: 0.97, regex: /(?:^|\n)\s*([A-Z][A-Za-z0-9&.'’()\- ]{2,100}?)\s+(?:is|are)\s+(?:looking|hiring|seeking)\b/i },
+    { source: 'row-headline-employer', confidence: 0.96, regex: /\b(?:founder|co[- ]?founder|owner|director|business director|managing director|manager|recruiter|talent acquisition specialist|talent acquisition lead|human resources manager|hr recruiter)\s+(?:at|@)\s+([^\n|•]{2,100})/i },
+    { source: 'row-with-company', confidence: 0.94, regex: /(?:^|\n)\s*with\s+([^\n|•]{2,100}?)(?:\s*•|\s*$)/im },
+  ];
+
+  for (const rule of patterns) {
+    const match = evidence.match(rule.regex);
+    const company = cleanedCompanyEvidence(match?.[1] || '');
+    if (!company) continue;
+    return {
+      company,
+      domain: '',
+      source: rule.source,
+      evidenceConfidence: rule.confidence,
+      anchorLinkedin: text(plan?.anchor?.snapshot?.values?.linkedin),
+      anchorApolloPersonId: '',
+      anchorPerson: null,
+    };
+  }
+
+  const domain = firstBusinessEmailDomain(evidence);
+  if (domain) {
+    return {
+      company: domain,
+      domain,
+      source: 'row-business-email-domain',
+      evidenceConfidence: 0.93,
+      anchorLinkedin: text(plan?.anchor?.snapshot?.values?.linkedin),
+      anchorApolloPersonId: '',
+      anchorPerson: null,
+    };
+  }
+
+  return null;
+}
+
+function preferredHiringCompanyContext(plan, row, anchorContext = null) {
+  return inferHiringCompanyFromEvidence(plan, row) || anchorContext;
+}
+
 function companyFromCompanyAnchor(anchor) {
   const values = anchor?.snapshot?.values || {};
   const company = text(values.company || values.name);
@@ -997,6 +1072,7 @@ function freshStats() {
     rowsProcessed: 0,
     rowsWithoutAnchor: 0,
     rowsWithoutEmployer: 0,
+    rowEvidenceEmployersResolved: 0,
     rowsChanged: 0,
     cellsChanged: 0,
     anchorsResolved: 0,
@@ -1094,17 +1170,21 @@ async function run(request = {}, options = {}) {
     if (!plan.anchor) { stats.rowsWithoutAnchor++; continue; }
 
     try {
-      const companyContext = plan.anchor.type === 'company' ? companyFromCompanyAnchor(plan.anchor) : await resolvePersonAnchor(plan, row, options);
+      const anchorCompanyContext = plan.anchor.type === 'company'
+        ? companyFromCompanyAnchor(plan.anchor)
+        : await resolvePersonAnchor(plan, row, options);
+      const companyContext = preferredHiringCompanyContext(plan, row, anchorCompanyContext);
+      if (companyContext?.source && /^row-/.test(companyContext.source)) stats.rowEvidenceEmployersResolved++;
       const writes = [];
       const fillTargets = candidateFillTargets(plan);
       const repairDiscoveryNeeded = existingRepairNeedsDiscovery(plan);
       const aiFallbackEnabled = Boolean(options.deferOpenGroupSelectionToAi);
 
-      // POC-1 is non-negotiable. Complete the exact anchor person immediately,
-      // even when employer resolution fails later and POC-2/3 cannot be discovered.
-      const anchorContext = companyContext?.anchorPerson
-        ? companyContext
-        : { ...(companyContext || {}), anchorPerson: companyContext?.anchorProfile || null };
+      // POC-1 is non-negotiable and remains tied to the exact anchor identity.
+      // POC-2/3 may target a different explicit hiring organization from the post.
+      const anchorContext = anchorCompanyContext?.anchorPerson
+        ? anchorCompanyContext
+        : { ...(anchorCompanyContext || {}), anchorPerson: anchorCompanyContext?.anchorProfile || null };
       const earlyRowOptions = { ...runOptions, rowNumber, candidatePool: [] };
       writes.push(...await enrichAnchorGroup(row, plan, anchorContext, stats, earlyRowOptions));
 
@@ -1279,7 +1359,7 @@ function formatResult(result) {
   const haltText = s.haltError
     ? ` Halt cause: ${formatFailureSummary(s.haltError)}. ${s.haltError.hint || ''}${s.haltError.attemptedRange ? ` Attempted range: ${s.haltError.attemptedRange}.` : ''}`
     : '';
-  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally; ${(schema.continuityRecoveries || []).length} contact groups recovered by explicit schema continuity. Header continuity repair: ${s.headerRepairsWritten || 0}/${s.headerRepairsPlanned || 0} missing headers restored into blank cells, ${s.headerRepairsSkippedPopulated || 0} skipped because populated. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} contact cells across ${s.rowsChanged} data rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts, ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked, ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Priority routing: POC-1 exact anchor completion always runs first; POC-2 manual attempts ${s.manualPoc2Attempts || 0}, manual fills ${s.manualPoc2Filled || 0}, unresolved POC-2 deferred to AI ${s.deferredOpenGroups || 0} across ${(s.deferredPoc2Rows || []).length} exact rows; optional POC-3 manual attempts ${s.manualPoc3Attempts || 0}, strong-confidence fills ${s.manualPoc3Filled || 0}, left optional ${s.optionalPoc3Deferred || 0}. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
+  return `${status} Schema: header row ${schema.headerRowNumber || '?'}, ${groups} person/contact groups, ${companies} company groups, confidence ${Number(schema.confidence || 0).toFixed(2)}; ${ordinalRecovered} ordinal contact groups recovered structurally; ${(schema.continuityRecoveries || []).length} contact groups recovered by explicit schema continuity. Header continuity repair: ${s.headerRepairsWritten || 0}/${s.headerRepairsPlanned || 0} missing headers restored into blank cells, ${s.headerRepairsSkippedPopulated || 0} skipped because populated. Processed ${s.rowsProcessed}/${s.rowsSeen} rows; changed ${s.cellsChanged} contact cells across ${s.rowsChanged} data rows; resolved ${s.anchorsResolved} anchors; repaired ${s.existingGroupsRepaired} existing groups; selected ${s.newPeopleSelected} new people. Embedded verified designations in ${s.embeddedDesignationWrites || 0} contact-name writes where no dedicated role column existed. Discovery: ${s.candidatesDiscovered} unique candidates from ${s.candidateSearches} Apollo discovery calls (${s.candidateBroadSearches || 0} broad, ${s.candidatePrioritySearches || 0} priority-targeted, ${s.candidatePrioritySearchFailures || 0} supplemental failures, ${s.candidateCacheHits} cache hits); ${s.candidatesRanked} candidates passed deterministic ranking. Hydration: ${s.hydrationAttempts} attempts, ${s.hydrationFailures} failures; ${s.postHydrationDuplicates || 0} hydrated identities were already present and were skipped before trying the next candidate. Existing-contact repair: ${s.existingVerificationAttempts || 0} verification attempts, ${s.existingDiscoveryIdentityMatches || 0} exact same-company discovery matches, ${s.existingGroupsRepaired || 0} groups repaired, ${s.existingVerificationFailures || 0} verification failures. Phone completion: ${s.pendingPhoneRequests || 0} async Apollo phone requests tracked, ${s.phoneCellsFilled || 0} phone cells filled after webhook sync, ${s.phoneNotFound || 0} confirmed unavailable, ${s.phoneStillPending || 0} still pending, ${s.phoneSyncErrors || 0} sync errors; background callback watcher ${s.backgroundPhoneWatcher ? 'active' : 'idle'} with ${s.backgroundPhonePending || 0} queued. Priority routing: POC-1 exact anchor completion always runs first; POC-2 manual attempts ${s.manualPoc2Attempts || 0}, manual fills ${s.manualPoc2Filled || 0}, unresolved POC-2 deferred to AI ${s.deferredOpenGroups || 0} across ${(s.deferredPoc2Rows || []).length} exact rows; optional POC-3 manual attempts ${s.manualPoc3Attempts || 0}, strong-confidence fills ${s.manualPoc3Filled || 0}, left optional ${s.optionalPoc3Deferred || 0}. Orphan-contact safety: ${s.orphanContactTargets || 0} identity-less partial targets, ${s.orphanContactVerified || 0} verified by matching existing contact data, ${s.orphanContactBlocked || 0} blocked, ${s.orphanContactMismatches || 0} candidate/contact mismatches. Unfilled target groups: ${s.unfilledOpenGroups}; rows without anchor ${s.rowsWithoutAnchor}; row-evidence employers resolved ${s.rowEvidenceEmployersResolved || 0}; rows without verified employer ${s.rowsWithoutEmployer}; identity conflicts ${s.identityConflicts}.${rowFailureText}${haltText} Resume-safe: yes; rerunning re-reads the live sheet and preserves already populated verified values. AI/model calls: 0.`;
 }
 
 module.exports = {
@@ -1287,6 +1367,8 @@ module.exports = {
   patchRichLinkedInLinks,
   readUniversalSheet,
   companyFromCompanyAnchor,
+  inferHiringCompanyFromEvidence,
+  preferredHiringCompanyContext,
   resolvePersonAnchor,
   existingIdentityKeys,
   candidateAlreadyPresent,
