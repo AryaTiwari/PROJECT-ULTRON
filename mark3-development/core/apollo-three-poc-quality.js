@@ -51,8 +51,12 @@ function maxWaterfalls() {
 
 function phoneWaterfallEnabled() {
   // Native Apollo reveal + webhook settlement is the production default.
-  // The custom poll-only phone waterfall is an opt-in experimental fallback.
-  return /^(1|true|yes|on)$/i.test(String(apollo.setting('ULTRON_M3_THREE_POC_PHONE_WATERFALL', '0')).trim());
+  // The legacy ULTRON_M3_THREE_POC_PHONE_WATERFALL=1 setting is intentionally
+  // ignored so stale .env files cannot silently restore the poll-only path.
+  // Custom phone waterfall behavior now requires an explicit experimental flag.
+  return /^(1|true|yes|on)$/i.test(String(
+    apollo.setting('ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0')
+  ).trim());
 }
 
 function maxPhoneWaterfalls() {
