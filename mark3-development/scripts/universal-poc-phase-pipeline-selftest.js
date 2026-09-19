@@ -82,6 +82,45 @@ assert.deepEqual(merged.stats.pocPhaseSummaries.map((item) => item.ordinal), [1,
 assert.equal(merged.stats.contactPhaseLabel, 'POC-1 -> POC-2 -> POC-3');
 assert.equal(merged.stats.unfilledOpenGroups, 4);
 
+const operator = require('../core/universal-sheet-enrichment-operator');
+const identitySnapshot = {
+  values: {
+    name: 'Ashraf Saggaf — Director of Talent & Culture',
+    linkedin: '',
+    email: '',
+    phone: '',
+  },
+};
+const verifiedExisting = {
+  identityVerified: true,
+  noMatch: false,
+  ambiguous: false,
+  name: 'Ashraf Saggaf',
+  title: 'Director of Talent & Culture',
+  organizationName: 'Different Existing Employer',
+  email: 'ashraf@example.com',
+};
+assert.equal(
+  operator.existingIdentityVerified(
+    identitySnapshot,
+    verifiedExisting,
+    { company: 'Bright Vision Technologies', domain: '' },
+    'public-index-exact',
+  ),
+  true,
+  'exact existing identity + compatible embedded role must permit contact completion even when row employer context differs',
+);
+assert.equal(
+  operator.existingIdentityVerified(
+    identitySnapshot,
+    { ...verifiedExisting, title: 'Software Engineer' },
+    { company: 'Bright Vision Technologies', domain: '' },
+    'public-index-exact',
+  ),
+  false,
+  'name-only public-index match with incompatible role must not unlock contact writes',
+);
+
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
@@ -99,5 +138,7 @@ assert.match(targetedSource, /ordinal: 2/);
 assert.match(targetedSource, /ordinal: 3/);
 assert.match(targetedSource, /runPocPhasePipeline\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /POC-phase pipeline:/);
+assert.match(targetedSource, /poc-phase-deterministic-only/);
+assert.doesNotMatch(targetedSource, /const boundedAiEnabled = aiBatchRescue\.enabled\(\) && options\.apolloApproved/);
 
 console.log('Universal POC phase pipeline self-test passed: enrichment is sheet-wide POC-1 -> POC-2 -> POC-3, each phase is ordinal-scoped, POC-3 owns discovery when needed, and aggregate reporting preserves POC-2 residue.');
