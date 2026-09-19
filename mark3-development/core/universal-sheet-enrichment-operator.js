@@ -1198,6 +1198,33 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   return merged;
 }
 
+function pragmaticSameEmployerCandidates(candidates = [], companyContext = {}, existing = { names: new Set(), linkedins: new Set() }) {
+  const useful = /\b(?:founder|owner|director|head|manager|lead|leader|executive|partner|recruit|talent|human resources|\bhr\b|people|staff|staffing|placement|workforce|sourc|hiring)\b/i;
+  const bad = /\b(?:intern|trainee|student|fresher|apprentice)\b/i;
+
+  return (Array.isArray(candidates) ? candidates : [])
+    .filter((candidate) => {
+      if (!candidate || !ranker.sameEmployer(candidate, companyContext)) return false;
+      if (candidateAlreadyPresent(candidate, existing)) return false;
+      const role = `${candidate.title || ''} ${candidate.headline || ''}`;
+      return useful.test(role) && !bad.test(role);
+    })
+    .map((candidate, index, pool) => {
+      const priority = Number(apollo.decisionPriority(candidate.title || candidate.headline || ''));
+      const scored = ranker.scoreCandidate(candidate, {
+        company: companyContext.company,
+        companyDomain: companyContext.domain,
+      }, pool);
+      return {
+        candidate,
+        priority: priority < 99 ? priority : 50,
+        score: Number(scored?.score || 0),
+      };
+    })
+    .sort((a, b) => a.priority - b.priority || b.score - a.score || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || '')))
+    .map((item) => item.candidate);
+}
+
 function manualPriorityCandidates(candidates = [], companyContext = {}, existing = { names: new Set(), linkedins: new Set() }) {
   const rows = [];
   for (const candidate of candidates || []) {
@@ -1245,7 +1272,12 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     { minimumScore: Number(options.fallbackMinimumScore ?? 28) },
   ).ranked.map((item) => item.candidate);
 
-  const pool = mergeCandidatePools(priorityPool, fallbackRanking)
+  // Results-first final fallback: if the formal priority ladder/ranker is too
+  // selective, keep useful same-company HR/talent/staffing/leadership contacts in
+  // play. They still must survive exact Apollo hydration + employer verification.
+  const pragmaticPool = pragmaticSameEmployerCandidates(candidates, companyContext, existing);
+
+  const pool = mergeCandidatePools(priorityPool, fallbackRanking, pragmaticPool)
     .filter((candidate) => {
       const key = candidateDiscoveryKey(candidate);
       return key && !claimed.has(key);
@@ -1923,6 +1955,7 @@ module.exports = {
   verifyLinkedInCompanyEmployee,
   hydrateDecisionMakerVerified,
   discoverPriorityPeopleFast,
+  pragmaticSameEmployerCandidates,
   manualPriorityCandidates,
   fillManualPriorityGroup,
   fillOpenGroups,
