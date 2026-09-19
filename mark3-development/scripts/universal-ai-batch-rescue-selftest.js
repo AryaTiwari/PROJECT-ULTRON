@@ -110,7 +110,7 @@ assert.match(rescueSource, /direct\.candidates\('research', \{ envOnly: true \}\
 assert.match(rescueSource, /direct\.chat\(/);
 assert.match(rescueSource, /envOnly: true/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_DIRECT_PROVIDERS/);
-assert.match(rescueSource, /xai,gemini,nvidia/);
+assert.match(rescueSource, /gemini,groq,nvidia/);
 assert.doesNotMatch(rescueSource, /omniroute|omniFallback|omniDiversity|chatOmniRouteOnly/i);
 assert.match(rescueSource, /You may choose ONLY candidateKey values supplied inside that same row/);
 assert.match(rescueSource, /apollo\.resolveDecisionMaker/);
@@ -140,4 +140,4 @@ assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? 
 assert.match(directSource, /async function candidates\(taskType = 'general', \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
 assert.match(directSource, /async function chat\(\{ messages, model, tools = null, taskType = 'general', timeoutMs = null, envOnly: forceEnvOnly = false \} = \{\}\)/);
 
-console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, only env-backed direct xAI/Gemini/NVIDIA providers are eligible, candidates and inference both force envOnly=true, one best model per provider is considered inside the hard 3-attempt budget, OmniRoute is absent from the batch path, partial and empty POCs share the same batch, Apollo verification remains mandatory, and per-row Big Pickle is suppressed while batch rescue is active.');
+console.log('Universal bounded AI batch rescue self-test passed: context + selection are batched across the whole run, only env-backed direct Gemini/Groq/NVIDIA providers are eligible, candidates and inference both force envOnly=true, one best model per provider is considered inside the hard 3-attempt budget, OmniRoute is absent from the batch path, partial and empty POCs share the same batch, Apollo verification remains mandatory, and per-row Big Pickle is suppressed while batch rescue is active.');
