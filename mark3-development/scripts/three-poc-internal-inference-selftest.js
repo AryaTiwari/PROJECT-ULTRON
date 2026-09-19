@@ -56,6 +56,7 @@ assert.throws(
 (async () => {
   await require('./universal-contact-completion-selftest').run();
   await require('./universal-schema-continuity-selftest').run();
+  require('./universal-poc-priority-selftest');
   await control.runInternalInference('three-poc-spreadsheet', async () => {
     assert.doesNotThrow(() => control.assertAllowed('general-model', {
       messages: [{ role: 'user', content: internalPayload }],
