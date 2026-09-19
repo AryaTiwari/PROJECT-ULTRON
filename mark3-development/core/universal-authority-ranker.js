@@ -1,5 +1,7 @@
 'use strict';
 
+const companyIdentity = require('./company-identity');
+
 // Universal deterministic authority/routing ranker.
 // It deliberately does NOT contain a Founder > Manager > Recruiter title ladder.
 // Candidates are scored from independent evidence dimensions so unfamiliar titles can
@@ -23,18 +25,11 @@ function tokenList(value) {
 }
 
 function companyKey(value) {
-  return normalize(value).split(' ').filter((token) => token && !LEGAL_SUFFIXES.has(token)).join(' ');
+  return companyIdentity.companyKey(value);
 }
 
 function hostname(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  try {
-    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
-    return url.hostname.toLowerCase().replace(/^www\./, '');
-  } catch {
-    return raw.toLowerCase().replace(/^www\./, '').split('/')[0];
-  }
+  return companyIdentity.hostname(value);
 }
 
 function linkedinKey(value) {
@@ -64,50 +59,29 @@ function candidateDomain(candidate = {}) {
 }
 
 function domainBrand(value) {
-  const host = hostname(value);
-  if (!host) return '';
-  return companyKey((host.split('.')[0] || '').replace(/[-_]+/g, ' '));
+  return companyIdentity.domainBrand(value);
 }
 
 function companyTokenMatch(expectedValue, actualValue) {
-  const expected = companyKey(expectedValue);
-  const actual = companyKey(actualValue);
-  if (!expected || !actual) return false;
-  if (expected === actual) return true;
-  const a = new Set(expected.split(' ').filter((token) => token && token !== 'com'));
-  const b = new Set(actual.split(' ').filter((token) => token && token !== 'com'));
-  if (!a.size || !b.size) return false;
-  const intersection = [...a].filter((token) => b.has(token)).length;
-  const denominator = Math.max(1, Math.min(a.size, b.size));
-  return intersection / denominator >= 0.8;
+  return companyIdentity.nameMatch(expectedValue, actualValue);
 }
 
 function sameEmployer(candidate, context = {}) {
   const expectedDomain = hostname(context.companyDomain || context.domain || '');
-  const actualDomain = candidateDomain(candidate);
-  if (expectedDomain && actualDomain) {
-    if (
-      expectedDomain === actualDomain
-      || expectedDomain.endsWith(`.${actualDomain}`)
-      || actualDomain.endsWith(`.${expectedDomain}`)
-    ) return true;
-  }
-
+  const expectedCompany = context.company || context.companyName || '';
+  const aliases = Array.isArray(context.companyAliases) ? context.companyAliases : [];
   const actualCompany = candidateCompany(candidate);
-  const expectedNames = [
-    context.company,
-    context.companyName,
-    ...(Array.isArray(context.companyAliases) ? context.companyAliases : []),
-    domainBrand(expectedDomain),
-  ].filter(Boolean);
+  const actualDomain = candidateDomain(candidate);
 
-  for (const expectedName of expectedNames) {
-    if (companyTokenMatch(expectedName, actualCompany)) return true;
-    if (actualDomain && companyTokenMatch(expectedName, domainBrand(actualDomain))) return true;
-  }
+  if (!expectedCompany && !expectedDomain && !aliases.length) return true;
 
-  if (!expectedNames.length && !expectedDomain) return true; // No employer constraint available.
-  return false;
+  return companyIdentity.sameOrganization({
+    expectedCompany,
+    expectedDomain,
+    actualCompany,
+    actualDomain,
+    aliases,
+  });
 }
 
 function stem(token) {
