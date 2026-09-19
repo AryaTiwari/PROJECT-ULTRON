@@ -2145,12 +2145,19 @@ async function run(request = {}, options = {}) {
           });
         } catch (error) {
           stats.candidatePrioritySearchFailures++;
+          const typed = typedFailureSummary(error, {
+            stage: error?.stage || 'candidate-discovery',
+          });
           stats.discoveryDiagnostics.push({
             rowNumber,
             groupOrdinal: 2,
             company: companyContext.company,
-            code: String(error?.code || 'APOLLO_PRIORITY_FAST_SEARCH_FAILED'),
-            message: String(error?.message || error || '').slice(0, 300),
+            code: typed.code,
+            subsystem: typed.subsystem,
+            type: typed.type,
+            stage: typed.stage,
+            message: typed.message.slice(0, 300),
+            hint: typed.hint,
           });
         }
       }
