@@ -15,6 +15,7 @@ const REQUIRED_TOOLS = Object.freeze([
   'search_jobs',
   'get_job_details',
   'get_company_profile',
+  'get_company_employees',
   'search_companies',
   'search_people',
   'get_person_profile',
