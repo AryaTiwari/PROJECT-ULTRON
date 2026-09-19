@@ -156,6 +156,7 @@ const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichme
 const bootstrapSource = fs.readFileSync(path.join(root, 'universal-deterministic-bootstrap.js'), 'utf8');
 const fallbackSource = fs.readFileSync(path.join(root, 'universal-big-pickle-fallback.js'), 'utf8');
 const contactQualitySource = fs.readFileSync(path.join(root, 'apollo-three-poc-quality.js'), 'utf8');
+const apolloSource = fs.readFileSync(path.join(root, 'apollo-enrichment.js'), 'utf8');
 
 assert.doesNotMatch(operatorSource, /existingRepairNeedsDiscovery/);
 assert.doesNotMatch(operatorSource, /exactCandidateForExisting/);
@@ -178,13 +179,19 @@ assert.match(operatorSource, /persistBackgroundPhoneAssignments/);
 assert.match(operatorSource, /loadBackgroundPhoneAssignments/);
 assert.match(operatorSource, /resumedPhoneAssignments/);
 
-assert.match(contactQualitySource, /run_waterfall_phone', 'true'/);
-assert.match(contactQualitySource, /poll_only', 'true'/);
+// Native Apollo reveal/webhook is the production phone path. The custom
+// poll-only phone waterfall is retained only as an explicit experimental/legacy
+// compatibility path so already-paid request IDs remain resumable.
+assert.match(apolloSource, /run_waterfall_phone', 'false'/);
+assert.match(apolloSource, /reveal_phone_number', needPhone \? 'true' : 'false'/);
+assert.match(contactQualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
+assert.match(contactQualitySource, /Native Apollo reveal \+ webhook settlement is the production default/);
 assert.match(contactQualitySource, /async function improveVerifiedPhone/);
 assert.match(contactQualitySource, /async function pollPhoneRequest/);
+assert.match(contactQualitySource, /function pendingPhoneWaterfallRequestId/);
+assert.match(contactQualitySource, /function carryLegacyPhoneRequest/);
 assert.match(contactQualitySource, /phoneStatus: 'waterfall_pending'/);
 assert.match(contactQualitySource, /function baseOptionsForQuality/);
-assert.match(contactQualitySource, /needPhone: false/);
 assert.match(operatorSource, /item\.phoneMode === 'waterfall'/);
 assert.match(operatorSource, /quality\.pollPhoneRequest\(item\.phoneWaterfallRequestId, \{ polls: 0 \}\)/);
 assert.match(operatorSource, /backgroundPhoneKey\(source, item\)/);
@@ -193,7 +200,7 @@ assert.match(contactQualitySource, /runState\.phoneWaterfallNotFound\+\+/);
 assert.match(contactQualitySource, /runState\.waterfallNotFound\+\+/);
 assert.match(contactQualitySource, /originalResolvePersonProfile/);
 assert.match(contactQualitySource, /apollo\.resolvePersonProfile = async function resultsFirstResolvePersonProfile/);
-assert.match(contactQualitySource, /return improveVerifiedContacts\(result, options\)/);
+assert.match(contactQualitySource, /improveVerifiedContacts\(carryLegacyPhoneRequest\(result, legacyPhoneRequestId\), options\)/);
 assert.match(contactQualitySource, /if \(options\.needPhone !== false\) next = await improveVerifiedPhone\(next\)/);
 assert.match(operatorSource, /Final-POC contact waterfall:/);
 assert.match(operatorSource, /const anchorContactHydrationNeeded = \(!phaseOrdinal \|\| phaseOrdinal === 1\)[\s\S]*?anchorNeedsHydration\(plan, anchorContactEvidence\)/);
@@ -283,7 +290,7 @@ async function run() {
     sheets.writeCells = originals.writeCells;
   }
 
-  console.log('Universal contact completion self-test passed: existing POCs verify exactly, final verified POCs use one bounded poll-only phone waterfall instead of duplicate native+waterfall spend, waterfall request IDs persist by exact sheet cell for background polling, old webhook assignments remain resume-safe, populated phone cells are never overwritten, and nested waterfall phone payloads parse safely.');
+  console.log('Universal contact completion self-test passed: existing POCs verify exactly, native Apollo reveal/webhook is the default phone-completion path, already-paid legacy waterfall request IDs remain resumable by exact sheet cell, pending native callbacks remain resume-safe, populated phone cells are never overwritten, and nested legacy waterfall payloads still parse safely.');
 }
 
 if (require.main === module) {
