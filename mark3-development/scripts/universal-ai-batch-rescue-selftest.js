@@ -151,6 +151,8 @@ assert.match(controllerSource, /Priority contract: POC-1 is non-negotiable/);
 assert.match(controllerSource, /resolves the hiring organization from deterministic row evidence/);
 assert.match(controllerSource, /repairs any existing POC exactly by LinkedIn\/name\+verified company/);
 assert.match(controllerSource, /POC-3 is optional and may only reuse a POC-2 discovery pool/);
+assert.match(controllerSource, /one authenticated read-only LinkedIn people search/);
+assert.match(controllerSource, /LinkedIn supplies only profile references and Apollo must still verify exact identity and employer/);
 assert.match(controllerSource, /Row-evidence employer resolution runs before AI context/);
 assert.match(controllerSource, /Selection prefers Groq, then Gemini, then NVIDIA on failure/);
 assert.match(controllerSource, /OmniRoute is not used by the direct batch path/);
