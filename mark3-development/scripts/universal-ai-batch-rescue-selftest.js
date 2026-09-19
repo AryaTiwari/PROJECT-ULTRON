@@ -133,7 +133,9 @@ assert.match(operatorSource, /stats\.deferredOpenGroups \+= fillTargets\.length/
 assert.match(operatorSource, /options\.deferOpenGroupSelectionToAi/);
 assert.match(operatorSource, /repairDiscoveryNeeded \|\| \(!deferOpenSelection && fillTargets\.length\)/);
 assert.doesNotMatch(operatorSource, /if \(fillTargets\.length \|\| repairDiscoveryNeeded\) \{\s*people = await discoverCompanyPeople/);
-assert.match(controllerSource, /maximum 3 logical AI calls for the entire run, not per row/);
+assert.match(controllerSource, /maximum 3 direct AI attempts for the entire run, not per row/);
+assert.match(controllerSource, /env-only direct providers: Gemini is preferred for context, Groq for candidate selection and NVIDIA for the optional reviewer/);
+assert.match(controllerSource, /OmniRoute is not used/);
 
 assert.match(directSource, /async function allCredentialEntries\(provider, \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
 assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? \{\} : await storedCredentials\(\)/);
