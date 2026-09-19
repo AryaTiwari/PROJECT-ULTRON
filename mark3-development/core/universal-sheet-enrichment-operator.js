@@ -2647,7 +2647,11 @@ async function run(request = {}, options = {}) {
       // Mandatory POC-2 always gets the deterministic/manual discovery path first.
       // AI is rescue only. POC-3 may reuse this same pool but never triggers its own search.
       let people = [];
-      const discoveryTargets = phaseOrdinal === 3 ? poc3Targets : poc2Targets;
+      const discoveryTargets = phaseOrdinal === 3
+        ? poc3Targets
+        : phaseOrdinal === 2
+          ? poc2Targets
+          : [...poc2Targets, ...poc3Targets];
       if (discoveryTargets.length) {
         try {
           people = await discoverPriorityPeopleFast(companyContext, cache, stats, {
@@ -2727,8 +2731,8 @@ async function run(request = {}, options = {}) {
             ordinal: 3,
             claimed: manualClaimed,
             maxHydrationAttempts: options.poc3HydrationAttempts
-              ?? Number(process.env.ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS || (phaseOrdinal === 3 ? 5 : 1)),
-            fallbackMinimumScore: options.poc3FallbackMinimumScore ?? (phaseOrdinal === 3 ? 30 : 42),
+              ?? Number(process.env.ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS || (phaseOrdinal === 3 ? 5 : (!phaseOrdinal ? 3 : 1))),
+            fallbackMinimumScore: options.poc3FallbackMinimumScore ?? ((!phaseOrdinal || phaseOrdinal === 3) ? 30 : 42),
           });
           writes.push(...result.writes);
           if (result.filled) stats.manualPoc3Filled++;
