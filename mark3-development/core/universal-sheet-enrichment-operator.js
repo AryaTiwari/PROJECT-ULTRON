@@ -1675,10 +1675,18 @@ async function run(request = {}, options = {}) {
   // self-describing for later runs without risking overwrite of user data.
   await applyRecoveredHeaderRepairs(source, stats);
 
-  // These wrappers are installed by the deterministic bootstrap, but their
-  // accounting/budgets are per approved enrichment run, not process-lifetime.
-  try { require('./apollo-three-poc-quality').startRun(); } catch {}
-  try { require('./three-poc-candidate-discovery-policy').startRun(); } catch {}
+  // Make contact-quality/discovery wrappers self-sufficient in this runtime.
+  // Do not rely on some earlier bootstrap path having happened to install them.
+  try {
+    const quality = require('./apollo-three-poc-quality');
+    quality.install();
+    quality.startRun();
+  } catch {}
+  try {
+    const discovery = require('./three-poc-candidate-discovery-policy');
+    discovery.install?.();
+    discovery.startRun();
+  } catch {}
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const pendingPhoneQueue = [];
   const runOptions = { ...options, discoveryCache: cache, pendingPhoneQueue };
