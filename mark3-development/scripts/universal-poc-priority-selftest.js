@@ -136,6 +136,46 @@ assert.equal(
   'explicit current-employer proof from authenticated LinkedIn may override stale Apollo organization metadata for the exact same identity',
 );
 
+assert.equal(
+  apollo.hydratedEmployerMatchesCandidate(
+    { id: 'apollo-search-current', organization_name: 'Old Employer', organization: {} },
+    {
+      id: 'apollo-search-current',
+      organizationName: 'Hanvitt Consulting & Solutions',
+      organizationDomain: 'hanvitt.com',
+      apolloSearchEmployerVerified: true,
+      apolloSearchEmployerCompany: 'Hanvitt Consulting & Solutions',
+      apolloSearchEmployerDomain: 'hanvitt.com',
+    },
+    'Hanvitt Consulting & Solutions',
+    'hanvitt.com',
+  ),
+  true,
+  'exact employer-constrained Apollo people-search evidence may override stale people/match organization metadata after identity match',
+);
+
+const pragmatic = base.pragmaticSameEmployerCandidates([
+  {
+    id: 'placement',
+    name: 'Useful Placement Person',
+    title: 'Placement Coordinator',
+    organizationName: 'Example Technologies Pvt Ltd',
+    organizationDomain: 'example.com',
+  },
+  {
+    id: 'engineer',
+    name: 'Unrelated Engineer',
+    title: 'Software Engineer',
+    organizationName: 'Example Technologies Pvt Ltd',
+    organizationDomain: 'example.com',
+  },
+], companyContext, existing);
+assert.deepEqual(
+  pragmatic.map((item) => item.id),
+  ['placement'],
+  'results-first pragmatic fallback must retain useful same-company people/placement roles without accepting unrelated engineers',
+);
+
 assert.equal(base.anchorNeedsHydration({
   anchor: {
     type: 'person',
@@ -205,6 +245,7 @@ assert.match(operatorSource, /linkedin_username: slug/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_LINKEDIN_ZERO_RESULT_FALLBACK/);
 assert.match(operatorSource, /priority-fast-v2\|/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
+assert.match(operatorSource, /pragmaticSameEmployerCandidates/);
 assert.match(operatorSource, /ordinal: 2/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
 assert.match(operatorSource, /ordinal: 3/);
@@ -243,4 +284,4 @@ assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);
 
-console.log('Universal POC priority self-test passed: POC-2 is manual-first even when batch AI is enabled, employer identity uses one canonical matcher across ranking and Apollo hydration, exact Apollo id hydration survives omitted LinkedIn URLs but rejects conflicting identities, sparse-company discovery escalates safely, and POC-3 remains optional.');
+console.log('Universal POC priority self-test passed: POC-2 is manual-first, exact employer-constrained Apollo search evidence survives stale hydration employer metadata after identity verification, useful same-company HR/talent/placement/leadership roles remain eligible through the pragmatic fallback, sparse-company discovery escalates safely, and POC-3 remains optional.');
