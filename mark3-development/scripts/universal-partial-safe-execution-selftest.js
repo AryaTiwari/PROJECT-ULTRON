@@ -81,11 +81,11 @@ assert.match(handlerSource, /resumeSafe/);
 assert.match(handlerSource, /UNIVERSAL_RESULT_FORMAT_FAILED/);
 assert.match(handlerSource, /reportFormattingError/);
 assert.match(handlerSource, /return response\(true, body/);
-assert.match(handlerSource, /EXECUTION_CONTRACT = 'universal-poc-phase-contact-completion-v3'/);
+assert.match(handlerSource, /EXECUTION_CONTRACT = 'universal-coordinated-multi-poc-v4'/);
 assert.match(handlerSource, /executionContract: EXECUTION_CONTRACT/);
 assert.match(handlerSource, /pocPhasePipeline: Boolean\(payload\.contactPhaseOrdinal\)/);
 assert.match(handlerSource, /contactPhaseOrdinal: payload\.contactPhaseOrdinal \|\| undefined/);
-assert.match(controlSource, /executionContract: 'universal-poc-phase-contact-completion-v3'/);
+assert.match(controlSource, /executionContract: 'universal-coordinated-multi-poc-v4'/);
 assert.match(controlSource, /typedErrors\.normalize\(error/);
 for (const source of [baseSource, targetedSource, fallbackSource, handlerSource, controlSource]) {
   assert.doesNotMatch(source, /UNIVERSAL_SPREADSHEET_EXECUTION_FAILED/, 'generic execution failure must not survive the partial-safe contract');
