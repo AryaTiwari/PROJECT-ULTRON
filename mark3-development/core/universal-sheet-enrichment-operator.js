@@ -973,15 +973,62 @@ function companySlugCandidates(companyContext = {}) {
   return [...out].slice(0, 2);
 }
 
+function flattenStructuredText(value, out = [], seen = new WeakSet(), depth = 0) {
+  if (value == null || depth > 8) return out;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const item = text(value);
+    if (item) out.push(item);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) flattenStructuredText(item, out, seen, depth + 1);
+    return out;
+  }
+  if (typeof value === 'object') {
+    if (seen.has(value)) return out;
+    seen.add(value);
+    for (const item of Object.values(value)) flattenStructuredText(item, out, seen, depth + 1);
+  }
+  return out;
+}
+
 function linkedinCompanyProfileMatches(profile, companyContext = {}) {
-  const about = text(profile?.sections?.about || profile?.sections?.main_profile || '');
-  const expectedCompany = ranker.companyKey(companyContext?.company || '');
+  if (!profile) return false;
+  const expectedCompany = text(companyContext?.company || '');
+  const expectedKey = ranker.companyKey(expectedCompany);
   const domain = websiteDomain(companyContext?.domain || '');
-  const haystack = ranker.normalize(about);
-  if (expectedCompany && haystack.includes(expectedCompany)) return true;
+  const brand = companyBrandFromDomain(domain);
+
+  // Strongest evidence first: an actual company URL/slug returned inside the
+  // fetched profile must match one of the verified employer-derived slug forms.
+  const expectedSlugs = new Set(companySlugCandidates(companyContext));
+  const returnedSlugs = collectLinkedInCompanySlugs(profile);
+  if ([...returnedSlugs].some((slug) => expectedSlugs.has(text(slug).toLowerCase()))) return true;
+
+  // Common direct name fields from MCP/package variants.
+  const directNames = [
+    profile?.name,
+    profile?.company_name,
+    profile?.companyName,
+    profile?.organization_name,
+    profile?.organizationName,
+    profile?.title,
+    profile?.sections?.main_profile?.name,
+    profile?.sections?.main_profile?.company_name,
+    profile?.sections?.about?.name,
+  ].map(text).filter(Boolean);
+  for (const candidate of directNames) {
+    if (expectedCompany && apollo.sameOrganization({ organization_name: candidate }, expectedCompany, domain)) return true;
+    if (brand && apollo.sameOrganization({ organization_name: candidate }, brand, domain)) return true;
+  }
+
+  // Structured MCP sections are objects/arrays, not guaranteed strings.
+  // Flatten their scalar content instead of coercing them to "[object Object]".
+  const haystack = ranker.normalize(flattenStructuredText(profile).join(' '));
+  if (expectedKey && haystack.includes(expectedKey)) return true;
   if (domain && haystack.includes(domain)) return true;
-  const brand = ranker.companyKey(companyBrandFromDomain(domain));
-  return Boolean(brand && haystack.includes(brand));
+  const brandKey = ranker.companyKey(brand);
+  return Boolean(brandKey && haystack.includes(brandKey));
 }
 
 async function verifyLinkedInCompanyEmployee(linkedinUrl, companyContext, stats) {
@@ -2571,6 +2618,7 @@ module.exports = {
   collectLinkedInCompanySlugs,
   collectLinkedInCompanyUrns,
   companySlugCandidates,
+  flattenStructuredText,
   linkedinCompanyProfileMatches,
   discoverLinkedInFallbackPeople,
   verifyLinkedInCompanyEmployee,
