@@ -144,8 +144,11 @@ assert.match(operatorSource, /optionalPoc3Deferred/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc3HydrationAttempts \?\? 1/);
 assert.match(controllerSource, /maximum 3 direct AI attempts for the entire run, not per row/);
-assert.match(controllerSource, /env-only direct providers: Gemini is preferred for context, Groq for candidate selection and NVIDIA for the optional reviewer/);
-assert.match(controllerSource, /OmniRoute is not used/);
+assert.match(controllerSource, /Priority contract: POC-1 is non-negotiable/);
+assert.match(controllerSource, /POC-2 is the primary additional contact/);
+assert.match(controllerSource, /POC-3 is optional and receives only one cheap manual attempt/);
+assert.match(controllerSource, /Selection prefers Groq, then Gemini, then NVIDIA on failure/);
+assert.match(controllerSource, /OmniRoute is not used by the direct batch path/);
 
 assert.match(directSource, /async function allCredentialEntries\(provider, \{ envOnly: forceEnvOnly = false \} = \{\}\)/);
 assert.match(directSource, /const stored = \(forceEnvOnly \|\| envOnly\(\)\) \? \{\} : await storedCredentials\(\)/);
