@@ -98,10 +98,15 @@ function providerOrder(taskType) {
   const task = taskName(taskType);
   const configured = csv(`ULTRON_M3_DIRECT_PROVIDER_ORDER_${task.toUpperCase()}`).map((provider) => provider.toLowerCase());
   if (configured.length) return configured.filter((provider) => PROVIDERS[provider]);
-  if (task === 'simple_qa' || task === 'automation') return ['gemini', 'xai', 'groq', 'nvidia'];
-  if (task === 'coding' || task === 'planning') return ['nvidia', 'xai', 'gemini', 'groq'];
-  if (task === 'research') return ['xai', 'gemini', 'nvidia', 'groq'];
-  return ['gemini', 'xai', 'nvidia', 'groq'];
+
+  // Specialist-first defaults. Keep these aligned with Mark 3 preflight:
+  // simple/automation -> Groq for latency, research -> Gemini for long context,
+  // coding/planning -> NVIDIA, general -> Gemini. xAI remains an optional
+  // configured/fallback provider when a real xAI/Grok key is present.
+  if (task === 'simple_qa' || task === 'automation') return ['groq', 'gemini', 'nvidia', 'xai'];
+  if (task === 'coding' || task === 'planning') return ['nvidia', 'gemini', 'groq', 'xai'];
+  if (task === 'research') return ['gemini', 'nvidia', 'groq', 'xai'];
+  return ['gemini', 'groq', 'nvidia', 'xai'];
 }
 
 function configuredModelOverride(provider, taskType) {
