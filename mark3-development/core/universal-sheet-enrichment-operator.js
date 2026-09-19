@@ -1918,6 +1918,7 @@ module.exports = {
   discoverCompanyPeople,
   companyBrandFromDomain,
   collectLinkedInPersonUrls,
+  collectLinkedInCompanySlugs,
   discoverLinkedInFallbackPeople,
   verifyLinkedInCompanyEmployee,
   hydrateDecisionMakerVerified,
