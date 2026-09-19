@@ -20,6 +20,9 @@ function parseSheetName(message) {
   // "worksheet" is a first-class synonym for "sheet"/"tab". This matters for
   // prompts such as: Target only the `Arya 2` worksheet.
   const linePatterns = [
+    // Common production phrasing: "Enrich ... on the \"Arya 2\" worksheet".
+    /\bon\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
+    /\bon\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet|worksheet)\b/i,
     /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/im,
     /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet|worksheet)\b/im,
     /(?:^|\n)\s*(?:target|use|sheet|tab|worksheet)\s+(?:only\s+)?(?:tab|sheet|worksheet)?\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})/im,
