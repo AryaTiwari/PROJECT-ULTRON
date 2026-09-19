@@ -53,6 +53,11 @@ assert.equal(
   'generic careers mailbox must never be treated as exact person evidence',
 );
 assert.equal(
+  operator.emailLocalPartMatchesAnchor('esha@mappoptimist.com', 'Esha Joshi'),
+  true,
+  'exact four-letter first-name business email should be accepted when the local part equals the name token',
+);
+assert.equal(
   operator.emailLocalPartMatchesAnchor('hr@a3nity.com', 'Arika Mishra'),
   false,
   'generic HR mailbox must never be treated as exact person evidence',
