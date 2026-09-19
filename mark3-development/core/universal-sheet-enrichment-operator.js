@@ -243,8 +243,9 @@ async function resolvePersonAnchor(plan, row, options = {}) {
   if (!anchor || anchor.type !== 'person') return null;
   const values = anchor.snapshot?.values || {};
   const group = anchor.group;
-  const needEmail = Boolean(group.fields.email && !values.email);
-  const needPhone = Boolean(group.fields.phone && !values.phone);
+  const completeContacts = options.completeContacts !== false;
+  const needEmail = completeContacts && Boolean(group.fields.email && !values.email);
+  const needPhone = completeContacts && Boolean(group.fields.phone && !values.phone);
   const normalizedLinkedin = apollo.normalizeLinkedIn(values.linkedin || '');
   let profile = null;
   let company = '';
@@ -2444,11 +2445,18 @@ async function run(request = {}, options = {}) {
 
     try {
       const rowEvidenceContext = inferHiringCompanyFromEvidence(plan, row);
+      const anchorContactHydrationNeeded = (!phaseOrdinal || phaseOrdinal === 1) && anchorNeedsHydration(plan);
       let anchorCompanyContext = null;
       if (plan.anchor.type === 'company') {
         anchorCompanyContext = companyFromCompanyAnchor(plan.anchor);
-      } else if (anchorNeedsHydration(plan) || !rowEvidenceContext) {
-        anchorCompanyContext = await resolvePersonAnchor(plan, row, { ...options, allowLinkedInEmployerFallback: false });
+      } else if (anchorContactHydrationNeeded || !rowEvidenceContext) {
+        if (anchorContactHydrationNeeded) stats.hydrationAttempts++;
+        anchorCompanyContext = await resolvePersonAnchor(plan, row, {
+          ...options,
+          allowLinkedInEmployerFallback: false,
+          completeContacts: anchorContactHydrationNeeded,
+        });
+        if (anchorContactHydrationNeeded && !anchorCompanyContext?.anchorPerson) stats.hydrationFailures++;
       } else {
         anchorCompanyContext = {
           unresolved: true,
@@ -2466,7 +2474,11 @@ async function run(request = {}, options = {}) {
       // a usable hiring organization.
       if (!companyContext?.company && plan.anchor.type === 'person' && !options.resultsFirstSweep) {
         try {
-          const linkedinEmployerContext = await resolvePersonAnchor(plan, row, { ...options, allowLinkedInEmployerFallback: true });
+          const linkedinEmployerContext = await resolvePersonAnchor(plan, row, {
+            ...options,
+            allowLinkedInEmployerFallback: true,
+            completeContacts: false,
+          });
           if (linkedinEmployerContext?.company) companyContext = linkedinEmployerContext;
           if (!anchorCompanyContext?.anchorPerson && linkedinEmployerContext?.anchorPerson) {
             anchorCompanyContext = linkedinEmployerContext;
