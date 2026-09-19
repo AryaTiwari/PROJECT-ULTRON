@@ -146,6 +146,9 @@ assert.match(targetedSource, /ordinal: 3/);
 assert.match(targetedSource, /runPocPhasePipeline\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /POC-phase pipeline:/);
 assert.match(targetedSource, /poc-phase-deterministic-only/);
+assert.match(targetedSource, /const phaseOrdinal = Number\(options\.contactPhaseOrdinal \|\| 0\) \|\| null/);
+assert.match(targetedSource, /\(!phaseOrdinal \|\| phaseOrdinal === 1\)/);
+assert.match(targetedSource, /\(!phaseOrdinal \|\| phaseOrdinal === 2\)/);
 assert.doesNotMatch(targetedSource, /const boundedAiEnabled = aiBatchRescue\.enabled\(\) && options\.apolloApproved/);
 
 console.log('Universal POC phase pipeline self-test passed: enrichment is sheet-wide POC-1 -> POC-2 -> POC-3, each phase is ordinal-scoped, POC-3 owns discovery when needed, and aggregate reporting preserves POC-2 residue.');
