@@ -57,6 +57,22 @@ const existingPocContext = base.existingPersonVerificationContext({
 assert.equal(existingPocContext.domain, 'sutherlandglobal.com');
 assert.equal(existingPocContext.source, 'existing-poc-business-email-domain');
 
+assert.equal(base.anchorNeedsHydration({
+  anchor: {
+    type: 'person',
+    group: { fields: { phone: { index: 3 }, email: { index: 4 } } },
+    snapshot: { values: { phone: '+919999999999', email: 'ready@example.com' } },
+  },
+}), false, 'complete POC-1 should not be re-hydrated merely for ceremony');
+
+assert.equal(base.anchorNeedsHydration({
+  anchor: {
+    type: 'person',
+    group: { fields: { phone: { index: 3 }, email: { index: 4 } } },
+    snapshot: { values: { phone: '', email: 'ready@example.com' } },
+  },
+}), true, 'missing POC-1 phone must still trigger exact anchor hydration');
+
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
@@ -79,6 +95,8 @@ assert.doesNotMatch(operatorSource, /candidateLimit: options\.manualCandidateLim
 assert.match(operatorSource, /preferredHiringCompanyContext/);
 assert.match(operatorSource, /row-business-email-domain/);
 assert.match(operatorSource, /existing-poc-business-email-domain/);
+assert.match(operatorSource, /anchor-hydration-skipped-complete/);
+assert.match(operatorSource, /allowLinkedInEmployerFallback: false/);
 
 const runSource = operatorSource.slice(operatorSource.indexOf('async function run(request = {}, options = {})'));
 const exactRepairIndex = runSource.indexOf('repairExistingGroups(row, plan, companyContext, stats, repairOptions)');
