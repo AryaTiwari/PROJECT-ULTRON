@@ -1113,6 +1113,7 @@ async function run(request = {}, options = {}) {
         const unresolvedPoc2 = fillTargets.some((target) => Number(target.group?.ordinal || 0) === 2);
         if (unresolvedPoc2 && aiFallbackEnabled) {
           stats.deferredOpenGroups++;
+          stats.unfilledOpenGroups++;
           if (!stats.deferredPoc2Rows.includes(rowNumber)) stats.deferredPoc2Rows.push(rowNumber);
         }
         const byColumn = new Map();
@@ -1170,6 +1171,7 @@ async function run(request = {}, options = {}) {
         if (result.filled) stats.manualPoc2Filled++;
         else if (aiFallbackEnabled) {
           stats.deferredOpenGroups++;
+          stats.unfilledOpenGroups++;
           if (!stats.deferredPoc2Rows.includes(rowNumber)) stats.deferredPoc2Rows.push(rowNumber);
         }
       }
