@@ -761,7 +761,18 @@ function formatDiagnosticFooter(result) {
 
 function formatResult(result) {
   const primaryView = result?.primaryStats ? { ...result, stats: result.primaryStats } : result;
-  const primary = base.formatResult(primaryView).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
+  const basePrimary = base.formatResult(primaryView).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
+  const phaseSummaries = Array.isArray(result?.stats?.pocPhaseSummaries)
+    ? result.stats.pocPhaseSummaries
+    : Array.isArray(result?.primaryStats?.pocPhaseSummaries)
+      ? result.primaryStats.pocPhaseSummaries
+      : [];
+  const phaseText = phaseSummaries.length
+    ? ` POC-phase pipeline: ${phaseSummaries.map((phase) =>
+        `${phase.label || `POC-${phase.ordinal}`}: ${phase.cellsChanged || 0} cells / ${phase.rowsChanged || 0} rows changed, ${phase.newPeopleSelected || 0} new people, ${phase.existingGroupsRepaired || 0} repairs, ${phase.unfilledOpenGroups || 0} unfilled${phase.haltedEarly ? ' [HALTED]' : ''}`
+      ).join(' | ')}.`
+    : '';
+  const primary = `${basePrimary}${phaseText}`;
   const ai = result?.aiBatchRescue;
   const fb = result?.bigPickleFallback;
   const diagnosticFooter = formatDiagnosticFooter(result);
