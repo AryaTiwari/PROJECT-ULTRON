@@ -223,6 +223,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     if (targets.length) {
       const people = await base.discoverPriorityPeopleFast(companyContext, cache, stats, {
         ...runOptions,
+        rowNumber,
         location: plan.context?.location || '',
         priorityCandidateLimit: runOptions.manualPriorityCandidateLimit ?? 20,
         adaptiveBroadCandidateLimit: runOptions.adaptiveBroadCandidateLimit ?? 30,
@@ -342,7 +343,19 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         stats.unresolvedRows = stats.unresolvedRows || [];
         stats.unresolvedReasons = stats.unresolvedReasons || [];
         if (!stats.unresolvedRows.includes(rowNumber)) stats.unresolvedRows.push(rowNumber);
-        stats.unresolvedReasons.push({ rowNumber, reason: 'recoverable-last-resort-failure', detail: typed.code });
+        stats.unresolvedReasons.push({
+          rowNumber,
+          reason: 'recoverable-last-resort-failure',
+          detail: typed.code,
+          typed: {
+            code: typed.code,
+            subsystem: typed.subsystem,
+            type: typed.type,
+            stage: typed.stage,
+            message: typed.message,
+            hint: typed.hint,
+          },
+        });
         continue;
       }
 
@@ -353,7 +366,19 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       stats.unresolvedRows = stats.unresolvedRows || [];
       stats.unresolvedReasons = stats.unresolvedReasons || [];
       if (!stats.unresolvedRows.includes(rowNumber)) stats.unresolvedRows.push(rowNumber);
-      stats.unresolvedReasons.push({ rowNumber, reason: 'systemic-last-resort-halt', detail: typed.code });
+      stats.unresolvedReasons.push({
+        rowNumber,
+        reason: 'systemic-last-resort-halt',
+        detail: typed.code,
+        typed: {
+          code: typed.code,
+          subsystem: typed.subsystem,
+          type: typed.type,
+          stage: typed.stage,
+          message: typed.message,
+          hint: typed.hint,
+        },
+      });
       break;
     }
   }
