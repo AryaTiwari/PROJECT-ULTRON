@@ -271,7 +271,7 @@ function decisionPriority(title, mode = 'general') {
     || exactManager
   ) return 2;
 
-  if (/\b(?:hr recruiter|human resources recruiter|technical recruiter|talent acquisition recruiter|recruiter)\b/.test(value)) return 3;
+  if (/\b(?:hr recruiter|human resources recruiter|technical recruiter|talent acquisition recruiter|recruiter|talent acquisition specialist|recruitment specialist|human resources specialist|hr specialist|people operations|people ops|hr business partner|human resources business partner|staffing specialist|placement coordinator)\b/.test(value)) return 3;
   return 99;
 }
 
@@ -364,6 +364,9 @@ function searchCandidateFromPerson(person, cleanCompany, cleanDomain) {
     phone: null,
     searchLimitedIdentity: !linkedinUrl,
     lastNameObfuscated: Boolean(person?.last_name_obfuscated && !person?.last_name),
+    apolloSearchEmployerVerified: true,
+    apolloSearchEmployerCompany: String(person?.organization_name || person?.organization?.name || cleanCompany).trim(),
+    apolloSearchEmployerDomain: hostname(person?.organization?.website_url || person?.organization?.primary_domain || person?.organization?.domain || cleanDomain),
   };
 }
 
@@ -622,6 +625,14 @@ function hydratedEmployerMatchesCandidate(person, candidate = {}, company = '', 
     && sameOrganization(candidate, ctx.requestedCompany, ctx.requestedDomain)
   ) return true;
 
+  // People API Search is itself employer-constrained. After exact person-id/
+  // LinkedIn identity matching succeeds, trust that fresh search evidence over a
+  // stale organization object returned by people/match.
+  if (
+    candidate.apolloSearchEmployerVerified === true
+    && sameOrganization(candidate, ctx.requestedCompany, ctx.requestedDomain)
+  ) return true;
+
   // Candidate came from an employer-constrained Apollo search. If its discovered
   // employer matches the requested employer, tolerate missing hydrated org metadata,
   // but never tolerate a clearly different hydrated organization unless LinkedIn
@@ -686,15 +697,31 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
   }
 
   const organization = personOrganization(person);
+  const searchEmployerOverride = Boolean(
+    candidate.apolloSearchEmployerVerified === true
+    && sameOrganization(candidate, company, domain)
+    && !sameOrganization(person, company, domain)
+  );
+  const finalOrganizationName = searchEmployerOverride
+    ? String(candidate.organizationName || candidate.organization_name || company || '').trim()
+    : organization.organizationName;
+  const finalOrganizationDomain = searchEmployerOverride
+    ? hostname(candidate.organizationDomain || domain || '')
+    : organization.organizationDomain;
   const immediatePhone = validPhone(person.phone_number || person.sanitized_phone || '');
   const phoneStatus = needPhone ? (immediatePhone ? 'found' : 'pending') : null;
   const record = {
     name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || candidate.name || '').trim(),
     title: String(person.title || candidate.title || '').trim(),
     headline: String(person.headline || candidate.headline || '').trim(),
-    organization: organization.organization,
-    organizationName: organization.organizationName,
-    organizationDomain: organization.organizationDomain,
+    organization: searchEmployerOverride
+      ? { ...(organization.organization || {}), ...(finalOrganizationName ? { name: finalOrganizationName } : {}), ...(finalOrganizationDomain ? { primary_domain: finalOrganizationDomain } : {}) }
+      : organization.organization,
+    organizationName: finalOrganizationName,
+    organizationDomain: finalOrganizationDomain,
+    hydratedOrganizationName: organization.organizationName,
+    hydratedOrganizationDomain: organization.organizationDomain,
+    employerVerifiedBy: searchEmployerOverride ? 'apollo-people-search' : 'apollo-enrichment',
     apolloPersonId: String(person.id),
     noMatch: false,
     ambiguous: false,
