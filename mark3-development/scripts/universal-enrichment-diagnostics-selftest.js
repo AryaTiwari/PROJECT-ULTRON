@@ -55,6 +55,12 @@ const typedCap = typedErrors.normalize(capError, { stage: 'candidate-discovery' 
 assert.equal(typedCap.type, 'RATE_LIMIT');
 assert.match(typedCap.hint, /daily safety budget/i);
 
+const recursionError = new RangeError('Maximum call stack size exceeded');
+const typedRecursion = typedErrors.normalize(recursionError, { stage: 'candidate-discovery' });
+assert.equal(typedRecursion.type, 'RECURSION');
+assert.equal(typedRecursion.code, 'UNIVERSAL_RECURSION_STACK_OVERFLOW');
+assert.match(typedRecursion.hint, /recursive wrapper\/helper loop/i);
+
 const providerReasons = targeted.providerRetryReasonsFromPrimary({
   deferredPoc2Rows: [5],
   discoveryDiagnostics: [{
@@ -80,6 +86,8 @@ assert.match(operatorSource, /deterministicRecheckRemainingMandatoryRows/);
 assert.match(operatorSource, /deterministicRecheckRemainingRepairRows/);
 assert.match(operatorSource, /Diagnostics:/);
 assert.match(operatorSource, /company URNs/);
+assert.match(operatorSource, /const pushLinkedInDiagnostic = \(payload = \{\}\) => \{[\s\S]*?stats\.discoveryDiagnostics\.push\(/);
+assert.doesNotMatch(operatorSource, /const pushLinkedInDiagnostic = \(payload = \{\}\) => \{\s*pushLinkedInDiagnostic\(/);
 assert.match(targetedSource, /MANDATORY_DATA_EXHAUSTED/);
 assert.match(targetedSource, /FINAL_AUDIT_FAILED/);
 assert.match(targetedSource, /AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL|ai-skipped-no-verified-candidate-pool/);
@@ -92,4 +100,4 @@ assert.match(targetedSource, /provider-retry-required/);
 assert.match(targetedSource, /const gateBlockers/);
 assert.match(targetedSource, /Problems:/);
 
-console.log('Universal enrichment diagnostics self-test passed: row scopes remain accurate, LinkedIn safety caps classify as retryable rate-limit root causes, rescue stops when the safety window is exhausted, and mandatory blockers remain separate from repair/pending/optional work.');
+console.log('Universal enrichment diagnostics self-test passed: row scopes remain accurate, LinkedIn safety caps are retryable rate-limit causes, recursive diagnostic helpers are forbidden, stack overflows get a dedicated typed code, and mandatory blockers remain separate from repair/pending/optional work.');
