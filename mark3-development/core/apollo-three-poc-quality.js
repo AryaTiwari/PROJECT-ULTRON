@@ -495,8 +495,11 @@ async function improveVerifiedPhone(result) {
 
 async function improveVerifiedContacts(result, options = {}) {
   let next = result;
-  if (options.needEmail !== false) next = await improveVerifiedEmail(next);
+  // Phone is operationally higher-value for this lead workflow and the user
+  // explicitly prioritizes filling missing numbers. Run it before optional email
+  // deepening so an email waterfall cannot delay a useful phone result.
   if (options.needPhone !== false) next = await improveVerifiedPhone(next);
+  if (options.needEmail !== false) next = await improveVerifiedEmail(next);
   return next;
 }
 
