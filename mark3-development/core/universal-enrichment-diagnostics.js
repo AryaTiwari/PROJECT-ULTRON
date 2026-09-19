@@ -323,8 +323,10 @@ function runtimeIssues(stats = {}) {
       severity: 'WARNING',
       blocking: false,
       retryable: true,
+      rowNumber: item.rowNumber,
+      groupOrdinal: item.groupOrdinal,
       company: item.company || '',
-      target: 'DISCOVERY',
+      target: item.groupOrdinal ? `POC-${item.groupOrdinal}` : 'DISCOVERY',
     }));
   }
   return issues;
