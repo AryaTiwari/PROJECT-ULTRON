@@ -214,6 +214,50 @@ const companySlugs = [...base.collectLinkedInCompanySlugs({
 })];
 assert.deepEqual(companySlugs, ['hanvitt-consulting-solutions', 'people-click']);
 
+const companyUrns = [...base.collectLinkedInCompanyUrns({
+  references: {
+    about: [
+      { kind: 'company_urn', value: '1115' },
+      { kind: 'company_urn', value: '1115' },
+      { kind: 'person', value: '999' },
+    ],
+  },
+})];
+assert.deepEqual(companyUrns, ['1115'], 'company_urn references must be recovered for current_company LinkedIn people search');
+
+assert.deepEqual(
+  base.companySlugCandidates({ company: 'Hanvitt Consulting & Solutions', domain: 'hanvitt.com' }),
+  ['hanvitt-consulting-solutions', 'hanvitt'],
+  'derived company slugs must be bounded search candidates, not trusted identities',
+);
+
+const leftoverStats = base.freshStats();
+base.markLeftover(leftoverStats, 5, 'poc2-no-candidates', {
+  groupOrdinal: 2,
+  company: 'Hanvitt Consulting & Solutions',
+});
+base.markLeftover(leftoverStats, 5, 'poc2-no-candidates', {
+  groupOrdinal: 2,
+  company: 'Hanvitt Consulting & Solutions',
+});
+assert.equal(leftoverStats.leftoverQueue.length, 1, 'leftover queue must dedupe row/reason/group');
+assert.deepEqual(leftoverStats.primarySweepDeferredRows, [5]);
+
+const recheckPrimary = base.freshStats();
+recheckPrimary.phoneStillPending = 3;
+recheckPrimary.leftoverQueue = [{ rowNumber: 5, groupOrdinal: 2, reason: 'poc2-no-candidates' }];
+const recheckStats = base.freshStats();
+recheckStats.manualPoc2Filled = 1;
+recheckStats.leftoverQueue = [];
+recheckStats.deferredPoc2Rows = [];
+recheckStats.phoneStillPending = 0;
+base.mergeDeterministicRecheckStats(recheckPrimary, recheckStats, [5]);
+assert.equal(recheckPrimary.deterministicRecheckAttempted, true);
+assert.deepEqual(recheckPrimary.deterministicRecheckRows, [5]);
+assert.deepEqual(recheckPrimary.deterministicRecheckResolvedRows, [5]);
+assert.deepEqual(recheckPrimary.deterministicRecheckRemainingRows, []);
+assert.equal(recheckPrimary.phoneStillPending, 3, 'recheck merge must never erase pending callback accounting from the full-sheet sweep');
+
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
@@ -243,7 +287,20 @@ assert.match(operatorSource, /APOLLO_COMPANY_MISMATCH_AFTER_HYDRATION/);
 assert.match(operatorSource, /linkedinHydrationRecoverySuccesses/);
 assert.match(operatorSource, /linkedin_username: slug/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_LINKEDIN_ZERO_RESULT_FALLBACK/);
-assert.match(operatorSource, /priority-fast-v2\|/);
+assert.match(operatorSource, /priority-fast-v3\|/);
+assert.match(operatorSource, /const discoveryMode = options\.primarySweep \? 'sweep' : 'deep'/);
+assert.match(operatorSource, /if \(options\.primarySweep\) \{/);
+assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_PRIMARY_POC2_HYDRATION_ATTEMPTS \|\| 1/);
+assert.match(operatorSource, /collectLinkedInCompanyUrns/);
+assert.match(operatorSource, /companySlugCandidates/);
+assert.match(operatorSource, /linkedinMcp\.callTool\('get_company_profile'/);
+assert.match(operatorSource, /current_company: urn/);
+assert.match(operatorSource, /LINKEDIN_DERIVED_COMPANY_SLUG_MISMATCH/);
+assert.match(operatorSource, /markLeftover/);
+assert.match(operatorSource, /mergeDeterministicRecheckStats/);
+assert.match(operatorSource, /resultsFirstSweep/);
+assert.match(operatorSource, /recheckPass: true/);
+assert.match(operatorSource, /targetRows: leftoverRows/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /pragmaticSameEmployerCandidates/);
 assert.match(operatorSource, /ordinal: 2/);
@@ -279,9 +336,11 @@ assert.match(rescueSource, /unresolvedContextInput/);
 assert.match(rescueSource, /\? \['groq', 'gemini', 'nvidia'\]/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
 
+assert.match(targetedSource, /resultsFirstSweep: options\.resultsFirstSweep !== false/);
+assert.match(targetedSource, /AI selection was intentionally skipped because no verified candidate pool survived deterministic discovery/);
 assert.match(targetedSource, /targetOrdinals: \[2\]/);
 assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);
 
-console.log('Universal POC priority self-test passed: POC-2 is manual-first, exact employer-constrained Apollo search evidence survives stale hydration employer metadata after identity verification, useful same-company HR/talent/placement/leadership roles remain eligible through the pragmatic fallback, sparse-company discovery escalates safely, and POC-3 remains optional.');
+console.log('Universal POC priority self-test passed: the primary sweep is results-first and bounded, unresolved rows enter a deduplicated leftover queue, the live-sheet deterministic recheck gets the full Apollo/LinkedIn company-URN waterfall, AI remains candidate-only, pending phone accounting survives recheck, and POC-3 remains optional.');
