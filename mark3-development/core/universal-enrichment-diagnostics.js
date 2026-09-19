@@ -223,7 +223,8 @@ function fallbackIssue(reason) {
 function issueFromReason(reason, context = {}) {
   const rawReason = text(reason || context.reason || 'unclassified');
   const spec = ISSUE_CATALOG[rawReason] || fallbackIssue(rawReason);
-  const rowNumber = Number(context.rowNumber);
+  const hasRowNumber = context.rowNumber !== null && context.rowNumber !== undefined && context.rowNumber !== '';
+  const rowNumber = hasRowNumber ? Number(context.rowNumber) : NaN;
   const groupOrdinal = Number(context.groupOrdinal || 0) || null;
   return {
     ...spec,
@@ -266,7 +267,10 @@ function typedIssue(value = {}, context = {}) {
     blocking: context.blocking !== false,
     retryable: context.retryable !== false,
     rawReason: code,
-    rowNumber: Number.isInteger(Number(context.rowNumber)) ? Number(context.rowNumber) : null,
+    rowNumber: context.rowNumber !== null && context.rowNumber !== undefined && context.rowNumber !== ''
+      && Number.isInteger(Number(context.rowNumber))
+      ? Number(context.rowNumber)
+      : null,
     groupOrdinal: Number(context.groupOrdinal || 0) || null,
     target: text(context.target || subsystem),
     company: text(context.company),
@@ -340,7 +344,8 @@ function uniqueIssues(issues = []) {
 }
 
 function formatIssue(issue = {}) {
-  const scope = Number.isInteger(Number(issue.rowNumber))
+  const scope = issue.rowNumber !== null && issue.rowNumber !== undefined && issue.rowNumber !== ''
+    && Number.isInteger(Number(issue.rowNumber))
     ? `[ROW ${Number(issue.rowNumber)}]`
     : '';
   const target = text(issue.target) ? `[${text(issue.target)}]` : '';
