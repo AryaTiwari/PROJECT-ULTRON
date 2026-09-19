@@ -63,22 +63,51 @@ function candidateDomain(candidate = {}) {
   );
 }
 
+function domainBrand(value) {
+  const host = hostname(value);
+  if (!host) return '';
+  return companyKey((host.split('.')[0] || '').replace(/[-_]+/g, ' '));
+}
+
+function companyTokenMatch(expectedValue, actualValue) {
+  const expected = companyKey(expectedValue);
+  const actual = companyKey(actualValue);
+  if (!expected || !actual) return false;
+  if (expected === actual) return true;
+  const a = new Set(expected.split(' ').filter((token) => token && token !== 'com'));
+  const b = new Set(actual.split(' ').filter((token) => token && token !== 'com'));
+  if (!a.size || !b.size) return false;
+  const intersection = [...a].filter((token) => b.has(token)).length;
+  const denominator = Math.max(1, Math.min(a.size, b.size));
+  return intersection / denominator >= 0.8;
+}
+
 function sameEmployer(candidate, context = {}) {
   const expectedDomain = hostname(context.companyDomain || context.domain || '');
   const actualDomain = candidateDomain(candidate);
   if (expectedDomain && actualDomain) {
-    if (expectedDomain === actualDomain || expectedDomain.endsWith(`.${actualDomain}`) || actualDomain.endsWith(`.${expectedDomain}`)) return true;
+    if (
+      expectedDomain === actualDomain
+      || expectedDomain.endsWith(`.${actualDomain}`)
+      || actualDomain.endsWith(`.${expectedDomain}`)
+    ) return true;
   }
-  const expected = companyKey(context.company || context.companyName || '');
-  const actual = companyKey(candidateCompany(candidate));
-  if (!expected) return true; // No employer constraint available: do not invent one.
-  if (!actual) return false;
-  if (expected === actual) return true;
-  const a = new Set(expected.split(' ').filter(Boolean));
-  const b = new Set(actual.split(' ').filter(Boolean));
-  const intersection = [...a].filter((token) => b.has(token)).length;
-  const denominator = Math.max(1, Math.min(a.size, b.size));
-  return intersection / denominator >= 0.8;
+
+  const actualCompany = candidateCompany(candidate);
+  const expectedNames = [
+    context.company,
+    context.companyName,
+    ...(Array.isArray(context.companyAliases) ? context.companyAliases : []),
+    domainBrand(expectedDomain),
+  ].filter(Boolean);
+
+  for (const expectedName of expectedNames) {
+    if (companyTokenMatch(expectedName, actualCompany)) return true;
+    if (actualDomain && companyTokenMatch(expectedName, domainBrand(actualDomain))) return true;
+  }
+
+  if (!expectedNames.length && !expectedDomain) return true; // No employer constraint available.
+  return false;
 }
 
 function stem(token) {
