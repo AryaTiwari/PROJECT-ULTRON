@@ -215,7 +215,7 @@ async function dispatch(message, options = {}) {
           attemptedRange: typed.attemptedRange || null,
           endpoint: typed.endpoint || null,
           providerStatus: typed.providerStatus ?? typed.status ?? null,
-          executionContract: 'universal-poc-phase-contact-completion-v3',
+          executionContract: 'universal-coordinated-multi-poc-v4',
           model: 'mark3-universal-deterministic-enrichment',
           provider: 'local-spreadsheet-control',
           taskType: 'universal-sheet-enrichment',
