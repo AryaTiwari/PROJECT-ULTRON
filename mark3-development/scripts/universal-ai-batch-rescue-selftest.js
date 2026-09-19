@@ -138,6 +138,7 @@ assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.match(targetedSource, /mandatoryCompletionAudit/);
 assert.match(targetedSource, /Completion beats "made progress"/);
 assert.match(targetedSource, /TERMINAL_EXHAUSTED/);
+assert.doesNotMatch(targetedSource, /INCOMPLETE_RETRYABLE/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /manualPoc2Filled/);
 assert.match(operatorSource, /optionalPoc3Deferred/);
