@@ -1040,8 +1040,33 @@ async function hydrateDecisionMakerVerified(candidate, companyContext, stats, op
       companyContext?.domain || '',
       { needEmail, needPhone },
     );
+
+    // LinkedIn current-employer verification is authoritative for employer
+    // identity in this recovery branch. Keep Apollo's contact fields, but do not
+    // let stale Apollo organization metadata make the caller reject the same
+    // verified candidate a second time.
+    const verifiedCompany = text(verified.organizationName || companyContext?.company || '');
+    const verifiedDomain = websiteDomain(
+      verified.organizationDomain
+      || companyContext?.domain
+      || ''
+    );
+    const recovered = {
+      ...person,
+      organizationName: verifiedCompany || person.organizationName,
+      organizationDomain: verifiedDomain || person.organizationDomain,
+      organization: {
+        ...(person.organization || {}),
+        ...(verifiedCompany ? { name: verifiedCompany } : {}),
+        ...(verifiedDomain ? { primary_domain: verifiedDomain } : {}),
+      },
+      linkedinEmployerVerified: true,
+      linkedinEmployerCompany: verifiedCompany,
+      linkedinEmployerSource: verified.linkedinEmployerSource || verified.linkedinEmployerVerified,
+    };
+
     stats.linkedinHydrationRecoverySuccesses = Number(stats.linkedinHydrationRecoverySuccesses || 0) + 1;
-    return person;
+    return recovered;
   }
 }
 
