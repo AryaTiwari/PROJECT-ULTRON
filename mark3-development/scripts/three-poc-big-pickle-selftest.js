@@ -33,7 +33,10 @@ const aiIndex = targetedSource.indexOf('aiBatchRescue.run(exact.request, primary
 const fallbackIndex = targetedSource.indexOf('fallbackPass.run(exact.request, primary, runOptions)');
 assert.ok(primaryIndex >= 0 && aiIndex > primaryIndex, 'deterministic safety pass must execute before bounded AI batch rescue');
 assert.ok(fallbackIndex > primaryIndex, 'legacy Big Pickle fallback must remain behind deterministic primary when batch AI is disabled');
-assert.match(targetedSource, /skippedReason:\s*'ai-batch-rescue-active'/);
+assert.match(targetedSource, /targetOrdinals:\s*\[2\]/);
+assert.match(targetedSource, /maxFallbackAttemptsPerTarget:\s*1/);
+assert.match(targetedSource, /directAiNeedsLastResort/);
+assert.match(targetedSource, /direct-ai-made-progress/);
 
 // Once primary returns successfully, optional fallback/orchestration problems must
 // preserve the primary result instead of reclassifying verified writes as failure.
@@ -77,4 +80,4 @@ assert.equal(fallback.ambiguityReason({ ranked: [{ score: 60, confidence: 0.4 }]
 assert.equal(fallback.ambiguityReason({ ranked: [{ score: 60, confidence: 0.7 }, { score: 57, confidence: 0.68 }] }, 0.54), 'close-score');
 assert.equal(fallback.ambiguityReason({ ranked: [{ score: 70, confidence: 0.72 }, { score: 50, confidence: 0.65 }] }, 0.54), null);
 
-console.log('Universal Big Pickle fallback self-test passed: deterministic primary executes before bounded fallback with a shared discovery cache, post-primary fallback failures preserve deterministic work, Apollo verification still gates writes, personal-provider fallback is forbidden, and legacy 3-POC wording cannot make Big Pickle own a Google Sheet run.');
+console.log('Universal Big Pickle fallback self-test passed: deterministic/manual primary executes first, direct env AI may rescue unresolved POC-2, Big Pickle is restricted to one last-resort POC-2 attempt only after direct AI failure/zero accepted selections, Apollo verification still gates writes, post-primary failures preserve earlier work, and POC-3 never enters the expensive fallback chain.');
