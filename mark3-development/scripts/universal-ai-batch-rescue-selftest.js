@@ -21,11 +21,13 @@ assert.equal(rescue.companySupported('Completely Different Holdings', evidence),
 
 const candidates = [
   { id: 'founder', name: 'Founder One', title: 'Founder & Director', organizationName: 'Example Co' },
+  { id: 'manager', name: 'Manager One', title: 'Talent Acquisition Manager', organizationName: 'Example Co' },
   { id: 'recruiter', name: 'Recruiter One', title: 'Technical Recruiter', organizationName: 'Example Co' },
   { id: 'engineer', name: 'Engineer One', title: 'Software Engineer', organizationName: 'Example Co' },
 ];
 const shortlist = rescue.shortlistCandidates(candidates, { hiringContext: 'Hiring SAP consultant' }, 6);
 assert.ok(shortlist.some((item) => item.id === 'founder'));
+assert.ok(shortlist.some((item) => item.id === 'manager'));
 assert.ok(shortlist.some((item) => item.id === 'recruiter'));
 
 const openPoc2 = {
