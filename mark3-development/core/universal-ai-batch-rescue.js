@@ -71,6 +71,9 @@ function freshStats() {
     candidateCacheHits: 0,
     candidatesDiscovered: 0,
     linkedinFallbackSearches: 0,
+    linkedinFallbackCompanySearches: 0,
+    linkedinFallbackEmployeeSearches: 0,
+    linkedinFallbackProfileVerifications: 0,
     linkedinFallbackFailures: 0,
     linkedinFallbackProfilesFound: 0,
     linkedinFallbackVerifiedCandidates: 0,
@@ -608,6 +611,9 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.candidateCacheHits = discoveryStats.candidateCacheHits || 0;
   stats.candidatesDiscovered = uniqueCandidateKeys.size;
   stats.linkedinFallbackSearches = discoveryStats.linkedinFallbackSearches || 0;
+  stats.linkedinFallbackCompanySearches = discoveryStats.linkedinFallbackCompanySearches || 0;
+  stats.linkedinFallbackEmployeeSearches = discoveryStats.linkedinFallbackEmployeeSearches || 0;
+  stats.linkedinFallbackProfileVerifications = discoveryStats.linkedinFallbackProfileVerifications || 0;
   stats.linkedinFallbackFailures = discoveryStats.linkedinFallbackFailures || 0;
   stats.linkedinFallbackProfilesFound = discoveryStats.linkedinFallbackProfilesFound || 0;
   stats.linkedinFallbackVerifiedCandidates = discoveryStats.linkedinFallbackVerifiedCandidates || 0;
