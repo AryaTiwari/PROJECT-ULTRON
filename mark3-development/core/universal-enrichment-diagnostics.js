@@ -186,6 +186,15 @@ const ISSUE_CATALOG = Object.freeze({
     message: 'At least one phone callback sync attempt failed.',
     nextAction: 'Inspect the typed phone-sync error and retry callback synchronization.',
   },
+  'requested-poc3-unresolved': {
+    code: 'POC3_REQUESTED_UNRESOLVED',
+    category: 'requested',
+    severity: 'WARNING',
+    blocking: false,
+    retryable: true,
+    message: 'Requested POC-3 is still unresolved.',
+    nextAction: 'Run the deep deterministic discovery and bounded AI rescue for this exact POC-3 slot; leave it blank if no safe same-company candidate survives.',
+  },
   'optional-poc3-unresolved': {
     code: 'OPTIONAL_POC3_UNRESOLVED',
     category: 'optional',
