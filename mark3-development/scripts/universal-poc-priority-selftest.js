@@ -30,6 +30,8 @@ const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.
 const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
 
 assert.match(operatorSource, /POC-1 is non-negotiable/);
+assert.match(operatorSource, /discoverPriorityPeopleFast/);
+assert.match(operatorSource, /priority-fast\|/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /ordinal: 2/);
 assert.match(operatorSource, /maxHydrationAttempts: options\.poc2HydrationAttempts \?\? 3/);
@@ -40,6 +42,8 @@ assert.match(operatorSource, /candidateLimit: options\.manualCandidateLimit \?\?
 assert.match(operatorSource, /priorityCandidateLimit: options\.manualPriorityCandidateLimit \?\? 20/);
 
 assert.match(rescueSource, /Number\(item\.group\?\.ordinal \|\| 0\) === wantedOrdinal/);
+assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
+assert.match(rescueSource, /no-primary-poc2-residue/);
 assert.match(rescueSource, /Select exactly one POC-2 candidate/);
 assert.match(rescueSource, /unresolvedContextInput/);
 assert.match(rescueSource, /\? \['groq', 'gemini', 'nvidia'\]/);
@@ -49,4 +53,4 @@ assert.match(targetedSource, /targetOrdinals: \[2\]/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.match(targetedSource, /POC-3 is never sent here/);
 
-console.log('Universal POC priority self-test passed: POC-1 completion is non-negotiable, POC-2 uses the canonical manual priority and up to three verified hydration attempts before AI, POC-3 gets only one cheap manual attempt, AI rescue is POC-2-only with Groq -> Gemini -> NVIDIA fallback, and last-resort model fallback is bounded to unresolved POC-2.');
+console.log('Universal POC priority self-test passed: POC-1 completion is non-negotiable, POC-2 uses priority-first Apollo discovery plus up to three verified hydration attempts before AI, only exact deferred POC-2 rows may enter AI rescue, POC-3 gets one cheap manual attempt, direct AI falls Groq -> Gemini -> NVIDIA, and last-resort fallback remains bounded to unresolved POC-2.');
