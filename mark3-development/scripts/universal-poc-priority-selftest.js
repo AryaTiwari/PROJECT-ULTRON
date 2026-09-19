@@ -337,7 +337,10 @@ assert.match(rescueSource, /\? \['groq', 'gemini', 'nvidia'\]/);
 assert.match(rescueSource, /ULTRON_M3_UNIVERSAL_AI_REVIEWER \|\| '0'/);
 
 assert.match(targetedSource, /resultsFirstSweep: options\.resultsFirstSweep !== false/);
-assert.match(targetedSource, /AI selection was intentionally skipped because no verified candidate pool survived deterministic discovery/);
+assert.match(targetedSource, /ai-skipped-no-verified-candidate-pool/);
+const diagnosticsSource = fs.readFileSync(path.join(root, 'universal-enrichment-diagnostics.js'), 'utf8');
+assert.match(diagnosticsSource, /AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL/);
+assert.match(diagnosticsSource, /Fix deterministic discovery\/verification evidence; changing AI providers will not help/);
 assert.match(targetedSource, /targetOrdinals: \[2\]/);
 assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
