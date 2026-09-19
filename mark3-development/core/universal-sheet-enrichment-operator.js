@@ -1040,6 +1040,13 @@ function linkedinZeroResultFallbackEnabled(options = {}) {
   return !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_LINKEDIN_ZERO_RESULT_FALLBACK ?? '1').trim());
 }
 
+function linkedinSafetyCapError(error) {
+  const code = text(error?.code).toUpperCase();
+  const message = text(error?.message).toUpperCase();
+  return /LINKEDIN_(?:DAILY|HOURLY)_CAP|LINKEDIN_SAFETY_CAP/.test(code)
+    || /DAILY SAFETY CAP|HOURLY SAFETY CAP|SAFETY CAP REACHED/.test(message);
+}
+
 async function discoverLinkedInFallbackPeople(companyContext, stats, options = {}) {
   if (!linkedinZeroResultFallbackEnabled(options)) return [];
   const company = text(companyContext?.company);
@@ -1049,6 +1056,16 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
   if (!queryBrand) return [];
 
   const personUrls = new Set();
+  const rowNumber = options.rowNumber !== null && options.rowNumber !== undefined && options.rowNumber !== ''
+    && Number.isInteger(Number(options.rowNumber))
+    ? Number(options.rowNumber)
+    : null;
+  const pushLinkedInDiagnostic = (payload = {}) => {
+    pushLinkedInDiagnostic({
+      ...payload,
+      ...(rowNumber != null ? { rowNumber, groupOrdinal: 2 } : {}),
+    });
+  };
 
   // Deep sparse-company path:
   // company search -> exact/derived slug -> verified company profile -> company URN
@@ -1060,11 +1077,12 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
     slugs = [...collectLinkedInCompanySlugs(companySearch)].slice(0, 2);
   } catch (error) {
     stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
-    stats.discoveryDiagnostics.push({
+    pushLinkedInDiagnostic({
       company: queryBrand,
       code: String(error?.code || 'LINKEDIN_COMPANY_SEARCH_FAILED'),
       message: String(error?.message || error || '').slice(0, 300),
     });
+    if (linkedinSafetyCapError(error)) throw error;
   }
 
   if (!slugs.length) slugs = companySlugCandidates(companyContext);
@@ -1076,16 +1094,17 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
       companyProfile = await linkedinMcp.callTool('get_company_profile', { company_name: slug });
       stats.linkedinFallbackCompanyProfiles = Number(stats.linkedinFallbackCompanyProfiles || 0) + 1;
     } catch (error) {
-      stats.discoveryDiagnostics.push({
+      pushLinkedInDiagnostic({
         company: queryBrand,
         code: String(error?.code || 'LINKEDIN_COMPANY_PROFILE_FAILED'),
         message: String(error?.message || error || '').slice(0, 300),
       });
+      if (linkedinSafetyCapError(error)) throw error;
     }
 
     const profileVerified = companyProfile && linkedinCompanyProfileMatches(companyProfile, companyContext);
     if (companyProfile && !profileVerified) {
-      stats.discoveryDiagnostics.push({
+      pushLinkedInDiagnostic({
         company: queryBrand,
         code: 'LINKEDIN_DERIVED_COMPANY_SLUG_MISMATCH',
         message: `LinkedIn company profile for slug ${slug} did not match the verified row employer.`,
@@ -1108,11 +1127,12 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
           collectLinkedInPersonUrls(constrained, personUrls);
         } catch (error) {
           stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
-          stats.discoveryDiagnostics.push({
+          pushLinkedInDiagnostic({
             company: queryBrand,
             code: String(error?.code || 'LINKEDIN_CURRENT_COMPANY_SEARCH_FAILED'),
             message: String(error?.message || error || '').slice(0, 300),
           });
+          if (linkedinSafetyCapError(error)) throw error;
         }
       }
     }
@@ -1132,11 +1152,12 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
       }
     } catch (error) {
       stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
-      stats.discoveryDiagnostics.push({
+      pushLinkedInDiagnostic({
         company: queryBrand,
         code: String(error?.code || 'LINKEDIN_COMPANY_EMPLOYEE_SEARCH_FAILED'),
         message: String(error?.message || error || '').slice(0, 300),
       });
+      if (linkedinSafetyCapError(error)) throw error;
     }
   }
 
@@ -1158,11 +1179,12 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
         collectLinkedInPersonUrls(result, personUrls);
       } catch (error) {
         stats.linkedinFallbackFailures = Number(stats.linkedinFallbackFailures || 0) + 1;
-        stats.discoveryDiagnostics.push({
+        pushLinkedInDiagnostic({
           company: queryBrand,
           code: String(error?.code || 'LINKEDIN_ZERO_RESULT_SEARCH_FAILED'),
           message: String(error?.message || error || '').slice(0, 300),
         });
+        if (linkedinSafetyCapError(error)) throw error;
       }
     }
   }
@@ -2115,6 +2137,7 @@ async function run(request = {}, options = {}) {
         try {
           people = await discoverPriorityPeopleFast(companyContext, cache, stats, {
             ...runOptions,
+            rowNumber,
             location: plan.context?.location || '',
             priorityCandidateLimit: options.manualPriorityCandidateLimit ?? 20,
             adaptiveBroadCandidateLimit: options.adaptiveBroadCandidateLimit ?? 30,
@@ -2123,6 +2146,8 @@ async function run(request = {}, options = {}) {
         } catch (error) {
           stats.candidatePrioritySearchFailures++;
           stats.discoveryDiagnostics.push({
+            rowNumber,
+            groupOrdinal: 2,
             company: companyContext.company,
             code: String(error?.code || 'APOLLO_PRIORITY_FAST_SEARCH_FAILED'),
             message: String(error?.message || error || '').slice(0, 300),
