@@ -335,31 +335,6 @@ function candidateFillTargets(plan) {
   return [...targets.values()].sort((a, b) => (a.group.ordinal || 999) - (b.group.ordinal || 999));
 }
 
-function existingRepairNeedsDiscovery(plan) {
-  return (plan?.groups?.partial || []).some((item) =>
-    !item.isAnchor
-    && item.snapshot?.hasIdentity
-    && item.snapshot?.values?.name
-    && item.snapshot?.linkedinKind !== 'linkedin_person'
-    && (
-      (item.group?.fields?.phone && !item.snapshot?.values?.phone)
-      || (item.group?.fields?.email && !item.snapshot?.values?.email)
-      || needsEmbeddedDesignationRepair(item)
-    )
-  );
-}
-
-function exactCandidateForExisting(item, candidates = [], companyContext = {}) {
-  const wanted = planner.normalizeName(item?.snapshot?.values?.name || '');
-  if (!wanted) return null;
-  const matches = (Array.isArray(candidates) ? candidates : []).filter((candidate) =>
-    planner.normalizeName(candidate?.name || '') === wanted
-    && ranker.sameEmployer(candidate, companyContext)
-  );
-  if (matches.length !== 1) return null;
-  return matches[0];
-}
-
 function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   const queue = options?.pendingPhoneQueue;
   if (!Array.isArray(queue) || !Number.isInteger(rowNumber) || !group?.fields?.phone) return;
@@ -596,7 +571,6 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     if (needsEmbeddedDesignationRepair(item)) targets.set(item.group.id, item);
   }
 
-  const candidatePool = Array.isArray(options.candidatePool) ? options.candidatePool : [];
   for (const item of targets.values()) {
     const group = item.group;
     const snapshot = item.snapshot;
@@ -613,15 +587,13 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
         verificationPath = 'exact-linkedin';
         resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone });
       } else if (snapshot.values.name && (verificationContext.company || verificationContext.domain)) {
-        const exactCandidate = exactCandidateForExisting(item, candidatePool, verificationContext);
-        if (exactCandidate) {
-          verificationPath = 'same-company-discovery-exact-name';
-          stats.existingDiscoveryIdentityMatches++;
-          resolved = await apollo.resolveDecisionMaker(exactCandidate, verificationContext.company, verificationContext.domain, { needEmail, needPhone });
-        } else {
-          verificationPath = 'apollo-name-company';
-          resolved = await apollo.resolvePersonByNameCompany(snapshot.values.name, verificationContext.company, verificationContext.domain, { needEmail, needPhone });
-        }
+        verificationPath = 'apollo-name-company';
+        resolved = await apollo.resolvePersonByNameCompany(
+          snapshot.values.name,
+          verificationContext.company,
+          verificationContext.domain,
+          { needEmail, needPhone },
+        );
       }
     } catch (error) {
       stats.existingVerificationFailures++;
@@ -1708,8 +1680,7 @@ module.exports = {
   existingPersonVerificationContext,
   needsEmbeddedDesignationRepair,
   candidateFillTargets,
-  existingRepairNeedsDiscovery,
-  exactCandidateForExisting,
+
   queuePendingPhone,
   registerBackgroundPhoneAssignments,
   syncBackgroundPhoneAssignments,
