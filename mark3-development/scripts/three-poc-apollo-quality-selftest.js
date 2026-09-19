@@ -42,8 +42,8 @@ assert.doesNotMatch(source, /apollo\.resolvePersonProfile\s*=/, 'POC-1/generic p
 assert.match(controller, /apollo-three-poc-quality/);
 assert.match(controller, /apolloQuality\.startRun\(\)/);
 
-const previousPhoneWaterfall = process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL;
-delete process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL;
+const previousPhoneWaterfall = process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL;
+delete process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL;
 quality.startRun();
 const stats = quality.stats();
 assert.equal(stats.maxWaterfalls, 30);
@@ -51,7 +51,7 @@ assert.equal(stats.personalEmailReveal, false);
 assert.equal(stats.phoneWaterfall, false);
 assert.equal(stats.scope, 'final-verified-pocs-only');
 assert.equal(stats.waterfallStarted, 0);
-if (previousPhoneWaterfall == null) delete process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL;
-else process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL = previousPhoneWaterfall;
+if (previousPhoneWaterfall == null) delete process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL;
+else process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL = previousPhoneWaterfall;
 
 console.log('3-POC Apollo quality self-test passed: native Apollo phone reveal is the production default, already-paid legacy phone waterfalls remain resumable, bounded work-email waterfall fallback is preserved, personal-email reveal stays off, and paid retries remain capped/cached.');
