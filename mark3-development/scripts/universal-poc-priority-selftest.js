@@ -73,6 +73,18 @@ assert.equal(base.anchorNeedsHydration({
   },
 }), true, 'missing POC-1 phone must still trigger exact anchor hydration');
 
+assert.equal(base.companyBrandFromDomain('people-click.com'), 'people click');
+const linkedinRefs = [...base.collectLinkedInPersonUrls({
+  references: {
+    search: [
+      { kind: 'person', url: '/in/example-one/' },
+      { kind: 'person', url: 'https://www.linkedin.com/in/example-two/' },
+    ],
+  },
+})];
+assert.equal(linkedinRefs.length, 2);
+assert.ok(linkedinRefs.every((value) => /linkedin\.com\/in\//.test(value)));
+
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.js'), 'utf8');
@@ -88,6 +100,10 @@ assert.match(operatorSource, /companyBrandFromDomain/);
 assert.match(operatorSource, /adaptiveBroadCandidateLimit/);
 assert.match(operatorSource, /APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED/);
 assert.match(operatorSource, /APOLLO_BRAND_KEYWORD_SEARCH_FAILED/);
+assert.match(operatorSource, /LINKEDIN_ZERO_RESULT_SEARCH_FAILED/);
+assert.match(operatorSource, /linkedinMcp\.callTool\('search_people'/);
+assert.match(operatorSource, /apollo\.resolvePersonProfile/);
+assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_LINKEDIN_ZERO_RESULT_FALLBACK/);
 assert.match(operatorSource, /priority-fast\|/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /ordinal: 2/);
