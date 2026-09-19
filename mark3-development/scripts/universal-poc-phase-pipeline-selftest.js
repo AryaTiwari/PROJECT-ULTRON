@@ -5,6 +5,7 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
 const targeted = require('../core/universal-sheet-enrichment-targeted');
+const controller = require('../core/universal-spreadsheet-domain-controller');
 
 const merged = targeted.mergePocPhaseResults([
   {
@@ -81,6 +82,12 @@ assert.equal(merged.stats.pocPhaseSummaries.length, 3);
 assert.deepEqual(merged.stats.pocPhaseSummaries.map((item) => item.ordinal), [1, 2, 3]);
 assert.equal(merged.stats.contactPhaseLabel, 'POC-1 -> POC-2 -> POC-3');
 assert.equal(merged.stats.unfilledOpenGroups, 4);
+
+assert.equal(controller.parseContactPhaseOrdinal('Fill POC-1 only in Arya 2'), 1);
+assert.equal(controller.parseContactPhaseOrdinal('Only second POC for this sheet'), 2);
+assert.equal(controller.parseContactPhaseOrdinal('3rd POC only'), 3);
+assert.equal(controller.parseContactPhaseOrdinal('Fill POC-1 then POC-2 then POC-3'), null);
+
 
 const operator = require('../core/universal-sheet-enrichment-operator');
 const identitySnapshot = {
