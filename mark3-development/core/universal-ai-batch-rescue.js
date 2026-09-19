@@ -60,6 +60,8 @@ function freshStats() {
     directProvidersUsed: [],
     directAttemptAudit: [],
     rowsConsidered: 0,
+    requestedResidueRows: [],
+    skippedReason: '',
     rowsWithKnownEmployer: 0,
     employersResolvedByAi: 0,
     employerOverridesByAi: 0,
@@ -331,13 +333,9 @@ function shortlistCandidates(candidates, context, limit) {
 
 function rescueTargets(plan) {
   const wantedOrdinal = 2;
-  const open = (plan?.groups?.open || [])
+  return (plan?.groups?.open || [])
     .filter((item) => !item.isAnchor && Number(item.group?.ordinal || 0) === wantedOrdinal)
     .map((item) => ({ ...item, rescueMode: 'fill' }));
-  const repair = (plan?.groups?.partial || [])
-    .filter((item) => !item.isAnchor && item.snapshot?.hasIdentity && Number(item.group?.ordinal || 0) === wantedOrdinal)
-    .map((item) => ({ ...item, rescueMode: 'repair' }));
-  return [...repair, ...open];
 }
 
 function exactRepairCandidate(target, candidate) {
@@ -468,6 +466,18 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   const stats = freshStats();
   stats.maxCalls = maxCalls(options);
   if (!stats.enabled || options.dryRun || options.apolloApproved !== true) return stats;
+
+  const exactResidueRows = [...new Set(
+    (primaryResult?.stats?.deferredPoc2Rows || [])
+      .map((value) => Number(value))
+      .filter(Number.isInteger)
+  )];
+  stats.requestedResidueRows = exactResidueRows;
+  if (!exactResidueRows.length) {
+    stats.skippedReason = 'no-primary-poc2-residue';
+    return stats;
+  }
+  const residueSet = new Set(exactResidueRows);
   stats.attempted = true;
 
   const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
@@ -481,6 +491,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   const contextInput = [];
   for (const record of analysis.rowPlans) {
     const { row, rowNumber, plan } = record;
+    if (!residueSet.has(Number(rowNumber))) continue;
     const targets = rescueTargets(plan);
     if (!plan.anchor || !targets.length) continue;
     stats.rowsConsidered++;
@@ -611,9 +622,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       hiringContext: pkg.hiringContext,
       existingPeople: [...existingIdentitySet(pkg.plan).names],
       target: {
-        mode: target.rescueMode,
-        existingName: text(target.snapshot?.values?.name),
-        existingLinkedin: text(target.snapshot?.values?.linkedin),
+        mode: 'fill',
         missingFields: target.snapshot?.missingFields || [],
       },
       candidates: pkg.candidates.map((candidate) => {
@@ -636,8 +645,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         'You are ULTRON Batch POC Selector.',
         'Select exactly one POC-2 candidate for each supplied row when a safe choice exists.',
         'You may choose ONLY candidateKey values supplied inside that same row.',
-        'For mode=fill: never choose anyone already listed in existingPeople.',
-        'For mode=repair: choose only the candidate representing the exact existing person.',
+        'Never choose anyone already listed in existingPeople.',
         'Priority: Founder/Director/Owner, then recruiting/talent/HR Head or Manager, then Recruiter, while respecting real hiring relevance.',
         'Return compact strict JSON only: {"rows":[{"rowNumber":2,"candidateKey":"...","confidence":0.0,"reason":""}]}.',
       ].join(' '),
