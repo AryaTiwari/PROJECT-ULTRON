@@ -284,14 +284,64 @@ function personOrganization(person = {}) {
   };
 }
 
+function domainBrand(value) {
+  const host = hostname(value);
+  if (!host) return '';
+  return normalizedWords((host.split('.')[0] || '').replace(/[-_]+/g, ' '));
+}
+
+function organizationNameOf(person = {}) {
+  return String(
+    person?.organizationName
+    || person?.organization_name
+    || person?.organization?.name
+    || person?.employment_history?.find?.((item) => item?.current)?.organization_name
+    || person?.employment_history?.[0]?.organization_name
+    || ''
+  ).trim();
+}
+
+function organizationDomainOf(person = {}) {
+  return hostname(
+    person?.organizationDomain
+    || person?.organization?.website_url
+    || person?.organization?.primary_domain
+    || person?.organization?.domain
+    || ''
+  );
+}
+
+function organizationNameMatches(expectedValue, actualValue) {
+  const expected = normalizedWords(expectedValue).split(' ').filter((token) => token && token !== 'com');
+  const actual = normalizedWords(actualValue).split(' ').filter((token) => token && token !== 'com');
+  if (!expected.length || !actual.length) return false;
+  const a = new Set(expected);
+  const b = new Set(actual);
+  const overlap = [...a].filter((token) => b.has(token)).length;
+  return overlap / Math.max(1, Math.min(a.size, b.size)) >= 0.8;
+}
+
 function sameOrganization(person, company, domain = '') {
   const expectedDomain = hostname(domain);
-  const actualDomain = hostname(person?.organization?.website_url || person?.organization?.primary_domain || person?.organization?.domain || '');
-  if (expectedDomain && actualDomain && (actualDomain === expectedDomain || actualDomain.endsWith(`.${expectedDomain}`) || expectedDomain.endsWith(`.${actualDomain}`))) return true;
-  const expected = normalizedWords(company);
-  const actual = normalizedWords(person?.organization_name || person?.organization?.name || person?.employment_history?.[0]?.organization_name || '');
-  if (!expected || !actual) return false;
-  return expected === actual || expected.includes(actual) || actual.includes(expected);
+  const actualDomain = organizationDomainOf(person);
+  if (
+    expectedDomain
+    && actualDomain
+    && (
+      actualDomain === expectedDomain
+      || actualDomain.endsWith(`.${expectedDomain}`)
+      || expectedDomain.endsWith(`.${actualDomain}`)
+    )
+  ) return true;
+
+  const actualName = organizationNameOf(person);
+  if (organizationNameMatches(company, actualName)) return true;
+
+  const expectedBrand = domainBrand(expectedDomain);
+  if (expectedBrand && organizationNameMatches(expectedBrand, actualName)) return true;
+  if (expectedBrand && actualDomain && organizationNameMatches(expectedBrand, domainBrand(actualDomain))) return true;
+
+  return false;
 }
 
 function searchCandidateFromPerson(person, cleanCompany, cleanDomain) {
@@ -892,6 +942,10 @@ module.exports = {
   matchDecision,
   COMPANY_DECISION_PRIORITY,
   decisionPriority,
+  domainBrand,
+  organizationNameOf,
+  organizationDomainOf,
+  organizationNameMatches,
   sameOrganization,
   searchCandidateFromPerson,
   rankedDecisionMakers,
