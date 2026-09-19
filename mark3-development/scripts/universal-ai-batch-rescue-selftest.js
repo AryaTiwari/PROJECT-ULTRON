@@ -50,7 +50,7 @@ const targets = rescue.rescueTargets({
     existing: [anchor],
   },
 });
-assert.equal(targets.length, 1, 'AI rescue must include only empty unresolved POC-2; partial POC-2 repair stays deterministic and optional POC-3 stays manual-only');
+assert.equal(targets.length, 1, 'Legacy AI rescue must include only empty unresolved POC-2; POC-3 is owned by its dedicated deterministic phase');
 assert.equal(targets[0].group.ordinal, 2);
 assert.equal(targets[0].rescueMode, 'fill');
 
