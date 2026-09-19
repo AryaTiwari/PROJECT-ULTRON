@@ -362,9 +362,9 @@ function shortlistCandidates(candidates, context, limit) {
 }
 
 function rescueTargets(plan) {
-  const wantedOrdinal = 2;
   return (plan?.groups?.open || [])
-    .filter((item) => !item.isAnchor && Number(item.group?.ordinal || 0) === wantedOrdinal)
+    .filter((item) => !item.isAnchor && Number(item.group?.ordinal || 0) >= 2)
+    .sort((a, b) => Number(a.group?.ordinal || 0) - Number(b.group?.ordinal || 0))
     .map((item) => ({ ...item, rescueMode: 'fill' }));
 }
 
@@ -391,9 +391,8 @@ function validateAssignments(output, rowPackages) {
   for (const item of rows) {
     const rowNumber = Number(item?.rowNumber ?? item?.row ?? item?.row_number);
     const pkg = rowPackages.get(rowNumber);
-    if (!pkg || pkg.targets.length !== 1) continue;
+    if (!pkg || !pkg.targets.length) continue;
 
-    const target = pkg.targets[0];
     const allowedEntries = pkg.candidates.map((candidate) => ({
       key: text(candidate.apolloPersonId || candidate.id || candidate.linkedinUrl || candidate.linkedin_url),
       candidate,
@@ -404,6 +403,7 @@ function validateAssignments(output, rowPackages) {
     let proposals = Array.isArray(item?.assignments) ? item.assignments : null;
     if (!proposals) {
       proposals = [{
+        slot: item?.slot ?? item?.ordinal ?? item?.target,
         candidateKey: item?.candidateKey ?? item?.candidate_id ?? item?.candidateId ?? item?.id,
         candidateName: item?.candidateName ?? item?.name,
         confidence: item?.confidence,
@@ -412,7 +412,25 @@ function validateAssignments(output, rowPackages) {
     }
 
     const assignments = [];
+    const usedTargets = new Set();
+    const usedCandidates = new Set();
+
     for (const proposal of proposals) {
+      const wantedSlot = text(proposal?.slot ?? proposal?.ordinal ?? proposal?.target);
+      let target = null;
+      if (wantedSlot) {
+        target = pkg.targets.find((candidateTarget) =>
+          wantedSlot === String(candidateTarget.group?.ordinal || '')
+          || wantedSlot === String(candidateTarget.group?.id || '')
+        ) || null;
+      } else if (pkg.targets.length === 1) {
+        target = pkg.targets[0];
+      }
+      if (!target) continue;
+
+      const targetKey = String(target.group?.id || target.group?.ordinal || '');
+      if (!targetKey || usedTargets.has(targetKey)) continue;
+
       let candidateKey = text(proposal?.candidateKey ?? proposal?.candidate_id ?? proposal?.candidateId ?? proposal?.id);
       let entry = candidateKey ? byKey.get(candidateKey.toLowerCase()) : null;
 
@@ -424,7 +442,7 @@ function validateAssignments(output, rowPackages) {
           candidateKey = entry.key;
         }
       }
-      if (!entry) continue;
+      if (!entry || usedCandidates.has(candidateKey.toLowerCase())) continue;
 
       assignments.push({
         target,
@@ -433,7 +451,8 @@ function validateAssignments(output, rowPackages) {
         confidence: Math.max(0, Math.min(1, Number(proposal?.confidence || 0.7))),
         reason: text(proposal?.reason).slice(0, 500),
       });
-      break;
+      usedTargets.add(targetKey);
+      usedCandidates.add(candidateKey.toLowerCase());
     }
     validated.set(rowNumber, assignments);
   }
@@ -471,24 +490,24 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.maxCalls = maxCalls(options);
   if (!stats.enabled || options.dryRun || options.apolloApproved !== true) return stats;
 
-  const exactResidueRows = [...new Set(
-    (primaryResult?.stats?.deferredPoc2Rows || [])
-      .map((value) => Number(value))
-      .filter(Number.isInteger)
-  )];
-  stats.requestedResidueRows = exactResidueRows;
-  if (!exactResidueRows.length) {
-    stats.skippedReason = 'no-primary-poc2-residue';
-    return stats;
-  }
-  const residueSet = new Set(exactResidueRows);
-  stats.attempted = true;
-
   const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
     ...options,
     sheetName: request.sheetName || options.sheetName,
   });
   const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema });
+  const exactResidueRows = [...new Set(
+    (analysis.rowPlans || [])
+      .filter((record) => rescueTargets(record.plan).length > 0)
+      .map((record) => Number(record.rowNumber))
+      .filter(Number.isInteger)
+  )];
+  stats.requestedResidueRows = exactResidueRows;
+  if (!exactResidueRows.length) {
+    stats.skippedReason = 'no-open-secondary-poc-residue';
+    return stats;
+  }
+  const residueSet = new Set(exactResidueRows);
+  stats.attempted = true;
   const discoveryCache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
 
   const rowRecords = new Map();
@@ -517,7 +536,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   if (!rowRecords.size) return stats;
 
   // Context AI is optional. If deterministic anchor evidence already resolved the
-  // employer, skip this entire model call and go straight to POC-2 selection.
+  // employer, skip this entire model call and go straight to multi-POC selection.
   const unresolvedContextInput = contextInput.filter((item) => item.unresolvedEmployer);
   let contextMap = new Map();
   if (unresolvedContextInput.length) {
@@ -623,7 +642,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     const shortlisted = candidatePoolForTargets(employerVerifiedPeople, record.targets, { hiringContext }, candidateLimit(options));
     if (!shortlisted.length) {
       stats.unresolvedSlots += record.targets.length;
-      markUnresolved(stats, rowNumber, 'no-verified-candidates', 'Apollo discovery returned no candidate that survived the POC-2 shortlist.');
+      markUnresolved(stats, rowNumber, 'no-verified-candidates', 'Apollo discovery returned no candidate that survived the secondary-POC shortlist.');
       continue;
     }
 
@@ -663,34 +682,32 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     }
     for (const rowNumber of exactResidueRows) {
       if (!rowPackages.has(rowNumber) && !stats.unresolvedRows.includes(rowNumber)) {
-        markUnresolved(stats, rowNumber, 'not-offered-to-selection', 'POC-2 residue could not reach candidate selection.');
+        markUnresolved(stats, rowNumber, 'not-offered-to-selection', 'Secondary-POC residue could not reach candidate selection.');
       }
     }
     return stats;
   }
 
-  const selectionInput = [...rowPackages.entries()].map(([rowNumber, pkg]) => {
-    const target = pkg.targets[0];
-    return {
-      rowNumber,
-      company: pkg.companyContext.company,
-      hiringContext: pkg.hiringContext,
-      existingPeople: [...existingIdentitySet(pkg.plan).names],
-      target: {
-        mode: 'fill',
-        missingFields: target.snapshot?.missingFields || [],
-      },
-      candidates: pkg.candidates.map((candidate) => {
-        const compact = compactCandidate(candidate);
-        return {
-          candidateKey: compact.candidateKey,
-          name: compact.name,
-          title: compact.title,
-          seniority: compact.seniority,
-        };
-      }),
-    };
-  });
+  const selectionInput = [...rowPackages.entries()].map(([rowNumber, pkg]) => ({
+    rowNumber,
+    company: pkg.companyContext.company,
+    hiringContext: pkg.hiringContext,
+    existingPeople: [...existingIdentitySet(pkg.plan).names],
+    targets: pkg.targets.map((target) => ({
+      slot: String(target.group?.ordinal || target.group?.id || ''),
+      mode: 'fill',
+      missingFields: target.snapshot?.missingFields || [],
+    })),
+    candidates: pkg.candidates.map((candidate) => {
+      const compact = compactCandidate(candidate);
+      return {
+        candidateKey: compact.candidateKey,
+        name: compact.name,
+        title: compact.title,
+        seniority: compact.seniority,
+      };
+    }),
+  }));
 
   // PASS 2: one batch selection call for all unresolved slots.
   const selectionResult = await batchChat([
@@ -698,11 +715,12 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       role: 'system',
       content: [
         'You are ULTRON Batch POC Selector.',
-        'Select exactly one POC-2 candidate for each supplied row when a safe choice exists.',
+        'Fill as many supplied secondary POC targets as can be safely justified for each row.',
+        'Return at most one candidate per target slot and never reuse the same candidate twice in one row.',
         'You may choose ONLY candidateKey values supplied inside that same row.',
         'Never choose anyone already listed in existingPeople.',
         'Priority: Founder/Director/Owner, then recruiting/talent/HR Head or Manager, then Recruiter, while respecting real hiring relevance.',
-        'Return compact strict JSON only: {"rows":[{"rowNumber":2,"candidateKey":"...","confidence":0.0,"reason":""}]}.',
+        'Return compact strict JSON only: {"rows":[{"rowNumber":2,"assignments":[{"slot":"2","candidateKey":"...","confidence":0.0,"reason":""},{"slot":"3","candidateKey":"...","confidence":0.0,"reason":""}]}]}.',
       ].join(' '),
     },
     { role: 'user', content: JSON.stringify({ rows: selectionInput }) },
@@ -763,141 +781,144 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     const proposed = assignments.get(rowNumber) || [];
     const existing = existingIdentitySet(pkg.plan);
     const claimed = new Set();
-
-    const primaryAssignment = proposed[0] || null;
-    const target = primaryAssignment?.target || pkg.targets[0];
-    const primaryKey = text(primaryAssignment?.candidateKey).toLowerCase();
+    const acceptedTargets = new Set();
     const fallbackLimit = Math.max(
       1,
       Math.min(4, Number(options.aiHydrationFallbackCandidates ?? process.env.ULTRON_M3_UNIVERSAL_AI_HYDRATION_FALLBACK_CANDIDATES ?? 3)),
     );
 
-    const attemptAssignments = [];
-    if (primaryAssignment) attemptAssignments.push(primaryAssignment);
-    for (const candidate of pkg.candidates || []) {
-      if (attemptAssignments.length >= fallbackLimit) break;
-      const key = text(candidate?.apolloPersonId || candidate?.id || candidate?.linkedinUrl || candidate?.linkedin_url);
-      if (!key || key.toLowerCase() === primaryKey) continue;
-      if (!ranker.sameEmployer(candidate, pkg.companyContext)) continue;
-      attemptAssignments.push({
-        target,
-        candidate,
-        candidateKey: key,
-        confidence: 0.55,
-        reason: 'post-ai-hydration-fallback',
-        fallbackAfterAi: true,
-      });
-    }
+    for (const target of pkg.targets) {
+      const targetKey = String(target.group?.id || target.group?.ordinal || '');
+      const primaryAssignment = proposed.find((item) =>
+        String(item.target?.group?.id || item.target?.group?.ordinal || '') === targetKey
+      ) || null;
+      const primaryKey = text(primaryAssignment?.candidateKey).toLowerCase();
 
-    let rowAccepted = false;
-    for (const assignment of attemptAssignments) {
-      if (rowAccepted || claimed.has(assignment.candidateKey)) continue;
-      if (assignment.fallbackAfterAi) stats.hydrationFallbackAttempts++;
-      stats.hydrationAttempts++;
-
-      let person = null;
-      try {
-        person = await base.hydrateDecisionMakerVerified(
-          assignment.candidate,
-          pkg.companyContext,
-          stats,
-          {
-            needEmail: Boolean(assignment.target.group.fields.email),
-            needPhone: Boolean(assignment.target.group.fields.phone),
-          },
-        );
-      } catch (error) {
-        stats.hydrationFailures++;
-        stats.aiSelectionRejects++;
-        stats.errors.push({
-          purpose: assignment.fallbackAfterAi ? 'hydration-fallback' : 'hydration',
-          rowNumber,
-          candidateKey: assignment.candidateKey,
-          code: text(error?.code),
-          message: text(error?.message).slice(0, 300),
+      const attemptAssignments = [];
+      if (primaryAssignment) attemptAssignments.push(primaryAssignment);
+      for (const candidate of pkg.candidates || []) {
+        if (attemptAssignments.length >= fallbackLimit) break;
+        const key = text(candidate?.apolloPersonId || candidate?.id || candidate?.linkedinUrl || candidate?.linkedin_url);
+        if (!key || key.toLowerCase() === primaryKey || claimed.has(key.toLowerCase())) continue;
+        if (!ranker.sameEmployer(candidate, pkg.companyContext)) continue;
+        attemptAssignments.push({
+          target,
+          candidate,
+          candidateKey: key,
+          confidence: 0.55,
+          reason: 'post-ai-hydration-fallback',
+          fallbackAfterAi: true,
         });
-        claimed.add(assignment.candidateKey);
-        continue;
       }
 
-      if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, pkg.companyContext)) {
-        stats.hydrationFailures++;
-        stats.aiSelectionRejects++;
-        claimed.add(assignment.candidateKey);
-        continue;
+      let targetAccepted = false;
+      for (const assignment of attemptAssignments) {
+        const claimKey = text(assignment.candidateKey).toLowerCase();
+        if (targetAccepted || !claimKey || claimed.has(claimKey)) continue;
+        if (assignment.fallbackAfterAi) stats.hydrationFallbackAttempts++;
+        stats.hydrationAttempts++;
+
+        let person = null;
+        try {
+          person = await base.hydrateDecisionMakerVerified(
+            assignment.candidate,
+            pkg.companyContext,
+            stats,
+            {
+              needEmail: Boolean(assignment.target.group.fields.email),
+              needPhone: Boolean(assignment.target.group.fields.phone),
+            },
+          );
+        } catch (error) {
+          stats.hydrationFailures++;
+          stats.aiSelectionRejects++;
+          stats.errors.push({
+            purpose: assignment.fallbackAfterAi ? 'hydration-fallback' : 'hydration',
+            rowNumber,
+            slot: assignment.target.group?.ordinal || null,
+            candidateKey: assignment.candidateKey,
+            code: text(error?.code),
+            message: text(error?.message).slice(0, 300),
+          });
+          continue;
+        }
+
+        if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, pkg.companyContext)) {
+          stats.hydrationFailures++;
+          stats.aiSelectionRejects++;
+          continue;
+        }
+
+        const nameKey = ranker.normalize(person.name || '');
+        const linkedinKey = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
+        if ((nameKey && existing.names.has(nameKey)) || (linkedinKey && existing.linkedins.has(linkedinKey))) {
+          stats.identityDuplicatesSkipped++;
+          stats.aiSelectionRejects++;
+          claimed.add(claimKey);
+          continue;
+        }
+
+        const writePlan = planner.safeWritesForGroup(pkg.row, assignment.target.group, person);
+        if (!writePlan.allowed) {
+          stats.aiSelectionRejects++;
+          continue;
+        }
+
+        const queueBefore = pendingPhoneQueue.length;
+        base.queuePendingPhone(
+          { pendingPhoneQueue },
+          rowNumber,
+          assignment.target.group,
+          assignment.target.snapshot,
+          person,
+        );
+        const queuedPendingPhone = pendingPhoneQueue.length > queueBefore;
+
+        if (!writePlan.writes.length && !queuedPendingPhone) {
+          stats.aiSelectionRejects++;
+          continue;
+        }
+
+        const byColumn = new Map();
+        for (const write of writePlan.writes) if (!byColumn.has(write.columnIndex)) byColumn.set(write.columnIndex, write);
+        const changes = [...byColumn.values()].map((write) => ({
+          range: sheets.cellRange(source.sheetName, rowNumber, write.columnIndex),
+          value: write.value,
+        }));
+        if (changes.length) {
+          await sheets.writeCells(source.spreadsheetId, changes);
+          changedRows.add(rowNumber);
+          stats.cellsChanged += changes.length;
+        }
+
+        stats.newPeopleSelected++;
+        stats.aiSelectionsAccepted++;
+        if (assignment.fallbackAfterAi) stats.hydrationFallbackAccepted++;
+        stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
+        stats.selectionAudit.push({
+          rowNumber,
+          groupId: assignment.target.group.id,
+          slot: assignment.target.group.ordinal || null,
+          mode: 'fill',
+          candidateKey: assignment.candidateKey,
+          name: text(person.name),
+          title: text(person.title),
+          confidence: assignment.confidence,
+          reason: assignment.reason,
+          fields: writePlan.writes.length
+            ? writePlan.writes.map((write) => write.field)
+            : (queuedPendingPhone ? ['phone-pending'] : []),
+        });
+
+        claimed.add(claimKey);
+        if (nameKey) existing.names.add(nameKey);
+        if (linkedinKey) existing.linkedins.add(linkedinKey);
+        acceptedTargets.add(targetKey);
+        targetAccepted = true;
       }
-
-      const nameKey = ranker.normalize(person.name || '');
-      const linkedinKey = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
-      if ((nameKey && existing.names.has(nameKey)) || (linkedinKey && existing.linkedins.has(linkedinKey))) {
-        stats.identityDuplicatesSkipped++;
-        stats.aiSelectionRejects++;
-        claimed.add(assignment.candidateKey);
-        continue;
-      }
-
-      const writePlan = planner.safeWritesForGroup(pkg.row, assignment.target.group, person);
-      if (!writePlan.allowed) {
-        stats.aiSelectionRejects++;
-        claimed.add(assignment.candidateKey);
-        continue;
-      }
-
-      const queueBefore = pendingPhoneQueue.length;
-      base.queuePendingPhone(
-        { pendingPhoneQueue },
-        rowNumber,
-        assignment.target.group,
-        assignment.target.snapshot,
-        person,
-      );
-      const queuedPendingPhone = pendingPhoneQueue.length > queueBefore;
-
-      if (!writePlan.writes.length && !queuedPendingPhone) {
-        stats.aiSelectionRejects++;
-        claimed.add(assignment.candidateKey);
-        continue;
-      }
-
-      const byColumn = new Map();
-      for (const write of writePlan.writes) if (!byColumn.has(write.columnIndex)) byColumn.set(write.columnIndex, write);
-      const changes = [...byColumn.values()].map((write) => ({
-        range: sheets.cellRange(source.sheetName, rowNumber, write.columnIndex),
-        value: write.value,
-      }));
-      if (changes.length) {
-        await sheets.writeCells(source.spreadsheetId, changes);
-        changedRows.add(rowNumber);
-        stats.cellsChanged += changes.length;
-      }
-
-      stats.newPeopleSelected++;
-      stats.aiSelectionsAccepted++;
-      if (assignment.fallbackAfterAi) stats.hydrationFallbackAccepted++;
-      stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
-      stats.selectionAudit.push({
-        rowNumber,
-        groupId: assignment.target.group.id,
-        slot: assignment.target.group.ordinal || null,
-        mode: 'fill',
-        candidateKey: assignment.candidateKey,
-        name: text(person.name),
-        title: text(person.title),
-        confidence: assignment.confidence,
-        reason: assignment.reason,
-        fields: writePlan.writes.length
-          ? writePlan.writes.map((write) => write.field)
-          : (queuedPendingPhone ? ['phone-pending'] : []),
-      });
-
-      claimed.add(assignment.candidateKey);
-      if (nameKey) existing.names.add(nameKey);
-      if (linkedinKey) existing.linkedins.add(linkedinKey);
-      rowAccepted = true;
     }
 
-    const acceptedForRow = stats.selectionAudit.filter((item) => item.rowNumber === rowNumber).length;
-    const remaining = Math.max(0, pkg.targets.length - acceptedForRow);
+    const remaining = Math.max(0, pkg.targets.length - acceptedTargets.size);
     stats.unresolvedSlots += remaining;
     if (remaining > 0) {
       const proposedForRow = proposed.length;
@@ -906,17 +927,13 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         rowNumber,
         proposedForRow ? 'selection-rejected-after-verification' : 'ai-selection-abstained',
         proposedForRow
-          ? 'AI proposed a supplied Apollo candidate, but deterministic hydration/identity/employer/write verification did not accept it.'
-          : 'Direct AI returned no accepted supplied candidate for this POC-2 target.',
+          ? 'AI proposed supplied Apollo candidates, but one or more target slots failed deterministic hydration/identity/employer/write verification.'
+          : 'Direct AI returned no accepted supplied candidate for one or more secondary POC targets.',
       );
     }
   }
 
   stats.rowsChanged = changedRows.size;
-
-  const acceptedRows = new Set(stats.selectionAudit.map((item) => Number(item.rowNumber)).filter(Number.isInteger));
-  stats.unresolvedRows = stats.unresolvedRows.filter((rowNumber) => !acceptedRows.has(Number(rowNumber)));
-  stats.unresolvedReasons = stats.unresolvedReasons.filter((item) => !acceptedRows.has(Number(item.rowNumber)));
 
   try {
     await base.syncPendingPhoneAssignments(source, pendingPhoneQueue, stats, options);
