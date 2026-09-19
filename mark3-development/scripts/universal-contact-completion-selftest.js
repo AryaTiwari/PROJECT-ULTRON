@@ -114,7 +114,25 @@ async function run() {
     writeCells: sheets.writeCells,
   };
   const writes = [];
+  const oldPendingRetry = process.env.ULTRON_M3_APOLLO_PENDING_PHONE_RETRY_MINUTES;
+  process.env.ULTRON_M3_APOLLO_PENDING_PHONE_RETRY_MINUTES = '3';
   try {
+    assert.equal(
+      apollo.pendingPhoneRequestFresh({
+        phoneStatus: 'pending',
+        phoneRequestedAt: new Date().toISOString(),
+      }),
+      true,
+      'fresh Apollo pending phone request should be reused briefly',
+    );
+    assert.equal(
+      apollo.pendingPhoneRequestFresh({
+        phoneStatus: 'pending',
+        phoneRequestedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      }),
+      false,
+      'stale Apollo pending phone request must become eligible for reveal retry',
+    );
     apollo.fetchPhoneResults = async () => [{ apollo_person_id: 'apollo-hemanth', phone: '+919876543210' }];
     apollo.recordPhoneResult = () => ['https://www.linkedin.com/in/hemanth-test'];
     apollo.consumePhoneResult = async () => true;
@@ -149,6 +167,8 @@ async function run() {
     assert.equal(writes.length, 0, 'existing phone must never be overwritten by webhook completion');
     assert.equal(populatedStats.phoneWriteSkippedPopulated, 1);
   } finally {
+    if (oldPendingRetry == null) delete process.env.ULTRON_M3_APOLLO_PENDING_PHONE_RETRY_MINUTES;
+    else process.env.ULTRON_M3_APOLLO_PENDING_PHONE_RETRY_MINUTES = oldPendingRetry;
     apollo.fetchPhoneResults = originals.fetchPhoneResults;
     apollo.recordPhoneResult = originals.recordPhoneResult;
     apollo.consumePhoneResult = originals.consumePhoneResult;
@@ -156,7 +176,7 @@ async function run() {
     sheets.writeCells = originals.writeCells;
   }
 
-  console.log('Universal contact completion self-test passed: existing POCs verify by exact LinkedIn or exact name+business-domain, pending phone ownership stays bound to the exact row/cell/person, callback assignments persist across restarts, verified callbacks write only blank phone cells, and Big Pickle control failures fail closed.');
+  console.log('Universal contact completion self-test passed: existing POCs verify by exact LinkedIn or exact name+business-domain, fresh pending Apollo phone requests are reused briefly while stale pending requests become retryable, callback ownership stays bound to the exact row/cell/person across restarts, verified callbacks write only blank phone cells, and Big Pickle control failures fail closed.');
 }
 
 if (require.main === module) {
