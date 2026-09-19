@@ -592,7 +592,8 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       if (key) uniqueCandidateKeys.add(key);
     }
     const hiringContext = aiContext?.hiringContext || text(record.plan?.context?.postDetails || record.plan?.context?.details || '');
-    const shortlisted = candidatePoolForTargets(people || [], record.targets, { hiringContext }, candidateLimit(options));
+    const employerVerifiedPeople = (people || []).filter((candidate) => ranker.sameEmployer(candidate, companyContext));
+    const shortlisted = candidatePoolForTargets(employerVerifiedPeople, record.targets, { hiringContext }, candidateLimit(options));
     if (!shortlisted.length) {
       stats.unresolvedSlots += record.targets.length;
       markUnresolved(stats, rowNumber, 'no-verified-candidates', 'Apollo discovery returned no candidate that survived the POC-2 shortlist.');
