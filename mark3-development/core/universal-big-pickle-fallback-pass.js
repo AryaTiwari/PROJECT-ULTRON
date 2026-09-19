@@ -142,7 +142,7 @@ async function hydrateSelection(selection, companyContext, target, stats) {
   stats.hydrationAttempts++;
   let person = null;
   try {
-    person = await apollo.resolveDecisionMaker(raw, companyContext.company, companyContext.domain, {
+    person = await base.hydrateDecisionMakerVerified(raw, companyContext, stats, {
       needEmail: Boolean(target.group.fields.email),
       needPhone: Boolean(target.group.fields.phone),
     });
