@@ -108,6 +108,7 @@ assert.doesNotMatch(rescueSource, /omniroute|omniFallback|omniDiversity|chatOmni
 assert.match(rescueSource, /Select exactly one POC-2 candidate for each supplied row/);
 assert.match(rescueSource, /candidateKey values supplied inside that same row/);
 assert.match(rescueSource, /unresolvedContextInput/);
+assert.match(rescueSource, /base\.inferHiringCompanyFromEvidence\(plan, row\)/);
 assert.match(rescueSource, /primaryResult\?\.stats\?\.deferredPoc2Rows/);
 assert.match(rescueSource, /no-primary-poc2-residue/);
 assert.match(rescueSource, /if \(!residueSet\.has\(Number\(rowNumber\)\)\) continue/);
