@@ -838,7 +838,11 @@ function formatResult(result) {
     const errors = (ai.errors || []).slice(0, 3).map(humanAiError);
     const gate = result?.completionGate || {};
     const gateIssues = collapseDiagnosticBlockers(gate.issues || []);
-    const gateText = ` Completion gate: ${gate.statusCode || gate.status || 'UNKNOWN'}; mandatory rows checked ${gate.mandatoryRowsChecked || 0}; unresolved mandatory rows [${(gate.unresolvedRows || []).join(', ') || 'none'}]; terminal rows [${(gate.terminalRows || []).join(', ') || 'none'}]; retryable rows [${(gate.retryableRows || []).join(', ') || 'none'}]. Problems: ${gateIssues.map(diagnostics.formatIssue).join(' | ') || '[INFO] No required blockers remain.'}.`;
+    const gateStatusText = humanRunStatus(
+      gate.statusCode || gate.status || (gateIssues.length ? 'RUN_WITH_BLOCKERS' : 'RUN_COMPLETE'),
+      gateIssues.length > 0,
+    );
+    const gateText = ` Completion status: ${gateStatusText}; required rows checked ${gate.mandatoryRowsChecked || 0}; unresolved required rows [${(gate.unresolvedRows || []).join(', ') || 'none'}]; terminal rows [${(gate.terminalRows || []).join(', ') || 'none'}]; retryable rows [${(gate.retryableRows || []).join(', ') || 'none'}]. Problems: ${gateIssues.map(diagnostics.formatIssue).join(' | ') || '[INFO] No required blockers remain.'}.`;
     const noCandidatePool = Number(ai.rowsOfferedForSelection || 0) === 0 && Number(ai.modelAttempts || 0) === 0;
     const aiSkipExplanation = noCandidatePool
       ? ` ${diagnostics.formatIssue(diagnostics.issueFromReason('ai-skipped-no-verified-candidate-pool'))}`
