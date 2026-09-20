@@ -158,23 +158,39 @@ function apolloBodyReadError(cause, attempts, endpoint) {
 }
 
 async function fetchApolloResponse(input, init, options = {}) {
-  const bodyRetries = Math.max(0, Math.min(3, Number(options.bodyRetries ?? 2)));
+  const retries = Math.max(0, Math.min(3, Number(options.bodyRetries ?? options.retries ?? 2)));
   const endpoint = input instanceof URL ? input.toString() : String(input || '');
-  let lastBodyError = null;
+  let lastError = null;
+  let lastFailureKind = 'body';
 
-  for (let attempt = 0; attempt <= bodyRetries; attempt++) {
-    const response = await fetch(input, init);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    let response;
+    try {
+      response = await fetch(input, init);
+    } catch (cause) {
+      lastError = cause;
+      lastFailureKind = 'transport';
+      if (!apolloFetchHardening.isTransportFailure(cause)) throw cause;
+      if (attempt >= retries) break;
+      await sleep(250 * (2 ** attempt));
+      continue;
+    }
+
     try {
       const text = await response.text();
       return { response, text };
     } catch (cause) {
-      lastBodyError = cause;
-      if (attempt >= bodyRetries) break;
+      lastError = cause;
+      lastFailureKind = 'body';
+      if (attempt >= retries) break;
       await sleep(250 * (2 ** attempt));
     }
   }
 
-  throw apolloBodyReadError(lastBodyError, bodyRetries + 1, endpoint);
+  if (lastFailureKind === 'transport') {
+    throw apolloFetchHardening.typedNetworkError(lastError, retries + 1, endpoint);
+  }
+  throw apolloBodyReadError(lastError, retries + 1, endpoint);
 }
 
 function webhookUrl() {
@@ -972,8 +988,8 @@ async function resolvePersonProfile(input, options = {}) {
 async function fetchPhoneResults() {
   const url = workerUrl('/results');
   if (!url) return [];
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
-  const data = await response.json().catch(() => ({}));
+  const { response, text: raw } = await fetchApolloResponse(url, { headers: { Accept: 'application/json' } });
+  const data = (() => { try { return raw ? JSON.parse(raw) : {}; } catch { return {}; } })();
   if (!response.ok || !data.ok) {
     const error = new Error(data.error || `Apollo webhook results failed (${response.status}).`);
     error.code = 'APOLLO_PHONE_RESULTS_FAILED';
@@ -989,12 +1005,12 @@ async function fetchPhoneResults() {
 async function consumePhoneResult(apolloPersonId) {
   const url = workerUrl('/results/consume');
   if (!url) return false;
-  const response = await fetch(url, {
+  const { response, text: raw } = await fetchApolloResponse(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ apollo_person_id: apolloPersonId }),
   });
-  const data = await response.json().catch(() => ({}));
+  const data = (() => { try { return raw ? JSON.parse(raw) : {}; } catch { return {}; } })();
   if (!response.ok || !data.ok) {
     const error = new Error(data.error || `Apollo webhook consume failed (${response.status}).`);
     error.code = 'APOLLO_PHONE_RESULT_CONSUME_FAILED';
