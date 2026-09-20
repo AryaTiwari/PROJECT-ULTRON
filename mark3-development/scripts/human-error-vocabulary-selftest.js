@@ -7,6 +7,10 @@ function title(error, context) {
   return errors.normalize(error, context).humanTitle;
 }
 
+function normalized(error, context) {
+  return errors.normalize(error, context);
+}
+
 assert.equal(
   title(Object.assign(new Error('Too many requests'), {
     status: 429,
@@ -117,6 +121,30 @@ assert.equal(
   })),
   'Gemini API key is missing, expired, or invalid',
 );
+
+const apolloRateMeta = normalized(Object.assign(new Error('Too many requests'), {
+  status: 429,
+  endpoint: 'https://api.apollo.io/api/v1/people/match',
+}));
+assert.equal(apolloRateMeta.code, 'APOLLO_RATE_LIMIT');
+
+const googleAuthMeta = normalized(Object.assign(new Error('Invalid Credentials'), {
+  status: 401,
+  endpoint: 'https://sheets.googleapis.com/v4/spreadsheets/example',
+}));
+assert.equal(googleAuthMeta.code, 'GOOGLE_SHEETS_AUTH_FAILED');
+
+const linkedinRateMeta = normalized(Object.assign(new Error('rate limited'), {
+  subsystem: 'LINKEDIN',
+  status: 429,
+}));
+assert.equal(linkedinRateMeta.code, 'LINKEDIN_RATE_LIMIT');
+
+const groqAuthMeta = normalized(Object.assign(new Error('invalid API key'), {
+  subsystem: 'GROQ',
+  status: 401,
+}));
+assert.equal(groqAuthMeta.code, 'GROQ_AUTH_FAILED');
 
 assert.equal(
   title(Object.assign(new Error('LinkedIn safety cooldown is active'), {
