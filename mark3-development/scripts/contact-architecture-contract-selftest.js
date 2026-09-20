@@ -60,6 +60,9 @@ const diagnostics = fs.readFileSync(path.join(coreDir, 'universal-enrichment-dia
 const control = fs.readFileSync(path.join(coreDir, 'command-control-plane.js'), 'utf8');
 const apolloFetch = fs.readFileSync(path.join(coreDir, 'apollo-fetch-hardening.js'), 'utf8');
 const spreadsheetController = fs.readFileSync(path.join(coreDir, 'universal-spreadsheet-domain-controller.js'), 'utf8');
+const errorVocabulary = fs.readFileSync(path.join(coreDir, 'spreadsheet-enrichment-errors.js'), 'utf8');
+const targeted = fs.readFileSync(path.join(coreDir, 'universal-sheet-enrichment-targeted.js'), 'utf8');
+const enrichmentDiagnostics = fs.readFileSync(path.join(coreDir, 'universal-enrichment-diagnostics.js'), 'utf8');
 
 assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
 assert.match(quality, /Native Apollo reveal \+ webhook settlement is the production default/);
@@ -92,4 +95,20 @@ assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
 assert.match(spreadsheetController, /Apollo native phone reveal with webhook settlement as the production default/);
 assert.match(spreadsheetController, /custom poll_only phone waterfall is experimental\/legacy-only/);
 
-console.log('Contact architecture contract self-test passed: native Apollo phone reveal is the production default, paid legacy waterfall requests stay resumable, explicit 3-POC intent reaches deep POC-3 rescue, AI rescue accepts all secondary slots, raw Apollo fetch failures cannot bypass typed retries or approval re-entry containment, and stale poll-only regression assertions are absent.');
+assert.match(errorVocabulary, /function humanTitleFor/);
+assert.match(errorVocabulary, /Apollo rate limit reached/);
+assert.match(errorVocabulary, /Google Sheets authorization expired or is invalid/);
+assert.match(errorVocabulary, /LinkedIn browser is already busy/);
+assert.match(errorVocabulary, /return \`Problem: \${typed\.humanTitle}/);
+
+assert.match(enrichmentDiagnostics, /function issueTitle/);
+assert.match(enrichmentDiagnostics, /No verified same-company POC-2 could be found/);
+assert.match(enrichmentDiagnostics, /Details:/);
+assert.doesNotMatch(targeted, /ROOT_CAUSE:/);
+assert.doesNotMatch(targeted, /MANDATORY_BLOCKERS:/);
+assert.doesNotMatch(targeted, /ULTRON_DIAGNOSTICS/);
+assert.match(targeted, /DIAGNOSTIC SUMMARY/);
+assert.match(targeted, /Main problem:/);
+assert.match(targeted, /Required blockers:/);
+
+console.log('Contact architecture contract self-test passed: native Apollo phone reveal is the production default, paid legacy waterfall requests stay resumable, explicit 3-POC intent reaches deep POC-3 rescue, AI rescue accepts all secondary slots, raw Apollo fetch failures cannot bypass typed retries or approval re-entry containment, user-facing diagnostics remain plain English while machine codes stay internal, and stale poll-only regression assertions are absent.');
