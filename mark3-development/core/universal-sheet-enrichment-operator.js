@@ -2340,7 +2340,7 @@ function isTransientProviderRowFailure(typed = {}) {
 }
 
 function formatFailureSummary(typed = {}) {
-  return `[${typed.subsystem || 'UNIVERSAL'}/${typed.type || 'INTERNAL'}] ${typed.code || 'UNIVERSAL_INTERNAL_UNCLASSIFIED'} @ ${typed.stage || 'row-enrichment'}: ${typed.message || 'unknown failure'}`;
+  return typedErrors.format(typed);
 }
 
 function freshStats() {
