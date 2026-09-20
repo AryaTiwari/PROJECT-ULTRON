@@ -207,6 +207,33 @@ assert.equal(
 );
 
 assert.equal(
+  title(Object.assign(new Error('provider error'), {
+    code: 'SERPAPI_SEARCH_FAILED',
+    subsystem: 'SERPAPI',
+    errorType: 'API',
+  })),
+  'SerpApi public search failed',
+);
+
+assert.equal(
+  title(Object.assign(new Error('provider error'), {
+    code: 'TINYFISH_PUBLIC_LINKEDIN_SEARCH_FAILED',
+    subsystem: 'TINYFISH',
+    errorType: 'API',
+  })),
+  'TinyFish public search failed',
+);
+
+assert.equal(
+  title(Object.assign(new Error('poll failed'), {
+    code: 'APOLLO_PHONE_RESULT_POLL_FAILED',
+    subsystem: 'APOLLO',
+    errorType: 'API',
+  })),
+  'Apollo phone result check failed',
+);
+
+assert.equal(
   title(Object.assign(new RangeError('Maximum call stack size exceeded'), {
     code: 'UNIVERSAL_RECURSION_STACK_OVERFLOW',
   })),
@@ -239,4 +266,4 @@ for (const sample of [
   assert.doesNotMatch(sample, /[A-Z]{3,}_[A-Z0-9_]+/, 'human problem names must not expose machine error codes');
 }
 
-console.log('Human error vocabulary self-test passed: provider limits, auth failures, network failures, LinkedIn safety states and daily/hourly caps, worksheet targeting, schema failures, candidate exhaustion and internal recursion are named in plain English with a clear explanation and next action.');
+console.log('Human error vocabulary self-test passed: provider limits, auth failures, network failures, provider-specific public-search failures, Apollo async phone-result failures, LinkedIn safety states and daily/hourly caps, worksheet targeting, schema failures, candidate exhaustion and internal recursion are named in plain English with a clear explanation and next action.');
