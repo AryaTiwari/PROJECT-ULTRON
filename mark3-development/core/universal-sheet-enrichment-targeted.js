@@ -758,6 +758,30 @@ function collapseDiagnosticBlockers(issues = []) {
   return out;
 }
 
+function humanRunStatus(value, hasBlockers = false) {
+  const status = text(value).toUpperCase();
+  if (/COMPLETE$|RUN_COMPLETE/.test(status) && !hasBlockers) return 'Complete';
+  if (/MANDATORY_DATA_EXHAUSTED|TERMINAL_EXHAUSTED/.test(status)) return 'Stopped because required verified contact data could not be found safely';
+  if (/BLOCKER/.test(status) || hasBlockers) return 'Completed with unresolved required items';
+  if (/PARTIAL/.test(status)) return 'Partially completed; earlier verified writes were preserved';
+  return status ? status.toLowerCase().replace(/_/g, ' ') : 'Complete';
+}
+
+function humanAiError(item = {}) {
+  const provider = text(item.provider || item.model || '').toLowerCase();
+  const subsystem = provider.includes('gemini') ? 'GEMINI'
+    : provider.includes('groq') ? 'GROQ'
+      : provider.includes('nvidia') || provider.includes('nemotron') ? 'NVIDIA'
+        : undefined;
+  const error = Object.assign(new Error(text(item.message) || 'AI provider request failed'), {
+    code: text(item.code) || undefined,
+    subsystem,
+    errorType: item.type || undefined,
+    stage: item.purpose || item.stage || 'bounded-ai-rescue',
+  });
+  return typedErrors.format(typedErrors.normalize(error));
+}
+
 function formatDiagnosticFooter(result) {
   const gate = result?.completionGate || {};
   const allIssues = diagnostics.uniqueIssues(result?.diagnostics || gate?.issues || []);
@@ -773,19 +797,20 @@ function formatDiagnosticFooter(result) {
     items.length ? items.slice(0, 8).map(diagnostics.formatIssue).join(' | ') : fallback;
 
   const statusCode = gate.statusCode || gate.status || (blockers.length ? 'RUN_WITH_BLOCKERS' : 'RUN_COMPLETE');
+  const runStatus = humanRunStatus(statusCode, blockers.length > 0);
   const rootCause = blockers.length === 1
-    ? blockers[0].code
-    : (blockers.length > 1 ? 'MULTIPLE_BLOCKERS' : 'NONE');
+    ? (blockers[0].humanTitle || diagnostics.issueTitle(blockers[0].code, blockers[0].message))
+    : (blockers.length > 1 ? 'Multiple required problems remain unresolved' : 'None');
 
   return [
     '',
-    'ULTRON_DIAGNOSTICS',
-    `RUN_STATUS: ${statusCode}`,
-    `ROOT_CAUSE: ${rootCause}`,
-    `MANDATORY_BLOCKERS: ${formatList(blockers)}`,
-    `REPAIR_OR_PENDING: ${formatList(pending)}`,
-    `WARNINGS: ${formatList(warnings)}`,
-    `INFO: ${formatList(infos)}`,
+    'DIAGNOSTIC SUMMARY',
+    `Run status: ${runStatus}`,
+    `Main problem: ${rootCause}`,
+    `Required blockers: ${formatList(blockers)}`,
+    `Repair or pending: ${formatList(pending)}`,
+    `Warnings: ${formatList(warnings)}`,
+    `Information: ${formatList(infos)}`,
   ].join('\n');
 }
 
@@ -810,10 +835,10 @@ function formatResult(result) {
     const audit = (ai.selectionAudit || []).slice(0, 6).map((item) =>
       `row ${item.rowNumber} POC-${item.slot || '?'} ${item.mode || 'fill'} ${item.name || item.candidateKey} (${item.fields?.join('/') || 'verified'})`
     );
-    const errors = (ai.errors || []).slice(0, 3).map((item) => `${item.purpose || 'ai'}:${item.code || 'ERROR'} ${item.message || ''}`);
+    const errors = (ai.errors || []).slice(0, 3).map(humanAiError);
     const gate = result?.completionGate || {};
     const gateIssues = collapseDiagnosticBlockers(gate.issues || []);
-    const gateText = ` Completion gate: ${gate.statusCode || gate.status || 'UNKNOWN'}; mandatory rows checked ${gate.mandatoryRowsChecked || 0}; unresolved mandatory rows [${(gate.unresolvedRows || []).join(', ') || 'none'}]; terminal rows [${(gate.terminalRows || []).join(', ') || 'none'}]; retryable rows [${(gate.retryableRows || []).join(', ') || 'none'}]. Problems: ${gateIssues.map(diagnostics.formatIssue).join(' | ') || '[INFO] NO_MANDATORY_BLOCKERS'}.`;
+    const gateText = ` Completion gate: ${gate.statusCode || gate.status || 'UNKNOWN'}; mandatory rows checked ${gate.mandatoryRowsChecked || 0}; unresolved mandatory rows [${(gate.unresolvedRows || []).join(', ') || 'none'}]; terminal rows [${(gate.terminalRows || []).join(', ') || 'none'}]; retryable rows [${(gate.retryableRows || []).join(', ') || 'none'}]. Problems: ${gateIssues.map(diagnostics.formatIssue).join(' | ') || '[INFO] No required blockers remain.'}.`;
     const noCandidatePool = Number(ai.rowsOfferedForSelection || 0) === 0 && Number(ai.modelAttempts || 0) === 0;
     const aiSkipExplanation = noCandidatePool
       ? ` ${diagnostics.formatIssue(diagnostics.issueFromReason('ai-skipped-no-verified-candidate-pool'))}`
@@ -827,7 +852,7 @@ function formatResult(result) {
   }
   if (fb.skippedReason === 'fallback-error') {
     const e = fb.error || {};
-    return `${primary} Primary deterministic work was preserved. Big Pickle fallback stopped independently with [${e.subsystem || 'BIG_PICKLE'}/${e.type || 'INTERNAL'}] ${e.code || 'BIG_PICKLE_FALLBACK_FAILED'} @ ${e.stage || 'big-pickle-fallback-pass'}: ${e.message || 'unknown fallback failure'}. ${e.hint || ''} Personal API fallbacks 0.${diagnosticFooter}`;
+    return `${primary} Primary deterministic work was preserved. Big Pickle fallback stopped independently. ${typedErrors.format(typedErrors.normalize(Object.assign(new Error(e.message || 'Big Pickle fallback failed'), e)))} Personal API fallbacks 0.${diagnosticFooter}`;
   }
   if (fb.skippedReason === 'provider-retry-required') {
     return `${primary} Primary engine: deterministic. AI selection and last-resort fallback were intentionally skipped because a required provider safety window is exhausted; retry only the affected mandatory row after the provider window resets. AI/model calls: 0.${diagnosticFooter}`;
@@ -837,7 +862,7 @@ function formatResult(result) {
   }
   const combinedCells = Number(result?.primaryStats?.cellsChanged || 0) + Number(fb.cellsChanged || 0);
   const fallbackHalt = fb.haltedEarly && fb.haltError
-    ? ` Fallback halted safely at row ${fb.haltAtRow || '?'} with [${fb.haltError.subsystem || 'BIG_PICKLE'}/${fb.haltError.type || 'INTERNAL'}] ${fb.haltError.code || 'BIG_PICKLE_FALLBACK_FAILED'} @ ${fb.haltError.stage || 'fallback-row-enrichment'}: ${fb.haltError.message || 'unknown fallback failure'}. Deterministic primary writes remain valid.`
+    ? ` Fallback halted safely at row ${fb.haltAtRow || '?'}. ${typedErrors.format(fb.haltError)} Deterministic primary writes remain valid.`
     : '';
   const fallbackRows = fb.rowFailures
     ? (() => {
