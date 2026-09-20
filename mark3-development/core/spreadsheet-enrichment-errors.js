@@ -163,6 +163,8 @@ function subsystemLabel(subsystem) {
     NETWORK: 'Network',
     UNIVERSAL: 'ULTRON enrichment',
     DISCOVERY: 'Contact discovery',
+    SERPAPI: 'SerpApi public search',
+    TINYFISH: 'TinyFish public search',
   })[String(subsystem || '').toUpperCase()] || 'ULTRON';
 }
 
@@ -177,6 +179,10 @@ function humanTitleFor(subsystem, type, code, message = '') {
   if (/LINKEDIN_DAILY_CAP/.test(c)) return 'LinkedIn daily safety limit reached';
   if (/LINKEDIN_HOURLY_CAP/.test(c)) return 'LinkedIn hourly safety limit reached';
   if (/SERP_PUBLIC_LINKEDIN_SEARCH_FAILED/.test(c)) return 'Public LinkedIn search returned no usable results';
+  if (/SERPAPI|SERP_/.test(c) || s === 'SERPAPI') return t === 'RATE_LIMIT' ? 'SerpApi rate limit reached' : 'SerpApi public search failed';
+  if (/TINYFISH/.test(c) || s === 'TINYFISH') return t === 'RATE_LIMIT' ? 'TinyFish rate limit reached' : 'TinyFish public search failed';
+  if (/APOLLO_PHONE_RESULT_POLL_FAILED/.test(c)) return 'Apollo phone result check failed';
+  if (/APOLLO_(?:PEOPLE|PRIORITY|ADAPTIVE|BRAND).*SEARCH_FAILED/.test(c)) return 'Apollo people search failed';
 
   if (/GOOGLE_SHEETS_AUTH_REQUIRED|UNAUTHENTICATED|INVALID_GRANT/.test(c + ' ' + m)) return 'Google Sheets authorization expired or is invalid';
   if (/UNIVERSAL_INSPECTION_TARGET_REQUIRED|UNIVERSAL_SHEET_TARGET_REQUIRED/.test(c)) return 'Worksheet target is missing';
@@ -246,6 +252,10 @@ function humanExplanationFor(subsystem, type, code, message = '') {
   if (/LINKEDIN_MCP_TOOL_ERROR/.test(c)) return 'Another LinkedIn browser session is using the authenticated browser, so this stage was safely paused.';
   if (/LINKEDIN_COOLDOWN_ACTIVE/.test(c)) return 'ULTRON is respecting the LinkedIn safety delay and will not bypass it.';
   if (/SERP_PUBLIC_LINKEDIN_SEARCH_FAILED/.test(c)) return 'The public search provider returned no useful LinkedIn profile results for this attempt.';
+  if (/SERPAPI|SERP_/.test(c) || s === 'SERPAPI') return 'SerpApi failed while searching the public web for LinkedIn profile evidence.';
+  if (/TINYFISH/.test(c) || s === 'TINYFISH') return 'TinyFish failed while searching the public web for LinkedIn profile evidence.';
+  if (/APOLLO_PHONE_RESULT_POLL_FAILED/.test(c)) return 'Apollo accepted the phone lookup, but ULTRON could not retrieve the asynchronous result yet.';
+  if (/APOLLO_(?:PEOPLE|PRIORITY|ADAPTIVE|BRAND).*SEARCH_FAILED/.test(c)) return 'Apollo failed while searching for people at the verified employer.';
   if (/APOLLO_NETWORK_FETCH_FAILED/.test(c)) return 'ULTRON retried the Apollo request automatically, but the connection still failed.';
   if (/APOLLO_NETWORK_BODY_READ_FAILED/.test(c)) return 'Apollo accepted the connection, but the response stream was interrupted before ULTRON could read it completely.';
   if (/GOOGLE_SHEETS_AUTH_REQUIRED/.test(c)) return 'The current Google authorization can no longer read or write the spreadsheet.';
@@ -279,6 +289,9 @@ function hintFor(subsystem, type, code) {
   if (c === 'LINKEDIN_HOURLY_CAP') return 'Wait for the LinkedIn hourly safety window to reset. Do not bypass the account-safety limit.';
   if (c === 'LINKEDIN_MCP_TOOL_ERROR') return 'Let the current LinkedIn browser operation finish, then retry only the affected LinkedIn stage.';
   if (c === 'LINKEDIN_COOLDOWN_ACTIVE') return 'Wait for the displayed LinkedIn cooldown to finish, then retry the affected stage.';
+  if (/SERPAPI|SERP_/.test(c) || String(subsystem || '').toUpperCase() === 'SERPAPI') return 'Retry the public search stage after checking SerpApi availability, quota, and key configuration.';
+  if (/TINYFISH/.test(c) || String(subsystem || '').toUpperCase() === 'TINYFISH') return 'Retry the public search stage after checking TinyFish availability and API-key configuration.';
+  if (/APOLLO_PHONE_RESULT_POLL_FAILED/.test(c)) return 'Keep the phone request ID and retry result polling; do not purchase a duplicate phone lookup.';
   if (type === 'RECURSION') return 'Restart ULTRON after checking recent wrappers or patches that may call each other recursively.';
   if (type === 'NETWORK') return `Check internet, DNS, firewall/proxy, and ${subsystemLabel(subsystem)} availability. ULTRON already retried automatically.`;
   if (type === 'AUTH') return `Refresh or re-authorize ${subsystemLabel(subsystem)}, then rerun the same operation.`;
