@@ -19,7 +19,7 @@ assert.equal(
   title(Object.assign(new TypeError('Failed to fetch'), {
     endpoint: 'https://api.apollo.io/api/v1/people/match',
   })),
-  'Apollo could not be reached',
+  'Apollo could not be reached after automatic retries',
 );
 
 assert.equal(
@@ -106,6 +106,16 @@ const formatted = errors.format(Object.assign(new Error('Too many requests'), {
   endpoint: 'https://api.apollo.io/api/v1/people/match',
 }));
 assert.match(formatted, /^Problem: Apollo rate limit reached\./);
+assert.match(formatted, /usage limit was reached/i);
+assert.match(formatted, /What to do:/i);
 assert.doesNotMatch(formatted, /APOLLO_[A-Z0-9_]+/);
 
-console.log('Human error vocabulary self-test passed: provider limits, auth failures, network failures, LinkedIn safety states, worksheet targeting, schema failures, candidate exhaustion and internal recursion are named in plain English.');
+const networkFormatted = errors.format(Object.assign(new TypeError('Failed to fetch'), {
+  endpoint: 'https://api.apollo.io/api/v1/people/match',
+}));
+assert.match(networkFormatted, /^Problem: Apollo could not be reached after automatic retries\./);
+assert.match(networkFormatted, /retried the Apollo request automatically/i);
+assert.match(networkFormatted, /internet, DNS, firewall\/proxy/i);
+assert.doesNotMatch(networkFormatted, /APOLLO_[A-Z0-9_]+/);
+
+console.log('Human error vocabulary self-test passed: provider limits, auth failures, network failures, LinkedIn safety states, worksheet targeting, schema failures, candidate exhaustion and internal recursion are named in plain English with a clear explanation and next action.');
