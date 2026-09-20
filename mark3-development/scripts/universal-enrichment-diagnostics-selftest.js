@@ -44,6 +44,16 @@ const runtime = diagnostics.runtimeIssues({
 assert.ok(runtime.some((item) => item.code === 'PHONE_CALLBACK_PENDING' && item.severity === 'PENDING'));
 assert.ok(runtime.some((item) => item.code === 'OPTIONAL_POC3_UNRESOLVED' && item.severity === 'INFO'));
 assert.ok(runtime.some((item) => item.code === 'IDENTITY_CONFLICT_WRITE_BLOCKED' && item.severity === 'WARNING'));
+
+const requestedPoc3 = diagnostics.issueFromReason('requested-poc3-unresolved', {
+  rowNumber: 8,
+  groupOrdinal: 3,
+});
+assert.equal(requestedPoc3.code, 'POC3_REQUESTED_UNRESOLVED');
+assert.equal(requestedPoc3.severity, 'WARNING');
+assert.equal(requestedPoc3.blocking, false);
+assert.equal(requestedPoc3.retryable, true);
+assert.match(requestedPoc3.nextAction, /deep deterministic discovery and bounded AI rescue/i);
 assert.ok(runtime.every((item) => item.blocking === false), 'pending contact work and optional POC-3 must not masquerade as mandatory failure');
 
 const globalPending = diagnostics.formatIssue(diagnostics.issueFromReason('phone-callback-pending'));
@@ -141,4 +151,4 @@ assert.match(targetedSource, /const gateBlockers/);
 assert.match(targetedSource, /collapseDiagnosticBlockers/);
 assert.match(targetedSource, /Problems:/);
 
-console.log('Universal enrichment diagnostics self-test passed: row scopes remain accurate, LinkedIn safety caps are retryable rate-limit causes, recursive diagnostic helpers are forbidden, stack overflows get a dedicated typed code, and mandatory blockers remain separate from repair/pending/optional work.');
+console.log('Universal enrichment diagnostics self-test passed: row scopes remain accurate, LinkedIn safety caps are retryable rate-limit causes, recursive diagnostic helpers are forbidden, stack overflows get a dedicated typed code, requested POC-3 residue is retryable without becoming a false mandatory blocker, and mandatory blockers remain separate from repair/pending/optional work.');
