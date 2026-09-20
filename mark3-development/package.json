@@ -64,7 +64,8 @@
     "linkedin:recover-diagnostic": "node --env-file=../.env scripts/linkedin-mission-recovery-diagnostic.js",
     "check:email-outreach": "node --env-file=../.env scripts/email-outreach-selftest.js",
     "check:three-poc": "node --env-file=../.env scripts/three-poc-enrichment-selftest.js && node --env-file=../.env scripts/three-poc-internal-inference-selftest.js",
-    "check:enrichment-benchmark": "node --env-file=../.env scripts/three-poc-internal-inference-selftest.js"
+    "check:benchmark": "node --env-file=../.env scripts/three-poc-internal-inference-selftest.js",
+    "check:enrichment-benchmark": "npm run check:benchmark"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
