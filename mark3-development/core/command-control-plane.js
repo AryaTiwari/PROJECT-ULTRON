@@ -152,7 +152,35 @@ async function resolveUniversalPaidApproval(message) {
 
   const decision = paidTools.resolveMessage(String(message || ''));
   if (!decision) return null;
-  const result = await handler.execute(decision);
+
+  let result;
+  try {
+    result = await handler.execute(decision);
+  } catch (error) {
+    const typedErrors = require('./spreadsheet-enrichment-errors');
+    const typed = typedErrors.normalize(error, {
+      stage: error?.stage || 'approval-reentry-dispatch',
+    });
+    const diagnostic = typedErrors.format(typed);
+    result = {
+      ok: false,
+      text: `Universal spreadsheet approval re-entry stopped safely: ${diagnostic}. ${typed.hint}`,
+      response: `Universal spreadsheet approval re-entry stopped safely: ${diagnostic}. ${typed.hint}`,
+      error: typed.code,
+      errorCode: typed.code,
+      errorSubsystem: typed.subsystem,
+      errorType: typed.type,
+      errorStage: typed.stage,
+      errorHint: typed.hint,
+      errorMessage: typed.message,
+      retryAttempts: typed.retryAttempts,
+      endpoint: typed.endpoint || null,
+      executionContract: 'universal-coordinated-multi-poc-v4',
+      model: 'mark3-universal-deterministic-enrichment',
+      provider: 'local-spreadsheet-control',
+      taskType: 'universal-sheet-enrichment',
+    };
+  }
   if (!result) return null;
 
   const route = Object.freeze({
