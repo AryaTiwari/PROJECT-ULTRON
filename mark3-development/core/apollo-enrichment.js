@@ -6,6 +6,7 @@ const apolloFetchHardening = require('./apollo-fetch-hardening');
 
 const APOLLO_MATCH = 'https://api.apollo.io/api/v1/people/match';
 const APOLLO_PEOPLE_SEARCH = 'https://api.apollo.io/api/v1/mixed_people/api_search';
+const APOLLO_WEBHOOK_RESULT = 'https://api.apollo.io/api/v1/webhook_result';
 const CACHE_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'apollo-cache.json');
 const CACHE_VERSION = 4;
 
@@ -195,6 +196,89 @@ async function fetchApolloResponse(input, init, options = {}) {
     throw apolloFetchHardening.typedNetworkError(lastError, retries + 1, endpoint);
   }
   throw apolloBodyReadError(lastError, retries + 1, endpoint);
+}
+
+function requestIdFromRaw(raw, parsed = {}) {
+  const match = String(raw || '').match(/"request_id"\s*:\s*"?(-?\d+)"?/i);
+  if (match?.[1]) return match[1];
+  if (parsed?.request_id != null) return String(parsed.request_id);
+  return '';
+}
+
+function phoneFromWebhookPayload(payload) {
+  const visit = (value) => {
+    if (!value) return null;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const phone = visit(item);
+        if (phone) return phone;
+      }
+      return null;
+    }
+    if (typeof value !== 'object') return null;
+
+    for (const key of ['sanitized_number','raw_number','phone_number','phone','number']) {
+      const phone = validPhone(value[key]);
+      if (phone) return phone;
+    }
+    for (const key of ['phone_numbers','vendors','person','contact','people','matches','waterfall','data']) {
+      const phone = visit(value[key]);
+      if (phone) return phone;
+    }
+    return null;
+  };
+  return visit(payload);
+}
+
+async function pollWebhookResult(requestId, options = {}) {
+  const apiKey = setting('APOLLO_API_KEY');
+  const id = String(requestId || '').trim();
+  if (!apiKey || !id) return { state: 'unavailable', phone: null, payload: null };
+
+  const pollsRaw = Number(options.polls ?? 0);
+  const polls = Number.isFinite(pollsRaw) ? Math.max(0, Math.min(10, Math.floor(pollsRaw))) : 0;
+  const maxWait = Math.max(250, Math.min(5000, Number(options.maxWaitMs || 1800)));
+
+  for (let attempt = 0; attempt <= polls; attempt++) {
+    const { response, text: raw } = await fetchApolloResponse(
+      `${APOLLO_WEBHOOK_RESULT}/${encodeURIComponent(id)}`,
+      { headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } },
+    );
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+
+    if (response.ok) {
+      const phone = phoneFromWebhookPayload(data);
+      return { state: phone ? 'found' : 'not_found', phone, payload: data };
+    }
+
+    const code = String(data?.error_code || data?.code || '').toLowerCase();
+    if (response.status === 404 && code === 'result_pending') {
+      if (attempt >= polls) return { state: 'pending', phone: null, payload: data };
+      const seconds = Number(data?.retry_after_seconds || 1);
+      const wait = Math.min(maxWait, Math.max(250, (Number.isFinite(seconds) ? seconds : 1) * 1000));
+      await sleep(wait);
+      continue;
+    }
+    if (
+      (response.status === 404 && code === 'request_id_unknown')
+      || (response.status === 410 && code === 'request_id_expired')
+      || (response.status === 400 && code === 'invalid_request_id')
+    ) return { state: 'terminal', phone: null, payload: data };
+
+    const error = new Error(
+      data?.error || data?.error_message || data?.message || `Apollo phone-result polling failed (${response.status}).`
+    );
+    error.code = response.status === 429
+      ? 'APOLLO_RATE_LIMITED'
+      : 'APOLLO_PHONE_RESULT_POLL_FAILED';
+    error.subsystem = 'APOLLO';
+    error.errorType = response.status === 429 ? 'RATE_LIMIT' : (response.status >= 500 ? 'API' : 'BAD_REQUEST');
+    error.stage = 'apollo-phone-result-poll';
+    error.status = response.status;
+    throw error;
+  }
+  return { state: 'pending', phone: null, payload: null };
 }
 
 function webhookUrl() {
@@ -597,7 +681,10 @@ async function apiCall(linkedinUrl, { needPhone }) {
     });
     let data = {};
     try { data = JSON.parse(text); } catch {}
-    if (response.ok) return data;
+    if (response.ok) {
+      data.__requestId = requestIdFromRaw(text, data);
+      return data;
+    }
     const message = data?.error || data?.error_message || data?.message || `Apollo enrichment failed (${response.status}).`;
     const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
     error.status = response.status;
@@ -752,6 +839,7 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
     returnedLinkedIn: linkedinUrl,
     checkedAt: new Date().toISOString(),
     phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
+    phoneRequestId: needPhone && !immediatePhone ? String(data.__requestId || '') : null,
     identityVerified: true,
   };
   if (linkedinUrl) {
@@ -809,6 +897,7 @@ async function resolvePersonByBusinessEmail(email, company = '', domain = '', op
     returnedLinkedIn: linkedinUrl,
     checkedAt: new Date().toISOString(),
     phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
+    phoneRequestId: needPhone && !immediatePhone ? String(data.__requestId || '') : null,
     identityVerified: true,
     matchConfidence: confidence || null,
     verifiedBy: 'business-email',
@@ -876,6 +965,7 @@ async function resolvePersonByNameCompany(name, company, domain, options = {}) {
     returnedLinkedIn: linkedinUrl,
     checkedAt: new Date().toISOString(),
     phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
+    phoneRequestId: needPhone && !immediatePhone ? String(data.__requestId || '') : null,
     identityVerified: true,
     matchConfidence: confidence || null,
   };
@@ -950,6 +1040,7 @@ async function enrich(input, options = {}) {
       returnedLinkedIn: decision.returnedLinkedIn || null,
       checkedAt: new Date().toISOString(),
       phoneRequestedAt: needPhone ? new Date().toISOString() : (previous.phoneRequestedAt || null),
+      phoneRequestId: needPhone ? String(data.__requestId || '') : (previous.phoneRequestId || null),
     };
   }
 
@@ -1080,6 +1171,9 @@ module.exports = {
   searchCompanyDecisionMaker,
   fetchApolloResponse,
   apolloBodyReadError,
+  requestIdFromRaw,
+  phoneFromWebhookPayload,
+  pollWebhookResult,
   searchCompanyPeopleBroad,
   candidateEmployerContext,
   hydratedEmployerMatchesCandidate,
