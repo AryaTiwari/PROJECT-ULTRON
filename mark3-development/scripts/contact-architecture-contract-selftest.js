@@ -100,7 +100,7 @@ assert.match(approval, /Preserve provider\/network semantics before applying any
 assert.match(control, /approval-reentry-dispatch/);
 assert.match(control, /Universal spreadsheet approval re-entry stopped safely/);
 assert.match(apolloFetch, /APOLLO_NETWORK_FETCH_FAILED/);
-assert.match(rescue, /Number\(item\.group\?\.ordinal \|\| 0\) >= 2/);
+assert.match(rescue, /candidateFillTargets\(plan\)/);
 assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
 assert.match(spreadsheetController, /Apollo native phone reveal with webhook settlement as the production default/);
 assert.match(spreadsheetController, /custom poll_only phone waterfall is experimental\/legacy-only/);
