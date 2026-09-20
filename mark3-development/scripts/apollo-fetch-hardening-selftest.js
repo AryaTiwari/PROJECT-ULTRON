@@ -60,6 +60,22 @@ async function run() {
     },
   );
   assert.equal(directFailedAttempts, 3);
+
+  let preTypedAttempts = 0;
+  globalThis.fetch = async () => {
+    preTypedAttempts++;
+    throw hardening.typedNetworkError(new TypeError('Failed to fetch'), 3, 'https://api.apollo.io/api/v1/people/match');
+  };
+  await assert.rejects(
+    () => apollo.fetchApolloResponse(
+      'https://api.apollo.io/api/v1/people/match',
+      { method: 'POST' },
+      { retries: 2 },
+    ),
+    (error) => error?.code === 'APOLLO_NETWORK_FETCH_FAILED' && error?.retryAttempts === 3,
+  );
+  assert.equal(preTypedAttempts, 1, 'already-typed global hardener failure must not be retried again by the Apollo helper');
+
   globalThis.fetch = originalGlobalFetch;
 
   let attempts = 0;
