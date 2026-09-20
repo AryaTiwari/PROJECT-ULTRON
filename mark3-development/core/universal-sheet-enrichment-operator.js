@@ -615,10 +615,14 @@ async function syncBackgroundPhoneAssignments() {
         try {
           const direct = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0 });
           phone = apollo.validPhone(direct?.phone);
-          terminal = ['found', 'not_found', 'terminal', 'unavailable'].includes(text(direct?.state));
+          const directState = text(direct?.state);
+          terminal = ['found', 'not_found'].includes(directState);
           if (terminal) {
             apollo.recordPhoneResult(item.apolloPersonId, phone);
             handledIds.add(item.apolloPersonId);
+          } else if (['terminal', 'unavailable'].includes(directState)) {
+            item.lastError = 'Apollo request-id result is unavailable; checking the local callback worker before giving up.';
+            item.lastAttemptAt = new Date().toISOString();
           }
         } catch (error) {
           item.lastError = text(error?.message || error).slice(0, 300);
@@ -825,11 +829,16 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
         handledProviderIds.add(item.apolloPersonId);
         unresolved.delete(item.key);
         stats.phoneDirectPollResolved++;
-      } else if (['not_found', 'terminal', 'unavailable'].includes(state)) {
+      } else if (state === 'not_found') {
         apollo.recordPhoneResult(item.apolloPersonId, null);
         handledProviderIds.add(item.apolloPersonId);
         unresolved.delete(item.key);
         stats.phoneNotFound++;
+        stats.phoneDirectPollTerminal++;
+      } else if (['terminal', 'unavailable'].includes(state)) {
+        // A request ID can expire while the local webhook worker still has the
+        // result. Keep the exact cell unresolved and fall through to worker sync
+        // instead of incorrectly marking the phone as unavailable.
         stats.phoneDirectPollTerminal++;
       }
     }
