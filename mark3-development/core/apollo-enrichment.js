@@ -439,9 +439,7 @@ function sameOrganization(person, company, domain = '') {
   });
 }
 
-function searchCandidateFromPerson(person, cleanCompany, cleanDomain) {
-  if (!sameOrganization(person, cleanCompany, cleanDomain)) return null;
-
+function searchCandidateFromPerson(person, cleanCompany = '', cleanDomain = '') {
   const apolloId = String(person?.id || '').trim();
   const linkedinUrl = normalizeLinkedIn(person?.linkedin_url || person?.linkedin || '');
   if (!apolloId && !linkedinUrl) return null;
@@ -451,6 +449,33 @@ function searchCandidateFromPerson(person, cleanCompany, cleanDomain) {
     || [person?.first_name, person?.last_name || person?.last_name_obfuscated].filter(Boolean).join(' ')
     || ''
   ).trim();
+
+  // Current-employer evidence must come from the returned person record itself.
+  // Apollo's organization-domain search can include previous employers, and
+  // q_keywords is not an employer-verification filter. Never synthesize the
+  // requested company into a candidate and then call that verification.
+  const returnedOrganizationName = String(
+    person?.organization_name
+    || person?.organization?.name
+    || ''
+  ).trim();
+  const returnedOrganizationDomain = hostname(
+    person?.organization?.website_url
+    || person?.organization?.primary_domain
+    || person?.organization?.domain
+    || ''
+  );
+  const currentEmployerVerified = Boolean(
+    (returnedOrganizationName || returnedOrganizationDomain)
+    && sameOrganization(
+      {
+        organizationName: returnedOrganizationName,
+        organizationDomain: returnedOrganizationDomain,
+      },
+      cleanCompany,
+      cleanDomain,
+    )
+  );
 
   return {
     id: apolloId || null,
@@ -462,15 +487,15 @@ function searchCandidateFromPerson(person, cleanCompany, cleanDomain) {
     functions: Array.isArray(person?.functions) ? person.functions.filter(Boolean) : [],
     location: String(person?.city || person?.state || person?.country || '').trim(),
     linkedinUrl: linkedinUrl || null,
-    organizationName: String(person?.organization_name || person?.organization?.name || cleanCompany).trim(),
-    organizationDomain: hostname(person?.organization?.website_url || person?.organization?.primary_domain || person?.organization?.domain || cleanDomain),
+    organizationName: returnedOrganizationName,
+    organizationDomain: returnedOrganizationDomain,
     email: null,
     phone: null,
     searchLimitedIdentity: !linkedinUrl,
     lastNameObfuscated: Boolean(person?.last_name_obfuscated && !person?.last_name),
-    apolloSearchEmployerVerified: true,
-    apolloSearchEmployerCompany: String(person?.organization_name || person?.organization?.name || cleanCompany).trim(),
-    apolloSearchEmployerDomain: hostname(person?.organization?.website_url || person?.organization?.primary_domain || person?.organization?.domain || cleanDomain),
+    apolloSearchEmployerVerified: currentEmployerVerified,
+    apolloSearchEmployerCompany: returnedOrganizationName,
+    apolloSearchEmployerDomain: returnedOrganizationDomain,
   };
 }
 
