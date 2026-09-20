@@ -126,7 +126,8 @@ assert.equal(collapsedBlockers.length, 1, 'one typed root cause must supersede d
 assert.equal(collapsedBlockers[0].code, 'UNIVERSAL_RECURSION_STACK_OVERFLOW');
 
 const rendered = diagnostics.formatIssue(exhausted);
-assert.match(rendered, /^\[BLOCKER\]\[ROW 5\]\[POC-2\] POC2_NO_VERIFIED_CANDIDATE_AFTER_ALL_STRATEGIES:/);
+assert.match(rendered, /^\[BLOCKER\]\[ROW 5\]\[POC-2\] No verified same-company POC-2 could be found\./);
+assert.doesNotMatch(rendered, /POC2_NO_VERIFIED_CANDIDATE_AFTER_ALL_STRATEGIES/);
 
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
@@ -141,14 +142,16 @@ assert.doesNotMatch(operatorSource, /const pushLinkedInDiagnostic = \(payload = 
 assert.match(targetedSource, /MANDATORY_DATA_EXHAUSTED/);
 assert.match(targetedSource, /FINAL_AUDIT_FAILED/);
 assert.match(targetedSource, /AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL|ai-skipped-no-verified-candidate-pool/);
-assert.match(targetedSource, /ULTRON_DIAGNOSTICS/);
-assert.match(targetedSource, /ROOT_CAUSE:/);
-assert.match(targetedSource, /MANDATORY_BLOCKERS:/);
-assert.match(targetedSource, /REPAIR_OR_PENDING:/);
+assert.match(targetedSource, /DIAGNOSTIC SUMMARY/);
+assert.match(targetedSource, /Main problem:/);
+assert.match(targetedSource, /Required blockers:/);
+assert.match(targetedSource, /Repair or pending:/);
+assert.doesNotMatch(targetedSource, /ROOT_CAUSE:/);
+assert.doesNotMatch(targetedSource, /MANDATORY_BLOCKERS:/);
 assert.match(targetedSource, /providerRetryReasonsFromPrimary/);
 assert.match(targetedSource, /provider-retry-required/);
 assert.match(targetedSource, /const gateBlockers/);
 assert.match(targetedSource, /collapseDiagnosticBlockers/);
 assert.match(targetedSource, /Problems:/);
 
-console.log('Universal enrichment diagnostics self-test passed: row scopes remain accurate, LinkedIn safety caps are retryable rate-limit causes, recursive diagnostic helpers are forbidden, stack overflows get a dedicated typed code, requested POC-3 residue is retryable without becoming a false mandatory blocker, and mandatory blockers remain separate from repair/pending/optional work.');
+console.log('Universal enrichment diagnostics self-test passed: machine codes remain available internally, visible row diagnostics and final root-cause summaries are plain English, LinkedIn safety caps are named clearly, requested POC-3 residue stays retryable, and mandatory blockers remain separate from repair/pending/optional work.');
