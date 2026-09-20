@@ -14,8 +14,9 @@ assert.equal(bodyError.subsystem, 'APOLLO');
 assert.equal(bodyError.errorType, 'NETWORK');
 assert.equal(bodyError.retryAttempts, 3);
 
-(async () => {
+async function run() {
   const originalGlobalFetch = globalThis.fetch;
+  try {
 
   let directAttempts = 0;
   globalThis.fetch = async () => {
@@ -100,9 +101,17 @@ assert.equal(bodyError.retryAttempts, 3);
   await assert.rejects(() => passThrough('https://sheets.googleapis.com/v4/spreadsheets/x'), /Failed to fetch/);
   assert.equal(googleAttempts, 1, 'non-Apollo requests must not be intercepted by Apollo hardening');
 
-  globalThis.fetch = originalGlobalFetch;
-  console.log('Apollo fetch hardening self-test passed: the Apollo HTTP helper and global hardener both retry thrown transport failures, exhausted network failures are typed, interrupted response bodies are typed, and non-Apollo fetches stay untouched.');
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+    console.log('Apollo fetch hardening self-test passed: the Apollo HTTP helper and global hardener both retry thrown transport failures, exhausted network failures are typed, interrupted response bodies are typed, and non-Apollo fetches stay untouched.');
+  } finally {
+    globalThis.fetch = originalGlobalFetch;
+  }
+}
+
+if (require.main === module) {
+  run().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { run };
