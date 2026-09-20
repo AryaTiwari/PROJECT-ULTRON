@@ -113,6 +113,24 @@ assert.equal(queue[0].rowNumber, 7);
 assert.equal(queue[0].columnIndex, 8);
 assert.equal(queue[0].apolloPersonId, 'apollo-hemanth');
 
+const directQueue = [];
+operator.queuePendingPhone(
+  { pendingPhoneQueue: directQueue },
+  9,
+  existing.group,
+  existing.snapshot,
+  {
+    id: 'apollo-direct',
+    name: 'Direct Poll Person',
+    phoneStatus: 'pending',
+    phoneRequestId: '1039995589705121975',
+    phone: '',
+  },
+);
+assert.equal(directQueue.length, 1, 'native Apollo pending phone with request_id must be owned by the exact sheet cell');
+assert.equal(directQueue[0].phoneMode, 'native');
+assert.equal(directQueue[0].phoneRequestId, '1039995589705121975');
+
 const waterfallQueue = [];
 operator.queuePendingPhone(
   { pendingPhoneQueue: waterfallQueue },
@@ -168,6 +186,11 @@ assert.match(operatorSource, /apollo-business-email/);
 assert.match(operatorSource, /apollo\.resolvePersonByBusinessEmail/);
 assert.match(operatorSource, /apollo-name-company/);
 assert.match(operatorSource, /apollo\.fetchPhoneResults\(\)/);
+assert.match(operatorSource, /apollo\.pollWebhookResult\(item\.phoneRequestId/);
+assert.match(operatorSource, /phoneDirectPollResolved/);
+assert.match(operatorSource, /phoneRequestId/);
+assert.match(apolloSource, /async function pollWebhookResult/);
+assert.match(apolloSource, /function requestIdFromRaw/);
 assert.match(operatorSource, /apollo\.recordPhoneResult/);
 assert.match(operatorSource, /sheets\.readCell/);
 assert.match(operatorSource, /sheets\.isBlank/);
@@ -222,6 +245,7 @@ async function run() {
   const sheets = require('../core/google-sheets-operator');
   const originals = {
     fetchPhoneResults: apollo.fetchPhoneResults,
+    pollWebhookResult: apollo.pollWebhookResult,
     recordPhoneResult: apollo.recordPhoneResult,
     consumePhoneResult: apollo.consumePhoneResult,
     readCell: sheets.readCell,
@@ -248,6 +272,10 @@ async function run() {
       'stale Apollo pending phone request must become eligible for reveal retry',
     );
     apollo.fetchPhoneResults = async () => [{ apollo_person_id: 'apollo-hemanth', phone: '+919876543210' }];
+    apollo.pollWebhookResult = async (requestId) => {
+      assert.equal(requestId, '1039995589705121975');
+      return { state: 'found', phone: '+919123456789' };
+    };
     apollo.recordPhoneResult = () => ['https://www.linkedin.com/in/hemanth-test'];
     apollo.consumePhoneResult = async () => true;
     sheets.readCell = async () => '';
@@ -270,6 +298,20 @@ async function run() {
     assert.equal(stats.phoneStillPending, 0);
 
     writes.length = 0;
+    const directStats = operator.freshStats();
+    await operator.syncPendingPhoneAssignments(
+      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2' },
+      directQueue,
+      directStats,
+      { phoneDirectPolls: 0, phoneSyncPolls: 1, phoneSyncWaitMs: 1 },
+    );
+    assert.equal(writes.length, 1, 'native request-id polling should write a ready phone without waiting for the worker');
+    assert.equal(writes[0].range, "'Arya 2'!I9");
+    assert.equal(writes[0].value, '+919123456789');
+    assert.equal(directStats.phoneDirectPollResolved, 1);
+    assert.equal(directStats.phoneStillPending, 0);
+
+    writes.length = 0;
     sheets.readCell = async () => '+911111111111';
     const populatedStats = operator.freshStats();
     await operator.syncPendingPhoneAssignments(
@@ -284,13 +326,14 @@ async function run() {
     if (oldPendingRetry == null) delete process.env.ULTRON_M3_APOLLO_PENDING_PHONE_RETRY_MINUTES;
     else process.env.ULTRON_M3_APOLLO_PENDING_PHONE_RETRY_MINUTES = oldPendingRetry;
     apollo.fetchPhoneResults = originals.fetchPhoneResults;
+    apollo.pollWebhookResult = originals.pollWebhookResult;
     apollo.recordPhoneResult = originals.recordPhoneResult;
     apollo.consumePhoneResult = originals.consumePhoneResult;
     sheets.readCell = originals.readCell;
     sheets.writeCells = originals.writeCells;
   }
 
-  console.log('Universal contact completion self-test passed: existing POCs verify exactly, native Apollo reveal/webhook is the default phone-completion path, already-paid legacy waterfall request IDs remain resumable by exact sheet cell, pending native callbacks remain resume-safe, populated phone cells are never overwritten, and nested legacy waterfall payloads still parse safely.');
+  console.log('Universal contact completion self-test passed: existing POCs verify exactly, native Apollo reveal/webhook is the default phone-completion path, already-paid legacy waterfall request IDs remain resumable by exact sheet cell, native Apollo request IDs are polled in-run before worker fallback, pending native callbacks remain resume-safe, populated phone cells are never overwritten, and nested legacy waterfall payloads still parse safely.');
 }
 
 if (require.main === module) {
