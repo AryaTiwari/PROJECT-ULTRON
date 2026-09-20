@@ -239,10 +239,10 @@ async function pollRequest(requestId, options = {}) {
     ? Math.max(0, Math.min(8, Math.floor(requestedPolls)))
     : maxPolls();
   for (let attempt = 0; attempt <= polls; attempt++) {
-    const response = await fetch(`${APOLLO_WEBHOOK_RESULT}/${encodeURIComponent(String(requestId))}`, {
-      headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' },
-    });
-    const raw = await response.text();
+    const { response, text: raw } = await apollo.fetchApolloResponse(
+      `${APOLLO_WEBHOOK_RESULT}/${encodeURIComponent(String(requestId))}`,
+      { headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } },
+    );
     let data = {};
     try { data = raw ? JSON.parse(raw) : {}; } catch {}
 
@@ -286,7 +286,7 @@ async function startWaterfall(result) {
   url.searchParams.set('reveal_phone_number', 'false');
   url.searchParams.set('poll_only', 'true');
 
-  const response = await fetch(url, {
+  const { response, text: raw } = await apollo.fetchApolloResponse(url, {
     method: 'POST',
     headers: {
       'x-api-key': apiKey,
@@ -295,7 +295,6 @@ async function startWaterfall(result) {
       'Cache-Control': 'no-cache',
     },
   });
-  const raw = await response.text();
   let data = {};
   try { data = raw ? JSON.parse(raw) : {}; } catch {}
   if (!response.ok) return { state: 'error', email: null, requestId: '', payload: data };
@@ -318,10 +317,10 @@ async function pollPhoneRequest(requestId, options = {}) {
     ? Math.max(0, Math.min(8, Math.floor(requestedPolls)))
     : phonePolls();
   for (let attempt = 0; attempt <= polls; attempt++) {
-    const response = await fetch(`${APOLLO_WEBHOOK_RESULT}/${encodeURIComponent(String(requestId))}`, {
-      headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' },
-    });
-    const raw = await response.text();
+    const { response, text: raw } = await apollo.fetchApolloResponse(
+      `${APOLLO_WEBHOOK_RESULT}/${encodeURIComponent(String(requestId))}`,
+      { headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Cache-Control': 'no-cache' } },
+    );
     let data = {};
     try { data = raw ? JSON.parse(raw) : {}; } catch {}
 
@@ -368,7 +367,7 @@ async function startPhoneWaterfall(result) {
   url.searchParams.set('reveal_phone_number', 'false');
   url.searchParams.set('poll_only', 'true');
 
-  const response = await fetch(url, {
+  const { response, text: raw } = await apollo.fetchApolloResponse(url, {
     method: 'POST',
     headers: {
       'x-api-key': apiKey,
@@ -377,7 +376,6 @@ async function startPhoneWaterfall(result) {
       'Cache-Control': 'no-cache',
     },
   });
-  const raw = await response.text();
   let data = {};
   try { data = raw ? JSON.parse(raw) : {}; } catch {}
   if (!response.ok) return { state: 'error', phone: null, requestId: '', payload: data };
