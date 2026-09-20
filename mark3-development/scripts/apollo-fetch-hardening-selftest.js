@@ -15,6 +15,52 @@ assert.equal(bodyError.errorType, 'NETWORK');
 assert.equal(bodyError.retryAttempts, 3);
 
 (async () => {
+  const originalGlobalFetch = globalThis.fetch;
+
+  let directAttempts = 0;
+  globalThis.fetch = async () => {
+    directAttempts++;
+    if (directAttempts < 3) throw new TypeError('Failed to fetch');
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => '{"ok":true}',
+    };
+  };
+  const directRecovered = await apollo.fetchApolloResponse(
+    'https://api.apollo.io/api/v1/people/match',
+    { method: 'POST' },
+    { retries: 2 },
+  );
+  assert.equal(directRecovered.response.ok, true);
+  assert.equal(directAttempts, 3, 'Apollo HTTP helper itself must retry thrown fetch transport failures');
+
+  let directFailedAttempts = 0;
+  globalThis.fetch = async () => {
+    directFailedAttempts++;
+    const error = new TypeError('Failed to fetch');
+    error.cause = Object.assign(new Error('getaddrinfo EAI_AGAIN api.apollo.io'), { code: 'EAI_AGAIN' });
+    throw error;
+  };
+  await assert.rejects(
+    () => apollo.fetchApolloResponse(
+      'https://api.apollo.io/api/v1/people/match',
+      { method: 'POST' },
+      { retries: 2 },
+    ),
+    (error) => {
+      assert.equal(error.code, 'APOLLO_NETWORK_FETCH_FAILED');
+      assert.equal(error.subsystem, 'APOLLO');
+      assert.equal(error.errorType, 'NETWORK');
+      assert.equal(error.stage, 'apollo-http-transport');
+      assert.equal(error.retryAttempts, 3);
+      return true;
+    },
+  );
+  assert.equal(directFailedAttempts, 3);
+  globalThis.fetch = originalGlobalFetch;
+
   let attempts = 0;
   const recovers = hardening.createHardenedFetch(async () => {
     attempts++;
@@ -54,7 +100,8 @@ assert.equal(bodyError.retryAttempts, 3);
   await assert.rejects(() => passThrough('https://sheets.googleapis.com/v4/spreadsheets/x'), /Failed to fetch/);
   assert.equal(googleAttempts, 1, 'non-Apollo requests must not be intercepted by Apollo hardening');
 
-  console.log('Apollo fetch hardening self-test passed: Apollo transport failures retry twice, interrupted response bodies are typed, and non-Apollo fetches stay untouched.');
+  globalThis.fetch = originalGlobalFetch;
+  console.log('Apollo fetch hardening self-test passed: the Apollo HTTP helper and global hardener both retry thrown transport failures, exhausted network failures are typed, interrupted response bodies are typed, and non-Apollo fetches stay untouched.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
