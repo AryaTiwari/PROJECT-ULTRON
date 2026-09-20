@@ -47,6 +47,21 @@ assert.ok(runtime.some((item) => item.code === 'PHONE_CALLBACK_PENDING' && item.
 assert.ok(runtime.some((item) => item.code === 'OPTIONAL_POC3_UNRESOLVED' && item.severity === 'INFO'));
 assert.ok(runtime.some((item) => item.code === 'IDENTITY_CONFLICT_WRITE_BLOCKED' && item.severity === 'WARNING'));
 
+const aiAbstained = diagnostics.issueFromReason('ai-selection-abstained', {
+  rowNumber: 5,
+  groupOrdinal: 2,
+});
+assert.equal(aiAbstained.code, 'AI_SELECTION_ABSTAINED');
+assert.equal(aiAbstained.humanTitle, 'AI could not safely choose a verified candidate');
+assert.doesNotMatch(aiAbstained.humanTitle, /ai-selection-abstained/i);
+
+const aiRejected = diagnostics.issueFromReason('selection-rejected-after-verification', {
+  rowNumber: 5,
+  groupOrdinal: 3,
+});
+assert.equal(aiRejected.code, 'AI_SELECTION_REJECTED_AFTER_VERIFICATION');
+assert.equal(aiRejected.humanTitle, 'AI suggestion failed final identity or employer verification');
+
 const requestedPoc3 = diagnostics.issueFromReason('requested-poc3-unresolved', {
   rowNumber: 8,
   groupOrdinal: 3,
