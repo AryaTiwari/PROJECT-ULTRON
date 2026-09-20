@@ -121,7 +121,7 @@ async function execute(decision) {
         hint: typed.hint,
       };
       const s = result?.stats || {};
-      body = `${modePrefix(payload.rowLimit)} Universal enrichment execution returned safely, but result formatting hit [${typed.subsystem}/${typed.type}] ${typed.code} @ ${typed.stage}: ${typed.message}. Earlier verified writes were preserved. Processed ${s.rowsProcessed || 0}/${s.rowsSeen || 0} rows and changed ${s.cellsChanged || 0} cells across ${s.rowsChanged || 0} rows. Resume-safe: yes.`;
+      body = `${modePrefix(payload.rowLimit)} Universal enrichment execution returned safely, but the report formatter had a problem. ${typedErrors.format(typed)} Earlier verified writes were preserved. Processed ${s.rowsProcessed || 0}/${s.rowsSeen || 0} rows and changed ${s.cellsChanged || 0} cells across ${s.rowsChanged || 0} rows. Resume-safe: yes.`;
     }
 
     const modelCalls = Number(result?.modelCalls || 0);
