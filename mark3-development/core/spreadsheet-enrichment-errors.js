@@ -1,8 +1,7 @@
 'use strict';
 
-// One error vocabulary for universal spreadsheet enrichment. Every failure that
-// crosses the spreadsheet boundary should expose subsystem + type + code + stage
-// instead of leaking raw provider/runtime strings such as "Failed to fetch".
+// One error vocabulary for universal spreadsheet enrichment.
+// Machine codes remain available in metadata/logs, but user-facing text is plain English.
 
 const NETWORK_PATTERN = /failed to fetch|fetch failed|econnrefused|econnreset|enotfound|eai_again|etimedout|socket|tls|network|dns/i;
 
@@ -27,6 +26,9 @@ function subsystemFor(error, context = {}) {
   if (/GOOGLE_SHEETS|GOOGLE SHEETS|google-sheets/i.test(value)) return 'GOOGLE_SHEETS';
   if (/BIG_PICKLE|BIG PICKLE|big-pickle|omniroute/i.test(value)) return 'BIG_PICKLE';
   if (/LINKEDIN|linkedin-/i.test(value)) return 'LINKEDIN';
+  if (/GEMINI/.test(value)) return 'GEMINI';
+  if (/GROQ/.test(value)) return 'GROQ';
+  if (/NVIDIA|NEMOTRON/.test(value)) return 'NVIDIA';
   if (/SCHEMA|HEADER|COLUMN_RELATION|COLUMN MAPPING/.test(value)) return 'SCHEMA';
   if (/TAB_|TARGET_|GID_|WORKSHEET|SHEET_TAB|TAB NOT FOUND/.test(value)) return 'TARGETING';
   if (/APPROVAL|CONTROL_PLANE|ROUTE_INVARIANT/.test(value)) return 'CONTROL_PLANE';
@@ -39,7 +41,7 @@ function typeFor(error, subsystem) {
   if (explicit) return explicit;
   const code = text(error?.code).toUpperCase();
   const value = combined(error).toUpperCase();
-  if (/AUTH|UNAUTHENTICATED|INVALID_GRANT|TOKEN|CREDENTIAL/.test(`${code} ${value}`)) return 'AUTH';
+  if (/AUTH|UNAUTHENTICATED|INVALID_GRANT|TOKEN|CREDENTIAL|API[_ -]?KEY/.test(`${code} ${value}`)) return 'AUTH';
   if (/FORBIDDEN|PERMISSION|ACCESS_REQUIRED|ACCESS DENIED/.test(`${code} ${value}`)) return 'PERMISSION';
   if (/RATE_LIMIT|RESOURCE_EXHAUSTED|429|QUOTA|DAILY_CAP|HOURLY_CAP|SAFETY_CAP/.test(`${code} ${value}`)) return 'RATE_LIMIT';
   if (/MAXIMUM CALL STACK SIZE EXCEEDED|STACK OVERFLOW|RANGEERROR/.test(`${code} ${value}`)) return 'RECURSION';
@@ -68,20 +70,123 @@ function defaultCode(error, subsystem, type) {
   return 'UNIVERSAL_INTERNAL_UNCLASSIFIED';
 }
 
+function subsystemLabel(subsystem) {
+  return ({
+    APOLLO: 'Apollo',
+    GOOGLE_SHEETS: 'Google Sheets',
+    LINKEDIN: 'LinkedIn',
+    BIG_PICKLE: 'Big Pickle fallback',
+    GEMINI: 'Gemini',
+    GROQ: 'Groq',
+    NVIDIA: 'NVIDIA',
+    TARGETING: 'Worksheet targeting',
+    SCHEMA: 'Spreadsheet schema',
+    CONTROL_PLANE: 'ULTRON routing',
+    NETWORK: 'Network',
+    UNIVERSAL: 'ULTRON enrichment',
+    DISCOVERY: 'Contact discovery',
+  })[String(subsystem || '').toUpperCase()] || 'ULTRON';
+}
+
+function humanTitleFor(subsystem, type, code, message = '') {
+  const s = String(subsystem || '').toUpperCase();
+  const t = String(type || '').toUpperCase();
+  const c = String(code || '').toUpperCase();
+  const m = String(message || '').toUpperCase();
+
+  if (/LINKEDIN_MCP_TOOL_ERROR/.test(c) || /ANOTHER LINKEDIN MCP CLIENT|BROWSER.*USING/.test(m)) return 'LinkedIn browser is already busy';
+  if (/LINKEDIN_COOLDOWN_ACTIVE/.test(c) || /COOLDOWN/.test(c + ' ' + m)) return 'LinkedIn safety cooldown is active';
+  if (/LINKEDIN_DAILY_CAP/.test(c)) return 'LinkedIn daily safety limit reached';
+  if (/LINKEDIN_HOURLY_CAP/.test(c)) return 'LinkedIn hourly safety limit reached';
+  if (/SERP_PUBLIC_LINKEDIN_SEARCH_FAILED/.test(c)) return 'Public LinkedIn search returned no usable results';
+
+  if (/GOOGLE_SHEETS_AUTH_REQUIRED|UNAUTHENTICATED|INVALID_GRANT/.test(c + ' ' + m)) return 'Google Sheets authorization expired or is invalid';
+  if (/UNIVERSAL_INSPECTION_TARGET_REQUIRED|UNIVERSAL_SHEET_TARGET_REQUIRED/.test(c)) return 'Worksheet target is missing';
+  if (/UNIVERSAL_SHEET_TAB_NOT_FOUND|TAB_NOT_FOUND/.test(c)) return 'The requested worksheet tab could not be found';
+  if (/UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW/.test(c)) return 'Spreadsheet columns could not be identified safely';
+
+  if (/APOLLO_NETWORK_BODY_READ_FAILED/.test(c)) return 'Apollo connection was interrupted while reading the response';
+  if (/APOLLO_NETWORK_FETCH_FAILED/.test(c)) return 'Apollo could not be reached after automatic retries';
+
+  if (/POC2_NO_VERIFIED_CANDIDATE_AFTER_ALL_STRATEGIES/.test(c)) return 'No verified same-company POC-2 could be found';
+  if (/POC2_NO_DISCOVERY_CANDIDATES/.test(c)) return 'No safe POC-2 candidates were found';
+  if (/POC2_CANDIDATES_FAILED_VERIFICATION/.test(c)) return 'POC-2 candidates were found but none passed verification';
+  if (/EMPLOYER_NOT_VERIFIED|EMPLOYER_UNRESOLVED/.test(c)) return 'The hiring company could not be verified';
+  if (/POC3_REQUESTED_UNRESOLVED/.test(c)) return 'Requested POC-3 could not be verified';
+  if (/AI_NO_VERIFIED_CANDIDATE_POOL|AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL/.test(c)) return 'AI had no verified candidates to choose from';
+  if (/AI_TARGET_NOT_OFFERED_TO_SELECTION/.test(c)) return 'AI selection was skipped because no safe candidate package existed';
+  if (/AI_SELECTION_ABSTAINED/.test(c)) return 'AI could not safely choose a candidate';
+
+  const label = subsystemLabel(s);
+  if (t === 'RATE_LIMIT') return `${label} rate limit reached`;
+  if (t === 'AUTH') return `${label} authentication or API-key problem`;
+  if (t === 'PERMISSION') return `${label} access permission denied`;
+  if (t === 'NETWORK') return `${label} could not be reached`;
+  if (t === 'TIMEOUT') return `${label} request timed out`;
+  if (t === 'CONFIG') return `${label} is not configured correctly`;
+  if (t === 'INVALID_RANGE') return 'Google Sheets range is invalid';
+  if (t === 'TARGETING') return 'Worksheet name or tab could not be resolved';
+  if (t === 'SCHEMA') return 'Spreadsheet columns could not be understood safely';
+  if (t === 'NOT_FOUND') return `${label} could not find the requested record`;
+  if (t === 'AMBIGUITY') return `${label} found conflicting or ambiguous evidence`;
+  if (t === 'BAD_REQUEST') return `${label} rejected the request as invalid`;
+  if (t === 'RECURSION') return 'ULTRON hit an internal recursive loop';
+  if (t === 'API') return `${label} returned an API error`;
+  return `${label} encountered an internal error`;
+}
+
+function humanExplanationFor(subsystem, type, code, message = '') {
+  const s = String(subsystem || '').toUpperCase();
+  const t = String(type || '').toUpperCase();
+  const c = String(code || '').toUpperCase();
+
+  if (/LINKEDIN_MCP_TOOL_ERROR/.test(c)) return 'Another LinkedIn browser session is using the authenticated browser, so this stage was safely paused.';
+  if (/LINKEDIN_COOLDOWN_ACTIVE/.test(c)) return 'ULTRON is respecting the LinkedIn safety delay and will not bypass it.';
+  if (/SERP_PUBLIC_LINKEDIN_SEARCH_FAILED/.test(c)) return 'The public search provider returned no useful LinkedIn profile results for this attempt.';
+  if (/APOLLO_NETWORK_FETCH_FAILED/.test(c)) return 'ULTRON retried the Apollo request automatically, but the connection still failed.';
+  if (/APOLLO_NETWORK_BODY_READ_FAILED/.test(c)) return 'Apollo accepted the connection, but the response stream was interrupted before ULTRON could read it completely.';
+  if (/GOOGLE_SHEETS_AUTH_REQUIRED/.test(c)) return 'The current Google authorization can no longer read or write the spreadsheet.';
+  if (/UNIVERSAL_SHEET_TARGET_REQUIRED|UNIVERSAL_INSPECTION_TARGET_REQUIRED/.test(c)) return 'ULTRON does not have a safe exact worksheet name or tab identifier to inspect.';
+  if (/POC2_NO_VERIFIED_CANDIDATE_AFTER_ALL_STRATEGIES/.test(c)) return 'All configured discovery and verification strategies were tried, but no distinct same-company person passed the safety checks.';
+
+  if (t === 'RATE_LIMIT') return `${subsystemLabel(s)} temporarily rejected more requests because its usage limit was reached.`;
+  if (t === 'AUTH') return `${subsystemLabel(s)} rejected the credentials or authorization currently configured.`;
+  if (t === 'PERMISSION') return `${subsystemLabel(s)} is reachable, but the connected account is not allowed to perform this operation.`;
+  if (t === 'NETWORK') return `${subsystemLabel(s)} could not be reached reliably after automatic retry.`;
+  if (t === 'TIMEOUT') return `${subsystemLabel(s)} did not respond before the safe timeout expired.`;
+  if (t === 'CONFIG') return `A required ${subsystemLabel(s)} setting, endpoint, key, or integration is missing or invalid.`;
+  if (t === 'INVALID_RANGE') return 'The worksheet range being requested does not exist or is outside the physical sheet grid.';
+  if (t === 'TARGETING') return 'ULTRON could not safely determine the exact worksheet that should be inspected or changed.';
+  if (t === 'SCHEMA') return 'ULTRON could not map the worksheet columns with enough confidence to write safely.';
+  if (t === 'NOT_FOUND') return `${subsystemLabel(s)} returned no matching record for the exact requested identity or resource.`;
+  if (t === 'AMBIGUITY') return 'More than one plausible result existed, so ULTRON refused to guess.';
+  if (t === 'BAD_REQUEST') return `${subsystemLabel(s)} rejected the request before processing it.`;
+  if (t === 'RECURSION') return 'An internal wrapper or helper called itself repeatedly until JavaScript stopped the operation.';
+  if (t === 'API') return `${subsystemLabel(s)} returned a provider-side error while processing the request.`;
+
+  const clean = text(message).replace(/[A-Z][A-Z0-9_]{3,}/g, '').replace(/\s+/g, ' ').trim();
+  return clean && clean.toLowerCase() !== 'unknown failure'
+    ? clean
+    : 'ULTRON stopped this stage safely because it could not confirm a reliable result.';
+}
+
 function hintFor(subsystem, type, code) {
-  if (String(code || '').toUpperCase() === 'LINKEDIN_DAILY_CAP') return 'LinkedIn daily safety budget is exhausted. Do not bypass the cap; resume after the daily safety window resets.';
-  if (String(code || '').toUpperCase() === 'LINKEDIN_HOURLY_CAP') return 'LinkedIn hourly safety budget is exhausted. Do not bypass the cap; resume after the hourly safety window resets.';
-  if (type === 'RECURSION') return 'A recursive wrapper/helper loop exhausted the JavaScript call stack. Inspect recent monkey-patches, wrappers and diagnostic helpers before retrying providers.';
-  if (type === 'NETWORK') return `${subsystem} could not be reached after automatic retry. Check internet, DNS, firewall/proxy and provider availability.`;
-  if (type === 'AUTH') return `Refresh or re-authorize ${subsystem} credentials, then rerun the same operation.`;
-  if (type === 'PERMISSION') return `The connected ${subsystem} identity lacks permission for this operation or resource.`;
-  if (type === 'RATE_LIMIT') return `${subsystem} rejected the request for quota/rate-limit reasons. Reduce burst size or retry after the provider window resets.`;
-  if (subsystem === 'TARGETING') return 'Check the exact spreadsheet URL, worksheet name and gid. Explicit worksheet names remain authoritative.';
-  if (subsystem === 'SCHEMA') return 'Inspect the worksheet header and inferred contact groups; ULTRON refused to guess an unsafe mapping.';
-  if (subsystem === 'BIG_PICKLE') return 'Deterministic enrichment remains authoritative. Big Pickle fallback may abstain without blocking already-resolved deterministic work.';
-  if (type === 'INVALID_RANGE') return 'Check the exact A1 range and worksheet name used by the Google Values API.';
-  if (type === 'CONFIG') return `Required configuration for ${subsystem} is missing or invalid.`;
-  return `Inspect the typed code ${code} and stage for the failing subsystem.`;
+  const c = String(code || '').toUpperCase();
+  if (c === 'LINKEDIN_DAILY_CAP') return 'Wait for the LinkedIn daily safety window to reset. Do not bypass the account-safety limit.';
+  if (c === 'LINKEDIN_HOURLY_CAP') return 'Wait for the LinkedIn hourly safety window to reset. Do not bypass the account-safety limit.';
+  if (c === 'LINKEDIN_MCP_TOOL_ERROR') return 'Let the current LinkedIn browser operation finish, then retry only the affected LinkedIn stage.';
+  if (c === 'LINKEDIN_COOLDOWN_ACTIVE') return 'Wait for the displayed LinkedIn cooldown to finish, then retry the affected stage.';
+  if (type === 'RECURSION') return 'Restart ULTRON after checking recent wrappers or patches that may call each other recursively.';
+  if (type === 'NETWORK') return `Check internet, DNS, firewall/proxy, and ${subsystemLabel(subsystem)} availability. ULTRON already retried automatically.`;
+  if (type === 'AUTH') return `Refresh or re-authorize ${subsystemLabel(subsystem)}, then rerun the same operation.`;
+  if (type === 'PERMISSION') return `Give the connected ${subsystemLabel(subsystem)} account permission for this resource or operation.`;
+  if (type === 'RATE_LIMIT') return `Wait for the ${subsystemLabel(subsystem)} rate-limit window to reset, then resume the same run.`;
+  if (subsystem === 'TARGETING') return 'Use the exact spreadsheet URL plus worksheet name or gid.';
+  if (subsystem === 'SCHEMA') return 'Check the worksheet headers and contact columns. ULTRON deliberately refused an unsafe guess.';
+  if (subsystem === 'BIG_PICKLE') return 'Keep deterministic enrichment authoritative; retry the fallback only if unresolved rows still need it.';
+  if (type === 'INVALID_RANGE') return 'Check the exact worksheet name and A1 range.';
+  if (type === 'CONFIG') return `Fix the missing or invalid ${subsystemLabel(subsystem)} configuration, then restart ULTRON.`;
+  return 'Retry only the affected stage after checking the plain-English problem description above.';
 }
 
 function normalize(error, context = {}) {
@@ -91,12 +196,16 @@ function normalize(error, context = {}) {
   const code = defaultCode(original, subsystem, type);
   const stage = text(original.stage || context.stage || 'unspecified-stage');
   const message = text(original.message || context.message || 'unknown failure');
+  const humanTitle = humanTitleFor(subsystem, type, code, message);
+  const humanExplanation = humanExplanationFor(subsystem, type, code, message);
   return {
     code,
     subsystem,
     type,
     stage,
     message,
+    humanTitle,
+    humanExplanation,
     hint: text(original.hint) || hintFor(subsystem, type, code),
     status: original.status ?? null,
     retryAttempts: original.retryAttempts ?? null,
@@ -109,15 +218,25 @@ function normalize(error, context = {}) {
 }
 
 function format(value) {
-  const typed = value?.subsystem && value?.type ? value : normalize(value);
-  return `[${typed.subsystem}/${typed.type}] ${typed.code} @ ${typed.stage}: ${typed.message}`;
+  const typed = value?.subsystem && value?.type ? {
+    ...value,
+    humanTitle: value.humanTitle || humanTitleFor(value.subsystem, value.type, value.code, value.message),
+    humanExplanation: value.humanExplanation || humanExplanationFor(value.subsystem, value.type, value.code, value.message),
+    hint: value.hint || hintFor(value.subsystem, value.type, value.code),
+  } : normalize(value);
+  const action = text(typed.hint) ? ` What to do: ${text(typed.hint)}` : '';
+  return `Problem: ${typed.humanTitle}. ${typed.humanExplanation}${action}`;
 }
 
 module.exports = {
   NETWORK_PATTERN,
   subsystemFor,
   typeFor,
+  defaultCode,
   normalize,
   format,
   hintFor,
+  subsystemLabel,
+  humanTitleFor,
+  humanExplanationFor,
 };
