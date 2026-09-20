@@ -158,11 +158,18 @@ async function execute(decision) {
       provider: fallbackUsed ? 'deterministic+apollo+google-sheets+bounded-direct-env-ai' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
-    if (!error?.code) error.code = 'UNIVERSAL_APPROVED_EXECUTION_LOCAL_FAILURE';
-    if (!error?.subsystem) error.subsystem = 'UNIVERSAL';
-    if (!error?.errorType) error.errorType = 'INTERNAL';
+    // Preserve provider/network semantics before applying any universal fallback.
+    // Raw transport errors such as "Failed to fetch" must become typed NETWORK
+    // failures rather than being mislabeled INTERNAL by the approval boundary.
     if (!error?.stage) error.stage = 'approved-enrichment-execution';
-    const typed = typedErrors.normalize(error, { stage: error?.stage || 'approved-enrichment-execution' });
+    const typed = typedErrors.normalize(error, {
+      stage: error?.stage || 'approved-enrichment-execution',
+    });
+    if (typed.code === 'UNIVERSAL_INTERNAL_UNCLASSIFIED') {
+      typed.code = 'UNIVERSAL_APPROVED_EXECUTION_LOCAL_FAILURE';
+      typed.subsystem = typed.subsystem || 'UNIVERSAL';
+      typed.type = typed.type || 'INTERNAL';
+    }
     const diagnostic = typedErrors.format(typed);
     return response(false, `Universal spreadsheet enrichment stopped safely: ${diagnostic}. ${typed.hint}`, {
       error: typed.code,
