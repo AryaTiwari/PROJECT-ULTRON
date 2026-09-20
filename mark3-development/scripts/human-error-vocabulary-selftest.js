@@ -43,7 +43,7 @@ assert.equal(
     subsystem: 'GROQ',
     status: 401,
   })),
-  'Groq authentication or API-key problem',
+  'Groq API key is missing, expired, or invalid',
 );
 
 assert.equal(
@@ -51,7 +51,71 @@ assert.equal(
     subsystem: 'NVIDIA',
     errorType: 'TIMEOUT',
   })),
-  'NVIDIA request timed out',
+  'NVIDIA took too long to respond',
+);
+
+assert.equal(
+  title(Object.assign(new Error('invalid API key'), {
+    subsystem: 'APOLLO',
+    status: 401,
+  })),
+  'Apollo API key is missing, expired, or invalid',
+);
+
+assert.equal(
+  title(Object.assign(new Error('forbidden'), {
+    subsystem: 'APOLLO',
+    status: 403,
+  })),
+  'Apollo account does not have permission for this request',
+);
+
+assert.equal(
+  title(Object.assign(new Error('request timed out'), {
+    subsystem: 'APOLLO',
+    errorType: 'TIMEOUT',
+  })),
+  'Apollo took too long to respond',
+);
+
+assert.equal(
+  title(Object.assign(new Error('permission denied'), {
+    subsystem: 'GOOGLE_SHEETS',
+    status: 403,
+  })),
+  'Google Sheets access permission was denied',
+);
+
+assert.equal(
+  title(Object.assign(new Error('quota exceeded'), {
+    subsystem: 'GOOGLE_SHEETS',
+    status: 429,
+  })),
+  'Google Sheets usage limit was reached',
+);
+
+assert.equal(
+  title(Object.assign(new Error('invalid session'), {
+    subsystem: 'LINKEDIN',
+    status: 401,
+  })),
+  'LinkedIn session or login is no longer valid',
+);
+
+assert.equal(
+  title(Object.assign(new Error('rate limited'), {
+    subsystem: 'LINKEDIN',
+    status: 429,
+  })),
+  'LinkedIn safety or usage limit reached',
+);
+
+assert.equal(
+  title(Object.assign(new Error('invalid API key'), {
+    subsystem: 'GEMINI',
+    status: 401,
+  })),
+  'Gemini API key is missing, expired, or invalid',
 );
 
 assert.equal(
@@ -117,5 +181,14 @@ assert.match(networkFormatted, /^Problem: Apollo could not be reached after auto
 assert.match(networkFormatted, /retried the Apollo request automatically/i);
 assert.match(networkFormatted, /internet, DNS, firewall\/proxy/i);
 assert.doesNotMatch(networkFormatted, /APOLLO_[A-Z0-9_]+/);
+
+for (const sample of [
+  title(Object.assign(new Error('invalid'), { subsystem: 'APOLLO', status: 401 })),
+  title(Object.assign(new Error('invalid'), { subsystem: 'GOOGLE_SHEETS', status: 401 })),
+  title(Object.assign(new Error('rate'), { subsystem: 'LINKEDIN', status: 429 })),
+  title(Object.assign(new Error('rate'), { subsystem: 'GEMINI', status: 429 })),
+]) {
+  assert.doesNotMatch(sample, /[A-Z]{3,}_[A-Z0-9_]+/, 'human problem names must not expose machine error codes');
+}
 
 console.log('Human error vocabulary self-test passed: provider limits, auth failures, network failures, LinkedIn safety states, worksheet targeting, schema failures, candidate exhaustion and internal recursion are named in plain English with a clear explanation and next action.');
