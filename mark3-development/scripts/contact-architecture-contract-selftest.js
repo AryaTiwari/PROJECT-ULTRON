@@ -1,0 +1,79 @@
+'use strict';
+
+const assert = require('assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const scriptsDir = __dirname;
+const coreDir = path.join(__dirname, '..', 'core');
+const thisFile = path.basename(__filename);
+
+const bannedTestContracts = [
+  {
+    needle: 'balancedResolveDecisionMaker',
+    reason: 'old balanced Apollo wrapper name',
+  },
+  {
+    needle: 'balancedResolvePersonByNameCompany',
+    reason: 'old balanced Apollo wrapper name',
+  },
+  {
+    needle: 'return improveVerifiedContacts\\(result, options\\)',
+    reason: 'pre-migration wrapper assertion that ignores carried legacy phone request IDs',
+  },
+  {
+    needle: 'generic profile resolution must keep standard credit-saver behavior',
+    reason: 'old contract that forbade the results-first exact-profile quality wrapper',
+  },
+  {
+    needle: 'final verified POCs use one bounded poll-only phone waterfall instead of duplicate native+waterfall spend',
+    reason: 'old poll-only phone architecture',
+  },
+  {
+    needle: "run_waterfall_phone', 'true'",
+    reason: 'custom phone waterfall must not be asserted as the production default',
+  },
+];
+
+const stale = [];
+for (const name of fs.readdirSync(scriptsDir)) {
+  if (!/selftest\.js$/i.test(name) || name === thisFile) continue;
+  const source = fs.readFileSync(path.join(scriptsDir, name), 'utf8');
+  for (const contract of bannedTestContracts) {
+    if (source.includes(contract.needle)) {
+      stale.push({ file: name, reason: contract.reason, needle: contract.needle });
+    }
+  }
+}
+assert.deepEqual(
+  stale,
+  [],
+  'Regression suite contains stale contact-architecture assertions: ' + JSON.stringify(stale),
+);
+
+const quality = fs.readFileSync(path.join(coreDir, 'apollo-three-poc-quality.js'), 'utf8');
+const apollo = fs.readFileSync(path.join(coreDir, 'apollo-enrichment.js'), 'utf8');
+const operator = fs.readFileSync(path.join(coreDir, 'universal-sheet-enrichment-operator.js'), 'utf8');
+const approval = fs.readFileSync(path.join(coreDir, 'universal-paid-approval-handler.js'), 'utf8');
+const rescue = fs.readFileSync(path.join(coreDir, 'universal-ai-batch-rescue.js'), 'utf8');
+const diagnostics = fs.readFileSync(path.join(coreDir, 'universal-enrichment-diagnostics.js'), 'utf8');
+
+assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
+assert.match(quality, /Native Apollo reveal \+ webhook settlement is the production default/);
+assert.match(quality, /resultsFirstResolveDecisionMaker/);
+assert.match(quality, /resultsFirstResolvePersonProfile/);
+assert.match(quality, /carryLegacyPhoneRequest/);
+assert.match(quality, /pendingPhoneWaterfallRequestId/);
+
+assert.match(apollo, /run_waterfall_phone', 'false'/);
+assert.match(apollo, /reveal_phone_number', needPhone \? 'true' : 'false'/);
+
+assert.match(operator, /const requestedPoc3 = !phaseOrdinal && requestedPersonGroups >= 3/);
+assert.match(operator, /requestedPoc3Deferred/);
+assert.match(operator, /markLeftover\(stats, rowNumber, 'requested-poc3-unresolved'/);
+
+assert.match(approval, /expectedPersonGroups: payload\.expectedPersonGroups \|\| undefined/);
+assert.match(rescue, /Number\(item\.group\?\.ordinal \|\| 0\) >= 2/);
+assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
+
+console.log('Contact architecture contract self-test passed: native Apollo phone reveal is the production default, paid legacy waterfall requests stay resumable, explicit 3-POC intent reaches deep POC-3 rescue, AI rescue accepts all secondary slots, and stale poll-only regression assertions are absent.');
