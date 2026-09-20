@@ -5,6 +5,7 @@
 // this module only validates and executes a resolved decision.
 
 const paidTools = require('./paid-tool-approval');
+const deterministicBootstrap = require('./universal-deterministic-bootstrap');
 const universal = require('./universal-sheet-enrichment-targeted');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 
@@ -46,6 +47,10 @@ async function execute(decision) {
     });
   }
   if (decision.status !== 'approved') return null;
+
+  // Approval re-entry is resolved before ordinary spreadsheet controller routing,
+  // so never assume an earlier controller import installed deterministic hardening.
+  deterministicBootstrap.install();
 
   const payload = decision.payload || {};
   if (payload.provider !== 'google' || !payload.url || !payload.sheetName) {
