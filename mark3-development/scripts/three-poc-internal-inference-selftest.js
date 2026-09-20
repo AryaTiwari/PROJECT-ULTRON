@@ -6,11 +6,9 @@ const assert = require('assert/strict');
 // layout and bounded Big Pickle fallback regressions here so enrichment cannot
 // regress silently.
 require('./spreadsheet-error-taxonomy-selftest');
-require('./apollo-fetch-hardening-selftest');
 require('./three-poc-apollo-quality-selftest');
 require('./contact-architecture-contract-selftest');
 require('./google-sheets-core-api-selftest');
-require('./google-sheets-values-range-hardening-selftest');
 require('./universal-deterministic-enrichment-selftest');
 require('./universal-enrichment-diagnostics-selftest');
 require('./universal-partial-safe-execution-selftest');
@@ -57,6 +55,8 @@ assert.throws(
 );
 
 (async () => {
+  await require('./apollo-fetch-hardening-selftest').run();
+  await require('./google-sheets-values-range-hardening-selftest').run();
   await require('./universal-contact-completion-selftest').run();
   await require('./universal-schema-continuity-selftest').run();
   require('./universal-poc-priority-selftest');
