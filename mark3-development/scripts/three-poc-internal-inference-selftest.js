@@ -6,6 +6,7 @@ const assert = require('assert/strict');
 // layout and bounded Big Pickle fallback regressions here so enrichment cannot
 // regress silently.
 require('./spreadsheet-error-taxonomy-selftest');
+require('./human-error-vocabulary-selftest');
 require('./three-poc-apollo-quality-selftest');
 require('./contact-architecture-contract-selftest');
 require('./google-sheets-core-api-selftest');
