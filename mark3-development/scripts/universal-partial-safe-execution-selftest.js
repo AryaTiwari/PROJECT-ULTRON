@@ -52,7 +52,12 @@ const formatted = base.formatResult({
 });
 assert.match(formatted, /PARTIALLY completed/i);
 assert.match(formatted, /preserving all earlier verified writes/i);
-assert.match(formatted, /APOLLO_NETWORK_FETCH_FAILED/);
+assert.match(formatted, /Apollo could not be reached after automatic retries/i);
+assert.match(formatted, /Check internet, DNS, firewall\/proxy, and Apollo availability/i);
+assert.doesNotMatch(formatted, /APOLLO_NETWORK_FETCH_FAILED|\[APOLLO\/NETWORK\]/);
+assert.equal(apolloNetwork.code, 'APOLLO_NETWORK_FETCH_FAILED');
+assert.equal(apolloNetwork.subsystem, 'APOLLO');
+assert.equal(apolloNetwork.type, 'NETWORK');
 assert.match(formatted, /Resume-safe: yes/i);
 
 const root = path.join(__dirname, '..', 'core');
@@ -91,4 +96,4 @@ for (const source of [baseSource, targetedSource, fallbackSource, handlerSource,
   assert.doesNotMatch(source, /UNIVERSAL_SPREADSHEET_EXECUTION_FAILED/, 'generic execution failure must not survive the partial-safe contract');
 }
 
-console.log('Universal partial-safe execution self-test passed: row-local failures continue, isolated Apollo network faults use a bounded circuit breaker, repeated/systemic failures halt safely with earlier writes preserved, all-POC production routing and explicit POC-phase diagnostics survive approval re-entry, post-primary/reporting failures cannot erase deterministic work, control-plane errors stay typed, generic UNIVERSAL_SPREADSHEET_EXECUTION_FAILED is banned, and reruns remain resume-safe.');
+console.log('Universal partial-safe execution self-test passed: row-local failures continue, isolated Apollo network faults use a bounded circuit breaker, repeated/systemic failures halt safely with earlier writes preserved, all-POC production routing and explicit POC-phase diagnostics survive approval re-entry, post-primary/reporting failures cannot erase deterministic work, control-plane errors stay typed internally while user-facing failure reports remain plain English, generic UNIVERSAL_SPREADSHEET_EXECUTION_FAILED is banned, and reruns remain resume-safe.');
