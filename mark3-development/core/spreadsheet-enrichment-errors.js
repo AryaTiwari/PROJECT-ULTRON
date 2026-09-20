@@ -123,6 +123,31 @@ function humanTitleFor(subsystem, type, code, message = '') {
   if (/AI_TARGET_NOT_OFFERED_TO_SELECTION/.test(c)) return 'AI selection was skipped because no safe candidate package existed';
   if (/AI_SELECTION_ABSTAINED/.test(c)) return 'AI could not safely choose a candidate';
 
+  // Provider-specific human vocabulary. Keep these ahead of the generic
+  // type fallback so the same real-world problem always gets the same wording.
+  if (s === 'GOOGLE_SHEETS' && t === 'AUTH') return 'Google Sheets authorization expired or is invalid';
+  if (s === 'GOOGLE_SHEETS' && t === 'PERMISSION') return 'Google Sheets access permission was denied';
+  if (s === 'GOOGLE_SHEETS' && t === 'RATE_LIMIT') return 'Google Sheets usage limit was reached';
+  if (s === 'GOOGLE_SHEETS' && t === 'NETWORK') return 'Google Sheets could not be reached';
+  if (s === 'GOOGLE_SHEETS' && t === 'TIMEOUT') return 'Google Sheets took too long to respond';
+
+  if (s === 'APOLLO' && t === 'AUTH') return 'Apollo API key is missing, expired, or invalid';
+  if (s === 'APOLLO' && t === 'PERMISSION') return 'Apollo account does not have permission for this request';
+  if (s === 'APOLLO' && t === 'RATE_LIMIT') return 'Apollo rate limit reached';
+  if (s === 'APOLLO' && t === 'TIMEOUT') return 'Apollo took too long to respond';
+  if (s === 'APOLLO' && t === 'CONFIG') return 'Apollo is not configured correctly';
+
+  if (s === 'LINKEDIN' && t === 'AUTH') return 'LinkedIn session or login is no longer valid';
+  if (s === 'LINKEDIN' && t === 'PERMISSION') return 'LinkedIn blocked this operation for the current account';
+  if (s === 'LINKEDIN' && t === 'RATE_LIMIT') return 'LinkedIn safety or usage limit reached';
+  if (s === 'LINKEDIN' && t === 'NETWORK') return 'LinkedIn could not be reached';
+  if (s === 'LINKEDIN' && t === 'TIMEOUT') return 'LinkedIn took too long to respond';
+
+  if (['GEMINI', 'GROQ', 'NVIDIA'].includes(s) && t === 'AUTH') return `${subsystemLabel(s)} API key is missing, expired, or invalid`;
+  if (['GEMINI', 'GROQ', 'NVIDIA'].includes(s) && t === 'RATE_LIMIT') return `${subsystemLabel(s)} rate limit reached`;
+  if (['GEMINI', 'GROQ', 'NVIDIA'].includes(s) && t === 'NETWORK') return `${subsystemLabel(s)} could not be reached`;
+  if (['GEMINI', 'GROQ', 'NVIDIA'].includes(s) && t === 'TIMEOUT') return `${subsystemLabel(s)} took too long to respond`;
+
   const label = subsystemLabel(s);
   if (t === 'RATE_LIMIT') return `${label} rate limit reached`;
   if (t === 'AUTH') return `${label} authentication or API-key problem`;
