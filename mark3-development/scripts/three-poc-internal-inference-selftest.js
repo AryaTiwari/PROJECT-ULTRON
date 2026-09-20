@@ -8,6 +8,7 @@ const assert = require('assert/strict');
 require('./spreadsheet-error-taxonomy-selftest');
 require('./apollo-fetch-hardening-selftest');
 require('./three-poc-apollo-quality-selftest');
+require('./contact-architecture-contract-selftest');
 require('./google-sheets-core-api-selftest');
 require('./google-sheets-values-range-hardening-selftest');
 require('./universal-deterministic-enrichment-selftest');
