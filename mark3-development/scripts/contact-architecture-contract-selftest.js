@@ -59,6 +59,7 @@ const rescue = fs.readFileSync(path.join(coreDir, 'universal-ai-batch-rescue.js'
 const diagnostics = fs.readFileSync(path.join(coreDir, 'universal-enrichment-diagnostics.js'), 'utf8');
 const control = fs.readFileSync(path.join(coreDir, 'command-control-plane.js'), 'utf8');
 const apolloFetch = fs.readFileSync(path.join(coreDir, 'apollo-fetch-hardening.js'), 'utf8');
+const spreadsheetController = fs.readFileSync(path.join(coreDir, 'universal-spreadsheet-domain-controller.js'), 'utf8');
 
 assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
 assert.match(quality, /Native Apollo reveal \+ webhook settlement is the production default/);
@@ -69,6 +70,7 @@ assert.match(quality, /pendingPhoneWaterfallRequestId/);
 
 assert.match(apollo, /run_waterfall_phone', 'false'/);
 assert.match(apollo, /reveal_phone_number', needPhone \? 'true' : 'false'/);
+assert.match(apollo, /const apolloFetchHardening = require\('\.\/apollo-fetch-hardening'\)/);
 assert.match(apollo, /apolloFetchHardening\.typedNetworkError/);
 assert.match(apollo, /lastFailureKind === 'transport'/);
 
@@ -87,5 +89,7 @@ assert.match(control, /Universal spreadsheet approval re-entry stopped safely/);
 assert.match(apolloFetch, /APOLLO_NETWORK_FETCH_FAILED/);
 assert.match(rescue, /Number\(item\.group\?\.ordinal \|\| 0\) >= 2/);
 assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
+assert.match(spreadsheetController, /Apollo native phone reveal with webhook settlement as the production default/);
+assert.match(spreadsheetController, /custom poll_only phone waterfall is experimental\/legacy-only/);
 
 console.log('Contact architecture contract self-test passed: native Apollo phone reveal is the production default, paid legacy waterfall requests stay resumable, explicit 3-POC intent reaches deep POC-3 rescue, AI rescue accepts all secondary slots, raw Apollo fetch failures cannot bypass typed retries or approval re-entry containment, and stale poll-only regression assertions are absent.');
