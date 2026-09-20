@@ -171,6 +171,9 @@ async function fetchApolloResponse(input, init, options = {}) {
       lastError = cause;
       lastFailureKind = 'transport';
       if (!apolloFetchHardening.isTransportFailure(cause)) throw cause;
+      // If the global Apollo hardener already exhausted and typed its own retry
+      // budget, do not multiply that budget again inside this helper.
+      if (String(cause?.code || '').toUpperCase() === 'APOLLO_NETWORK_FETCH_FAILED') throw cause;
       if (attempt >= retries) break;
       await sleep(250 * (2 ** attempt));
       continue;
