@@ -8,7 +8,7 @@
 function text(value) { return String(value ?? '').trim(); }
 
 function normalizeEmail(value) {
-  return text(value).toLowerCase();
+  return require('./universal-contact-normalization').normalizeEmail(value);
 }
 
 function phoneDigits(value) {
@@ -16,16 +16,7 @@ function phoneDigits(value) {
 }
 
 function equivalentPhone(a, b) {
-  const left = phoneDigits(a);
-  const right = phoneDigits(b);
-  if (!left || !right) return false;
-  if (left === right) return true;
-
-  // Country-code formatting commonly differs between Sheets and Apollo. Allow
-  // suffix matching only for substantial phone numbers, never short fragments.
-  const shorter = left.length <= right.length ? left : right;
-  const longer = left.length > right.length ? left : right;
-  return shorter.length >= 10 && longer.endsWith(shorter) && longer.length - shorter.length <= 3;
+  return require('./universal-contact-normalization').equivalentPhone(a, b);
 }
 
 function personEmail(person = {}) {
@@ -49,11 +40,12 @@ function isOrphanContactTarget(item) {
 function verify(snapshot = {}, person = {}) {
   const values = snapshot.values || snapshot || {};
   const existingEmail = normalizeEmail(values.email);
-  const existingPhone = phoneDigits(values.phone);
+  const existingPhone = text(values.phone);
   const candidateEmail = normalizeEmail(personEmail(person));
-  const candidatePhone = phoneDigits(personPhone(person));
+  const candidatePhone = personPhone(person);
   const proof = [];
   const mismatches = [];
+  if (text(values.email) && !existingEmail) mismatches.push('existing-email-ambiguous');
 
   if (existingEmail) {
     if (!candidateEmail) mismatches.push('candidate-email-missing');

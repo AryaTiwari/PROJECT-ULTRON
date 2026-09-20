@@ -123,6 +123,9 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
   const phaseOrdinal = Number(options.contactPhaseOrdinal || 0) || null;
   const poc1IdentityIssues = [];
   const poc2OpenRows = [];
+  const requiredIdentityIssues = [];
+  const contactGaps = [];
+  const requestedCount = Number(options.expectedPersonGroups || options.schema?.expectedPersonGroups || 0);
   const checkedRows = [];
 
   for (const record of analysis.rowPlans || []) {
@@ -130,6 +133,17 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     const plan = record.plan;
     if (!Number.isInteger(rowNumber)) continue;
     checkedRows.push(rowNumber);
+    for (const group of source.schema.personGroups || []) {
+      const ordinal = Number(group.ordinal || 1);
+      if (phaseOrdinal && ordinal !== phaseOrdinal) continue;
+      if (!phaseOrdinal && requestedCount && ordinal > requestedCount) continue;
+      const snapshot = require('./universal-enrichment-planner').groupSnapshot(record.row, group);
+      const required = phaseOrdinal ? ordinal === phaseOrdinal : (!requestedCount || ordinal <= requestedCount);
+      if (required && !snapshot.hasIdentity) requiredIdentityIssues.push({ rowNumber, groupOrdinal: ordinal, reason: 'No verified same-company contact could be found.' });
+      if (required && snapshot.hasIdentity) {
+        for (const field of ['phone', 'email']) if (group.fields[field] && !text(snapshot.values[field])) contactGaps.push({ rowNumber, groupOrdinal: ordinal, field });
+      }
+    }
 
     if (!plan?.anchor) {
       if (!phaseOrdinal || phaseOrdinal === 1) {
@@ -141,10 +155,10 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     if ((!phaseOrdinal || phaseOrdinal === 1) && plan.anchor.type !== 'company') {
       const anchorName = text(plan.anchor?.snapshot?.values?.name);
       const anchorLinkedin = text(plan.anchor?.snapshot?.values?.linkedin);
-      if (!anchorName || !anchorLinkedin) {
+      if ((plan.anchor.group.fields.name && !anchorName) || (plan.anchor.group.fields.linkedin && !anchorLinkedin)) {
         poc1IdentityIssues.push({
           rowNumber,
-          reason: !anchorName ? 'missing-poc1-name' : 'missing-poc1-linkedin',
+          reason: plan.anchor.group.fields.name && !anchorName ? 'missing-poc1-name' : 'missing-poc1-linkedin',
         });
       }
     }
@@ -153,7 +167,7 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     // genuinely empty. A known POC-2 with missing phone/email is a contact repair
     // target, not a missing-person target, and must never be sent back through
     // candidate discovery merely because a callback is still pending.
-    const openPoc2 = (!phaseOrdinal || phaseOrdinal === 2)
+    const openPoc2 = (!requestedCount || requestedCount >= 2) && (!phaseOrdinal || phaseOrdinal === 2)
       && (plan.groups?.open || [])
         .some((target) => !target.isAnchor && Number(target.group?.ordinal || 0) === 2);
     if (openPoc2) poc2OpenRows.push(rowNumber);
@@ -162,6 +176,7 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
   const unresolvedRows = [...new Set([
     ...poc1IdentityIssues.map((item) => item.rowNumber),
     ...poc2OpenRows,
+    ...requiredIdentityIssues.map(item => item.rowNumber),
   ])].sort((a, b) => a - b);
 
   const reasonMap = new Map();
@@ -193,8 +208,14 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     }
   }
 
-  const issues = [];
+  const issues = requiredIdentityIssues.map(item => ({
+    code: 'REQUIRED_POC_NOT_VERIFIED', category: 'identity', severity: 'BLOCKER', blocking: true,
+    retryable: false, rowNumber: item.rowNumber, groupOrdinal: item.groupOrdinal, target: 'POC-' + item.groupOrdinal,
+    message: item.reason, detail: 'No safe identity is present in this requested contact slot.',
+    nextAction: 'Supply current-employer evidence or retry when new verified candidates are available.',
+  }));
   for (const rowNumber of unresolvedRows) {
+    if (!poc1IdentityIssues.some(item => item.rowNumber === rowNumber) && !poc2OpenRows.includes(rowNumber)) continue;
     const reasons = reasonMap.get(rowNumber) || [{
       reason: 'no-safe-verified-poc2-after-all-strategies',
       detail: '',
@@ -243,6 +264,8 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     mandatoryRowsChecked: checkedRows.length,
     poc1IdentityIssues,
     poc2OpenRows,
+    requiredIdentityIssues,
+    contactGaps,
     unresolvedRows,
     terminalRows,
     retryableRows,
@@ -705,7 +728,14 @@ async function run(request = {}, options = {}) {
           : []),
       ]),
       postPrimaryError,
-      completedFully: !postPrimaryError && completionGate?.complete === true,
+      completionState: result?.stats?.haltedEarly
+        ? (result.stats.haltError?.type === 'RATE_LIMIT' ? 'PARTIAL_PROVIDER_LIMIT' : 'PARTIAL_PROVIDER_UNAVAILABLE')
+        : (postPrimaryError || completionGate?.status === 'AUDIT_FAILED' ? 'PARTIAL_PROVIDER_UNAVAILABLE'
+          : (!completionGate?.complete ? 'TERMINAL_DATA_EXHAUSTED'
+            : ((completionGate.contactGaps || []).length
+              ? ((result?.stats?.phoneStillPending || result?.stats?.emailStillPending) ? 'COMPLETE_WITH_PENDING_CONTACTS' : 'TERMINAL_DATA_EXHAUSTED')
+              : 'COMPLETE'))),
+      completedFully: !postPrimaryError && completionGate?.complete === true && !(completionGate.contactGaps || []).length,
       partialCompletion: Boolean(postPrimaryError || completionGate?.complete !== true || result?.partialCompletion),
       resumeSafe: result?.resumeSafe !== false,
     };
@@ -814,7 +844,7 @@ function formatDiagnosticFooter(result) {
   ].join('\n');
 }
 
-function formatResult(result) {
+function formatDetailedResult(result) {
   const primaryView = result?.primaryStats ? { ...result, stats: result.primaryStats } : result;
   const basePrimary = base.formatResult(primaryView).replace(/\s*AI\/model calls:\s*0\.\s*$/i, '').trim();
   const phaseSummaries = Array.isArray(result?.stats?.pocPhaseSummaries)
@@ -889,7 +919,8 @@ function formatResult(result) {
 module.exports = {
   ...base,
   run,
-  formatResult,
+  formatResult: result => require('./universal-run-report').build(result),
+  formatDetailedResult,
   diagnostics,
   formatDiagnosticFooter,
   collapseDiagnosticBlockers,

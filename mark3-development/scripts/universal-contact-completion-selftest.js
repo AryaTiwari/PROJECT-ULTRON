@@ -249,6 +249,7 @@ async function run() {
     recordPhoneResult: apollo.recordPhoneResult,
     consumePhoneResult: apollo.consumePhoneResult,
     readCell: sheets.readCell,
+    values: sheets.values,
     writeCells: sheets.writeCells,
   };
   const writes = [];
@@ -279,6 +280,13 @@ async function run() {
     apollo.recordPhoneResult = () => ['https://www.linkedin.com/in/hemanth-test'];
     apollo.consumePhoneResult = async () => true;
     sheets.readCell = async () => '';
+    sheets.values = async (_id, range) => {
+      const item = range.endsWith('9:9') ? directQueue[0] : queue[0];
+      const row = [];
+      for (const [field, descriptor] of Object.entries(item.ownerFields)) row[descriptor.index] = range.endsWith('1:1') ? descriptor.header : (field === 'name' ? item.personName : field === 'linkedin' ? item.personLinkedin : '');
+      if (!range.endsWith('1:1')) row[item.columnIndex] = await sheets.readCell();
+      return [row];
+    };
     sheets.writeCells = async (_id, changes) => {
       writes.push(...changes);
       return { updatedCells: changes.length };
@@ -286,7 +294,7 @@ async function run() {
 
     const stats = operator.freshStats();
     await operator.syncPendingPhoneAssignments(
-      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2' },
+      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2', schema: {headerRowNumber:1} },
       queue,
       stats,
       { phoneSyncPolls: 1, phoneSyncWaitMs: 1 },
@@ -300,7 +308,7 @@ async function run() {
     writes.length = 0;
     const directStats = operator.freshStats();
     await operator.syncPendingPhoneAssignments(
-      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2' },
+      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2', schema: {headerRowNumber:1} },
       directQueue,
       directStats,
       { phoneDirectPolls: 0, phoneSyncPolls: 1, phoneSyncWaitMs: 1 },
@@ -315,7 +323,7 @@ async function run() {
     sheets.readCell = async () => '+911111111111';
     const populatedStats = operator.freshStats();
     await operator.syncPendingPhoneAssignments(
-      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2' },
+      { spreadsheetId: 'sheet-test', sheetName: 'Arya 2', schema: {headerRowNumber:1} },
       queue,
       populatedStats,
       { phoneSyncPolls: 1, phoneSyncWaitMs: 1 },
@@ -330,6 +338,7 @@ async function run() {
     apollo.recordPhoneResult = originals.recordPhoneResult;
     apollo.consumePhoneResult = originals.consumePhoneResult;
     sheets.readCell = originals.readCell;
+    sheets.values = originals.values;
     sheets.writeCells = originals.writeCells;
   }
 

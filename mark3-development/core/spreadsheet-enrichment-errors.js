@@ -172,6 +172,7 @@ function humanTitleFor(subsystem, type, code, message = '') {
   const s = String(subsystem || '').toUpperCase();
   const t = String(type || '').toUpperCase();
   const c = String(code || '').toUpperCase();
+  if (c === 'UNIVERSAL_LIVE_WRITE_CONFLICT') return 'The worksheet changed during enrichment; inspect the affected row and retry it';
   const m = String(message || '').toUpperCase();
 
   if (/LINKEDIN_MCP_TOOL_ERROR/.test(c) || /ANOTHER LINKEDIN MCP CLIENT|BROWSER.*USING/.test(m)) return 'LinkedIn browser is already busy';

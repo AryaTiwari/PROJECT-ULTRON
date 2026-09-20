@@ -160,7 +160,7 @@ function schemaReadable(summary = {}) {
   const people = Array.isArray(summary.personGroups) ? summary.personGroups.length : 0;
   const companies = Array.isArray(summary.companyGroups) ? summary.companyGroups.length : 0;
   const confidence = Number(summary.confidence || 0);
-  return confidence >= 0.48 && (people > 0 || companies > 0);
+  return summary.safety?.safe !== false && confidence >= 0.55 && (people > 0 || companies > 0);
 }
 
 function approvalSummary(inspection) {
@@ -343,6 +343,8 @@ async function handle(message, context = {}) {
       subsystem: 'SCHEMA',
       errorType: 'SCHEMA',
       stage: 'schema-confidence-gate',
+      hint: summary.safety?.questions?.[0],
+      completionState: 'NEEDS_SCHEMA_CLARIFICATION',
     }));
     return response(false,
       `Universal spreadsheet enrichment stopped safely: ${failure.diagnostic}. ${failure.typed.hint} Nothing was edited and Apollo was not called.`,

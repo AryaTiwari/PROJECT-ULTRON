@@ -110,6 +110,7 @@ function auditCandidateSet(candidates, context = {}, options = {}) {
 
 function schemaSummary(schema) {
   return {
+    safety: require('./universal-schema-safety').assess(schema),
     headerRowNumber: schema.headerRowNumber,
     confidence: schema.confidence,
     personGroups: schema.personGroups.map((group) => ({

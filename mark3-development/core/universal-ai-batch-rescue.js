@@ -1,4 +1,5 @@
 'use strict';
+const liveWrites = require('./universal-live-write-guard');
 
 // Bounded AI reasoning rescue for universal spreadsheet enrichment.
 //
@@ -852,7 +853,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
         const nameKey = ranker.normalize(person.name || '');
         const linkedinKey = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
-        if ((nameKey && existing.names.has(nameKey)) || (linkedinKey && existing.linkedins.has(linkedinKey))) {
+        if (base.candidateAlreadyPresent(person, existing)) {
           stats.identityDuplicatesSkipped++;
           stats.aiSelectionRejects++;
           claimed.add(claimKey);
@@ -889,7 +890,8 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           value: write.value,
         }));
         if (changes.length) {
-          await sheets.writeCells(source.spreadsheetId, changes);
+          await liveWrites.writeVerifiedRow(source, rowNumber, pkg.row, changes);
+          for (const write of byColumn.values()) pkg.row[write.columnIndex] = write.value;
           changedRows.add(rowNumber);
           stats.cellsChanged += changes.length;
         }
@@ -919,6 +921,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
         });
 
         claimed.add(claimKey);
+        base.rememberCandidate(existing, person);
         if (nameKey) existing.names.add(nameKey);
         if (linkedinKey) existing.linkedins.add(linkedinKey);
         acceptedTargets.add(targetKey);

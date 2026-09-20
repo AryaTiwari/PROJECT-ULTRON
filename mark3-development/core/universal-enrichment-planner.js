@@ -2,6 +2,8 @@
 
 const schemaTools = require('./universal-sheet-schema');
 const ranker = require('./universal-authority-ranker');
+const contact = require('./universal-contact-normalization');
+const orphanPolicy = require('./universal-orphan-contact-policy');
 
 function text(value) {
   return String(value ?? '').trim();
@@ -143,20 +145,17 @@ function expectedPersonFields(group) {
 }
 
 function normalizeName(value) {
-  const base = String(value || '')
-    .replace(/\s+[—–]\s+.*$/, '')
-    .replace(/\s*\([^)]{2,120}\)\s*$/, '')
-    .trim();
+  const base = contact.splitIdentity(value).name;
   return ranker.normalize(base).replace(/\b(?:mr|mrs|ms|dr)\b/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function samePerson(existing = {}, person = {}) {
   const existingLinkedin = ranker.linkedinKey(existing.linkedin || '');
   const candidateLinkedin = ranker.linkedinKey(person.linkedinUrl || person.linkedin || person.linkedin_url || '');
-  if (existingLinkedin && candidateLinkedin) return existingLinkedin === candidateLinkedin;
+  if (existingLinkedin && candidateLinkedin && existingLinkedin !== candidateLinkedin) return false;
   const a = normalizeName(existing.name || '');
   const b = normalizeName(person.name || [person.first_name, person.last_name].filter(Boolean).join(' '));
-  return Boolean(a && b && a === b);
+  return Boolean((a && b && a === b) || ((!a || !b) && existingLinkedin && existingLinkedin === candidateLinkedin));
 }
 
 function personValues(person = {}) {
@@ -165,7 +164,7 @@ function personValues(person = {}) {
     role: text(person.title || person.role || person.designation),
     linkedin: text(person.linkedinUrl || person.linkedin_url || person.linkedin),
     phone: text(person.phone || person.phoneNumber || person.mobile),
-    email: text(person.email || person.workEmail || person.businessEmail),
+    email: contact.normalizeEmail(person.workEmail || person.businessEmail || person.email),
     company: text(person.organizationName || person.organization_name || person.organization?.name),
   };
 }
@@ -178,7 +177,7 @@ function shouldEmbedRoleInName(group) {
   // Structurally recovered secondary/later person groups may have unfamiliar
   // identity headers. If they own contact coordinates but have no role destination,
   // the name cell is the only safe place to preserve the verified designation.
-  return Number(group.ordinal || 0) > 1 && Boolean(group.fields.phone || group.fields.email || group.fields.linkedin);
+  return group.kind === 'person';
 }
 
 function displayNameForGroup(group, values) {
@@ -188,7 +187,7 @@ function displayNameForGroup(group, values) {
 }
 
 function hasEmbeddedDesignation(value) {
-  return /\s+[—–]\s+\S/.test(String(value || '').trim());
+  return Boolean(contact.splitIdentity(value).designation);
 }
 
 function safeWritesForGroup(row, group, person, options = {}) {
@@ -197,6 +196,10 @@ function safeWritesForGroup(row, group, person, options = {}) {
   const writes = [];
   const conflicts = [];
   const existingIdentity = snapshot.hasIdentity;
+  if (!existingIdentity && (snapshot.values.phone || snapshot.values.email)
+      && !orphanPolicy.verify(snapshot, person).verified) {
+    return { writes, conflicts: ['orphan-contact-mismatch'], allowed: false };
+  }
   if (existingIdentity && !samePerson(snapshot.values, person)) {
     conflicts.push('identity-conflict');
     return { writes, conflicts, allowed: false };

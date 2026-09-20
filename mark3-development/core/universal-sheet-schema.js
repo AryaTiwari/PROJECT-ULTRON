@@ -28,7 +28,7 @@ const FAMILIES = Object.freeze({
 function normalizeHeader(value){return String(value??'').toLowerCase().replace(/&/g,' and ').replace(/[_./\\-]+/g,' ').replace(/[^a-z0-9+ ]+/g,' ').replace(/\s+/g,' ').trim();}
 function words(value){return normalizeHeader(value).split(' ').filter(Boolean);}
 function slotHint(value){const h=normalizeHeader(value);if(!h)return null;const numeric=h.match(/(?:^|\s)(\d{1,2})(?:st|nd|rd|th)?(?:\s|$)/)?.[1]||h.match(/\b(?:poc|contact|person|decision maker|dm|lead)\s*(\d{1,2})\b/)?.[1];if(numeric){const n=Number(numeric);if(Number.isInteger(n)&&n>=1&&n<=99)return n;}for(const token of h.split(' '))if(ORDINAL_WORDS[token])return ORDINAL_WORDS[token];return null;}
-function looksEmail(value){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value||'').trim());}
+function looksEmail(value){return Boolean(require('./universal-contact-normalization').normalizeEmail(value));}
 function looksPhone(value){const s=String(value||'').trim();if(!s||/linkedin|https?:\/\//i.test(s))return false;const d=s.replace(/\D/g,'');return d.length>=7&&d.length<=15&&/[+()\d -]/.test(s);}
 function linkedInKind(value){const s=String(value||'').trim();if(!/(?:https?:\/\/)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\//i.test(s))return null;if(/linkedin\.com\/in\//i.test(s))return'linkedin_person';if(/linkedin\.com\/company\//i.test(s))return'linkedin_company';return'linkedin';}
 function looksUrl(value){const s=String(value||'').trim();if(!s)return false;try{const u=new URL(/^https?:\/\//i.test(s)?s:`https://${s}`);return Boolean(u.hostname&&u.hostname.includes('.'));}catch{return false;}}
@@ -40,6 +40,7 @@ function headerRoleScores(header,signature={}){
   if(/^(?:company|organisation|organization|employer|business)$/.test(h))scores.company+=48;
   if(/^(?:role|title|designation|position|seniority|function|department)$/.test(h))scores.role+=46;
   if(/^(?:name|person|contact)$/.test(h))scores.name+=38;
+  if (/\b(?:poc|decision maker|recruiter)\b/.test(h) && !/\b(?:phone|mobile|email|mail|linkedin|profile|role|title|designation|number|no)\b/.test(h)) scores.name+=48;
   if(/^(?:phone|mobile|telephone|cell|whatsapp)$/.test(h))scores.phone+=50;
   if(/^(?:email|mail|e mail)$/.test(h))scores.email+=52;
   if(/\b(full )?name\b/.test(h))scores.name+=42;if(/\b(person|contact|poc|decision maker|candidate)\b/.test(h)&&/\bname\b/.test(h))scores.name+=34;

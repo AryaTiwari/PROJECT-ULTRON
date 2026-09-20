@@ -20,6 +20,8 @@ const orphanPolicy = require('./universal-orphan-contact-policy');
 const engine = require('./universal-enrichment-engine');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 const diagnostics = require('./universal-enrichment-diagnostics');
+const contact = require('./universal-contact-normalization');
+const liveWrites = require('./universal-live-write-guard');
 
 function text(value) { return String(value ?? '').trim(); }
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -97,6 +99,9 @@ async function readUniversalSheet(sheetUrl, options = {}) {
   const requestedName = text(options.sheetName);
   const tabs = (meta.sheets || []).map((sheet) => ({ name: sheet?.properties?.title, sheetId: sheet?.properties?.sheetId })).filter((sheet) => sheet.name);
   const targets = requestedName ? tabs.filter((tab) => tab.name === requestedName) : tabs;
+  if (!requestedName && targets.length > 1) {
+    throw Object.assign(new Error('Which worksheet should ULTRON enrich? Supply its name or tab identifier.'), { code: 'UNIVERSAL_SHEET_TARGET_REQUIRED', subsystem: 'TARGETING' });
+  }
   if (!targets.length) {
     const error = new Error(requestedName ? `Google Sheet tab not found: ${requestedName}` : 'Spreadsheet has no readable tabs.');
     error.code = 'UNIVERSAL_SHEET_TAB_NOT_FOUND';
@@ -388,22 +393,25 @@ async function resolvePersonAnchor(plan, row, options = {}) {
   };
 }
 
-function existingIdentityKeys(plan) {
-  const names = new Set();
-  const linkedins = new Set();
-  for (const item of plan.groups?.existing || []) {
-    const name = ranker.normalize(String(item.snapshot?.values?.name || '').replace(/\s+[—–-]\s+.*$/, ''));
-    const linkedin = ranker.linkedinKey(item.snapshot?.values?.linkedin || '');
-    if (name) names.add(name);
-    if (linkedin) linkedins.add(linkedin);
-  }
-  return { names, linkedins };
+function rememberCandidate(existing, candidate) {
+  const signals = {
+    names: planner.normalizeName(candidate?.name),
+    linkedins: ranker.linkedinKey(candidate?.linkedinUrl || candidate?.linkedin_url || candidate?.linkedin || candidate?.returnedLinkedIn),
+    emails: contact.normalizeEmail(candidate?.workEmail || candidate?.businessEmail || candidate?.email),
+    phones: contact.phone(candidate?.phone || candidate?.phoneNumber)?.digits,
+    ids: text(candidate?.apolloPersonId || candidate?.id),
+  };
+  for (const [key, value] of Object.entries(signals)) if (value) (existing[key] ||= new Set()).add(value);
+  return existing;
 }
-
+function existingIdentityKeys(plan) {
+  const existing = {names:new Set(), linkedins:new Set(), emails:new Set(), phones:new Set(), ids:new Set()};
+  for (const item of plan.groups?.existing || []) rememberCandidate(existing, item.snapshot?.values || {});
+  return existing;
+}
 function candidateAlreadyPresent(candidate, existing) {
-  const name = ranker.normalize(candidate?.name || '');
-  const linkedin = ranker.linkedinKey(candidate?.linkedinUrl || candidate?.linkedin_url || '');
-  return Boolean((name && existing.names.has(name)) || (linkedin && existing.linkedins.has(linkedin)));
+  const signals = rememberCandidate({}, candidate);
+  return Object.entries(signals).some(([key, values]) => [...values].some(value => existing[key]?.has(value)));
 }
 
 function needsEmbeddedDesignationRepair(item) {
@@ -445,6 +453,8 @@ function queuePendingEmail(options, rowNumber, group, snapshot, person) {
     groupId: group.id,
     requestId,
     personName: text(person?.name),
+    personLinkedin: text(person?.linkedinUrl || person?.linkedin_url || person?.linkedin),
+    ownerFields: JSON.parse(JSON.stringify(group.fields)),
   };
   const existingIndex = queue.findIndex((entry) => entry.key === key);
   if (existingIndex >= 0) queue[existingIndex] = item;
@@ -454,6 +464,40 @@ function queuePendingEmail(options, rowNumber, group, snapshot, person) {
 function emailSyncPolls(options = {}) {
   const raw = Number(options.emailWaterfallSyncPolls ?? process.env.ULTRON_M3_THREE_POC_EMAIL_WATERFALL_SYNC_POLLS ?? 3);
   return Number.isFinite(raw) ? Math.max(0, Math.min(5, Math.floor(raw))) : 3;
+}
+
+function pendingCompanyContext(source, item) {
+  if (item.ownerCompanyContext) return item.ownerCompanyContext;
+  return (source.schema?.companyGroups || []).flatMap(group => Object.values(group.fields || {}).map(field => ({
+    index: field.index, header: field.header, value: source.rows?.[item.rowNumber - 1]?.[field.index] ?? '',
+  })));
+}
+
+async function pendingOwnerCell(source, item) {
+  // Old callback records without identity coordinates are retained for manual
+  // reinspection; a saved row number alone is never sufficient ownership proof.
+  if (!item.ownerFields) throw Object.assign(new Error('Saved contact ownership needs reinspection before settlement.'), { code: 'UNIVERSAL_LIVE_WRITE_CONFLICT' });
+  const headerNumber = source.schema?.headerRowNumber || item.headerRowNumber;
+  if (!headerNumber) throw Object.assign(new Error('Saved worksheet structure needs reinspection before settlement.'), { code: 'UNIVERSAL_LIVE_WRITE_CONFLICT' });
+  const quoted = sheets.quoteSheet(source.sheetName);
+  const [rows, headers] = await Promise.all([
+    sheets.values(source.spreadsheetId, quoted + '!' + item.rowNumber + ':' + item.rowNumber),
+    sheets.values(source.spreadsheetId, quoted + '!' + headerNumber + ':' + headerNumber),
+  ]);
+  const row = rows[0] || [], header = headers[0] || [];
+  for (const descriptor of Object.values(item.ownerFields)) {
+    if (text(descriptor.header) !== text(header[descriptor.index])) throw Object.assign(new Error('Contact columns changed before settlement.'), { code: 'UNIVERSAL_LIVE_WRITE_CONFLICT' });
+  }
+  for (const field of pendingCompanyContext(source, item)) {
+    if (text(header[field.index]) !== text(field.header) || text(row[field.index]) !== text(field.value)) {
+      throw Object.assign(new Error('The company context changed before contact settlement.'), { code: 'UNIVERSAL_LIVE_WRITE_CONFLICT' });
+    }
+  }
+  const existing = { name: row[item.ownerFields.name?.index], linkedin: row[item.ownerFields.linkedin?.index] };
+  if (!planner.samePerson(existing, {name:item.personName,linkedinUrl:item.personLinkedin})) {
+    throw Object.assign(new Error('The row no longer identifies the person who owns this contact lookup.'), { code: 'UNIVERSAL_LIVE_WRITE_CONFLICT' });
+  }
+  return row[item.columnIndex] ?? '';
 }
 
 async function syncPendingEmailAssignments(source, queue = [], stats, options = {}) {
@@ -486,8 +530,8 @@ async function syncPendingEmailAssignments(source, queue = [], stats, options = 
     const email = apollo.validEmail(result.email);
     if (email) {
       const range = sheets.cellRange(source.sheetName, item.rowNumber, item.columnIndex);
-      let current = '';
-      try { current = await sheets.readCell(source.spreadsheetId, range); } catch {}
+      let current;
+      try { current = await pendingOwnerCell(source, item); } catch (error) { stats.emailSyncErrors++; stillPending++; continue; }
       if (sheets.isBlank(current)) {
         changes.push({ range, value: email, rowNumber: item.rowNumber });
       } else {
@@ -533,6 +577,8 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
     groupId: group.id,
     apolloPersonId,
     personName: text(person?.name),
+    personLinkedin: text(person?.linkedinUrl || person?.linkedin_url || person?.linkedin),
+    ownerFields: JSON.parse(JSON.stringify(group.fields)),
     phoneMode: isWaterfallPending ? 'waterfall' : 'native',
     phoneWaterfallRequestId: isWaterfallPending ? phoneWaterfallRequestId : '',
     phoneRequestId: isNativePending ? phoneRequestId : '',
@@ -565,6 +611,8 @@ function registerBackgroundPhoneAssignments(source, items = []) {
       ...item,
       spreadsheetId: source.spreadsheetId,
       sheetName: source.sheetName,
+      ownerCompanyContext: pendingCompanyContext(source, item),
+      headerRowNumber: source.schema?.headerRowNumber || item.headerRowNumber,
       registeredAt: new Date().toISOString(),
     });
   }
@@ -647,7 +695,7 @@ async function syncBackgroundPhoneAssignments() {
 
     try {
       const range = sheets.cellRange(item.sheetName, item.rowNumber, item.columnIndex);
-      const current = await sheets.readCell(item.spreadsheetId, range);
+      const current = await pendingOwnerCell(item, item);
       if (phone && sheets.isBlank(current)) {
         await sheets.writeCells(item.spreadsheetId, [{ range, value: phone }]);
         written++;
@@ -713,6 +761,7 @@ function backgroundPhoneStatus() {
 
 async function syncPendingPhoneAssignments(source, queue = [], stats, options = {}) {
   const pending = Array.isArray(queue) ? queue.filter((item) => item?.apolloPersonId) : [];
+  registerBackgroundPhoneAssignments(source, pending);
   stats.pendingPhoneRequests = pending.length;
   if (!pending.length) return;
 
@@ -749,8 +798,8 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
       quality.recordPhoneWaterfallOutcome?.({ apolloPersonId: item.apolloPersonId }, result);
       if (phone) {
         const range = sheets.cellRange(source.sheetName, item.rowNumber, item.columnIndex);
-        let current = '';
-        try { current = await sheets.readCell(source.spreadsheetId, range); } catch {}
+        let current;
+        try { current = await pendingOwnerCell(source, item); } catch (error) { stats.phoneSyncErrors++; unresolvedWaterfall.push(item); continue; }
         if (sheets.isBlank(current)) {
           waterfallChanges.push({ range, value: phone, rowNumber: item.rowNumber });
         } else {
@@ -779,6 +828,8 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   }
 
   if (!nativePending.length) {
+    for (const item of pending) if (!unresolvedWaterfall.includes(item)) backgroundPhoneAssignments.delete(backgroundPhoneKey(source, item));
+    persistBackgroundPhoneAssignments();
     stats.phoneStillPending = unresolvedWaterfall.length;
     stats.backgroundPhonePending = backgroundPhoneAssignments.size;
     return;
@@ -818,8 +869,8 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
       const phone = apollo.validPhone(result?.phone);
       if (phone) {
         const range = sheets.cellRange(source.sheetName, item.rowNumber, item.columnIndex);
-        let current = '';
-        try { current = await sheets.readCell(source.spreadsheetId, range); } catch {}
+        let current;
+        try { current = await pendingOwnerCell(source, item); } catch (error) { stats.phoneSyncErrors++; continue; }
         if (sheets.isBlank(current)) {
           directChanges.push({ range, value: phone, rowNumber: item.rowNumber });
         } else {
@@ -885,8 +936,8 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
       }
 
       const range = sheets.cellRange(source.sheetName, item.rowNumber, item.columnIndex);
-      let current = '';
-      try { current = await sheets.readCell(source.spreadsheetId, range); } catch {}
+      let current;
+        try { current = await pendingOwnerCell(source, item); } catch (error) { stats.phoneSyncErrors++; continue; }
       if (!sheets.isBlank(current)) {
         resolvedKeys.push(key);
         stats.phoneWriteSkippedPopulated++;
@@ -909,6 +960,8 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   for (const apolloPersonId of handledProviderIds) {
     try { await apollo.consumePhoneResult(apolloPersonId); } catch {}
   }
+  for (const item of pending) if (!unresolved.has(item.key) && !unresolvedWaterfall.includes(item)) backgroundPhoneAssignments.delete(backgroundPhoneKey(source, item));
+  persistBackgroundPhoneAssignments();
   stats.phoneStillPending = unresolved.size + unresolvedWaterfall.length;
   if (unresolved.size && options.backgroundPhoneWatcher !== false) {
     registerBackgroundPhoneAssignments(source, [...unresolved.values()]);
@@ -933,20 +986,8 @@ function existingPersonVerificationContext(item, fallbackContext = {}) {
 }
 
 
-function existingContactSearchName(value) {
-  return text(value)
-    .replace(/\s+[—–]\s+.*$/, '')
-    .replace(/\s*\([^)]{2,120}\)\s*$/, '')
-    .trim();
-}
-
-function existingContactRole(value) {
-  const raw = text(value);
-  const dash = raw.match(/\s+[—–]\s+(.+)$/);
-  if (dash?.[1]) return text(dash[1]);
-  const paren = raw.match(/\(([^)]{2,120})\)\s*$/);
-  return text(paren?.[1] || '');
-}
+function existingContactSearchName(value) { return contact.splitIdentity(value).name; }
+function existingContactRole(value) { return contact.splitIdentity(value).designation; }
 
 function roleEvidenceMatches(expectedRole, actualRole) {
   const expected = ranker.normalize(expectedRole || '');
@@ -2189,7 +2230,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
 
     const hydratedName = ranker.normalize(person.name || '');
     const hydratedLinkedin = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
-    if ((hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) {
+    if (candidateAlreadyPresent(person, existing)) {
       stats.postHydrationDuplicates++;
       claimed.add(rawKey);
       continue;
@@ -2204,7 +2245,8 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     }
 
     claimed.add(rawKey);
-    if (hydratedName) existing.names.add(hydratedName);
+    rememberCandidate(existing, person);
+      if (hydratedName) existing.names.add(hydratedName);
     if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
     stats.newPeopleSelected++;
     stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
@@ -2293,7 +2335,7 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
       if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) continue;
       const hydratedName = ranker.normalize(person?.name || '');
       const hydratedLinkedin = ranker.linkedinKey(person?.linkedinUrl || person?.returnedLinkedIn || '');
-      if ((hydratedName && existing.names.has(hydratedName)) || (hydratedLinkedin && existing.linkedins.has(hydratedLinkedin))) {
+      if (candidateAlreadyPresent(person, existing)) {
         stats.postHydrationDuplicates++;
         continue;
       }
@@ -2316,6 +2358,7 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
 
       writes.push(...writePlan.writes);
       stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
+      rememberCandidate(existing, person);
       if (hydratedName) existing.names.add(hydratedName);
       if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
       claimed.add(rawKey);
@@ -2401,6 +2444,7 @@ function typedFailureSummary(error, context = {}) {
 }
 
 function isRecoverableRowFailure(typed = {}) {
+  if (typed.code === 'UNIVERSAL_LIVE_WRITE_CONFLICT') return true;
   const subsystem = text(typed.subsystem).toUpperCase();
   const type = text(typed.type).toUpperCase();
   const code = text(typed.code).toUpperCase();
@@ -2669,6 +2713,7 @@ async function run(request = {}, options = {}) {
     throw error;
   }
 
+  require('./universal-schema-safety').assertSafe(source.schema);
   const stats = freshStats();
   const internalRecheck = Boolean(options.recheckPass);
   const phaseOrdinal = Number(options.contactPhaseOrdinal || 0) || null;
@@ -2815,7 +2860,7 @@ async function run(request = {}, options = {}) {
         for (const write of writes) if (!byColumn.has(write.columnIndex)) byColumn.set(write.columnIndex, write);
         const changes = toSheetChanges(source.sheetName, rowNumber, [...byColumn.values()]);
         if (changes.length) {
-          await sheets.writeCells(source.spreadsheetId, changes);
+          await liveWrites.writeVerifiedRow(source, rowNumber, row, changes);
           stats.rowsChanged++;
           stats.cellsChanged += changes.length;
         }
@@ -2960,7 +3005,7 @@ async function run(request = {}, options = {}) {
       for (const write of writes) if (!byColumn.has(write.columnIndex)) byColumn.set(write.columnIndex, write);
       const changes = toSheetChanges(source.sheetName, rowNumber, [...byColumn.values()]);
       if (changes.length) {
-        await sheets.writeCells(source.spreadsheetId, changes);
+        await liveWrites.writeVerifiedRow(source, rowNumber, row, changes);
         stats.rowsChanged++;
         stats.cellsChanged += changes.length;
       }
@@ -3096,6 +3141,7 @@ module.exports = {
   extractAnchorContactEvidence,
   anchorNeedsHydration,
   resolvePersonAnchor,
+  rememberCandidate,
   existingIdentityKeys,
   candidateAlreadyPresent,
   existingPersonVerificationContext,
@@ -3107,6 +3153,7 @@ module.exports = {
   needsEmbeddedDesignationRepair,
   candidateFillTargets,
 
+  pendingOwnerCell,
   queuePendingEmail,
   syncPendingEmailAssignments,
   queuePendingPhone,

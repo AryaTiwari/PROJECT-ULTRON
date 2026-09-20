@@ -5,7 +5,7 @@ const policy = require('../core/universal-orphan-contact-policy');
 const operator = require('../core/universal-sheet-enrichment-operator');
 const planner = require('../core/universal-enrichment-planner');
 
-assert.equal(policy.equivalentPhone('+91 98765 43210', '9876543210'), true);
+assert.equal(policy.equivalentPhone('+91 98765 43210', '9876543210'), false, 'a missing country code is insufficient proof for assigning an orphan identity');
 assert.equal(policy.equivalentPhone('+91 98765 43210', '9123456789'), false);
 
 const orphan = {
@@ -28,11 +28,11 @@ const orphan = {
 
 assert.equal(policy.isOrphanContactTarget(orphan), true);
 assert.deepEqual(
-  policy.verify(orphan.snapshot, { phone: '9876543210', email: 'PERSON@example.com' }).mismatches,
+  policy.verify(orphan.snapshot, { phone: '+919876543210', email: 'PERSON@example.com' }).mismatches,
   []
 );
-assert.equal(policy.verify(orphan.snapshot, { phone: '9876543210', email: 'PERSON@example.com' }).verified, true);
-assert.equal(policy.verify(orphan.snapshot, { phone: '9876543210', email: 'wrong@example.com' }).verified, false);
+assert.equal(policy.verify(orphan.snapshot, { phone: '+919876543210', email: 'PERSON@example.com' }).verified, true);
+assert.equal(policy.verify(orphan.snapshot, { phone: '+919876543210', email: 'wrong@example.com' }).verified, false);
 assert.equal(policy.verify(orphan.snapshot, { phone: '', email: 'person@example.com' }).verified, false, 'all existing orphan contact signals must be proven');
 
 const plan = {
@@ -50,7 +50,7 @@ row[9] = 'person@example.com';
 const hydrated = {
   name: 'Verified Person',
   title: 'Talent Acquisition Manager',
-  phone: '9876543210',
+  phone: '+919876543210',
   email: 'person@example.com',
 };
 const proof = policy.verify(orphan.snapshot, hydrated);

@@ -1,4 +1,5 @@
 'use strict';
+const liveWrites = require('./universal-live-write-guard');
 
 const sheets = require('./google-sheets-operator');
 const apollo = require('./apollo-enrichment');
@@ -326,7 +327,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       value: write.value,
     }));
       if (changes.length) {
-        await sheets.writeCells(source.spreadsheetId, changes);
+        await liveWrites.writeVerifiedRow(source, rowNumber, row, changes);
         stats.rowsChanged++;
         stats.cellsChanged += changes.length;
       }
