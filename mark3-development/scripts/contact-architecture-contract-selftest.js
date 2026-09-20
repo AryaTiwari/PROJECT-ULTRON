@@ -57,6 +57,8 @@ const operator = fs.readFileSync(path.join(coreDir, 'universal-sheet-enrichment-
 const approval = fs.readFileSync(path.join(coreDir, 'universal-paid-approval-handler.js'), 'utf8');
 const rescue = fs.readFileSync(path.join(coreDir, 'universal-ai-batch-rescue.js'), 'utf8');
 const diagnostics = fs.readFileSync(path.join(coreDir, 'universal-enrichment-diagnostics.js'), 'utf8');
+const control = fs.readFileSync(path.join(coreDir, 'command-control-plane.js'), 'utf8');
+const apolloFetch = fs.readFileSync(path.join(coreDir, 'apollo-fetch-hardening.js'), 'utf8');
 
 assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
 assert.match(quality, /Native Apollo reveal \+ webhook settlement is the production default/);
@@ -67,13 +69,23 @@ assert.match(quality, /pendingPhoneWaterfallRequestId/);
 
 assert.match(apollo, /run_waterfall_phone', 'false'/);
 assert.match(apollo, /reveal_phone_number', needPhone \? 'true' : 'false'/);
+assert.match(apollo, /apolloFetchHardening\.typedNetworkError/);
+assert.match(apollo, /lastFailureKind === 'transport'/);
+
+assert.match(quality, /apollo\.fetchApolloResponse/);
+assert.doesNotMatch(quality, /\bawait fetch\(/, 'contact-quality Apollo traffic must never bypass typed retry handling');
 
 assert.match(operator, /const requestedPoc3 = !phaseOrdinal && requestedPersonGroups >= 3/);
 assert.match(operator, /requestedPoc3Deferred/);
 assert.match(operator, /markLeftover\(stats, rowNumber, 'requested-poc3-unresolved'/);
 
 assert.match(approval, /expectedPersonGroups: payload\.expectedPersonGroups \|\| undefined/);
+assert.match(approval, /deterministicBootstrap\.install\(\)/);
+assert.match(approval, /Preserve provider\/network semantics before applying any universal fallback/);
+assert.match(control, /approval-reentry-dispatch/);
+assert.match(control, /Universal spreadsheet approval re-entry stopped safely/);
+assert.match(apolloFetch, /APOLLO_NETWORK_FETCH_FAILED/);
 assert.match(rescue, /Number\(item\.group\?\.ordinal \|\| 0\) >= 2/);
 assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
 
-console.log('Contact architecture contract self-test passed: native Apollo phone reveal is the production default, paid legacy waterfall requests stay resumable, explicit 3-POC intent reaches deep POC-3 rescue, AI rescue accepts all secondary slots, and stale poll-only regression assertions are absent.');
+console.log('Contact architecture contract self-test passed: native Apollo phone reveal is the production default, paid legacy waterfall requests stay resumable, explicit 3-POC intent reaches deep POC-3 rescue, AI rescue accepts all secondary slots, raw Apollo fetch failures cannot bypass typed retries or approval re-entry containment, and stale poll-only regression assertions are absent.');
