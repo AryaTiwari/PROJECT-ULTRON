@@ -1913,6 +1913,12 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   };
   const priorityLimit = integer(options.priorityCandidateLimit, 20, 6, 40);
   const broadLimit = integer(options.adaptiveBroadCandidateLimit, 30, 10, 50);
+  const minimumUsefulPool = integer(
+    options.minimumUsefulCandidatePool ?? process.env.ULTRON_M3_UNIVERSAL_MIN_USEFUL_CANDIDATE_POOL,
+    4,
+    2,
+    8,
+  );
 
   // 1. Fast canonical title search against the strongest known organization identity.
   try {
@@ -1945,8 +1951,9 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     return merged;
   }
 
-  // 2. Deep leftover pass: if title-targeting produced nothing, do one bounded broad search.
-  if (!merged.length) {
+  // 2. Deep leftover pass: a tiny candidate pool is not enough for multiple
+  // secondary POCs. Broaden while the pool is still sparse, not only at zero.
+  if (merged.length < minimumUsefulPool) {
     try {
       const broad = await apollo.searchCompanyPeopleBroad({
         company,
@@ -1970,7 +1977,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // 3. Apollo sometimes has the organization but not under the supplied domain.
   // Retry once by human-readable brand keyword rather than repeating the same
   // empty domain filter. Example: people-click.com -> "people click".
-  if (!merged.length && domain) {
+  if (merged.length < minimumUsefulPool && domain) {
     const brand = companyBrandFromDomain(domain);
     if (brand && ranker.companyKey(brand) !== ranker.companyKey(company)) {
       try {
@@ -1995,7 +2002,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   }
 
   // 4. If company itself is just a domain string, also retry its readable brand.
-  if (!merged.length && company && websiteDomain(company) === company.toLowerCase()) {
+  if (merged.length < minimumUsefulPool && company && websiteDomain(company) === company.toLowerCase()) {
     const brand = companyBrandFromDomain(company);
     if (brand) {
       try {
@@ -2023,7 +2030,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // 5. Authenticated LinkedIn is useful but no longer a single point of failure.
   // A local/account safety stop is recorded, then public-index discovery may
   // continue without touching the authenticated LinkedIn session.
-  if (!merged.length && linkedinZeroResultFallbackEnabled(options)) {
+  if (merged.length < minimumUsefulPool && linkedinZeroResultFallbackEnabled(options)) {
     try {
       const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, options);
       add(linkedinPeople);
@@ -2052,7 +2059,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // 6. Public-index emergency fallback. SerpApi is preferred; TinyFish is used
   // when configured and SerpApi yields no profile references. Every candidate
   // must still survive exact Apollo identity + employer verification.
-  if (!merged.length && publicIndexFallbackEnabled(options)) {
+  if (merged.length < minimumUsefulPool && publicIndexFallbackEnabled(options)) {
     const publicPeople = await discoverPublicIndexPeople(companyContext, stats, options);
     add(publicPeople);
   }
