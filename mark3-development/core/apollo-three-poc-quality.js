@@ -25,6 +25,7 @@ function freshRunState() {
     waterfallBudgetSkips: 0,
     waterfallCooldownSkips: 0,
     waterfallErrors: 0,
+    waterfallLastError: '',
     phoneWaterfallStarted: 0,
     phoneWaterfallCacheHits: 0,
     phoneWaterfallSucceeded: 0,
@@ -266,7 +267,21 @@ async function pollRequest(requestId, options = {}) {
       || (response.status === 400 && code === 'invalid_request_id')
     ) return { state: 'terminal', email: null, payload: data };
 
-    return { state: 'error', email: null, payload: data };
+    return {
+      state: 'error',
+      email: null,
+      payload: data,
+      status: response.status,
+      problem: response.status === 429
+        ? 'Apollo email enrichment rate limit reached'
+        : response.status === 403
+          ? 'Apollo account does not allow this email enrichment request'
+          : response.status === 401
+            ? 'Apollo API key is invalid or expired'
+            : response.status >= 500
+              ? 'Apollo email enrichment service returned a server error'
+              : 'Apollo rejected the email enrichment request',
+    };
   }
   return { state: 'pending', email: null, payload: null };
 }
@@ -297,7 +312,24 @@ async function startWaterfall(result) {
   });
   let data = {};
   try { data = raw ? JSON.parse(raw) : {}; } catch {}
-  if (!response.ok) return { state: 'error', email: null, requestId: '', payload: data };
+  if (!response.ok) {
+    return {
+      state: 'error',
+      email: null,
+      requestId: '',
+      payload: data,
+      status: response.status,
+      problem: response.status === 429
+        ? 'Apollo email enrichment rate limit reached'
+        : response.status === 403
+          ? 'Apollo account does not allow email waterfall enrichment'
+          : response.status === 401
+            ? 'Apollo API key is invalid or expired'
+            : response.status >= 500
+              ? 'Apollo email enrichment service returned a server error'
+              : 'Apollo rejected the email waterfall request',
+    };
+  }
 
   const immediate = emailFromPayload(data);
   const requestId = requestIdFromRaw(raw, data);
@@ -662,11 +694,12 @@ async function improveVerifiedEmail(result) {
       return { ...result, emailWaterfallStatus: 'not_found' };
     }
     runState.waterfallErrors++;
+    runState.waterfallLastError = polled.problem || 'Apollo email enrichment polling failed';
     saveWaterfallState(result, {
       threePocEmailWaterfallStatus: 'error',
       threePocEmailWaterfallResolvedAt: new Date().toISOString(),
     });
-    return { ...result, emailWaterfallStatus: 'error' };
+    return { ...result, emailWaterfallStatus: 'error', emailWaterfallProblem: runState.waterfallLastError };
   }
 
   if (recentAttempt(record)) {
@@ -725,15 +758,17 @@ async function improveVerifiedEmail(result) {
     }
 
     runState.waterfallErrors++;
+    runState.waterfallLastError = waterfall.problem || 'Apollo email enrichment failed';
     saveWaterfallState(result, {
       threePocEmailWaterfallRequestId: waterfall.requestId || null,
       threePocEmailWaterfallStatus: 'error',
     });
-    return { ...result, emailWaterfallStatus: 'error' };
-  } catch {
+    return { ...result, emailWaterfallStatus: 'error', emailWaterfallProblem: runState.waterfallLastError };
+  } catch (error) {
     runState.waterfallErrors++;
+    runState.waterfallLastError = String(error?.message || error || 'Apollo email enrichment failed').slice(0, 240);
     saveWaterfallState(result, { threePocEmailWaterfallStatus: 'error' });
-    return { ...result, emailWaterfallStatus: 'error' };
+    return { ...result, emailWaterfallStatus: 'error', emailWaterfallProblem: runState.waterfallLastError };
   }
 }
 
