@@ -11,6 +11,7 @@ require('./three-poc-apollo-quality-selftest');
 require('./google-sheets-core-api-selftest');
 require('./google-sheets-values-range-hardening-selftest');
 require('./universal-deterministic-enrichment-selftest');
+require('./universal-enrichment-diagnostics-selftest');
 require('./universal-partial-safe-execution-selftest');
 require('./universal-ai-batch-rescue-selftest');
 require('./universal-spreadsheet-routing-selftest');
@@ -85,7 +86,7 @@ assert.throws(
     );
   });
 
-  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, typed-error taxonomy, Apollo transport retry, native-phone/contact-quality policy, verified contact completion, schema continuity recovery, bounded direct-env AI batch rescue, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; direct env-backed models are permitted only inside authorized spreadsheet inference, while OmniRoute remains blocked there.');
+  console.log('3-POC internal inference self-test passed. Universal deterministic spreadsheet, typed-error taxonomy, enrichment diagnostics, Apollo transport retry, native-phone/contact-quality policy, verified contact completion, schema continuity recovery, bounded direct-env AI batch rescue, Google core-API and values-range hardening, routing, approval, contact-display, ordinal-contact, orphan-contact, exact Arya 2 layout and bounded Big Pickle fallback regressions also ran; direct env-backed models are permitted only inside authorized spreadsheet inference, while OmniRoute remains blocked there.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
