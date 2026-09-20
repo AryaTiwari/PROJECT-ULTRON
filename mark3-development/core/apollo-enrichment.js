@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const companyIdentity = require('./company-identity');
+const apolloFetchHardening = require('./apollo-fetch-hardening');
 
 const APOLLO_MATCH = 'https://api.apollo.io/api/v1/people/match';
 const APOLLO_PEOPLE_SEARCH = 'https://api.apollo.io/api/v1/mixed_people/api_search';
