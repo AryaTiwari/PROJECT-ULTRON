@@ -33,6 +33,14 @@ const bannedTestContracts = [
     needle: "run_waterfall_phone', 'true'",
     reason: 'custom phone waterfall must not be asserted as the production default',
   },
+  {
+    needle: 'daily safety budget',
+    reason: 'tests must validate the LinkedIn daily-cap condition semantically instead of freezing old user-facing prose',
+  },
+  {
+    needle: 'hourly safety budget',
+    reason: 'tests must validate the LinkedIn hourly-cap condition semantically instead of freezing old user-facing prose',
+  },
 ];
 
 const stale = [];
