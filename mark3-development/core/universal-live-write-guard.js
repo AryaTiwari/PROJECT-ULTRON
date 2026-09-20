@@ -16,9 +16,8 @@ async function writeVerifiedRow(source, rowNumber, expectedRow, changes) {
   const expectedHeader = source.rows[headerNumber - 1] || [];
   // Recheck headers as well as row ownership; a concurrent column insertion
   // must not redirect otherwise valid contacts to the wrong destinations.
-  const [headers, rows] = await Promise.all([
-    sheets.values(source.spreadsheetId, `${quoted}!${headerNumber}:${headerNumber}`),
-    sheets.values(source.spreadsheetId, `${quoted}!${rowNumber}:${rowNumber}`),
+  const [headers, rows] = await sheets.batchValues(source.spreadsheetId, [
+    `${quoted}!${headerNumber}:${headerNumber}`, `${quoted}!${rowNumber}:${rowNumber}`,
   ]);
   const liveHeader = headers[0] || [];
   if (Array.from({ length: Math.max(expectedHeader.length, liveHeader.length) }, (_, i) => i)
@@ -48,6 +47,7 @@ async function writeVerifiedRow(source, rowNumber, expectedRow, changes) {
     if (!upgrade) throw conflict('populated-destination');
   }
   const result = await sheets.writeCells(source.spreadsheetId, changes);
+  require('./universal-run-context').commit(source.spreadsheetId, changes);
   return result;
 }
 module.exports = { writeVerifiedRow };

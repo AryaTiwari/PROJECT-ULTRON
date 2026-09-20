@@ -8,7 +8,7 @@ const ROLE_NAMES = Object.freeze([
   'website','location','details','source','status','notes',
 ]);
 const ORDINAL_WORDS = Object.freeze({
-  first:1,primary:1,one:1,second:2,two:2,third:3,three:3,fourth:4,four:4,fifth:5,five:5,sixth:6,six:6,
+  first:1,primary:1,one:1,second:2,secondary:2,two:2,third:3,three:3,fourth:4,four:4,fifth:5,five:5,sixth:6,six:6,
   seventh:7,seven:7,eighth:8,eight:8,ninth:9,nine:9,tenth:10,ten:10,eleventh:11,eleven:11,twelfth:12,twelve:12,
   thirteenth:13,thirteen:13,fourteenth:14,fourteen:14,fifteenth:15,fifteen:15,sixteenth:16,sixteen:16,
   seventeenth:17,seventeen:17,eighteenth:18,eighteen:18,nineteenth:19,nineteen:19,twentieth:20,twenty:20,
@@ -39,15 +39,17 @@ function headerRoleScores(header,signature={}){
   for(const[role,family]of Object.entries(FAMILIES))scores[role]+=familyHits(tokens,family)*18;
   if(/^(?:company|organisation|organization|employer|business)$/.test(h))scores.company+=48;
   if(/^(?:role|title|designation|position|seniority|function|department)$/.test(h))scores.role+=46;
-  if(/^(?:name|person|contact)$/.test(h))scores.name+=38;
+  if(/^(?:name|person|contact|lead|candidate)$/.test(h))scores.name+=38;
   if (/\b(?:poc|decision maker|recruiter)\b/.test(h) && !/\b(?:phone|mobile|email|mail|linkedin|profile|role|title|designation|number|no)\b/.test(h)) scores.name+=48;
   if(/^(?:phone|mobile|telephone|cell|whatsapp)$/.test(h))scores.phone+=50;
   if(/^(?:email|mail|e mail)$/.test(h))scores.email+=52;
+  if(/^(?:profile|profile url)$/.test(h))scores.linkedin_person+=65;
+  if(/\b(?:company|organisation|organization|employer|firm|business)\b/.test(h) && !/\b(?:phone|mobile|email|mail|linkedin|profile|contact|person)\b/.test(h))scores.company+=40;
   if(/\b(full )?name\b/.test(h))scores.name+=42;if(/\b(person|contact|poc|decision maker|candidate)\b/.test(h)&&/\bname\b/.test(h))scores.name+=34;
   if(/\b(company|organisation|organization|employer)\b/.test(h)&&/\bname\b/.test(h))scores.company+=45;if(/\bperson or company\b|\bcompany or person\b/.test(h)){scores.name+=28;scores.company+=28;}
   if(/\b(job )?title\b|\bdesignation\b|\bposition\b/.test(h))scores.role+=46;if(/\blinkedin\b/.test(h))scores.linkedin+=52;
   if(/\blinkedin\b/.test(h)&&/\b(company|organisation|organization|employer)\b/.test(h))scores.linkedin_company+=75;if(/\blinkedin\b/.test(h)&&/\b(person|contact|profile|candidate|poc)\b/.test(h))scores.linkedin_person+=70;
-  if(/\b(phone|mobile|telephone|cell)\b/.test(h)||/\bcontact (?:no|number)\b/.test(h))scores.phone+=62;if(/\bemail\b|\be mail\b/.test(h))scores.email+=68;
+  if(/\b(phone|mobile|telephone|cell)\b/.test(h)||/\bcontact (?:no|number)\b/.test(h))scores.phone+=62;if(/\bemail\b|\be mail\b|\bmail\b/.test(h))scores.email+=68;
   if(/\b(website|web site|domain|homepage)\b/.test(h))scores.website+=55;if(/\b(location|city|state|country|region)\b/.test(h))scores.location+=52;
   if(/\b(post|job|requirement|vacancy|description|details|jd)\b/.test(h))scores.details+=45;if(/\b(source|reference|evidence)\b/.test(h))scores.source+=40;if(/\b(status|stage|outcome|progress)\b/.test(h))scores.status+=45;if(/\b(notes?|remarks?|comments?)\b/.test(h))scores.notes+=45;
   if((signature.email||0)>=.5)scores.email+=80*signature.email;if((signature.phone||0)>=.5)scores.phone+=75*signature.phone;

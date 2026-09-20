@@ -185,7 +185,7 @@ function infer(rows) {
   assert.match(targetedSource, /sharedDiscoveryCache/);
   assert.match(targetedSource, /deferOpenGroupSelectionToAi:\s*boundedAiEnabled/);
   assert.match(targetedSource, /aiBatchRescue\.run\(exact\.request, primary, runOptions\)/);
-  assert.match(targetedSource, /fallbackPass\.run\(exact\.request, primary, runOptions\)/);
+  assert.match(targetedSource, /exactRowLastResort\(exact\.request, primary, runOptions\)/);
   assert.match(aiSource, /options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);
   const operatorSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-sheet-enrichment-operator.js'), 'utf8');
   assert.match(fallbackSource, /options\.discoveryCache instanceof Map \? options\.discoveryCache : new Map\(\)/);

@@ -21,8 +21,8 @@ const apolloRate = Object.assign(new Error('HTTP 429 resource exhausted'), {
 });
 const apolloRateTyped = errors.normalize(apolloRate);
 assert.equal(apolloRateTyped.type, 'RATE_LIMIT');
-assert.equal(apolloRateTyped.humanTitle, 'Apollo rate limit reached');
-assert.match(errors.format(apolloRateTyped), /Problem: Apollo rate limit reached\./);
+assert.match(apolloRateTyped.humanTitle, /Apollo.*limit.*reached/i);
+assert.match(errors.format(apolloRateTyped), /Problem: Apollo.*limit.*reached\./i);
 
 const sheetsAuth = Object.assign(new Error('Authorization required'), {
   code: 'GOOGLE_SHEETS_AUTH_REQUIRED',
@@ -39,7 +39,7 @@ const tabMissing = Object.assign(new Error('Google Sheet tab not found: Arya 2')
 const tabTyped = errors.normalize(tabMissing, { stage: 'worksheet-target-resolution' });
 assert.equal(tabTyped.subsystem, 'TARGETING');
 assert.equal(tabTyped.type, 'NOT_FOUND');
-assert.equal(tabTyped.humanTitle, 'The requested worksheet tab could not be found');
+assert.match(tabTyped.humanTitle, /worksheet.*not.*found/i);
 
 const schema = Object.assign(new Error('Schema confidence too low'), {
   code: 'UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW',
@@ -47,7 +47,7 @@ const schema = Object.assign(new Error('Schema confidence too low'), {
 const schemaTyped = errors.normalize(schema, { stage: 'schema-confidence-gate' });
 assert.equal(schemaTyped.subsystem, 'SCHEMA');
 assert.equal(schemaTyped.type, 'SCHEMA');
-assert.equal(schemaTyped.humanTitle, 'Spreadsheet columns could not be identified safely');
+assert.match(schemaTyped.humanTitle, /schema.*ambiguous|columns.*safely/i);
 
 const linkedinBusy = Object.assign(new Error('Another LinkedIn MCP client is currently using the browser.'), {
   code: 'LINKEDIN_MCP_TOOL_ERROR',

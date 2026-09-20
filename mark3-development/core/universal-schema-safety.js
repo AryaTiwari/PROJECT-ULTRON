@@ -1,6 +1,8 @@
 'use strict';
 function assess(schema) {
   const issues = [], owners = new Map();
+  if ((schema.continuityRecoveries || []).length) issues.push('Requested contact columns are missing. Add or identify their actual headers before enrichment.');
+  if (Number(schema.expectedPersonGroups || 0) > (schema.personGroups || []).length) issues.push('Where are the remaining requested contact columns?');
   for (const group of schema.personGroups || []) {
     for (const [field, descriptor] of Object.entries(group.fields || {})) {
       if (!['name','linkedin','phone','email','role'].includes(field)) continue;

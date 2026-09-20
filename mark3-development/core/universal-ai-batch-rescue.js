@@ -206,6 +206,7 @@ async function batchChat(messages, purpose, stats, options = {}) {
   return control.runInternalInference('spreadsheet-enrichment', async () => {
     for (const model of candidates) {
       if (stats.modelAttempts >= stats.maxCalls) return null;
+      if (!require('./universal-run-context').ai()) return null;
       stats.modelAttempts++;
 
       const provider = providerName(model) || 'direct';
@@ -363,8 +364,8 @@ function shortlistCandidates(candidates, context, limit) {
 }
 
 function rescueTargets(plan) {
-  return (plan?.groups?.open || [])
-    .filter((item) => !item.isAnchor && Number(item.group?.ordinal || 0) >= 2)
+  return base.candidateFillTargets(plan)
+    .filter((item) => !item.isAnchor)
     .sort((a, b) => Number(a.group?.ordinal || 0) - Number(b.group?.ordinal || 0))
     .map((item) => ({ ...item, rescueMode: 'fill' }));
 }
@@ -538,7 +539,8 @@ async function run(request = {}, primaryResult = {}, options = {}) {
 
   // Context AI is optional. If deterministic anchor evidence already resolved the
   // employer, skip this entire model call and go straight to multi-POC selection.
-  const unresolvedContextInput = contextInput.filter((item) => item.unresolvedEmployer);
+  // Company identity must be established by deterministic evidence before any AI call.
+  const unresolvedContextInput = [];
   let contextMap = new Map();
   if (unresolvedContextInput.length) {
     const contextResult = await batchChat([

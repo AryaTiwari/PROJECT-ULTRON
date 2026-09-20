@@ -476,6 +476,20 @@ function mergePrimaryAndAiRescue(primary, rescue) {
 }
 
 async function run(request = {}, options = {}) {
+  return require('./universal-run-context').run(options, async () => {
+    const result = await runInternal(request, options);
+    const measured={...result,metrics:require('./universal-run-context').snapshot(),validationMode:Boolean(options.rowLimit),rowLimitApplied:options.rowLimit||null};
+    if(!result.dryRun){measured.completionState=require('./universal-completion-state').decide(measured);measured.completedFully=measured.completionState==='COMPLETE';measured.partialCompletion=!['COMPLETE','COMPLETE_WITH_PENDING_CONTACTS'].includes(measured.completionState);}
+    return measured;
+  });
+}
+async function exactRowLastResort(request, primaryResult, options={}) {
+  const result=await base.run(request,{...options,recheckPass:true,resultsFirstSweep:false,deferOpenGroupSelectionToAi:false,discoveryCache:new Map()});
+  return {...result.stats,attempted:true,enabled:true,modelCalls:0,unresolvedRows:[...new Set((result.stats.leftoverQueue||[]).map(item=>item.rowNumber))],unresolvedReasons:result.stats.leftoverQueue||[]};
+}
+
+async function runInternal(request = {}, options = {}) {
+  require('./universal-deterministic-bootstrap').install();
   const exact = await resolveExactRequest(request);
   const sharedDiscoveryCache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const phasedExecution = options.pocPhasePipeline === true || Boolean(options.contactPhaseOrdinal);
@@ -575,11 +589,11 @@ async function run(request = {}, options = {}) {
         const unresolvedPoc2 = unresolvedRows.length;
         const lastResortEnabled = !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_LAST_RESORT_POC2 || '1'));
 
-        if (unresolvedPoc2 > 0 && lastResortEnabled && fallback.enabled()) {
+        if (unresolvedPoc2 > 0 && lastResortEnabled) {
           try {
-            fb = await fallbackPass.run(exact.request, result, {
+            fb = await exactRowLastResort(exact.request, result, {
               ...runOptions,
-              targetOrdinals: [2],
+              targetOrdinals: undefined,
               targetRows: unresolvedRows,
               maxFallbackAttemptsPerTarget: 1,
             });
@@ -616,9 +630,9 @@ async function run(request = {}, options = {}) {
             fallback: fallback.snapshot(),
           };
         }
-      } else if (!runOptions.dryRun && runOptions.apolloApproved === true && fallback.enabled()) {
+      } else if (!runOptions.dryRun && runOptions.apolloApproved === true) {
         try {
-          fb = await fallbackPass.run(exact.request, primary, runOptions);
+          fb = await exactRowLastResort(exact.request, primary, runOptions);
           result = mergePrimaryAndFallback(primary, fb);
         } catch (error) {
           const typed = typedErrors.normalize(error, { stage: error?.stage || 'big-pickle-fallback-pass' });

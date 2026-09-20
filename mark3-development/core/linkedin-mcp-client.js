@@ -285,6 +285,7 @@ async function rawCall(tool, args = {}, retryConnection = true) {
   const timeoutMs = toolTimeoutMs(tool);
 
   try {
+    require('./universal-run-context').provider('linkedin');
     const result = await connected.callTool(
       { name: tool, arguments: args },
       {
@@ -307,6 +308,7 @@ async function rawCall(tool, args = {}, retryConnection = true) {
       await closeTransport();
       const retryClient = await ensureServer();
       try {
+        require('./universal-run-context').provider('linkedin');
         const result = await retryClient.callTool(
           { name: tool, arguments: args },
           {

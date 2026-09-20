@@ -6,6 +6,7 @@ const policy = require('../core/universal-orphan-contact-policy');
 const schema = require('../core/universal-sheet-schema');
 const safety = require('../core/universal-schema-safety');
 const sheets = require('../core/google-sheets-operator');
+sheets.batchValues=async(id,ranges)=>Promise.all(ranges.map(range=>sheets.values(id,range)));
 const guard = require('../core/universal-live-write-guard');
 
 async function main() {

@@ -85,6 +85,7 @@ async function execute(decision) {
       explicitNameAuthoritative: payload.explicitNameAuthoritative !== false,
     }, {
       apolloApproved: true,
+      expectedSchemaFingerprint: payload.schemaFingerprint || undefined,
       rowLimit: payload.rowLimit || undefined,
       schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
       expectedPersonGroups: payload.expectedPersonGroups || undefined,

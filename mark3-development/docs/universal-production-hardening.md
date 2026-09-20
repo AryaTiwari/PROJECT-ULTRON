@@ -13,6 +13,9 @@ This upgrade extends the existing Mark 3 enrichment pipeline. It does not replac
 - Duplicate detection can use normalized names, LinkedIn, email, phone and Apollo identity.
 - Ambiguous field alternatives and shared coordinates trigger schema clarification. An untargeted multi-tab workbook cannot silently select the highest-scoring tab.
 - Final auditing includes requested POC-3 and missing contact fields, and only requires identity fields actually present in the schema.
+- All requested POC slots share one employer-scoped discovery pool, while exact identity hydration remains distinct-person and reusable across rows.
+- Per-run accounting reports unique rows and cells changed, verified/repaired/new contacts, phone/email writes, pending callbacks, provider calls and bounded AI calls.
+- Pending email and phone ownership survives restart and resumes only after exact sheet, row, group and identity checks.
 - User-facing results lead with completion state and unresolved rows. The detailed technical formatter remains available as formatDetailedResult.
 
 ## Existing architecture retained
@@ -21,7 +24,9 @@ The one-run paid approval gate and saved mission re-entry, deterministic bootstr
 
 ## Verification
 
-22 focused regression scripts passed with live fetch disabled and runtime storage redirected to temporary test directories. The new production-safety suite exercises varied layouts, normalization, orphan protection, conflicting live edits, batches, requested third-contact auditing and callback ownership. Existing regression suites cover approval, Apollo retries/rate limits, native phone settlement, AI bounds, provider fault containment and routing.
+24 focused regression scripts passed with live fetch disabled and runtime storage redirected to temporary test directories. The suites exercise varied and unfamiliar layouts, 17 name-header aliases, normalization, orphan protection, conflicting live edits, formula cells, bounded callback concurrency, durable ownership, requested third-contact auditing, approval fingerprints, Apollo retries/rate limits, bounded AI, provider fault containment and routing.
+
+The coordinated end-to-end test runs 30 rows with three contacts per row. It fills 90 distinct contact slots and 270 cells from one shared employer search plus three distinct-person hydrations, batches one write per row, and confirms that a second run makes zero writes.
 
 Run individual tests without loading .env:
 
@@ -33,6 +38,4 @@ No live Google Sheets, Apollo, LinkedIn or model calls were made for validation.
 
 Google Sheets values writes do not offer an atomic compare-and-swap through this adapter. The live checks reduce the race window but cannot prevent an external editor changing a cell between the read and write. Avoid concurrent editing during enrichment.
 
-Counters inherited from the existing pipeline are stage counters: settlement phone/email counts exclude synchronous initial hydration writes, and row counters may include revisits. The concise report labels settlement counts explicitly; a complete unique-row/provider-call accounting redesign is not included here.
-
-This patch is production hardening of the existing engine, not a claim that every item in the supplied 40-section specification has been independently validated against live providers.
+The implementation covers the requested deterministic schema mapping, all-POC coordination, paid approval continuity, identity-safe writes, credit reuse, durable asynchronous contacts, bounded model use, provider-aware completion states, run metrics and plain-English error reporting. Live provider behavior still depends on the connected accounts, quotas and current external APIs, so the offline verification is not a substitute for a separately approved live enrichment run.

@@ -21,9 +21,15 @@ const engine = require('./universal-enrichment-engine');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 const diagnostics = require('./universal-enrichment-diagnostics');
 const contact = require('./universal-contact-normalization');
+const emailStore = require('./universal-pending-emails');
+const runContext = require('./universal-run-context');
 const liveWrites = require('./universal-live-write-guard');
 
 function text(value) { return String(value ?? '').trim(); }
+function throwSystemic(error) {
+  const typed=typedFailureSummary(error);
+  if (['APOLLO','GOOGLE_SHEETS'].includes(typed.subsystem) && ['AUTH','PERMISSION','CONFIG','RATE_LIMIT','NETWORK','TIMEOUT','API'].includes(typed.type)) throw error;
+}
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function integer(value, fallback, min = 1, max = 100000) {
   const n = Number(value);
@@ -38,21 +44,14 @@ let backgroundPhoneWatcherRemaining = 0;
 let backgroundPhoneAssignmentsLoaded = false;
 
 function persistBackgroundPhoneAssignments() {
-  try {
-    fs.mkdirSync(path.dirname(PHONE_ASSIGNMENTS_FILE), { recursive: true });
-    const payload = {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      assignments: [...backgroundPhoneAssignments.entries()].map(([key, value]) => ({ key, ...value })),
-    };
-    fs.writeFileSync(PHONE_ASSIGNMENTS_FILE, JSON.stringify(payload, null, 2), { mode: 0o600 });
-    try { fs.chmodSync(PHONE_ASSIGNMENTS_FILE, 0o600); } catch {}
-  } catch {}
+  fs.mkdirSync(path.dirname(PHONE_ASSIGNMENTS_FILE),{recursive:true});
+  const temporary=PHONE_ASSIGNMENTS_FILE+'.'+process.pid+'.tmp';
+  fs.writeFileSync(temporary,JSON.stringify({version:2,updatedAt:new Date().toISOString(),assignments:[...backgroundPhoneAssignments.entries()].map(([key,value])=>({key,...value}))},null,2),{mode:0o600});
+  fs.renameSync(temporary,PHONE_ASSIGNMENTS_FILE);
 }
 
 function loadBackgroundPhoneAssignments() {
   if (backgroundPhoneAssignmentsLoaded) return backgroundPhoneAssignments.size;
-  backgroundPhoneAssignmentsLoaded = true;
   try {
     if (!fs.existsSync(PHONE_ASSIGNMENTS_FILE)) return 0;
     const parsed = JSON.parse(fs.readFileSync(PHONE_ASSIGNMENTS_FILE, 'utf8'));
@@ -64,7 +63,8 @@ function loadBackgroundPhoneAssignments() {
       // deliberately collapsed so one phone cell cannot accumulate callbacks.
       backgroundPhoneAssignments.set(key, value);
     }
-  } catch {}
+  } catch (error) { throw Object.assign(new Error('Saved phone lookup ownership could not be read safely.'),{code:'PENDING_CONTACT_STATE_INVALID',cause:error}); }
+  backgroundPhoneAssignmentsLoaded=true;
   return backgroundPhoneAssignments.size;
 }
 function linkedinSlug(value) {
@@ -124,6 +124,7 @@ async function readUniversalSheet(sheetUrl, options = {}) {
   }
   await patchRichLinkedInLinks(best.spreadsheetId, best.sheetName, best.rows, best.schema);
   best.schema = schemaTools.inferSchema(best.rows, options.schema || {});
+  require('./universal-run-context').source(best);
   return best;
 }
 
@@ -157,6 +158,7 @@ function firstBusinessEmailDomain(value) {
 }
 
 function inferHiringCompanyFromEvidence(plan, row = []) {
+  if (text(plan.context?.company)) return {company:text(plan.context.company),domain:websiteDomain(plan.context.website),source:'sheet-company',anchorPerson:null};
   const evidence = contextEvidenceText(plan);
   if (!evidence) return null;
 
@@ -310,7 +312,7 @@ async function resolvePersonAnchor(plan, row, options = {}) {
   let source = '';
 
   if (normalizedLinkedin) {
-    try { profile = await apollo.resolvePersonProfile(normalizedLinkedin, { needEmail, needPhone }); } catch {}
+    try { profile = await apollo.resolvePersonProfile(normalizedLinkedin, { needEmail, needPhone }); } catch(error) { throwSystemic(error); }
     company = text(profile?.organizationName || profile?.organization?.name);
     domain = websiteDomain(profile?.organizationDomain || profile?.organization?.website_url || profile?.organization?.primary_domain || '');
     source = company ? 'apollo-exact-person' : '';
@@ -330,15 +332,15 @@ async function resolvePersonAnchor(plan, row, options = {}) {
             source = employer.source;
             profile = { ...(profile || {}), title: profile?.title || employer.title, organizationName: company, linkedinEmployerConfidence: employer.confidence };
           }
-        } catch {}
+        } catch(error) { throwSystemic(error); }
       }
     }
   } else if (values.name) {
     const explicitCompany = nearestCompanyIdentity(plan);
     if (explicitCompany) {
       try {
-        profile = await apollo.resolvePersonByNameCompany(values.name, explicitCompany, '', { needEmail, needPhone });
-      } catch {}
+        profile = await apollo.resolvePersonByNameCompany(existingContactSearchName(values.name), explicitCompany, '', { needEmail, needPhone });
+      } catch(error) { throwSystemic(error); }
       if (profile && !profile.noMatch && !profile.ambiguous && profile.identityVerified !== false) {
         company = text(profile.organizationName || profile.organization?.name || explicitCompany);
         domain = websiteDomain(profile.organizationDomain || profile.organization?.website_url || profile.organization?.primary_domain || '');
@@ -406,7 +408,7 @@ function rememberCandidate(existing, candidate) {
 }
 function existingIdentityKeys(plan) {
   const existing = {names:new Set(), linkedins:new Set(), emails:new Set(), phones:new Set(), ids:new Set()};
-  for (const item of plan.groups?.existing || []) rememberCandidate(existing, item.snapshot?.values || {});
+  for (const item of plan.groups?.existing || []) if (item.snapshot?.hasIdentity) rememberCandidate(existing, item.snapshot?.values || {});
   return existing;
 }
 function candidateAlreadyPresent(candidate, existing) {
@@ -451,6 +453,7 @@ function queuePendingEmail(options, rowNumber, group, snapshot, person) {
     rowNumber,
     columnIndex: group.fields.email.index,
     groupId: group.id,
+    groupOrdinal: group.ordinal,
     requestId,
     personName: text(person?.name),
     personLinkedin: text(person?.linkedinUrl || person?.linkedin_url || person?.linkedin),
@@ -480,9 +483,9 @@ async function pendingOwnerCell(source, item) {
   const headerNumber = source.schema?.headerRowNumber || item.headerRowNumber;
   if (!headerNumber) throw Object.assign(new Error('Saved worksheet structure needs reinspection before settlement.'), { code: 'UNIVERSAL_LIVE_WRITE_CONFLICT' });
   const quoted = sheets.quoteSheet(source.sheetName);
-  const [rows, headers] = await Promise.all([
-    sheets.values(source.spreadsheetId, quoted + '!' + item.rowNumber + ':' + item.rowNumber),
-    sheets.values(source.spreadsheetId, quoted + '!' + headerNumber + ':' + headerNumber),
+  const [rows, headers] = await sheets.batchValues(source.spreadsheetId, [
+    quoted + '!' + item.rowNumber + ':' + item.rowNumber,
+    quoted + '!' + headerNumber + ':' + headerNumber,
   ]);
   const row = rows[0] || [], header = headers[0] || [];
   for (const descriptor of Object.values(item.ownerFields)) {
@@ -501,56 +504,35 @@ async function pendingOwnerCell(source, item) {
 }
 
 async function syncPendingEmailAssignments(source, queue = [], stats, options = {}) {
-  const pending = Array.isArray(queue) ? queue.filter((item) => item?.requestId) : [];
-  stats.pendingEmailRequests = pending.length;
-  if (!pending.length) return;
-
-  const quality = require('./apollo-three-poc-quality');
-  const polls = emailSyncPolls(options);
-  const outcomes = await Promise.allSettled(
-    pending.map(async (item) => ({
-      item,
-      result: await quality.pollEmailRequest(item.requestId, { polls }),
-    }))
-  );
-
-  const changes = [];
-  let stillPending = 0;
-  for (let index = 0; index < outcomes.length; index++) {
-    const outcome = outcomes[index];
-    const item = pending[index];
-    if (outcome.status !== 'fulfilled') {
-      stats.emailSyncErrors++;
-      stillPending++;
-      continue;
-    }
-
-    const result = outcome.value.result || {};
-    const state = text(result.state);
-    const email = apollo.validEmail(result.email);
-    if (email) {
-      const range = sheets.cellRange(source.sheetName, item.rowNumber, item.columnIndex);
-      let current;
-      try { current = await pendingOwnerCell(source, item); } catch (error) { stats.emailSyncErrors++; stillPending++; continue; }
-      if (sheets.isBlank(current)) {
-        changes.push({ range, value: email, rowNumber: item.rowNumber });
-      } else {
-        stats.emailWriteSkippedPopulated++;
-      }
-    } else if (['not_found', 'terminal'].includes(state)) {
-      stats.emailNotFound++;
-    } else {
-      stillPending++;
-    }
+  const map = new Map(emailStore.forSource(source).map(item=>[item.key,item]));
+  for (const item of queue) if (item?.requestId) {
+    item.ownerCompanyContext = pendingCompanyContext(source,item);
+    map.set(item.key,emailStore.put(source,item));
   }
-
-  if (changes.length) {
-    await sheets.writeCells(source.spreadsheetId, changes);
-    stats.emailCellsFilled += changes.length;
-    stats.cellsChanged += changes.length;
-    stats.emailRowsChanged += new Set(changes.map((change) => change.rowNumber)).size;
+  const pending=[...map.values()];stats.pendingEmailRequests=pending.length;
+  const quality=require('./apollo-three-poc-quality');
+  const outcomes=await runContext.settledMap(pending,async item=>({item,result:await quality.pollEmailRequest(item.requestId,{polls:emailSyncPolls(options)})}));
+  const changes=[],completed=[];let stillPending=0;
+  for(let i=0;i<outcomes.length;i++){
+    const outcome=outcomes[i],item=pending[i];
+    if(outcome.status!=='fulfilled'){stats.emailSyncErrors++;stillPending++;runContext.pending({...item,kind:'email'});continue;}
+    const result=outcome.value.result,email=apollo.validEmail(result.email);
+    if(email){
+      try {const current=await pendingOwnerCell(source,item);
+        if(!text(current))changes.push({range:sheets.cellRange(source.sheetName,item.rowNumber,item.columnIndex),value:email,rowNumber:item.rowNumber,item});
+        else {stats.emailWriteSkippedPopulated++;completed.push(item);}
+      }catch(error){stats.emailSyncErrors++;stillPending++;runContext.pending({...item,kind:'email'});}
+    }else if(['not_found','terminal'].includes(text(result.state))){stats.emailNotFound++;completed.push(item);}
+    else {stillPending++;runContext.pending({...item,kind:'email'});}
   }
-  stats.emailStillPending = stillPending;
+  if(changes.length){await sheets.writeCells(source.spreadsheetId,changes);stats.emailCellsFilled+=changes.length;stats.cellsChanged+=changes.length;stats.emailRowsChanged+=new Set(changes.map(c=>c.rowNumber)).size;completed.push(...changes.map(c=>c.item));}
+  for(const item of completed){emailStore.remove(item);runContext.pending({...item,kind:'email'},'complete');}
+  stats.emailStillPending=stillPending;
+}
+
+async function syncBackgroundEmailAssignments(){
+  const sources=new Map();for(const item of emailStore.read()) sources.set(item.spreadsheetId+'|'+item.sheetName,{spreadsheetId:item.spreadsheetId,sheetName:item.sheetName,schema:{headerRowNumber:item.headerRowNumber}});
+  for(const source of sources.values()) await syncPendingEmailAssignments(source,[],freshStats(),{emailWaterfallSyncPolls:0});
 }
 
 function queuePendingPhone(options, rowNumber, group, snapshot, person) {
@@ -575,6 +557,7 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
     rowNumber,
     columnIndex: group.fields.phone.index,
     groupId: group.id,
+    groupOrdinal: group.ordinal,
     apolloPersonId,
     personName: text(person?.name),
     personLinkedin: text(person?.linkedinUrl || person?.linkedin_url || person?.linkedin),
@@ -607,6 +590,7 @@ function registerBackgroundPhoneAssignments(source, items = []) {
   for (const item of items) {
     if (!item?.apolloPersonId) continue;
     const key = backgroundPhoneKey(source, item);
+    runContext.pending({...item,kind:'phone'});
     backgroundPhoneAssignments.set(key, {
       ...item,
       spreadsheetId: source.spreadsheetId,
@@ -723,7 +707,7 @@ async function syncBackgroundPhoneAssignments() {
 
 function startBackgroundPhoneWatcher() {
   loadBackgroundPhoneAssignments();
-  if (backgroundPhoneWatcher || !backgroundPhoneAssignments.size) return;
+  if (backgroundPhoneWatcher || (!backgroundPhoneAssignments.size && !emailStore.read().length)) return;
   backgroundPhoneWatcherRemaining = Math.max(
     1,
     Math.min(60, Number(process.env.ULTRON_M3_APOLLO_PHONE_WATCHER_ATTEMPTS || 30)),
@@ -731,9 +715,10 @@ function startBackgroundPhoneWatcher() {
 
   const tick = async () => {
     backgroundPhoneWatcher = null;
-    if (!backgroundPhoneAssignments.size || backgroundPhoneWatcherRemaining-- <= 0) return;
+    if ((!backgroundPhoneAssignments.size && !emailStore.read().length) || backgroundPhoneWatcherRemaining-- <= 0) return;
     try { await syncBackgroundPhoneAssignments(); } catch {}
-    if (backgroundPhoneAssignments.size && backgroundPhoneWatcherRemaining > 0) {
+    try { await syncBackgroundEmailAssignments(); } catch {}
+    if ((backgroundPhoneAssignments.size || emailStore.read().length) && backgroundPhoneWatcherRemaining > 0) {
       const delay = Math.max(
         5000,
         Math.min(120000, Number(process.env.ULTRON_M3_APOLLO_PHONE_WATCHER_INTERVAL_MS || 45000)),
@@ -777,11 +762,11 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
     const syncPollsRaw = Number(options.phoneWaterfallSyncPolls ?? process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_SYNC_POLLS ?? 1);
     const syncPolls = Number.isFinite(syncPollsRaw) ? Math.max(0, Math.min(3, Math.floor(syncPollsRaw))) : 1;
 
-    const outcomes = await Promise.allSettled(
-      waterfallPending.map(async (item) => ({
+    const outcomes = await runContext.settledMap(
+      waterfallPending, async (item) => ({
         item,
         result: await quality.pollPhoneRequest(item.phoneWaterfallRequestId, { polls: syncPolls }),
-      }))
+      })
     );
 
     const waterfallChanges = [];
@@ -830,6 +815,7 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   if (!nativePending.length) {
     for (const item of pending) if (!unresolvedWaterfall.includes(item)) backgroundPhoneAssignments.delete(backgroundPhoneKey(source, item));
     persistBackgroundPhoneAssignments();
+    for(const item of pending) if(!unresolvedWaterfall.includes(item)) runContext.pending({...item,kind:'phone'},'complete');
     stats.phoneStillPending = unresolvedWaterfall.length;
     stats.backgroundPhonePending = backgroundPhoneAssignments.size;
     return;
@@ -847,14 +833,14 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   if (directPending.length) {
     const directPollsRaw = Number(options.phoneDirectPolls ?? process.env.ULTRON_M3_APOLLO_PHONE_DIRECT_POLLS ?? 4);
     const directPolls = Number.isFinite(directPollsRaw) ? Math.max(0, Math.min(8, Math.floor(directPollsRaw))) : 4;
-    const outcomes = await Promise.allSettled(
-      directPending.map(async (item) => ({
+    const outcomes = await runContext.settledMap(
+      directPending, async (item) => ({
         item,
         result: await apollo.pollWebhookResult(item.phoneRequestId, {
           polls: directPolls,
           maxWaitMs: waitMs,
         }),
-      }))
+      })
     );
 
     const directChanges = [];
@@ -962,6 +948,7 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   }
   for (const item of pending) if (!unresolved.has(item.key) && !unresolvedWaterfall.includes(item)) backgroundPhoneAssignments.delete(backgroundPhoneKey(source, item));
   persistBackgroundPhoneAssignments();
+  for(const item of pending) if(!unresolved.has(item.key)&&!unresolvedWaterfall.includes(item)) runContext.pending({...item,kind:'phone'},'complete');
   stats.phoneStillPending = unresolved.size + unresolvedWaterfall.length;
   if (unresolved.size && options.backgroundPhoneWatcher !== false) {
     registerBackgroundPhoneAssignments(source, [...unresolved.values()]);
@@ -1141,6 +1128,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
         );
       }
     } catch (error) {
+    throwSystemic(error);
       verificationError = error;
       resolved = null;
     }
@@ -1861,6 +1849,10 @@ async function discoverPublicIndexPeople(companyContext, stats, options = {}) {
 }
 
 async function hydrateDecisionMakerVerified(candidate, companyContext, stats, options = {}) {
+  const key=JSON.stringify(['hydrate',candidateDiscoveryKey(candidate),companyContext.company,companyContext.domain,options.needPhone,options.needEmail]);
+  return runContext.memo(key,()=>hydrateDecisionMakerUncached(candidate,companyContext,stats,options));
+}
+async function hydrateDecisionMakerUncached(candidate, companyContext, stats, options = {}) {
   const needEmail = options.needEmail !== false;
   const needPhone = options.needPhone !== false;
   try {
@@ -1871,6 +1863,7 @@ async function hydrateDecisionMakerVerified(candidate, companyContext, stats, op
       { needEmail, needPhone },
     );
   } catch (error) {
+    throwSystemic(error);
     if (String(error?.code || '') !== 'APOLLO_COMPANY_MISMATCH_AFTER_HYDRATION') throw error;
 
     stats.linkedinHydrationRecoveryAttempts = Number(stats.linkedinHydrationRecoveryAttempts || 0) + 1;
@@ -1983,6 +1976,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     stats.candidatePrioritySearches++;
     add(Array.isArray(priority?.people) ? priority.people : []);
   } catch (error) {
+    throwSystemic(error);
     stats.candidatePrioritySearchFailures++;
     stats.discoveryDiagnostics.push({
       company: company || domain,
@@ -2016,6 +2010,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
       stats.candidateBroadSearches++;
       add(Array.isArray(broad?.people) ? broad.people : []);
     } catch (error) {
+    throwSystemic(error);
       stats.discoveryDiagnostics.push({
         company: company || domain,
         code: String(error?.code || 'APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED'),
@@ -2042,6 +2037,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
         stats.candidateBroadSearches++;
         add(Array.isArray(keyword?.people) ? keyword.people : []);
       } catch (error) {
+    throwSystemic(error);
         stats.discoveryDiagnostics.push({
           company: brand,
           code: String(error?.code || 'APOLLO_BRAND_KEYWORD_SEARCH_FAILED'),
@@ -2067,6 +2063,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
         stats.candidatePrioritySearches++;
         add(Array.isArray(keyword?.people) ? keyword.people : []);
       } catch (error) {
+    throwSystemic(error);
         stats.candidatePrioritySearchFailures++;
         stats.discoveryDiagnostics.push({
           company: brand,
@@ -2085,6 +2082,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
       const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, options);
       add(linkedinPeople);
     } catch (error) {
+    throwSystemic(error);
       const typed = typedFailureSummary(error, { stage: error?.stage || 'authenticated-linkedin-discovery' });
       const alreadyRecorded = (stats.discoveryDiagnostics || []).some((item) =>
         text(item?.code).toUpperCase() === text(typed.code).toUpperCase()
@@ -2171,7 +2169,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   const target = candidateFillTargets(plan).find((item) => Number(item.group?.ordinal || 0) === ordinal);
   if (!target) return { writes: [], filled: false, selected: null };
 
-  const existing = existingIdentityKeys(plan);
+  const existing = options.existingIdentities || existingIdentityKeys(plan);
   const claimed = options.claimed instanceof Set ? options.claimed : new Set();
   const priorityPool = manualPriorityCandidates(candidates, companyContext, existing)
     .filter((candidate) => {
@@ -2216,7 +2214,8 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
         needEmail: Boolean(target.group.fields.email),
         needPhone: Boolean(target.group.fields.phone),
       });
-    } catch {
+    } catch (error) {
+      throwSystemic(error);
       stats.hydrationFailures++;
       claimed.add(rawKey);
       continue;
@@ -2713,6 +2712,7 @@ async function run(request = {}, options = {}) {
     throw error;
   }
 
+  if(options.expectedSchemaFingerprint && options.expectedSchemaFingerprint !== source.schema.fingerprint) throw Object.assign(new Error('The worksheet columns changed after approval. Inspect and approve the new layout.'),{code:'UNIVERSAL_SCHEMA_AMBIGUOUS',subsystem:'SCHEMA',errorType:'SCHEMA'});
   require('./universal-schema-safety').assertSafe(source.schema);
   const stats = freshStats();
   const internalRecheck = Boolean(options.recheckPass);
@@ -2755,7 +2755,7 @@ async function run(request = {}, options = {}) {
 
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const pendingPhoneQueue = [];
-  const pendingEmailQueue = [];
+  const pendingEmailQueue = emailStore.forSource(source);
   const runOptions = { ...options, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue };
   const targetRows = Array.isArray(options.targetRows)
     ? new Set(options.targetRows.map((value) => Number(value)).filter(Number.isInteger))
@@ -2764,6 +2764,7 @@ async function run(request = {}, options = {}) {
   for (const record of analysis.rowPlans) {
     const { row, rowNumber, plan } = record;
     if (targetRows && !targetRows.has(Number(rowNumber))) continue;
+    require('./universal-run-context').processed(source, rowNumber);
     stats.rowsSeen++;
     if (!plan.anchor) { stats.rowsWithoutAnchor++; continue; }
 
@@ -2825,7 +2826,7 @@ async function run(request = {}, options = {}) {
 
       if (companyContext?.source && /^row-/.test(companyContext.source)) stats.rowEvidenceEmployersResolved++;
       const writes = [];
-      const openPersonTargets = (plan.groups?.open || []).filter((target) =>
+      const openPersonTargets = candidateFillTargets(plan).filter((target) =>
         !target.isAnchor
         && (!phaseOrdinal || Number(target.group?.ordinal || 0) === phaseOrdinal)
       );
@@ -2843,6 +2844,7 @@ async function run(request = {}, options = {}) {
 
       if (!companyContext || companyContext.unresolved || !companyContext.company) {
         stats.rowsWithoutEmployer++;
+        markLeftover(stats,rowNumber,'employer-unresolved',{detail:'A reliable current employer could not be established.'});
         const unresolvedPoc2 = (!phaseOrdinal || phaseOrdinal === 2)
           && openPersonTargets.some((target) => Number(target.group?.ordinal || 0) === 2);
         if (unresolvedPoc2 && aiFallbackEnabled) {
@@ -2893,7 +2895,7 @@ async function run(request = {}, options = {}) {
         ? poc3Targets
         : phaseOrdinal === 2
           ? poc2Targets
-          : [...poc2Targets, ...poc3Targets];
+          : openPersonTargets;
       if (discoveryTargets.length) {
         try {
           people = await discoverPriorityPeopleFast(companyContext, cache, stats, {
@@ -2920,14 +2922,25 @@ async function run(request = {}, options = {}) {
             hint: typed.hint,
           });
           if (typed.subsystem === 'APOLLO') {
+            if (!isRecoverableRowFailure(typed)) throw error;
             stats.candidatePrioritySearchFailures++;
           }
         }
       }
 
-      const rowOptions = { ...runOptions, rowNumber, candidatePool: people };
+      const rowOptions = { ...runOptions, rowNumber, candidatePool: people, existingIdentities: existingIdentityKeys(plan) };
       const manualClaimed = new Set();
 
+      // The same verified path applies to a first contact in company-led sheets
+      // and to any additional contact groups beyond three.
+      for (const target of openPersonTargets.filter(target => ![2,3].includes(Number(target.group.ordinal)))) {
+        const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
+          ...rowOptions, ordinal: target.group.ordinal, claimed: manualClaimed,
+          maxHydrationAttempts: options.resultsFirstSweep ? 1 : 5,
+        });
+        writes.push(...result.writes);
+        if (!result.filled) { stats.unfilledOpenGroups++; markLeftover(stats,rowNumber,'requested-contact-unresolved',{groupOrdinal:target.group.ordinal,company:companyContext.company}); }
+      }
       if ((!phaseOrdinal || phaseOrdinal === 2) && poc2Targets.length) {
         stats.manualPoc2Attempts += poc2Targets.length;
         const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
@@ -3061,6 +3074,7 @@ async function run(request = {}, options = {}) {
   }
   try {
     await syncPendingEmailAssignments(source, pendingEmailQueue, stats, runOptions);
+    if(stats.emailStillPending) startBackgroundPhoneWatcher();
   } catch (error) {
     stats.emailSyncErrors++;
   }
@@ -3156,6 +3170,7 @@ module.exports = {
   pendingOwnerCell,
   queuePendingEmail,
   syncPendingEmailAssignments,
+  syncBackgroundEmailAssignments,
   queuePendingPhone,
   registerBackgroundPhoneAssignments,
   syncBackgroundPhoneAssignments,

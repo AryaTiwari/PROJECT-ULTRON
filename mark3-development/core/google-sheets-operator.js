@@ -213,6 +213,7 @@ async function request(url, options = {}) {
 
     let response;
     try {
+      require('./universal-run-context').provider('googleSheets');
       response = await fetch(url, {
         ...options,
         headers: {
@@ -455,9 +456,18 @@ async function writeCells(id, changes) {
     method: 'POST',
     body: JSON.stringify({ valueInputOption: 'RAW', data, includeValuesInResponse: false }),
   });
+  require('./universal-run-context').commit(id, changes);
   return { updatedCells: Number(result.totalUpdatedCells || data.length), raw: result };
 }
 
+async function batchValues(id, ranges, options = {}) {
+  if (!ranges.length) return [];
+  const query=new URLSearchParams({majorDimension:'ROWS',valueRenderOption:options.formulas===false?'UNFORMATTED_VALUE':'FORMULA'});
+  for(const range of ranges) query.append('ranges',range);
+  const data=await request(API+'/'+encodeURIComponent(id)+'/values:batchGet?'+query);
+  if (!Array.isArray(data.valueRanges) || data.valueRanges.length !== ranges.length) throw Object.assign(new Error('Google Sheets returned an incomplete batch read.'),{code:'GOOGLE_SHEETS_READ_FAILED',subsystem:'GOOGLE_SHEETS'});
+  return data.valueRanges.map(value=>value.values||[]);
+}
 async function readCell(id, range) {
   const rows = await values(id, range);
   return rows?.[0]?.[0] ?? '';
@@ -475,6 +485,7 @@ module.exports = {
   metadata,
   ensureGridSize,
   values,
+  batchValues,
   columnName,
   quoteSheet,
   normalizeHeader,

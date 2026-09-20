@@ -113,6 +113,7 @@ async function fetchJson(url, options = {}, timeoutMs = 20000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(3000, timeoutMs));
   try {
+    require('./universal-run-context').provider('publicSearch');
     const response = await fetch(url, { ...options, signal: controller.signal });
     const raw = await response.text();
     let data = null;

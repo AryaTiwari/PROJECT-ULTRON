@@ -319,7 +319,7 @@ assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5
 assert.match(operatorSource, /ordinal: 3/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS/);
 assert.match(operatorSource, /phaseOrdinal === 3 \? 5 : \(!phaseOrdinal \? 3 : 1\)/);
-assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?\[\.\.\.poc2Targets, \.\.\.poc3Targets\]/);
+assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?openPersonTargets/);
 assert.match(operatorSource, /priorityCandidateLimit: options\.manualPriorityCandidateLimit \?\? 20/);
 assert.doesNotMatch(operatorSource, /candidateLimit: options\.manualCandidateLimit \?\? 40/);
 assert.match(operatorSource, /preferredHiringCompanyContext/);
@@ -332,9 +332,9 @@ const runSource = operatorSource.slice(operatorSource.indexOf('async function ru
 const exactRepairIndex = runSource.indexOf('repairExistingGroups(row, plan, companyContext, stats, repairOptions)');
 const prioritySearchIndex = runSource.indexOf('discoverPriorityPeopleFast(companyContext, cache, stats');
 assert.ok(exactRepairIndex >= 0 && prioritySearchIndex > exactRepairIndex, 'existing POC exact repair must happen before candidate discovery');
-assert.match(runSource, /const openPersonTargets = \(plan\.groups\?\.open \|\| \[\]\)\.filter/);
+assert.match(runSource, /const openPersonTargets = candidateFillTargets\(plan\)/);
 assert.match(runSource, /const poc2Targets = openPersonTargets\.filter/);
-assert.match(runSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?\[\.\.\.poc2Targets, \.\.\.poc3Targets\]/);
+assert.match(runSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?openPersonTargets/);
 assert.match(runSource, /if \(discoveryTargets\.length\) \{[\s\S]*?discoverPriorityPeopleFast/);
 const manualPoc2Index = runSource.indexOf('fillManualPriorityGroup(row, plan, companyContext, people, stats');
 const deferPoc2Index = runSource.indexOf('stats.deferredOpenGroups += poc2Targets.length');
@@ -342,7 +342,7 @@ assert.ok(manualPoc2Index >= 0, 'manual POC-2 selector must run');
 assert.ok(deferPoc2Index > manualPoc2Index, 'AI deferral must happen only after manual POC-2 failed');
 assert.match(runSource, /if \(\(!phaseOrdinal \|\| phaseOrdinal === 3\) && poc3Targets\.length\) \{[\s\S]*?if \(people\.length\)/);
 
-assert.match(rescueSource, /Number\(item\.group\?\.ordinal \|\| 0\) >= 2/);
+assert.match(rescueSource, /candidateFillTargets\(plan\)/);
 assert.match(rescueSource, /rescueTargets\(record\.plan\)\.length > 0/);
 assert.match(rescueSource, /no-open-secondary-poc-residue/);
 assert.doesNotMatch(rescueSource, /const wantedOrdinal = 2/);
@@ -359,7 +359,7 @@ assert.match(diagnosticsSource, /POC3_REQUESTED_UNRESOLVED/);
 assert.match(diagnosticsSource, /Requested POC-3 is still unresolved/);
 assert.match(diagnosticsSource, /AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL/);
 assert.match(diagnosticsSource, /Fix deterministic discovery\/verification evidence; changing AI providers will not help/);
-assert.match(targetedSource, /targetOrdinals: \[2\]/);
+assert.match(targetedSource, /targetOrdinals: undefined/);
 assert.match(targetedSource, /targetRows: unresolvedRows/);
 assert.match(targetedSource, /maxFallbackAttemptsPerTarget: 1/);
 assert.doesNotMatch(targetedSource, /targetOrdinals:\s*\[3\]/);

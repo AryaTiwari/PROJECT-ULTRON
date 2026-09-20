@@ -40,6 +40,8 @@ function subsystemFor(error, context = {}) {
 
 function typeFor(error, subsystem) {
   const explicit = text(error?.errorType || error?.type).toUpperCase();
+  const httpStatus = Number(error?.status || error?.providerStatus || error?.response?.status || 0);
+  if(httpStatus===429)return 'RATE_LIMIT';if(httpStatus===401)return 'AUTH';if(httpStatus===403)return 'PERMISSION';
   if (explicit) return explicit;
   const code = text(error?.code).toUpperCase();
   const value = combined(error).toUpperCase();
@@ -172,10 +174,11 @@ function humanTitleFor(subsystem, type, code, message = '') {
   const s = String(subsystem || '').toUpperCase();
   const t = String(type || '').toUpperCase();
   const c = String(code || '').toUpperCase();
-  if (c === 'UNIVERSAL_LIVE_WRITE_CONFLICT') return 'The worksheet changed during enrichment; inspect the affected row and retry it';
+  const canonical = require('./universal-error-catalog').lookup(c);
+  if (canonical) return canonical.title;
   const m = String(message || '').toUpperCase();
 
-  if (/LINKEDIN_MCP_TOOL_ERROR/.test(c) || /ANOTHER LINKEDIN MCP CLIENT|BROWSER.*USING/.test(m)) return 'LinkedIn browser is already busy';
+  if ((/LINKEDIN_MCP_TOOL_ERROR/.test(c) && /BUSY|LOCK|ANOTHER|ALREADY.*US/.test(m)) || /ANOTHER LINKEDIN MCP CLIENT|BROWSER.*USING/.test(m)) return 'LinkedIn browser is already busy';
   if (/LINKEDIN_COOLDOWN_ACTIVE/.test(c) || /COOLDOWN/.test(c + ' ' + m)) return 'LinkedIn safety cooldown is active';
   if (/LINKEDIN_DAILY_CAP/.test(c)) return 'LinkedIn daily safety limit reached';
   if (/LINKEDIN_HOURLY_CAP/.test(c)) return 'LinkedIn hourly safety limit reached';
@@ -307,14 +310,16 @@ function hintFor(subsystem, type, code) {
 }
 
 function normalize(error, context = {}) {
-  const original = error instanceof Error ? error : new Error(text(error) || 'unknown failure');
+  const original = error instanceof Error ? error : (error && typeof error==='object' ? Object.assign(new Error(text(error.message)||'unknown failure'),error) : new Error(text(error)||'unknown failure'));
   const subsystem = subsystemFor(original, context);
   const type = typeFor(original, subsystem);
   const code = defaultCode(original, subsystem, type);
   const stage = text(original.stage || context.stage || 'unspecified-stage');
   const message = text(original.message || context.message || 'unknown failure');
   const humanTitle = humanTitleFor(subsystem, type, code, message);
-  const humanExplanation = humanExplanationFor(subsystem, type, code, message);
+  const catalog = require('./universal-error-catalog').lookup(code);
+  const specific = ['NETWORK','AUTH','PERMISSION','RATE_LIMIT','TIMEOUT','CONFIG'].includes(type);
+  const humanExplanation = specific ? humanExplanationFor(subsystem,type,code,message) : (catalog?.explanation || humanExplanationFor(subsystem,type,code,message));
   return {
     code,
     subsystem,
@@ -323,7 +328,7 @@ function normalize(error, context = {}) {
     message,
     humanTitle,
     humanExplanation,
-    hint: text(original.hint) || hintFor(subsystem, type, code),
+    hint: text(original.hint) || (specific ? hintFor(subsystem,type,code) : catalog?.action) || hintFor(subsystem,type,code),
     status: original.status ?? null,
     retryAttempts: original.retryAttempts ?? null,
     attemptedRange: text(original.requestedRange || original.originalRange || context.attemptedRange) || null,
@@ -342,7 +347,7 @@ function format(value) {
     hint: value.hint || hintFor(value.subsystem, value.type, value.code),
   } : normalize(value);
   const action = text(typed.hint) ? ` What to do: ${text(typed.hint)}` : '';
-  return `Problem: ${typed.humanTitle}. ${typed.humanExplanation}${action}`;
+  return `Problem: ${typed.humanTitle}. Explanation: ${typed.humanExplanation}${action}`;
 }
 
 module.exports = {

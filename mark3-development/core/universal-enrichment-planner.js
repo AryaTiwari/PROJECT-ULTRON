@@ -50,6 +50,10 @@ function rowContext(row, schema) {
     if (!values.length) continue;
     context[role] = values.join(' | ');
   }
+  for (const group of schema.companyGroups || []) {
+    if (group.fields.company && valueAt(row, group.fields.company)) context.company ||= valueAt(row, group.fields.company);
+    if (group.fields.website && valueAt(row, group.fields.website)) context.website ||= valueAt(row, group.fields.website);
+  }
   return context;
 }
 
@@ -77,7 +81,7 @@ function chooseAnchor(row, schema) {
   }
   for (const group of schema?.companyGroups || []) {
     const snapshot = companySnapshot(row, group);
-    if (!snapshot.hasIdentity && !snapshot.strongCompanyIdentity) continue;
+    if (!snapshot.values.company && !snapshot.hasIdentity && !snapshot.strongCompanyIdentity) continue;
     const scored = anchorScore(snapshot, group, row);
     candidates.push({ type: 'company', group, snapshot, ...scored });
   }
@@ -204,6 +208,7 @@ function safeWritesForGroup(row, group, person, options = {}) {
     conflicts.push('identity-conflict');
     return { writes, conflicts, allowed: false };
   }
+  require('./universal-run-context').verified(row, group);
   for (const field of expectedPersonFields(group)) {
     const descriptor = group.fields[field];
     const current = snapshot.values[field];

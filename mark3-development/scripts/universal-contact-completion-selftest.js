@@ -243,6 +243,7 @@ assert.match(operatorSource, /repairExistingGroups,\s*enrichAnchorGroup,/s);
 async function run() {
   const apollo = require('../core/apollo-enrichment');
   const sheets = require('../core/google-sheets-operator');
+sheets.batchValues=async(id,ranges)=>Promise.all(ranges.map(range=>sheets.values(id,range)));
   const originals = {
     fetchPhoneResults: apollo.fetchPhoneResults,
     pollWebhookResult: apollo.pollWebhookResult,

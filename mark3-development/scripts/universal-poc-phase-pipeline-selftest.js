@@ -151,7 +151,7 @@ assert.match(operatorSource, /contactPhaseOrdinal/);
 assert.match(operatorSource, /phaseOrdinal === 1/);
 assert.match(operatorSource, /phaseOrdinal === 2/);
 assert.match(operatorSource, /phaseOrdinal === 3/);
-assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?\[\.\.\.poc2Targets, \.\.\.poc3Targets\]/);
+assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?openPersonTargets/);
 assert.match(operatorSource, /targetOrdinals: phaseOrdinals/);
 
 assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline === true \|\| Boolean\(options\.contactPhaseOrdinal\)/);

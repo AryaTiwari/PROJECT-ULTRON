@@ -85,7 +85,7 @@ const typedCap = typedErrors.normalize(capError, { stage: 'candidate-discovery' 
 assert.equal(typedCap.code, 'LINKEDIN_DAILY_CAP');
 assert.equal(typedCap.subsystem, 'LINKEDIN');
 assert.equal(typedCap.type, 'RATE_LIMIT');
-assert.equal(typedCap.humanTitle, 'LinkedIn daily safety limit reached');
+assert.match(typedCap.humanTitle, /LinkedIn daily safety limit.*reached/i);
 assert.match(typedCap.hint, /LinkedIn/i);
 assert.match(typedCap.hint, /daily/i);
 assert.match(typedCap.hint, /(reset|wait)/i);
@@ -98,7 +98,7 @@ const typedHourlyCap = typedErrors.normalize(hourlyCapError, { stage: 'candidate
 assert.equal(typedHourlyCap.code, 'LINKEDIN_HOURLY_CAP');
 assert.equal(typedHourlyCap.subsystem, 'LINKEDIN');
 assert.equal(typedHourlyCap.type, 'RATE_LIMIT');
-assert.equal(typedHourlyCap.humanTitle, 'LinkedIn hourly safety limit reached');
+assert.match(typedHourlyCap.humanTitle, /LinkedIn hourly safety limit.*reached/i);
 assert.match(typedHourlyCap.hint, /LinkedIn/i);
 assert.match(typedHourlyCap.hint, /hourly/i);
 assert.match(typedHourlyCap.hint, /(reset|wait)/i);

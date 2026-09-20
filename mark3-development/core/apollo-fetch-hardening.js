@@ -81,6 +81,7 @@ function createHardenedFetch(originalFetch, options = {}) {
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
+        require('./universal-run-context').provider('apollo');
         const result = await originalFetch(input, init);
         if (attempt > 0) state.recovered++;
         return result;

@@ -113,6 +113,7 @@ function isFresh(record) {
 
 function pendingPhoneRequestFresh(record) {
   if (record?.phoneStatus !== 'pending') return false;
+  if (record.phoneRequestId || record.apolloPersonId) return true;
   const requestedAt = Date.parse(record?.phoneRequestedAt || record?.checkedAt || '');
   if (!Number.isFinite(requestedAt)) return false;
   const retryMinutes = Math.max(
@@ -123,7 +124,7 @@ function pendingPhoneRequestFresh(record) {
 }
 
 function satisfies(record, { needEmail, needPhone }) {
-  if (!record || !isFresh(record)) return false;
+  if (!record || (!isFresh(record) && !(record.phoneStatus === 'pending' && pendingPhoneRequestFresh(record)))) return false;
   if (record.noMatch || record.ambiguous) return true;
   if (needEmail && !record.emailKnown) return false;
   if (needEmail && record.email != null && !validEmail(record.email)) return false;
@@ -661,6 +662,19 @@ function matchDecision(requestedLinkedIn, data) {
 }
 
 async function apiCall(linkedinUrl, { needPhone }) {
+  if(needPhone){
+    const query=typeof linkedinUrl==='object'?linkedinUrl:{linkedin_url:linkedinUrl};
+    const saved=Object.entries(readCache().people).find(([url,person])=>person.phoneStatus==='pending'&&person.apolloPersonId&&(
+      (query.id&&String(query.id)===String(person.apolloPersonId)) ||
+      (query.linkedin_url&&normalizeLinkedIn(query.linkedin_url)===normalizeLinkedIn(url)) ||
+      (query.email&&validEmail(person.email)?.toLowerCase()===String(query.email).toLowerCase()) ||
+      (query.name&&query.organizationName&&normalizedWords(query.name)===normalizedWords(person.name)&&sameOrganization(person,query.organizationName,query.domain))
+    ));
+    if(saved){const [url,person]=saved;return {__requestId:person.phoneRequestId||'',person:{...person,id:person.apolloPersonId,linkedin_url:person.returnedLinkedIn||url,organization:person.organization||{name:person.organizationName,primary_domain:person.organizationDomain}}};}
+  }
+  return require('./universal-run-context').memo('apollo-match:'+JSON.stringify([linkedinUrl,needPhone]),()=>apiCallUncached(linkedinUrl,{needPhone}));
+}
+async function apiCallUncached(linkedinUrl, { needPhone }) {
   const apiKey = setting('APOLLO_API_KEY');
   if (!apiKey) {
     const error = new Error('APOLLO_API_KEY is missing.');
