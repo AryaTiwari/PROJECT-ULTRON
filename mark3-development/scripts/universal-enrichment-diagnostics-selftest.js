@@ -63,8 +63,27 @@ const capError = new Error('LinkedIn daily safety cap reached (100/100). Resume 
 capError.code = 'LINKEDIN_DAILY_CAP';
 capError.subsystem = 'LINKEDIN';
 const typedCap = typedErrors.normalize(capError, { stage: 'candidate-discovery' });
+assert.equal(typedCap.code, 'LINKEDIN_DAILY_CAP');
+assert.equal(typedCap.subsystem, 'LINKEDIN');
 assert.equal(typedCap.type, 'RATE_LIMIT');
-assert.match(typedCap.hint, /daily safety budget/i);
+assert.equal(typedCap.humanTitle, 'LinkedIn daily safety limit reached');
+assert.match(typedCap.hint, /LinkedIn/i);
+assert.match(typedCap.hint, /daily/i);
+assert.match(typedCap.hint, /(reset|wait)/i);
+assert.match(typedCap.hint, /(do not bypass|account-safety)/i);
+
+const hourlyCapError = new Error('LinkedIn hourly safety cap reached.');
+hourlyCapError.code = 'LINKEDIN_HOURLY_CAP';
+hourlyCapError.subsystem = 'LINKEDIN';
+const typedHourlyCap = typedErrors.normalize(hourlyCapError, { stage: 'candidate-discovery' });
+assert.equal(typedHourlyCap.code, 'LINKEDIN_HOURLY_CAP');
+assert.equal(typedHourlyCap.subsystem, 'LINKEDIN');
+assert.equal(typedHourlyCap.type, 'RATE_LIMIT');
+assert.equal(typedHourlyCap.humanTitle, 'LinkedIn hourly safety limit reached');
+assert.match(typedHourlyCap.hint, /LinkedIn/i);
+assert.match(typedHourlyCap.hint, /hourly/i);
+assert.match(typedHourlyCap.hint, /(reset|wait)/i);
+assert.match(typedHourlyCap.hint, /(do not bypass|account-safety)/i);
 
 const fallbackStatsShape = fallbackPass.freshStats();
 assert.ok(Array.isArray(fallbackStatsShape.discoveryDiagnostics), 'Big Pickle stats must initialize discoveryDiagnostics before base discovery helpers push into it');
@@ -154,4 +173,4 @@ assert.match(targetedSource, /const gateBlockers/);
 assert.match(targetedSource, /collapseDiagnosticBlockers/);
 assert.match(targetedSource, /Problems:/);
 
-console.log('Universal enrichment diagnostics self-test passed: machine codes remain available internally, visible row diagnostics and final root-cause summaries are plain English, LinkedIn safety caps are named clearly, requested POC-3 residue stays retryable, and mandatory blockers remain separate from repair/pending/optional work.');
+console.log('Universal enrichment diagnostics self-test passed: machine codes remain available internally, visible row diagnostics and final root-cause summaries are plain English, LinkedIn daily/hourly safety caps are validated by stable condition plus plain-English meaning instead of brittle prose, requested POC-3 residue stays retryable, and mandatory blockers remain separate from repair/pending/optional work.');
