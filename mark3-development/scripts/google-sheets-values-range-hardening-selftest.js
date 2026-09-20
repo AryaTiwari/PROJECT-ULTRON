@@ -42,7 +42,7 @@ assert.equal(authError.code, 'GOOGLE_SHEETS_AUTH_REQUIRED');
 assert.equal(authError.status, 401);
 assert.match(authError.reauthorizeCommand, /google-sheets-auth\.js/i);
 
-(async () => {
+async function run() {
   const parsed = hardening.parseSheetRange("'Arya 2'!A:ZZ");
   const physicalLastColumnIndex = 14; // O
   const fakeValues = async (_id, range) => {
@@ -68,7 +68,13 @@ assert.match(authError.reauthorizeCommand, /google-sheets-auth\.js/i);
   );
 
   console.log('Google Sheets values hardening self-test passed: stale 401 tokens are recognized for forced-refresh recovery, while wide universal reads still recover from real grid failures with metadata or Values-only probing.');
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+}
+
+if (require.main === module) {
+  run().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { run };
