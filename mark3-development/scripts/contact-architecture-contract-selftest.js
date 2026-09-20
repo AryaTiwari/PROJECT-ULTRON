@@ -63,6 +63,8 @@ const spreadsheetController = fs.readFileSync(path.join(coreDir, 'universal-spre
 const errorVocabulary = fs.readFileSync(path.join(coreDir, 'spreadsheet-enrichment-errors.js'), 'utf8');
 const targeted = fs.readFileSync(path.join(coreDir, 'universal-sheet-enrichment-targeted.js'), 'utf8');
 const enrichmentDiagnostics = fs.readFileSync(path.join(coreDir, 'universal-enrichment-diagnostics.js'), 'utf8');
+const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+const humanErrorTest = fs.readFileSync(path.join(__dirname, 'human-error-vocabulary-selftest.js'), 'utf8');
 
 assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
 assert.match(quality, /Native Apollo reveal \+ webhook settlement is the production default/);
@@ -110,5 +112,14 @@ assert.doesNotMatch(targeted, /ULTRON_DIAGNOSTICS/);
 assert.match(targeted, /DIAGNOSTIC SUMMARY/);
 assert.match(targeted, /Main problem:/);
 assert.match(targeted, /Required blockers:/);
+assert.match(targeted, /Completion status:/);
+assert.doesNotMatch(targeted, /Completion gate: \$\{gate\.statusCode/);
+assert.match(serverSource, /const enrichmentErrors = require\('\.\/core\/spreadsheet-enrichment-errors'\)/);
+assert.match(serverSource, /problem: typed\.humanTitle/);
+assert.match(serverSource, /explanation: typed\.humanExplanation/);
+assert.match(serverSource, /whatToDo: typed\.hint/);
+assert.match(humanErrorTest, /Apollo rate limit reached/);
+assert.match(humanErrorTest, /Google Sheets authorization expired or is invalid/);
+assert.match(humanErrorTest, /LinkedIn safety cooldown is active/);
 
 console.log('Contact architecture contract self-test passed: native Apollo phone reveal is the production default, paid legacy waterfall requests stay resumable, explicit 3-POC intent reaches deep POC-3 rescue, AI rescue accepts all secondary slots, raw Apollo fetch failures cannot bypass typed retries or approval re-entry containment, user-facing diagnostics remain plain English while machine codes stay internal, and stale poll-only regression assertions are absent.');
