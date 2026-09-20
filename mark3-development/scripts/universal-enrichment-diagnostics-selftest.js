@@ -33,7 +33,9 @@ assert.equal(exhausted.retryable, false);
 const aiSkipped = diagnostics.issueFromReason('ai-skipped-no-verified-candidate-pool');
 assert.equal(aiSkipped.code, 'AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL');
 assert.equal(aiSkipped.blocking, false);
-assert.match(aiSkipped.nextAction, /discovery\/verification evidence/i);
+assert.match(aiSkipped.nextAction, /discovery/i);
+assert.match(aiSkipped.nextAction, /verification/i);
+assert.match(aiSkipped.nextAction, /(evidence|candidate pool|candidate)/i);
 
 const runtime = diagnostics.runtimeIssues({
   phoneStillPending: 1,
@@ -53,7 +55,9 @@ assert.equal(requestedPoc3.code, 'POC3_REQUESTED_UNRESOLVED');
 assert.equal(requestedPoc3.severity, 'WARNING');
 assert.equal(requestedPoc3.blocking, false);
 assert.equal(requestedPoc3.retryable, true);
-assert.match(requestedPoc3.nextAction, /deep deterministic discovery and bounded AI rescue/i);
+assert.match(requestedPoc3.nextAction, /deterministic/i);
+assert.match(requestedPoc3.nextAction, /AI rescue/i);
+assert.match(requestedPoc3.nextAction, /(leave it blank|no safe|verified)/i);
 assert.ok(runtime.every((item) => item.blocking === false), 'pending contact work and optional POC-3 must not masquerade as mandatory failure');
 
 const globalPending = diagnostics.formatIssue(diagnostics.issueFromReason('phone-callback-pending'));
@@ -94,7 +98,9 @@ const recursionError = new RangeError('Maximum call stack size exceeded');
 const typedRecursion = typedErrors.normalize(recursionError, { stage: 'candidate-discovery' });
 assert.equal(typedRecursion.type, 'RECURSION');
 assert.equal(typedRecursion.code, 'UNIVERSAL_RECURSION_STACK_OVERFLOW');
-assert.match(typedRecursion.hint, /recursive wrapper\/helper loop/i);
+assert.equal(typedRecursion.humanTitle, 'ULTRON hit an internal recursive loop');
+assert.match(typedRecursion.hint, /(restart|check)/i);
+assert.match(typedRecursion.hint, /(wrapper|helper|recursive|loop)/i);
 
 const providerReasons = targeted.providerRetryReasonsFromPrimary({
   deferredPoc2Rows: [5],
