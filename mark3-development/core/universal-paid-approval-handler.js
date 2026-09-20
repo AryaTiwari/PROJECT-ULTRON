@@ -48,10 +48,6 @@ async function execute(decision) {
   }
   if (decision.status !== 'approved') return null;
 
-  // Approval re-entry is resolved before ordinary spreadsheet controller routing,
-  // so never assume an earlier controller import installed deterministic hardening.
-  deterministicBootstrap.install();
-
   const payload = decision.payload || {};
   if (payload.provider !== 'google' || !payload.url || !payload.sheetName) {
     const typed = typedErrors.normalize(Object.assign(new Error('Universal spreadsheet approval could not resolve its exact Google Sheet source.'), {
@@ -75,6 +71,10 @@ async function execute(decision) {
   }
 
   try {
+    // Approval re-entry is resolved before ordinary spreadsheet controller routing,
+    // so never assume an earlier controller import installed deterministic hardening.
+    deterministicBootstrap.install();
+
     const executionMode = payload.contactPhaseOrdinal
       ? `POC-${Number(payload.contactPhaseOrdinal)} diagnostic`
       : 'coordinated multi-POC production';
