@@ -870,9 +870,15 @@ function formatResult(result) {
     : '';
   const fallbackRows = fb.rowFailures
     ? (() => {
-        const samples = (fb.rowFailureAudit || []).slice(0, 4).map((item) =>
-          `row ${item.rowNumber || '?'} [${item.subsystem || 'UNIVERSAL'}/${item.type || 'INTERNAL'}] ${item.code || 'UNKNOWN'} @ ${item.stage || 'fallback-row-enrichment'}`
-        );
+        const samples = (fb.rowFailureAudit || []).slice(0, 4).map((item) => {
+          const error = Object.assign(new Error(item.message || 'Fallback row failed'), {
+            code: item.code || undefined,
+            subsystem: item.subsystem || undefined,
+            errorType: item.type || undefined,
+            stage: item.stage || 'fallback-row-enrichment',
+          });
+          return `row ${item.rowNumber || '?'}: ${typedErrors.format(typedErrors.normalize(error))}`;
+        });
         return ` Row fault containment captured ${fb.rowFailures} fallback row failure${Number(fb.rowFailures) === 1 ? '' : 's'}; ${fb.recoverableRowFailures || 0} continued safely.${samples.length ? ` Samples: ${samples.join('; ')}.` : ''}`;
       })()
     : '';
