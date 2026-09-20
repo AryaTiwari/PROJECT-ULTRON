@@ -62,4 +62,25 @@ const pickle = Object.assign(new Error('Big Pickle unavailable'), {
 const pickleTyped = errors.normalize(pickle, { stage: 'fallback-reasoning' });
 assert.equal(pickleTyped.subsystem, 'BIG_PICKLE');
 
+const humanTypeMatrix = [
+  ['APOLLO', 'RATE_LIMIT', 'Apollo rate limit reached'],
+  ['APOLLO', 'AUTH', 'Apollo authentication or API-key problem'],
+  ['APOLLO', 'PERMISSION', 'Apollo access permission denied'],
+  ['APOLLO', 'NETWORK', 'Apollo could not be reached'],
+  ['APOLLO', 'TIMEOUT', 'Apollo request timed out'],
+  ['APOLLO', 'CONFIG', 'Apollo is not configured correctly'],
+  ['GOOGLE_SHEETS', 'INVALID_RANGE', 'Google Sheets range is invalid'],
+  ['TARGETING', 'TARGETING', 'Worksheet name or tab could not be resolved'],
+  ['SCHEMA', 'SCHEMA', 'Spreadsheet columns could not be understood safely'],
+  ['LINKEDIN', 'NOT_FOUND', 'LinkedIn could not find the requested record'],
+  ['LINKEDIN', 'AMBIGUITY', 'LinkedIn found conflicting or ambiguous evidence'],
+  ['GEMINI', 'BAD_REQUEST', 'Gemini rejected the request as invalid'],
+  ['UNIVERSAL', 'RECURSION', 'ULTRON hit an internal recursive loop'],
+  ['NVIDIA', 'API', 'NVIDIA returned an API error'],
+  ['UNIVERSAL', 'INTERNAL', 'ULTRON enrichment encountered an internal error'],
+];
+for (const [subsystem, type, expected] of humanTypeMatrix) {
+  assert.equal(errors.humanTitleFor(subsystem, type, 'TEST_CODE', 'test failure'), expected);
+}
+
 console.log('Spreadsheet error taxonomy self-test passed: machine codes remain available for debugging while Apollo, Google Sheets, LinkedIn, targeting, schema and fallback failures render as plain-English problem names.');
