@@ -21,6 +21,7 @@ const voice = require('./core/voice-orchestrator');
 const nativeVoice = require('./core/native-voice-input');
 const multimodal = require('./core/multimodal');
 const commandControl = require('./core/command-control-plane');
+const enrichmentErrors = require('./core/spreadsheet-enrichment-errors');
 const fileVault = require('./core/file-vault');
 const { subscribe, emit } = require('./core/events');
 const proactive = require('./core/proactive');
@@ -347,7 +348,30 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET') return serve(req,res);
     return send(res,404,{ok:false,error:'Not found.'});
   } catch(error) {
-    if (!res.headersSent) return send(res,errorStatus(error),{ok:false,error:error.message,status:error.status||null,failures:error.failures||undefined});
+    if (!res.headersSent) {
+      const isChatRequest = req.method === 'POST' && req.url === '/api/chat';
+      if (isChatRequest) {
+        const typed = enrichmentErrors.normalize(error, {
+          stage: error?.stage || 'chat-request',
+        });
+        return send(res, errorStatus(error), {
+          ok: false,
+          error: enrichmentErrors.format(typed),
+          problem: typed.humanTitle,
+          explanation: typed.humanExplanation,
+          whatToDo: typed.hint,
+          errorCode: typed.code,
+          errorSubsystem: typed.subsystem,
+          errorType: typed.type,
+          errorStage: typed.stage,
+          status: error.status || null,
+          retryAttempts: typed.retryAttempts,
+          endpoint: typed.endpoint || null,
+          failures: error.failures || undefined,
+        });
+      }
+      return send(res,errorStatus(error),{ok:false,error:error.message,status:error.status||null,failures:error.failures||undefined});
+    }
     try{res.end();}catch{}
   }
 });
