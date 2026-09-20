@@ -29,6 +29,8 @@ const ISSUE_TITLES = Object.freeze({
   POC3_REQUESTED_UNRESOLVED: 'Requested POC-3 could not be safely verified',
   OPTIONAL_POC3_UNRESOLVED: 'Optional POC-3 was not filled',
   IDENTITY_CONFLICT_WRITE_BLOCKED: 'A contact write was blocked because the identity evidence conflicted',
+  AI_SELECTION_ABSTAINED: 'AI could not safely choose a verified candidate',
+  AI_SELECTION_REJECTED_AFTER_VERIFICATION: 'AI suggestion failed final identity or employer verification',
 });
 
 function issueTitle(code, fallbackMessage = '') {
@@ -235,6 +237,24 @@ const ISSUE_CATALOG = Object.freeze({
     retryable: false,
     message: 'Optional POC-3 was not filled.',
     nextAction: 'No action is required unless a third contact is explicitly desired.',
+  },
+  'ai-selection-abstained': {
+    code: 'AI_SELECTION_ABSTAINED',
+    category: 'ai',
+    severity: 'WARNING',
+    blocking: false,
+    retryable: true,
+    message: 'AI received verified candidates but did not choose a safe candidate for at least one requested slot.',
+    nextAction: 'Keep deterministic verification authoritative and retry only if the verified candidate pool changes.',
+  },
+  'selection-rejected-after-verification': {
+    code: 'AI_SELECTION_REJECTED_AFTER_VERIFICATION',
+    category: 'ai',
+    severity: 'WARNING',
+    blocking: false,
+    retryable: true,
+    message: 'AI proposed a supplied candidate, but final identity, employer, duplicate, or write-safety checks rejected it.',
+    nextAction: 'Inspect the verified candidate pool and final safety rejection; do not bypass deterministic verification.',
   },
   'identity-conflict': {
     code: 'IDENTITY_CONFLICT_WRITE_BLOCKED',
