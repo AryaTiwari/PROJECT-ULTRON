@@ -15,15 +15,17 @@ function combined(error) {
     error?.stack,
     error?.cause?.code,
     error?.cause?.message,
+    error?.status,
+    error?.endpoint,
   ].map(text).filter(Boolean).join(' ');
 }
 
 function subsystemFor(error, context = {}) {
   const explicit = text(error?.subsystem || context.subsystem).toUpperCase();
   if (explicit) return explicit;
-  const value = combined(error).toUpperCase();
-  if (/APOLLO/.test(value) || /apollo-enrichment/i.test(error?.stack || '')) return 'APOLLO';
-  if (/GOOGLE_SHEETS|GOOGLE SHEETS|google-sheets/i.test(value)) return 'GOOGLE_SHEETS';
+  const value = `${combined(error)} ${text(context.endpoint)}`.toUpperCase();
+  if (/APOLLO|API\.APOLLO\.IO/.test(value) || /apollo-enrichment/i.test(error?.stack || '')) return 'APOLLO';
+  if (/GOOGLE_SHEETS|GOOGLE SHEETS|google-sheets|SHEETS\.GOOGLEAPIS\.COM/i.test(value)) return 'GOOGLE_SHEETS';
   if (/BIG_PICKLE|BIG PICKLE|big-pickle|omniroute/i.test(value)) return 'BIG_PICKLE';
   if (/LINKEDIN|linkedin-/i.test(value)) return 'LINKEDIN';
   if (/GEMINI/.test(value)) return 'GEMINI';
@@ -41,6 +43,10 @@ function typeFor(error, subsystem) {
   if (explicit) return explicit;
   const code = text(error?.code).toUpperCase();
   const value = combined(error).toUpperCase();
+  const status = Number(error?.status || error?.providerStatus || 0);
+  if (status === 429) return 'RATE_LIMIT';
+  if (status === 401) return 'AUTH';
+  if (status === 403) return 'PERMISSION';
   if (/AUTH|UNAUTHENTICATED|INVALID_GRANT|TOKEN|CREDENTIAL|API[_ -]?KEY/.test(`${code} ${value}`)) return 'AUTH';
   if (/FORBIDDEN|PERMISSION|ACCESS_REQUIRED|ACCESS DENIED/.test(`${code} ${value}`)) return 'PERMISSION';
   if (/RATE_LIMIT|RESOURCE_EXHAUSTED|429|QUOTA|DAILY_CAP|HOURLY_CAP|SAFETY_CAP/.test(`${code} ${value}`)) return 'RATE_LIMIT';
