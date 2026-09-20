@@ -14,6 +14,8 @@ assert.match(controllerSource, /approvalHandler\.OPERATION/);
 assert.doesNotMatch(controllerSource, /agentic-three-poc-enrichment/);
 assert.doesNotMatch(controllerSource, /legacyThreePoc|REQUEST_FLAG|universalCompatibilityRun/);
 assert.match(handlerSource, /const OPERATION = 'universal-spreadsheet-enrichment'/);
+assert.match(handlerSource, /const deterministicBootstrap = require\('\.\/universal-deterministic-bootstrap'\)/);
+assert.match(handlerSource, /deterministicBootstrap\.install\(\)/);
 assert.match(handlerSource, /paidTools\.withPermit\(decision/);
 assert.match(handlerSource, /universal\.run\(/);
 assert.doesNotMatch(handlerSource, /three-poc-enrichment-operator|handleThreePocCommand/);
@@ -23,6 +25,9 @@ assert.match(handlerSource, /owner: 'command-control-plane'/);
 assert.match(controlSource, /async function resolveUniversalPaidApproval/);
 assert.match(controlSource, /paidTools\.resolveMessage/);
 assert.match(controlSource, /handler\.execute\(decision\)/);
+assert.match(controlSource, /try \{[\s\S]*?result = await handler\.execute\(decision\)/);
+assert.match(controlSource, /typedErrors\.normalize\(error,[\s\S]*?approval-reentry-dispatch/);
+assert.match(controlSource, /Universal spreadsheet approval re-entry stopped safely/);
 assert.match(controlSource, /const paidApprovalResult = await resolveUniversalPaidApproval\(originalMessage\)/);
 assert.match(controlSource, /if \(paidApprovalResult\) return paidApprovalResult/);
 assert.match(controlSource, /controller: 'universal-spreadsheet-domain-controller'/);
@@ -94,4 +99,4 @@ const googleThreePocRoute = control.claim(
 assert.equal(googleThreePocRoute.domain, 'three-poc-spreadsheet');
 assert.equal(googleThreePocRoute.controller, 'three-poc-domain-controller');
 
-console.log('Universal approval routing self-test passed: the Gaurav 2 full-sheet command is first-class, approval re-entry is command-control owned, pre-approval inspection is values/schema-only, explicit legacy 3-POC compatibility stays isolated, and typed inspection errors expose the canonical subsystem/type/code/stage contract.');
+console.log('Universal approval routing self-test passed: approval re-entry installs deterministic hardening, handler failures are typed before the HTTP boundary, the Gaurav 2 full-sheet command remains first-class, pre-approval inspection is values/schema-only, explicit legacy 3-POC compatibility stays isolated, and typed inspection errors expose the canonical subsystem/type/code/stage contract.');
