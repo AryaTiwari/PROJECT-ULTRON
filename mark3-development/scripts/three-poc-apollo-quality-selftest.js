@@ -45,6 +45,8 @@ assert.match(source, /function pendingPhoneWaterfallRequestId/);
 assert.match(source, /function carryLegacyPhoneRequest/);
 assert.match(source, /const pendingWasCarried = Boolean/);
 assert.match(source, /result\?\.phoneWaterfallRequestId/);
+assert.match(source, /apollo\.fetchApolloResponse/);
+assert.doesNotMatch(source, /\bawait fetch\(/, 'contact-quality Apollo traffic must use the typed retry helper');
 assert.doesNotMatch(source, /apollo\.enrich\s*=/, 'generic Apollo enrich must not be monkey-patched');
 assert.match(controller, /apollo-three-poc-quality/);
 assert.match(controller, /apolloQuality\.startRun\(\)/);
