@@ -154,6 +154,26 @@ assert.equal(
   'LinkedIn safety cooldown is active',
 );
 
+const linkedinDaily = normalized(Object.assign(new Error('LinkedIn daily safety cap reached'), {
+  code: 'LINKEDIN_DAILY_CAP',
+  subsystem: 'LINKEDIN',
+}));
+assert.equal(linkedinDaily.humanTitle, 'LinkedIn daily safety limit reached');
+assert.equal(linkedinDaily.type, 'RATE_LIMIT');
+assert.match(linkedinDaily.hint, /daily/i);
+assert.match(linkedinDaily.hint, /(reset|wait)/i);
+assert.match(linkedinDaily.hint, /(do not bypass|account-safety)/i);
+
+const linkedinHourly = normalized(Object.assign(new Error('LinkedIn hourly safety cap reached'), {
+  code: 'LINKEDIN_HOURLY_CAP',
+  subsystem: 'LINKEDIN',
+}));
+assert.equal(linkedinHourly.humanTitle, 'LinkedIn hourly safety limit reached');
+assert.equal(linkedinHourly.type, 'RATE_LIMIT');
+assert.match(linkedinHourly.hint, /hourly/i);
+assert.match(linkedinHourly.hint, /(reset|wait)/i);
+assert.match(linkedinHourly.hint, /(do not bypass|account-safety)/i);
+
 assert.equal(
   title(Object.assign(new Error('Another LinkedIn MCP client is currently using the browser'), {
     code: 'LINKEDIN_MCP_TOOL_ERROR',
@@ -219,4 +239,4 @@ for (const sample of [
   assert.doesNotMatch(sample, /[A-Z]{3,}_[A-Z0-9_]+/, 'human problem names must not expose machine error codes');
 }
 
-console.log('Human error vocabulary self-test passed: provider limits, auth failures, network failures, LinkedIn safety states, worksheet targeting, schema failures, candidate exhaustion and internal recursion are named in plain English with a clear explanation and next action.');
+console.log('Human error vocabulary self-test passed: provider limits, auth failures, network failures, LinkedIn safety states and daily/hourly caps, worksheet targeting, schema failures, candidate exhaustion and internal recursion are named in plain English with a clear explanation and next action.');
