@@ -1,9 +1,41 @@
 'use strict';
 
+const typedErrors = require('./spreadsheet-enrichment-errors');
+
 // Canonical problem vocabulary for universal spreadsheet enrichment.
 // Human-readable reports may change; these codes are the stable debugging contract.
 
 function text(value) { return String(value == null ? '' : value).trim(); }
+
+const ISSUE_TITLES = Object.freeze({
+  EMPLOYER_NOT_VERIFIED: 'Hiring company could not be verified',
+  POC2_NO_DISCOVERY_CANDIDATES: 'No safe POC-2 candidates were found',
+  POC2_CANDIDATES_FAILED_VERIFICATION: 'POC-2 candidates were found but none passed verification',
+  EXISTING_CONTACT_REPAIR_UNRESOLVED: 'Existing contact could not be safely completed',
+  ROW_LOCAL_RECOVERABLE_FAILURE: 'One row failed but the rest of the sheet continued',
+  EMPLOYER_UNRESOLVED_AFTER_ALL_STRATEGIES: 'Hiring company could not be verified after all safe strategies',
+  POC2_NO_VERIFIED_CANDIDATE_AFTER_ALL_STRATEGIES: 'No verified same-company POC-2 could be found',
+  POC1_ANCHOR_MISSING: 'Primary contact anchor is missing',
+  POC1_NAME_MISSING: 'Primary contact name is missing',
+  POC1_LINKEDIN_MISSING: 'Primary contact LinkedIn identity is missing',
+  APOLLO_DISCOVERY_FAILED_FOR_POC2: 'Apollo discovery failed before POC-2 candidates could be built',
+  AI_NO_VERIFIED_CANDIDATE_POOL: 'AI had no verified candidates to choose from',
+  AI_TARGET_NOT_OFFERED_TO_SELECTION: 'AI selection was skipped because no safe candidate package existed',
+  AI_SKIPPED_NO_VERIFIED_CANDIDATE_POOL: 'AI selection was skipped because no verified candidate pool existed',
+  POC2_LAST_RESORT_RETRYABLE_FAILURE: 'POC-2 last-resort retry failed for a recoverable reason',
+  LAST_RESORT_SYSTEMIC_HALT: 'The final fallback stopped because a provider or routing system failed',
+  PHONE_CALLBACK_PENDING: 'Phone lookup is still waiting for the provider callback',
+  PHONE_SYNC_ERROR: 'Phone callback synchronization failed',
+  POC3_REQUESTED_UNRESOLVED: 'Requested POC-3 could not be safely verified',
+  OPTIONAL_POC3_UNRESOLVED: 'Optional POC-3 was not filled',
+  IDENTITY_CONFLICT_WRITE_BLOCKED: 'A contact write was blocked because the identity evidence conflicted',
+});
+
+function issueTitle(code, fallbackMessage = '') {
+  return ISSUE_TITLES[text(code).toUpperCase()]
+    || text(fallbackMessage).replace(/[.:]+$/, '')
+    || 'Enrichment stage needs attention';
+}
 
 const ISSUE_CATALOG = Object.freeze({
   'employer-unresolved': {
@@ -237,6 +269,7 @@ function issueFromReason(reason, context = {}) {
   const groupOrdinal = Number(context.groupOrdinal || 0) || null;
   return {
     ...spec,
+    humanTitle: issueTitle(spec.code, spec.message),
     rawReason,
     rowNumber: Number.isInteger(rowNumber) ? rowNumber : null,
     groupOrdinal,
@@ -272,9 +305,13 @@ function typedIssue(value = {}, context = {}) {
   const subsystem = text(value.subsystem || context.subsystem || 'UNIVERSAL').toUpperCase();
   const type = text(value.type || context.type || 'INTERNAL').toUpperCase();
   const stage = text(value.stage || context.stage || 'unspecified-stage');
-  const message = text(value.message || context.message || 'A typed system/provider error occurred.');
+  const message = text(value.message || context.message || 'A system or provider error occurred.');
+  const humanTitle = typedErrors.humanTitleFor(subsystem, type, code, message);
+  const humanExplanation = typedErrors.humanExplanationFor(subsystem, type, code, message);
   return {
     code,
+    humanTitle,
+    humanExplanation,
     category: text(context.category || 'system'),
     severity: text(context.severity || 'BLOCKER'),
     blocking: context.blocking !== false,
@@ -285,11 +322,12 @@ function typedIssue(value = {}, context = {}) {
       ? Number(context.rowNumber)
       : null,
     groupOrdinal: Number(context.groupOrdinal || 0) || null,
-    target: text(context.target || subsystem),
+    target: text(context.target || typedErrors.subsystemLabel(subsystem)),
     company: text(context.company),
-    detail: `[${subsystem}/${type}] @ ${stage}: ${message}`.slice(0, 500),
+    detail: humanExplanation.slice(0, 500),
     message,
-    nextAction: text(value.hint || context.nextAction || 'Fix the typed subsystem error, then retry only the affected stage.'),
+    nextAction: text(value.hint || context.nextAction || typedErrors.hintFor(subsystem, type, code)),
+    debug: { code, subsystem, type, stage },
   };
 }
 
@@ -365,13 +403,17 @@ function formatIssue(issue = {}) {
     ? `[ROW ${Number(issue.rowNumber)}]`
     : '';
   const target = text(issue.target) ? `[${text(issue.target)}]` : '';
-  const detail = text(issue.detail) ? ` Evidence: ${text(issue.detail)}` : '';
-  const next = text(issue.nextAction) ? ` Next: ${text(issue.nextAction)}` : '';
-  return `[${text(issue.severity) || 'INFO'}]${scope}${target} ${text(issue.code) || 'UNCLASSIFIED_ENRICHMENT_ISSUE'}: ${text(issue.message) || 'Unclassified enrichment issue.'}${detail}${next}`.trim();
+  const title = text(issue.humanTitle) || issueTitle(issue.code, issue.message);
+  const detailValue = text(issue.humanExplanation || issue.detail);
+  const detail = detailValue ? ` Details: ${detailValue}` : '';
+  const next = text(issue.nextAction) ? ` What to do: ${text(issue.nextAction)}` : '';
+  return `[${text(issue.severity) || 'INFO'}]${scope}${target} ${title}.${detail}${next}`.trim();
 }
 
 module.exports = {
   ISSUE_CATALOG,
+  ISSUE_TITLES,
+  issueTitle,
   issueFromReason,
   typedIssue,
   classifyLeftovers,
