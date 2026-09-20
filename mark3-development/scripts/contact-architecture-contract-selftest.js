@@ -96,7 +96,7 @@ assert.match(spreadsheetController, /Apollo native phone reveal with webhook set
 assert.match(spreadsheetController, /custom poll_only phone waterfall is experimental\/legacy-only/);
 
 assert.match(errorVocabulary, /function humanTitleFor/);
-assert.match(errorVocabulary, /Apollo rate limit reached/);
+assert.match(errorVocabulary, /if \(t === 'RATE_LIMIT'\) return \`\$\{label\} rate limit reached\`/);
 assert.match(errorVocabulary, /Google Sheets authorization expired or is invalid/);
 assert.match(errorVocabulary, /LinkedIn browser is already busy/);
 assert.match(errorVocabulary, /return \`Problem: \${typed\.humanTitle}/);
