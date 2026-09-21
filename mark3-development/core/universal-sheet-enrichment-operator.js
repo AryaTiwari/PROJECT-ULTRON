@@ -3087,6 +3087,23 @@ async function run(request = {}, options = {}) {
       // Fill missing identities before spending time repairing contact-only gaps.
       // This makes useful sheet progress visible early while retaining the exact
       // same-person checks for every existing contact repair.
+      // Commit the verified identity writes now. Contact repair can involve
+      // slower provider calls, and holding these writes until the whole row is
+      // finished makes the sheet appear stalled and loses safe progress if a
+      // later lookup times out.
+      let rowHadChanges = false;
+      const identityByColumn = new Map();
+      for (const write of writes) if (!identityByColumn.has(write.columnIndex)) identityByColumn.set(write.columnIndex, write);
+      const identityWrites = [...identityByColumn.values()];
+      const identityChanges = toSheetChanges(source.sheetName, rowNumber, identityWrites);
+      if (identityChanges.length) {
+        await liveWrites.writeVerifiedRow(source, rowNumber, row, identityChanges);
+        for (const write of identityWrites) row[write.columnIndex] = write.value;
+        stats.cellsChanged += identityChanges.length;
+        rowHadChanges = true;
+        writes.length = 0;
+      }
+
       const repairOptions = { ...runOptions, rowNumber, candidatePool: people, targetOrdinals: phaseOrdinals };
       const verificationFailuresBefore = Number(stats.existingVerificationFailures || 0);
       writes.push(...await repairExistingGroups(row, plan, companyContext, stats, repairOptions));
@@ -3102,9 +3119,10 @@ async function run(request = {}, options = {}) {
       const changes = toSheetChanges(source.sheetName, rowNumber, [...byColumn.values()]);
       if (changes.length) {
         await liveWrites.writeVerifiedRow(source, rowNumber, row, changes);
-        stats.rowsChanged++;
         stats.cellsChanged += changes.length;
+        rowHadChanges = true;
       }
+      if (rowHadChanges) stats.rowsChanged++;
       stats.rowsProcessed++;
       stats.consecutiveTransientProviderFailures = 0;
     } catch (error) {
