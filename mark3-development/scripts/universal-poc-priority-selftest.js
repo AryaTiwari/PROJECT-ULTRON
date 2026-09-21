@@ -19,6 +19,13 @@ const candidates = [
   { id: 'other-company', name: 'Other Director', title: 'Director', organizationName: 'Wrong Company', organizationDomain: 'wrong.example' },
 ];
 
+const prioritizedRows = base.prioritizeIdentityGapRows([
+  { rowNumber: 2, plan: { groups: { open: [], partial: [] } } },
+  { rowNumber: 3, plan: { groups: { open: [{ isAnchor: false, group: { id: 'poc3', ordinal: 3 } }], partial: [] } } },
+  { rowNumber: 4, plan: { groups: { open: [{ isAnchor: false, group: { id: 'poc2', ordinal: 2 } }], partial: [] } } },
+], null, null);
+assert.deepEqual(prioritizedRows.map((row) => row.rowNumber), [4, 3, 2], 'mandatory POC-2 and other identity gaps must run before contact-only repair rows');
+
 const ordered = base.manualPriorityCandidates(candidates, companyContext, existing);
 assert.deepEqual(
   ordered.map((item) => item.id),
@@ -331,7 +338,7 @@ assert.match(operatorSource, /allowLinkedInEmployerFallback: false/);
 const runSource = operatorSource.slice(operatorSource.indexOf('async function run(request = {}, options = {})'));
 const exactRepairIndex = runSource.indexOf('repairExistingGroups(row, plan, companyContext, stats, repairOptions)');
 const prioritySearchIndex = runSource.indexOf('discoverPriorityPeopleFast(companyContext, cache, stats');
-assert.ok(exactRepairIndex >= 0 && prioritySearchIndex > exactRepairIndex, 'existing POC exact repair must happen before candidate discovery');
+assert.ok(prioritySearchIndex >= 0 && exactRepairIndex > prioritySearchIndex, 'missing identity discovery must happen before slower contact-only repair');
 assert.match(runSource, /const openPersonTargets = candidateFillTargets\(plan\)/);
 assert.match(runSource, /const poc2Targets = openPersonTargets\.filter/);
 assert.match(runSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?openPersonTargets/);

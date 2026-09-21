@@ -1095,26 +1095,28 @@ async function repairExistingContactFromPublicIndex(item, companyContext, stats,
     }
   };
 
-  if (leadSources.status()?.serpApiConfigured) {
+  // Keyless direct search is the default. SerpApi is opt-in only so a worksheet
+  // run cannot silently consume a monthly paid-search allowance.
+  if (web.status()?.configured) {
     for (const query of queries) {
       if (refs.size >= 4) break;
       try {
-        const result = await leadSources.serpSearch(query, { limit: 10, timeoutMs: 15000 });
+        const result = await web.searchWeb(query, { limit: 10, timeoutMs: 10000 });
         stats.existingPublicIndexSearches = Number(stats.existingPublicIndexSearches || 0) + 1;
-        addItems(result?.results, 'serpapi-google');
+        addItems(result?.results, result?.provider || 'direct-public-search');
       } catch (error) {
         stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
       }
     }
   }
 
-  if (!refs.size && web.status()?.configured) {
+  if (!refs.size && serpApiPublicFallbackEnabled(options) && leadSources.status()?.serpApiConfigured) {
     for (const query of queries) {
       if (refs.size >= 4) break;
       try {
-        const result = await web.searchWeb(query, { limit: 10, timeoutMs: 12000 });
+        const result = await leadSources.serpSearch(query, { limit: 10, timeoutMs: 15000 });
         stats.existingPublicIndexSearches = Number(stats.existingPublicIndexSearches || 0) + 1;
-        addItems(result?.results, 'tinyfish-search');
+        addItems(result?.results, 'serpapi-google');
       } catch (error) {
         stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
       }
@@ -1749,6 +1751,12 @@ function publicIndexFallbackEnabled(options = {}) {
   return !/^(0|false|no|off)$/i.test(String(process.env.ULTRON_M3_UNIVERSAL_PUBLIC_INDEX_FALLBACK ?? '1').trim());
 }
 
+function serpApiPublicFallbackEnabled(options = {}) {
+  if (options.serpApiFallback === true) return true;
+  if (options.serpApiFallback === false) return false;
+  return /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_SERPAPI_FALLBACK || '').trim());
+}
+
 function publicIndexQueries(companyContext = {}) {
   const company = text(companyContext?.company || companyContext?.domain || '').replace(/"/g, '').trim();
   if (!company) return [];
@@ -1843,8 +1851,28 @@ async function discoverPublicIndexPeople(companyContext, stats, options = {}) {
     }
   };
 
-  const serpReady = Boolean(leadSources.status()?.serpApiConfigured);
-  if (serpReady) {
+  if (web.status()?.configured) {
+    for (const query of queries.slice(0, 3)) {
+      if (refs.size >= 12) break;
+      try {
+        const result = await web.searchWeb(query, { limit: 10, timeoutMs: 10000 });
+        stats.publicIndexSearchCalls = Number(stats.publicIndexSearchCalls || 0) + 1;
+        addItems(result?.results, result?.provider || 'direct-public-search');
+      } catch (error) {
+        stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
+        stats.discoveryDiagnostics.push({
+          company: companyContext?.company || companyContext?.domain || '',
+          code: String(error?.code || 'DIRECT_PUBLIC_LINKEDIN_SEARCH_FAILED'),
+          subsystem: 'PUBLIC_SEARCH',
+          type: String(error?.errorType || 'API'),
+          stage: 'public-linkedin-index-search',
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
+    }
+  }
+
+  if (!refs.size && serpApiPublicFallbackEnabled(options) && leadSources.status()?.serpApiConfigured) {
     for (const query of queries) {
       if (refs.size >= 12) break;
       try {
@@ -1865,27 +1893,6 @@ async function discoverPublicIndexPeople(companyContext, stats, options = {}) {
     }
   }
 
-  if (!refs.size && web.status()?.configured) {
-    for (const query of queries.slice(0, 3)) {
-      if (refs.size >= 12) break;
-      try {
-        const result = await web.searchWeb(query, { limit: 10, timeoutMs: 12000 });
-        stats.publicIndexSearchCalls = Number(stats.publicIndexSearchCalls || 0) + 1;
-        addItems(result?.results, 'tinyfish-search');
-      } catch (error) {
-        stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
-        stats.discoveryDiagnostics.push({
-          company: companyContext?.company || companyContext?.domain || '',
-          code: String(error?.code || 'TINYFISH_PUBLIC_LINKEDIN_SEARCH_FAILED'),
-          subsystem: 'TINYFISH',
-          type: String(error?.errorType || 'API'),
-          stage: 'public-linkedin-index-search',
-          message: String(error?.message || error || '').slice(0, 300),
-        });
-      }
-    }
-  }
-
   const records = [...refs.values()].slice(0, integer(
     options.publicIndexVerifyLimit ?? process.env.ULTRON_M3_UNIVERSAL_PUBLIC_INDEX_VERIFY_LIMIT,
     8,
@@ -1895,12 +1902,14 @@ async function discoverPublicIndexPeople(companyContext, stats, options = {}) {
   stats.publicIndexProfilesFound = Number(stats.publicIndexProfilesFound || 0) + records.length;
   if (!records.length) return [];
 
-  const verified = [];
-  for (const record of records) {
-    const candidate = await verifyPublicIndexPerson(record, companyContext, stats);
-    if (!candidate) continue;
-    verified.push(candidate);
-  }
+  const verifiedOutcomes = await runContext.settledMap(
+    records,
+    (record) => verifyPublicIndexPerson(record, companyContext, stats),
+    integer(options.publicIndexVerifyConcurrency ?? process.env.ULTRON_M3_PUBLIC_INDEX_VERIFY_CONCURRENCY, 4, 1, 6),
+  );
+  const verified = verifiedOutcomes
+    .filter((outcome) => outcome.status === 'fulfilled' && outcome.value)
+    .map((outcome) => outcome.value);
   stats.publicIndexApolloVerifiedCandidates = Number(stats.publicIndexApolloVerifiedCandidates || 0) + verified.length;
   return verified;
 }
@@ -2131,9 +2140,15 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     }
   }
 
-  // 5. Authenticated LinkedIn is useful but no longer a single point of failure.
-  // A local/account safety stop is recorded, then public-index discovery may
-  // continue without touching the authenticated LinkedIn session.
+  // 5. Use keyless public indexing before authenticated LinkedIn. It is faster,
+  // cached, and does not consume LinkedIn safety budget. Every returned identity
+  // still passes exact Apollo person and current-employer verification.
+  if (merged.length < minimumUsefulPool && publicIndexFallbackEnabled(options)) {
+    const publicPeople = await discoverPublicIndexPeople(companyContext, stats, options);
+    add(publicPeople);
+  }
+
+  // 6. Authenticated LinkedIn is the final sparse-company identity fallback.
   if (merged.length < minimumUsefulPool && linkedinZeroResultFallbackEnabled(options)) {
     try {
       const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, options);
@@ -2159,14 +2174,6 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
         });
       }
     }
-  }
-
-  // 6. Public-index emergency fallback. SerpApi is preferred; TinyFish is used
-  // when configured and SerpApi yields no profile references. Every candidate
-  // must still survive exact Apollo identity + employer verification.
-  if (merged.length < minimumUsefulPool && publicIndexFallbackEnabled(options)) {
-    const publicPeople = await discoverPublicIndexPeople(companyContext, stats, options);
-    add(publicPeople);
   }
 
   stats.candidatesDiscovered += merged.length;
@@ -2758,6 +2765,22 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
   return primary;
 }
 
+function prioritizeIdentityGapRows(records = [], targetRows = null, phaseOrdinal = null) {
+  const priority = (record) => {
+    if (targetRows && !targetRows.has(Number(record?.rowNumber))) return -1;
+    const open = candidateFillTargets(record?.plan || {}).filter((target) =>
+      !target.isAnchor && (!phaseOrdinal || Number(target.group?.ordinal || 0) === Number(phaseOrdinal))
+    );
+    if (!open.length) return 0;
+    const mandatoryPoc2 = open.some((target) => Number(target.group?.ordinal || 0) === 2);
+    return 100 + (mandatoryPoc2 ? 20 : 0) + open.length;
+  };
+  return [...records]
+    .map((record, index) => ({ record, index, priority: priority(record) }))
+    .sort((a, b) => b.priority - a.priority || a.index - b.index)
+    .map((item) => item.record);
+}
+
 async function run(request = {}, options = {}) {
   const sheetUrl = request.sheetUrl || request.url;
   if (!sheetUrl) throw new Error('Universal enrichment requires a Google Sheet URL.');
@@ -2820,7 +2843,8 @@ async function run(request = {}, options = {}) {
     ? new Set(options.targetRows.map((value) => Number(value)).filter(Number.isInteger))
     : null;
 
-  for (const record of analysis.rowPlans) {
+  const executionRecords = prioritizeIdentityGapRows(analysis.rowPlans, targetRows, phaseOrdinal);
+  for (const record of executionRecords) {
     const { row, rowNumber, plan } = record;
     if (targetRows && !targetRows.has(Number(rowNumber))) continue;
     require('./universal-run-context').processed(source, rowNumber);
@@ -2933,19 +2957,6 @@ async function run(request = {}, options = {}) {
 
       const poc2Targets = openPersonTargets.filter((target) => Number(target.group?.ordinal || 0) === 2);
       const poc3Targets = openPersonTargets.filter((target) => Number(target.group?.ordinal || 0) >= 3);
-
-      // Existing/partial POCs are exact-person repair jobs, not discovery jobs.
-      // Verify them directly by LinkedIn or exact name+company before spending any
-      // Apollo people-search calls. This is especially important for missing phones.
-      const repairOptions = { ...runOptions, rowNumber, candidatePool: [], targetOrdinals: phaseOrdinals };
-      const verificationFailuresBefore = Number(stats.existingVerificationFailures || 0);
-      writes.push(...await repairExistingGroups(row, plan, companyContext, stats, repairOptions));
-      if (Number(stats.existingVerificationFailures || 0) > verificationFailuresBefore) {
-        markLeftover(stats, rowNumber, 'existing-contact-repair-unresolved', {
-          company: companyContext.company,
-          detail: 'At least one existing contact could not be exactly re-verified/repaired in this pass.',
-        });
-      }
 
       // Mandatory POC-2 always gets the deterministic/manual discovery path first.
       // AI is rescue only. POC-3 may reuse this same pool but never triggers its own search.
@@ -3071,6 +3082,19 @@ async function run(request = {}, options = {}) {
             stats.optionalPoc3Deferred += poc3Targets.length;
           }
         }
+      }
+
+      // Fill missing identities before spending time repairing contact-only gaps.
+      // This makes useful sheet progress visible early while retaining the exact
+      // same-person checks for every existing contact repair.
+      const repairOptions = { ...runOptions, rowNumber, candidatePool: people, targetOrdinals: phaseOrdinals };
+      const verificationFailuresBefore = Number(stats.existingVerificationFailures || 0);
+      writes.push(...await repairExistingGroups(row, plan, companyContext, stats, repairOptions));
+      if (Number(stats.existingVerificationFailures || 0) > verificationFailuresBefore) {
+        markLeftover(stats, rowNumber, 'existing-contact-repair-unresolved', {
+          company: companyContext.company,
+          detail: 'At least one existing contact could not be exactly re-verified/repaired in this pass.',
+        });
       }
 
       const byColumn = new Map();
@@ -3256,6 +3280,7 @@ module.exports = {
   discoverLinkedInFallbackPeople,
   verifyLinkedInCompanyEmployee,
   publicIndexFallbackEnabled,
+  serpApiPublicFallbackEnabled,
   publicIndexQueries,
   publicIndexRecord,
   verifyPublicIndexPerson,
@@ -3275,6 +3300,7 @@ module.exports = {
   freshStats,
   markLeftover,
   mergeDeterministicRecheckStats,
+  prioritizeIdentityGapRows,
   run,
   formatResult,
 };

@@ -107,10 +107,10 @@ if (typeof integrations.githubSelfStatus!=='function' || typeof founderBehavior.
 if (!selfRepository.isSelfRepositoryStatusIntent('Ultron check your own get hub for an update')) throw new Error('Self-GitHub voice intent regressed.');
 if (!conversation.isContinuation('finish it now') || !conversation.isContinuation('just do it')) throw new Error('Continuation recovery regressed.');
 if (handoff.responseDelivery('Anything else, Sir?').listenAfterResponseMs < 7000) throw new Error('Direct questions lost their no-wake reply window.');
-if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must remain primary public research.');
+if (web.status().primary !== 'direct-bing-html' || web.status().directSearch?.apiKeyRequired !== false) throw new Error('Keyless direct public search must remain primary.');
 if (typeof multimodal.generate!=='function' || typeof multimodal.readFile!=='function' || multimodal.generationIntent('Ultron make a PDF report')?.kind!=='pdf') throw new Error('Multimodal core API is incomplete.');
 if (!fileVault.status().maxFileBytes || typeof nativeVoice.transcribe!=='function') throw new Error('File vault/native voice APIs are incomplete.');
 
-if (!web.status().configured) console.warn('[Mark 3] TinyFish warning: TINYFISH_API_KEY was not detected; live web search will be unavailable.');
-else console.log('[Mark 3] TinyFish web layer configured: Fetch + Search enabled.');
+if (!web.status().configured) console.warn('[Mark 3] Public web search is unavailable.');
+else console.log(`[Mark 3] Public web search ready: ${web.status().primary}; TinyFish fallback=${web.status().tinyfishConfigured ? 'configured' : 'off'}.`);
 console.log(`ULTRON Mark 3 beta.22 preflight passed: ${required.length} Mark 3 files, ${sharedTransport.length} shared transport files and ${js.length+sharedJs.length} JavaScript files validated.`);

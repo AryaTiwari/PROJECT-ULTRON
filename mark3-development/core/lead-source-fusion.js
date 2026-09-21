@@ -27,11 +27,12 @@ function boundedNumber(name, fallback, min, max) {
 }
 
 function status() {
+  const serpFallback = /^(1|true|yes|on)$/i.test(String(process.env.ULTRON_M3_SERPAPI_FALLBACK || '').trim());
   return {
     serpApiConfigured: Boolean(serpApiKey()),
     apifyConfigured: Boolean(apifyApiKey()),
     serpGoogleJobs: Boolean(serpApiKey()),
-    serpGoogleFallback: Boolean(serpApiKey()),
+    serpGoogleFallback: Boolean(serpApiKey() && serpFallback),
     apifyGoogleMaps: Boolean(apifyApiKey()),
     apifyActor: String(process.env.APIFY_GOOGLE_MAPS_ACTOR || DEFAULT_MAPS_ACTOR).trim(),
     maxJobSignals: boundedNumber('ULTRON_M3_SERP_JOBS_MAX_RESULTS', 18, 3, 40),

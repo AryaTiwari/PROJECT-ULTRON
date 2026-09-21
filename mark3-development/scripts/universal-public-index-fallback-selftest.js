@@ -6,6 +6,7 @@ const operator = require('../core/universal-sheet-enrichment-operator');
 const leadSources = require('../core/lead-source-fusion');
 const web = require('../core/web');
 const apollo = require('../core/apollo-enrichment');
+const directSearch = require('../core/direct-web-search');
 
 const originalLeadStatus = leadSources.status;
 const originalSerpSearch = leadSources.serpSearch;
@@ -54,14 +55,14 @@ async function runSerpCase() {
   const people = await operator.discoverPublicIndexPeople(
     { company: COMPANY, domain: '' },
     stats,
-    { publicIndexVerifyLimit: 8 }
+    { publicIndexVerifyLimit: 8, serpApiFallback: true }
   );
 
   assert.equal(people.length, 1, 'SerpApi public-index candidate should survive exact Apollo employer verification.');
   assert.equal(people[0].publicIndexApolloVerified, true);
   assert.equal(people[0].organizationName, COMPANY);
   assert.ok(serpCalls >= 1);
-  assert.equal(tinyfishCalls, 0, 'TinyFish should be fallback-only when SerpApi already yields profile refs.');
+  assert.ok(tinyfishCalls >= 1, 'Keyless direct search must run before opt-in SerpApi fallback.');
   assert.ok(stats.publicIndexProfilesFound >= 1);
   assert.equal(stats.publicIndexApolloVerifiedCandidates, 1);
 }
@@ -148,7 +149,7 @@ async function runExistingRepairCase() {
         phone: '',
       },
     },
-  }, { company: COMPANY, domain: '' }, stats, {});
+  }, { company: COMPANY, domain: '' }, stats, { serpApiFallback: true });
 
   assert.ok(person, 'existing named contact should be recoverable through exact-name public index + Apollo verification');
   assert.equal(person.apolloPersonId, 'apollo-existing-jane');
@@ -176,7 +177,7 @@ async function runMismatchCase() {
   const people = await operator.discoverPublicIndexPeople(
     { company: COMPANY, domain: '' },
     stats,
-    { publicIndexVerifyLimit: 8 }
+    { publicIndexVerifyLimit: 8, serpApiFallback: true }
   );
 
   assert.equal(people.length, 0, 'Public-index discovery must never write a person whose Apollo employer does not match the row employer.');
@@ -185,6 +186,17 @@ async function runMismatchCase() {
 (async () => {
   try {
     assert.ok(operator.publicIndexQueries({ company: COMPANY }).every((query) => /site:linkedin\.com\/in/i.test(query)));
+    assert.equal(operator.serpApiPublicFallbackEnabled({}), false, 'SerpApi must be opt-in so normal enrichment cannot consume monthly search quota.');
+    const parsedRss = directSearch.parseBingRss('<?xml version="1.0"?><rss><channel><item><title>Jane &amp; Team</title><link>https://www.linkedin.com/in/jane-test</link><description><![CDATA[<b>Recruiter</b> at Example]]></description></item></channel></rss>');
+    assert.equal(parsedRss.length, 1);
+    assert.equal(parsedRss[0].title, 'Jane & Team');
+    assert.equal(parsedRss[0].snippet, 'Recruiter at Example');
+    const parsedHtml = directSearch.parseBingHtml('<ol><li class="b_algo"><h2><a href="https://www.linkedin.com/in/jane-test">Jane &amp; Team</a></h2><div class="b_caption"><p>Recruiter at Example</p></div></li></ol>');
+    assert.equal(parsedHtml.length, 1);
+    assert.equal(parsedHtml[0].url, 'https://www.linkedin.com/in/jane-test');
+    assert.equal(directSearch.siteConstraint('site:linkedin.com/in "Example" recruiter'), 'linkedin.com');
+    assert.equal(directSearch.matchesSite('https://www.linkedin.com/in/jane-test', 'linkedin.com'), true);
+    assert.equal(directSearch.matchesSite('https://example.com/jane-test', 'linkedin.com'), false);
 
     const structuredCompanyProfile = {
       sections: {
@@ -215,7 +227,7 @@ async function runMismatchCase() {
     await runTinyFishCase();
     await runExistingRepairCase();
     await runMismatchCase();
-    console.log('Universal public-index fallback self-test passed: SerpApi and TinyFish can supply LinkedIn person refs, Apollo remains the exact identity/employer authority, and mismatched employers are rejected.');
+    console.log('Universal public-index fallback self-test passed: keyless direct search is primary, SerpApi is opt-in, Apollo remains the exact identity/employer authority, and mismatched employers are rejected.');
   } finally {
     leadSources.status = originalLeadStatus;
     leadSources.serpSearch = originalSerpSearch;

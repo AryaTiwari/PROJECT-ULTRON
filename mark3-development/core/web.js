@@ -1,5 +1,6 @@
 const dns = require('node:dns').promises;
 const net = require('node:net');
+const directSearch = require('./direct-web-search');
 
 const DEFAULT_TIMEOUT_MS = Math.max(3000, Number(process.env.ULTRON_M3_WEB_TIMEOUT_MS || 15000));
 const DEFAULT_MAX_BYTES = Math.max(64 * 1024, Number(process.env.ULTRON_M3_WEB_MAX_BYTES || 1024 * 1024));
@@ -18,8 +19,10 @@ function tinyfishApiKey() {
 
 function status() {
   return {
-    primary: 'tinyfish',
-    configured: Boolean(tinyfishApiKey()),
+    primary: directSearch.status().enabled ? 'direct-bing-html' : 'tinyfish',
+    configured: Boolean(directSearch.status().enabled || tinyfishApiKey()),
+    directSearch: directSearch.status(),
+    tinyfishConfigured: Boolean(tinyfishApiKey()),
     fetchEndpoint: TINYFISH_FETCH_URL,
     searchEndpoint: TINYFISH_SEARCH_URL,
     fallback: 'direct-http',
@@ -31,7 +34,7 @@ function status() {
       sources: {
         hootsuite: { role: 'creator-trend-signal', url: HOOTSUITE_TREND_URL, access: 'public-web' },
         afluencer: { role: 'creator-collab-market-signal', url: AFLUENCER_CREATORS_URL, access: 'public-indexed-web', exhaustive: false },
-        general: { role: 'cross-check-and-current-context', access: 'tinyfish-search-fetch' },
+        general: { role: 'cross-check-and-current-context', access: 'keyless-direct-search-with-tinyfish-fallback' },
       },
     },
   };
@@ -314,11 +317,16 @@ async function fetchPage(input, options = {}) {
 async function searchWeb(query, options = {}) {
   require('./command-control-plane').assertAllowed('public-research');
 
-  const key = tinyfishApiKey();
   const text = String(query || '').trim();
   if (!text) throw new Error('Search query is required.');
-  if (!key) throw new Error('TINYFISH_API_KEY is not configured for web search.');
   const limit = Math.max(1, Math.min(10, Number(options.limit || 5)));
+  let directError = null;
+  if (directSearch.status().enabled && options.directSearch !== false) {
+    try { return await directSearch.search(text, { ...options, limit }); }
+    catch (error) { directError = error; }
+  }
+  const key = tinyfishApiKey();
+  if (!key) throw directError || new Error('No public web-search route is available.');
   const payload = await fetchJson(`${TINYFISH_SEARCH_URL}?query=${encodeURIComponent(text)}`, {
     method: 'GET',
     headers: { 'X-API-Key': key, Accept: 'application/json' },
@@ -331,7 +339,7 @@ async function searchWeb(query, options = {}) {
     siteName: String(item?.site_name || item?.siteName || '').trim(),
   })).filter((item) => item.url);
   if (!results.length) throw new Error('TinyFish Search returned no results.');
-  return { query: text, results, provider: 'tinyfish-search' };
+  return { query: text, results, provider: 'tinyfish-search', primaryError: directError?.message || null };
 }
 
 function hostMatches(url, domain) {

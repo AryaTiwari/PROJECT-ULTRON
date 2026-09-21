@@ -158,7 +158,7 @@ async function searchWithFusion(query, options = {}) {
       }
     }
   }
-  if (sourceFusion.status().serpApiConfigured) {
+  if (sourceFusion.status().serpGoogleFallback) {
     const result = await sourceFusion.serpSearch(query, options);
     return { ...result, primaryError: primaryError?.message || null };
   }
