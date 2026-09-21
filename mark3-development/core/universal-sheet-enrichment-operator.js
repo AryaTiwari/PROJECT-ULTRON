@@ -464,7 +464,13 @@ function queuePendingEmail(options, rowNumber, group, snapshot, person) {
   else queue.push(item);
 }
 
-function emailSyncPolls(options = {}) {
+function backgroundFirstPendingContacts(options = {}, count = 0) {
+  const threshold = Math.max(1, Math.min(1000, Number(process.env.ULTRON_M3_PENDING_CONTACT_BACKGROUND_THRESHOLD || 12)));
+  return options.backgroundFirstPendingContacts === true || Number(count || 0) > threshold;
+}
+
+function emailSyncPolls(options = {}, count = 0) {
+  if (backgroundFirstPendingContacts(options, count)) return 0;
   const raw = Number(options.emailWaterfallSyncPolls ?? process.env.ULTRON_M3_THREE_POC_EMAIL_WATERFALL_SYNC_POLLS ?? 3);
   return Number.isFinite(raw) ? Math.max(0, Math.min(5, Math.floor(raw))) : 3;
 }
@@ -511,7 +517,7 @@ async function syncPendingEmailAssignments(source, queue = [], stats, options = 
   }
   const pending=[...map.values()];stats.pendingEmailRequests=pending.length;
   const quality=require('./apollo-three-poc-quality');
-  const outcomes=await runContext.settledMap(pending,async item=>({item,result:await quality.pollEmailRequest(item.requestId,{polls:emailSyncPolls(options)})}));
+  const outcomes=await runContext.settledMap(pending,async item=>({item,result:await quality.pollEmailRequest(item.requestId,{polls:emailSyncPolls(options,pending.length)})}));
   const changes=[],completed=[];let stillPending=0;
   for(let i=0;i<outcomes.length;i++){
     const outcome=outcomes[i],item=pending[i];
@@ -760,7 +766,9 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   if (waterfallPending.length) {
     const quality = require('./apollo-three-poc-quality');
     const syncPollsRaw = Number(options.phoneWaterfallSyncPolls ?? process.env.ULTRON_M3_THREE_POC_PHONE_WATERFALL_SYNC_POLLS ?? 1);
-    const syncPolls = Number.isFinite(syncPollsRaw) ? Math.max(0, Math.min(3, Math.floor(syncPollsRaw))) : 1;
+    const syncPolls = backgroundFirstPendingContacts(options, pending.length)
+      ? 0
+      : (Number.isFinite(syncPollsRaw) ? Math.max(0, Math.min(3, Math.floor(syncPollsRaw))) : 1);
 
     const outcomes = await runContext.settledMap(
       waterfallPending, async (item) => ({
@@ -823,7 +831,7 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
 
   const unresolved = new Map(nativePending.map((item) => [item.key, item]));
   const handledProviderIds = new Set();
-  const polls = phoneSyncPolls(options);
+  const polls = backgroundFirstPendingContacts(options, pending.length) ? 1 : phoneSyncPolls(options);
   const waitMs = phoneSyncWaitMs(options);
 
   // Apollo returns a signed request_id for native phone reveal. Poll it directly
@@ -832,7 +840,9 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   const directPending = [...unresolved.values()].filter((item) => text(item.phoneRequestId));
   if (directPending.length) {
     const directPollsRaw = Number(options.phoneDirectPolls ?? process.env.ULTRON_M3_APOLLO_PHONE_DIRECT_POLLS ?? 4);
-    const directPolls = Number.isFinite(directPollsRaw) ? Math.max(0, Math.min(8, Math.floor(directPollsRaw))) : 4;
+    const directPolls = backgroundFirstPendingContacts(options, pending.length)
+      ? 0
+      : (Number.isFinite(directPollsRaw) ? Math.max(0, Math.min(8, Math.floor(directPollsRaw))) : 4);
     const outcomes = await runContext.settledMap(
       directPending, async (item) => ({
         item,
@@ -3170,6 +3180,7 @@ module.exports = {
   candidateFillTargets,
 
   pendingOwnerCell,
+  backgroundFirstPendingContacts,
   queuePendingEmail,
   syncPendingEmailAssignments,
   syncBackgroundEmailAssignments,

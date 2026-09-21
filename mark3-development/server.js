@@ -379,6 +379,15 @@ const server = http.createServer(async (req,res) => {
 require('./core/linkedin-domain-controller').initialize();
 module.exports = server;
 server.listen(config.port,config.host,()=>{
+  // Resume already-paid exact-cell callbacks after a production restart. Port 0
+  // is used by HTTP self-tests and deliberately skips external background work.
+  if (Number(config.port) !== 0) {
+    try {
+      require('./core/universal-sheet-enrichment-operator').startBackgroundPhoneWatcher();
+    } catch (error) {
+      console.error(`[Universal enrichment] Pending contact watcher could not start: ${error.code || 'START_FAILED'}.`);
+    }
+  }
   if (!/^(0|false|off)$/i.test(process.env.ULTRON_M3_LINKEDIN_AUTOSTART || '1')) {
     void require('./core/linkedin-mcp-client').ensureServer()
       .then(() => console.log('[LinkedIn] Local MCP server ready.'))

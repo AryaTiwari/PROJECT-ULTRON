@@ -71,6 +71,8 @@ const serverSource = fs.readFileSync(path.join(root,'server.js'),'utf8');
 if (!/SpeechRecognition|webkitSpeechRecognition/.test(appJs) || !/WAKE_WORD=['\"]ultron['\"]/.test(appJs) || !/COMMAND_SILENCE_MS=4000/.test(appJs)) throw new Error('Patient wake/command recognition is missing.');
 if (!/prematureFastFinalize:\s*false/.test(wakeBoost)) throw new Error('Premature voice finalization must remain disabled.');
 if (!/FLOW_REPLY_WINDOW_MS\s*=\s*10000/.test(chatTransport) || !/PLAYBACK_SETTLE_MS\s*=\s*700/.test(chatTransport)) throw new Error('Playback-safe ten-second flow is missing.');
+if (!/CHAT_TRANSPORT_TIMEOUT_MS\s*=\s*45\s*\*\s*60\s*\*\s*1000/.test(chatTransport)) throw new Error('Long-running full-sheet chat transport timeout is not aligned with the Mark 3 client.');
+if (!/startBackgroundPhoneWatcher\(\)/.test(serverSource)) throw new Error('Production startup must resume pending enrichment callbacks.');
 if (!/MediaRecorder/.test(nativeVoiceUi) || !/\/api\/voice\/transcribe/.test(nativeVoiceUi) || !/browserTranscript/.test(nativeVoiceUi)) throw new Error('Native-audio command path is missing.');
 if (!/\/api\/files\/upload/.test(multimodalUi) || !/attachments/.test(multimodalUi) || !/artifacts/.test(multimodalUi)) throw new Error('Attachment/artifact UI is incomplete.');
 if (!/multimodal\.css/.test(indexHtml) || !/native-voice\.js/.test(indexHtml) || !/multimodal-ui\.js/.test(indexHtml)) throw new Error('Multimodal interface assets are missing.');

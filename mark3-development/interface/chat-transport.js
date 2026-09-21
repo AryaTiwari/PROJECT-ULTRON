@@ -1,6 +1,8 @@
 (() => {
   const nativeFetch = window.fetch.bind(window);
-  const CHAT_TRANSPORT_TIMEOUT_MS = 10 * 60 * 1000;
+  // Match the Mark 3 client budget so long full-sheet work is not reported as
+  // failed while the server is still committing verified rows.
+  const CHAT_TRANSPORT_TIMEOUT_MS = 45 * 60 * 1000;
   const LINKEDIN_RESEARCH_TIMEOUT_MS = 45 * 60 * 1000;
   const MIN_REPLY_WINDOW_MS = 7000;
   const FLOW_REPLY_WINDOW_MS = 10000;

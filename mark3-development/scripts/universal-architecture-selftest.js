@@ -19,6 +19,9 @@ async function main(){
  for(const name of names){for(const fields of [['Mail ID','Contact No'],['Mobile','Email Address']]){const rows=[['Organization',name,...fields],['Acme','First Person','','']];const found=schema.inferSchema(rows).personGroups[0];assert.equal(found.fields.name.index,1);assert.ok(found.fields.email);assert.ok(found.fields.phone);}}
  const apollo=require('../core/apollo-enrichment');assert.equal(apollo.pendingPhoneRequestFresh({phoneStatus:'pending',apolloPersonId:'paid-person',phoneRequestId:'paid-id',phoneRequestedAt:'2020-01-01'}),true);
  const base=require('../core/universal-sheet-enrichment-operator');
+ assert.equal(base.backgroundFirstPendingContacts({},12),false);
+ assert.equal(base.backgroundFirstPendingContacts({},13),true);
+ assert.equal(base.backgroundFirstPendingContacts({backgroundFirstPendingContacts:true},1),true);
  const originalSearch=apollo.searchCompanyPeopleBroad;let emptySearchCalls=0;
  apollo.searchCompanyPeopleBroad=async()=>{emptySearchCalls++;return {people:[]};};
  const discoveryCache=new Map(),discoveryStats=base.freshStats();

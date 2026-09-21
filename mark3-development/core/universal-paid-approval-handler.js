@@ -90,6 +90,9 @@ async function execute(decision) {
       schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
       expectedPersonGroups: payload.expectedPersonGroups || undefined,
       allowLinkedInEmployerFallback: true,
+      // Give pending callbacks one immediate check, then let the durable watcher
+      // settle remaining exact-owned cells without holding the chat response.
+      backgroundFirstPendingContacts: !payload.rowLimit,
       // Explicit "POC-N only" requests stay isolated for diagnostics. Ordinary
       // enrichment returns to the coordinated all-POC production path so bounded
       // Gemini/Groq/NVIDIA rescue can operate after deterministic enrichment.
