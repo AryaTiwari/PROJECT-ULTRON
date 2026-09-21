@@ -2024,31 +2024,43 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   const broadLimit = integer(options.adaptiveBroadCandidateLimit, 30, 10, 50);
   const minimumUsefulPool = integer(
     options.minimumUsefulCandidatePool ?? process.env.ULTRON_M3_UNIVERSAL_MIN_USEFUL_CANDIDATE_POOL,
-    4,
+    3,
     2,
     8,
   );
 
+  // Reuse exact Apollo profiles already verified elsewhere in this workbook or
+  // an earlier run. This is especially useful when several rows belong to the
+  // same recruiter/employer: the cache may already contain enough safe peers
+  // for POC-2/POC-3 even when Apollo's company search returns a sparse page.
+  const cachedPeople = cachedVerifiedPeopleForCompany(companyContext);
+  if (cachedPeople.length) {
+    add(cachedPeople);
+    stats.candidateCacheHits++;
+  }
+
   // 1. Fast canonical title search against the strongest known organization identity.
-  try {
-    const priority = await apollo.searchCompanyPeopleBroad({
-      company,
-      domain,
-      location: options.location || '',
-      limit: priorityLimit,
-      titles: companyPriorityTitles(),
-    });
-    stats.candidateSearches++;
-    stats.candidatePrioritySearches++;
-    add(Array.isArray(priority?.people) ? priority.people : []);
-  } catch (error) {
-    throwSystemic(error);
-    stats.candidatePrioritySearchFailures++;
-    stats.discoveryDiagnostics.push({
-      company: company || domain,
-      code: String(error?.code || 'APOLLO_PRIORITY_FAST_SEARCH_FAILED'),
-      message: String(error?.message || error || '').slice(0, 300),
-    });
+  if (merged.length < minimumUsefulPool) {
+    try {
+      const priority = await apollo.searchCompanyPeopleBroad({
+        company,
+        domain,
+        location: options.location || '',
+        limit: priorityLimit,
+        titles: companyPriorityTitles(),
+      });
+      stats.candidateSearches++;
+      stats.candidatePrioritySearches++;
+      add(Array.isArray(priority?.people) ? priority.people : []);
+    } catch (error) {
+      throwSystemic(error);
+      stats.candidatePrioritySearchFailures++;
+      stats.discoveryDiagnostics.push({
+        company: company || domain,
+        code: String(error?.code || 'APOLLO_PRIORITY_FAST_SEARCH_FAILED'),
+        message: String(error?.message || error || '').slice(0, 300),
+      });
+    }
   }
 
   // Results-first primary sweep never cascades down a long waterfall on one row.
@@ -2209,6 +2221,33 @@ function pragmaticSameEmployerCandidates(candidates = [], companyContext = {}, e
     })
     .sort((a, b) => a.priority - b.priority || b.score - a.score || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || '')))
     .map((item) => item.candidate);
+}
+
+function cachedVerifiedPeopleForCompany(companyContext = {}, cacheState = null) {
+  if (!companyContext?.company && !companyContext?.domain) return [];
+  const people = cacheState?.people || apollo.readCache()?.people || {};
+  const now = Date.now();
+  const rows = [];
+  for (const [linkedinUrl, record] of Object.entries(people)) {
+    if (!record?.apolloPersonId || !text(record?.name) || record.noMatch || record.ambiguous) continue;
+    const checkedAt = Date.parse(record.checkedAt || '');
+    const maxAge = Math.max(1, Number(apollo.cacheDays(record) || 1)) * 86400000;
+    if (!Number.isFinite(checkedAt) || now - checkedAt > maxAge) continue;
+    if (!ranker.sameEmployer(record, companyContext)) continue;
+    rows.push({
+      ...record,
+      id: record.apolloPersonId,
+      linkedinUrl: apollo.normalizeLinkedIn(linkedinUrl || record.linkedinUrl || record.returnedLinkedIn),
+      organizationName: apollo.organizationNameOf(record),
+      organizationDomain: apollo.organizationDomainOf(record),
+      identityVerified: true,
+      apolloSearchEmployerVerified: true,
+      apolloSearchEmployerCompany: apollo.organizationNameOf(record),
+      apolloSearchEmployerDomain: apollo.organizationDomainOf(record),
+      candidateSource: 'verified-apollo-cache',
+    });
+  }
+  return mergeCandidatePools([], rows);
 }
 
 function manualPriorityCandidates(candidates = [], companyContext = {}, existing = { names: new Set(), linkedins: new Set() }) {
@@ -3306,6 +3345,7 @@ module.exports = {
   hydrateDecisionMakerVerified,
   discoverPriorityPeopleFast,
   pragmaticSameEmployerCandidates,
+  cachedVerifiedPeopleForCompany,
   manualPriorityCandidates,
   fillManualPriorityGroup,
   fillOpenGroups,

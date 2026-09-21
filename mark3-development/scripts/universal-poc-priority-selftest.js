@@ -11,6 +11,21 @@ const apollo = require('../core/apollo-enrichment');
 const companyContext = { company: 'Example Technologies Pvt Ltd', domain: 'example.com' };
 const existing = { names: new Set(['anchor person']), linkedins: new Set() };
 
+const cachedPeers = base.cachedVerifiedPeopleForCompany(companyContext, { people: {
+  'https://www.linkedin.com/in/cached-director': {
+    apolloPersonId: 'cached-1', name: 'Cached Director', title: 'Director',
+    organizationName: 'Example Technologies', organizationDomain: 'example.com',
+    checkedAt: new Date().toISOString(),
+  },
+  'https://www.linkedin.com/in/wrong-company': {
+    apolloPersonId: 'cached-2', name: 'Wrong Company Person', title: 'Director',
+    organizationName: 'Wrong Company', organizationDomain: 'wrong.example',
+    checkedAt: new Date().toISOString(),
+  },
+} });
+assert.deepEqual(cachedPeers.map((person) => person.name), ['Cached Director'], 'fresh exact Apollo cache peers must be reusable only for the verified same employer');
+assert.equal(cachedPeers[0].candidateSource, 'verified-apollo-cache');
+
 const candidates = [
   { id: 'recruiter', name: 'Recruiter One', title: 'Technical Recruiter', organizationName: 'Example Technologies Pvt Ltd', organizationDomain: 'example.com' },
   { id: 'manager', name: 'Manager One', title: 'Talent Acquisition Manager', organizationName: 'Example Technologies Pvt Ltd', organizationDomain: 'example.com' },
