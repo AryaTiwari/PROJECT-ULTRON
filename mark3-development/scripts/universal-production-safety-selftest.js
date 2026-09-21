@@ -77,9 +77,10 @@ async function main() {
   const rows=[['Company','POC 1','Phone 1','Email 1','POC 2','Phone 2','Email 2','POC 3','Phone 3','Email 3'],['Acme','One Person','1111111111','one@acme.com','Two Person','2222222222','two@acme.com','','','']];
   base.readUniversalSheet=async()=>({rows,schema:schema.inferSchema(rows)});
   try {
-    let audit=await targeted.mandatoryCompletionAudit({sheetUrl:'offline'}, {expectedPersonGroups:3});
+    let audit=await targeted.mandatoryCompletionAudit({sheetUrl:'offline'}, {expectedPersonGroups:3}, {reasons:[{rowNumber:2,groupOrdinal:3,target:'POC-3',reason:'requested-poc3-unresolved'}]});
     assert.equal(audit.complete,false);
     assert.ok(audit.requiredIdentityIssues.some(i=>i.groupOrdinal===3));
+    assert.ok(audit.issues.some(i=>i.target==='POC-3' && /POC-3/i.test(i.message)),'POC-3 reason must not be mislabeled as POC-2');
     rows[1][7]='Three Person';
     audit=await targeted.mandatoryCompletionAudit({sheetUrl:'offline'}, {expectedPersonGroups:3});
     assert.equal(audit.requiredIdentityIssues.length,0);

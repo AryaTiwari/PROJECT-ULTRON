@@ -18,7 +18,16 @@ async function main(){
  const names=['Name','Person Name','Candidate Name','Contact Name','POC','POC Name','First POC','POC 1','1st POC','Decision Maker','HR Name','Recruiter','Founder Name','Contact Person','Primary Contact','Secondary Contact','Third Contact'];
  for(const name of names){for(const fields of [['Mail ID','Contact No'],['Mobile','Email Address']]){const rows=[['Organization',name,...fields],['Acme','First Person','','']];const found=schema.inferSchema(rows).personGroups[0];assert.equal(found.fields.name.index,1);assert.ok(found.fields.email);assert.ok(found.fields.phone);}}
  const apollo=require('../core/apollo-enrichment');assert.equal(apollo.pendingPhoneRequestFresh({phoneStatus:'pending',apolloPersonId:'paid-person',phoneRequestId:'paid-id',phoneRequestedAt:'2020-01-01'}),true);
- const sheets=require('../core/google-sheets-operator');const store=require('../core/universal-pending-emails');const base=require('../core/universal-sheet-enrichment-operator');const quality=require('../core/apollo-three-poc-quality');
+ const base=require('../core/universal-sheet-enrichment-operator');
+ const originalSearch=apollo.searchCompanyPeopleBroad;let emptySearchCalls=0;
+ apollo.searchCompanyPeopleBroad=async()=>{emptySearchCalls++;return {people:[]};};
+ const discoveryCache=new Map(),discoveryStats=base.freshStats();
+ await base.discoverPriorityPeopleFast({company:'Acme'},discoveryCache,discoveryStats,{linkedinZeroResultFallback:false,publicIndexFallback:false});
+ const callsAfterEmptySearch=emptySearchCalls;
+ await base.discoverPriorityPeopleFast({company:'Acme'},discoveryCache,discoveryStats,{linkedinZeroResultFallback:false,publicIndexFallback:false});
+ assert.equal(emptySearchCalls,callsAfterEmptySearch,'same-run empty deep discovery must be cached');
+ apollo.searchCompanyPeopleBroad=originalSearch;
+ const sheets=require('../core/google-sheets-operator');const store=require('../core/universal-pending-emails');const quality=require('../core/apollo-three-poc-quality');
  const source={spreadsheetId:'fixture',sheetName:'Leads',schema:{headerRowNumber:1},rows:[['Name','Email'],['First Person','']]};
  const item={key:'2|1',rowNumber:2,columnIndex:1,groupId:'p1',groupOrdinal:1,personName:'First Person',requestId:'paid-email-id',ownerFields:{name:{index:0,header:'Name'},email:{index:1,header:'Email'}}};
  store.put(source,item);assert.equal(store.forSource(source)[0].requestId,'paid-email-id');

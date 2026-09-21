@@ -188,6 +188,8 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
       reason: text(item?.reason || item?.detail || 'unresolved'),
       detail: text(item?.detail || ''),
       typed: item?.typed || null,
+      groupOrdinal: Number(item?.groupOrdinal || 0) || null,
+      target: text(item?.target || ''),
     });
   }
 
@@ -215,7 +217,11 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     nextAction: 'Supply current-employer evidence or retry when new verified candidates are available.',
   }));
   for (const rowNumber of unresolvedRows) {
-    if (!poc1IdentityIssues.some(item => item.rowNumber === rowNumber) && !poc2OpenRows.includes(rowNumber)) continue;
+    if (
+      !poc1IdentityIssues.some(item => item.rowNumber === rowNumber)
+      && !poc2OpenRows.includes(rowNumber)
+      && !requiredIdentityIssues.some(item => item.rowNumber === rowNumber)
+    ) continue;
     const reasons = reasonMap.get(rowNumber) || [{
       reason: 'no-safe-verified-poc2-after-all-strategies',
       detail: '',
@@ -223,8 +229,14 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     }];
     const isPoc1 = poc1IdentityIssues.some((item) => Number(item.rowNumber) === rowNumber);
     for (const entry of reasons) {
-      const target = isPoc1 ? 'POC-1' : 'POC-2';
-      const groupOrdinal = isPoc1 ? 1 : 2;
+      const reasonOrdinal = Number(
+        entry?.groupOrdinal
+        || String(entry?.target || '').match(/POC\s*-?\s*(\d+)/i)?.[1]
+        || String(entry?.reason || '').match(/POC\s*-?\s*(\d+)/i)?.[1]
+        || 0
+      );
+      const groupOrdinal = reasonOrdinal || (isPoc1 ? 1 : 2);
+      const target = `POC-${groupOrdinal}`;
       if (entry?.typed?.code) {
         issues.push(diagnostics.typedIssue(entry.typed, {
           category: 'provider',
@@ -484,7 +496,8 @@ async function run(request = {}, options = {}) {
   });
 }
 async function exactRowLastResort(request, primaryResult, options={}) {
-  const result=await base.run(request,{...options,recheckPass:true,resultsFirstSweep:false,deferOpenGroupSelectionToAi:false,discoveryCache:new Map()});
+  const discoveryCache=options.discoveryCache instanceof Map?options.discoveryCache:new Map();
+  const result=await base.run(request,{...options,recheckPass:true,resultsFirstSweep:false,deferOpenGroupSelectionToAi:false,discoveryCache});
   return {...result.stats,attempted:true,enabled:true,modelCalls:0,unresolvedRows:[...new Set((result.stats.leftoverQueue||[]).map(item=>item.rowNumber))],unresolvedReasons:result.stats.leftoverQueue||[]};
 }
 

@@ -62,6 +62,14 @@ assert.equal(
 assert.match(spreadsheetController.rowLimitNotice(8), /VALIDATION MODE IS ACTIVE/i);
 assert.match(spreadsheetController.rowLimitNotice(8), /first 8 non-empty data rows/i);
 assert.match(spreadsheetController.rowLimitNotice(undefined), /FULL-SHEET MODE/i);
+assert.equal(spreadsheetController.parseFullSheetRequested('Run the full-sheet enrichment on Arya 2.'), true);
+assert.equal(spreadsheetController.parseFullSheetRequested('Validate the first rows only.'), false);
+const previousUniversalLimit = process.env.ULTRON_M3_UNIVERSAL_ENRICHMENT_ROW_LIMIT;
+process.env.ULTRON_M3_UNIVERSAL_ENRICHMENT_ROW_LIMIT = '15';
+assert.equal(spreadsheetController.configuredRowLimit('Validate Arya 2.'), 15);
+assert.equal(spreadsheetController.configuredRowLimit('Fill the entire worksheet with no row limit.'), undefined);
+if (previousUniversalLimit == null) delete process.env.ULTRON_M3_UNIVERSAL_ENRICHMENT_ROW_LIMIT;
+else process.env.ULTRON_M3_UNIVERSAL_ENRICHMENT_ROW_LIMIT = previousUniversalLimit;
 
 const meta = {
   sheets: [

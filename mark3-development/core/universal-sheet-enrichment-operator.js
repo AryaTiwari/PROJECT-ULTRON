@@ -2113,8 +2113,10 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   }
 
   stats.candidatesDiscovered += merged.length;
-  if (merged.length) cache.set(key, merged);
-  else cache.delete(key);
+  // Cache an empty deep-search result for this approved run. Later AI and
+  // exact-row rechecks cannot gain new evidence by repeating the same provider
+  // waterfall moments later, and repeated calls can consume Apollo credits.
+  cache.set(key, merged);
   return merged;
 }
 

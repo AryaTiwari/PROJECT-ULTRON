@@ -106,7 +106,14 @@ function parseContactPhaseOrdinal(message) {
   return null;
 }
 
-function configuredRowLimit() {
+function parseFullSheetRequested(message) {
+  const value = String(message || '');
+  return /\b(?:full[ -]?sheet|entire\s+(?:sheet|worksheet|tab)|all\s+non[- ]?empty\s+(?:data\s+)?rows|no\s+row\s+limit)\b/i.test(value);
+}
+
+function configuredRowLimit(message = '') {
+  // An explicit full-sheet instruction is authoritative for this exact request.
+  if (parseFullSheetRequested(message)) return undefined;
   const universalLimit = Number(process.env.ULTRON_M3_UNIVERSAL_ENRICHMENT_ROW_LIMIT || 0);
   if (Number.isFinite(universalLimit) && universalLimit > 0) return Math.floor(universalLimit);
   const legacyLimit = Number(process.env.ULTRON_M3_THREE_POC_ROW_LIMIT || 0);
@@ -313,7 +320,7 @@ async function handle(message, context = {}) {
   const expectedPersonGroups = parseExpectedPersonGroups(original);
   const contactPhaseOrdinal = parseContactPhaseOrdinal(original);
   const explicitNameAuthoritative = Boolean(requestedSheetName);
-  const rowLimit = configuredRowLimit();
+  const rowLimit = configuredRowLimit(original);
   let inspection;
   try {
     inspection = await inspect(sheetUrl, requestedSheetName, rowLimit, {
@@ -406,6 +413,7 @@ module.exports = {
   parseSheetName,
   parseExpectedPersonGroups,
   parseContactPhaseOrdinal,
+  parseFullSheetRequested,
   configuredRowLimit,
   rowLimitNotice,
   schemaReadable,

@@ -129,6 +129,8 @@ function markUnresolved(stats, rowNumber, reason, detail = '', meta = {}) {
     reason: text(reason || 'unresolved'),
     detail: text(detail).slice(0, 300),
     ...(meta?.typed ? { typed: meta.typed } : {}),
+    ...(Number(meta?.groupOrdinal) > 0 ? { groupOrdinal: Number(meta.groupOrdinal) } : {}),
+    ...(text(meta?.target) ? { target: text(meta.target) } : {}),
   });
 }
 
@@ -931,18 +933,25 @@ async function run(request = {}, primaryResult = {}, options = {}) {
       }
     }
 
-    const remaining = Math.max(0, pkg.targets.length - acceptedTargets.size);
+    const unresolvedTargets = pkg.targets.filter((target) =>
+      !acceptedTargets.has(`${rowNumber}:${Number(target.group?.ordinal || 0)}`)
+    );
+    const remaining = unresolvedTargets.length;
     stats.unresolvedSlots += remaining;
     if (remaining > 0) {
       const proposedForRow = proposed.length;
-      markUnresolved(
-        stats,
-        rowNumber,
-        proposedForRow ? 'selection-rejected-after-verification' : 'ai-selection-abstained',
-        proposedForRow
-          ? 'AI proposed supplied Apollo candidates, but one or more target slots failed deterministic hydration/identity/employer/write verification.'
-          : 'Direct AI returned no accepted supplied candidate for one or more secondary POC targets.',
-      );
+      for (const target of unresolvedTargets) {
+        const groupOrdinal = Number(target.group?.ordinal || 0) || 2;
+        markUnresolved(
+          stats,
+          rowNumber,
+          proposedForRow ? 'selection-rejected-after-verification' : 'ai-selection-abstained',
+          proposedForRow
+            ? 'AI proposed supplied Apollo candidates, but this target slot failed deterministic hydration/identity/employer/write verification.'
+            : 'Direct AI returned no accepted supplied candidate for this secondary POC target.',
+          { groupOrdinal, target: `POC-${groupOrdinal}` },
+        );
+      }
     }
   }
 
