@@ -378,6 +378,39 @@ const server = http.createServer(async (req,res) => {
 // Synchronous domain initialization closes the preload setImmediate startup gap.
 require('./core/linkedin-domain-controller').initialize();
 module.exports = server;
+server.on('error', (error) => {
+  if (error?.code !== 'EADDRINUSE') {
+    console.error(`[Mark 3] Server startup failed: ${error?.message || error}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const request = http.get({
+    host: config.host,
+    port: config.port,
+    path: '/api/health',
+    timeout: 3000,
+  }, (response) => {
+    let raw = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk) => { raw += chunk; });
+    response.on('end', () => {
+      let health = null;
+      try { health = JSON.parse(raw); } catch {}
+      if (response.statusCode === 200 && health?.service === 'ULTRON Mark 3') {
+        console.log(`[Mark 3] ULTRON is already running at http://${config.host}:${config.port}. Use that instance, or stop it with Ctrl+C before restarting.`);
+        process.exit(0);
+      }
+      console.error(`[Mark 3] Port ${config.port} is already in use by another application. Stop that application or set ULTRON_M3_PORT to a free port.`);
+      process.exit(1);
+    });
+  });
+  request.on('timeout', () => request.destroy(new Error('health check timed out')));
+  request.on('error', () => {
+    console.error(`[Mark 3] Port ${config.port} is already in use and the existing service could not be identified as ULTRON.`);
+    process.exit(1);
+  });
+});
 server.listen(config.port,config.host,()=>{
   // Resume already-paid exact-cell callbacks after a production restart. Port 0
   // is used by HTTP self-tests and deliberately skips external background work.
