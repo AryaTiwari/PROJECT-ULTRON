@@ -9,7 +9,9 @@ function decide(result){
    if(errors.some(e=>e.type==='RATE_LIMIT'||e.errorType==='RATE_LIMIT'||e.status===429))return 'PARTIAL_PROVIDER_LIMIT';
    if(s.haltedEarly||errors.some(e=>['NETWORK','TIMEOUT','AUTH','PERMISSION','CONFIG','API'].includes(e.type||e.errorType)))return 'PARTIAL_PROVIDER_UNAVAILABLE';
    const pending=metrics.pending||[];
+   const pendingGap=gaps.some(g=>pending.some(p=>Number(p.rowNumber)===Number(g.rowNumber)&&Number(p.groupOrdinal)===Number(g.groupOrdinal)&&p.kind===g.field));
    if(!identities.length&&gate.complete!==false&&gaps.length&&gaps.every(g=>pending.some(p=>Number(p.rowNumber)===Number(g.rowNumber)&&Number(p.groupOrdinal)===Number(g.groupOrdinal)&&p.kind===g.field)))return 'COMPLETE_WITH_PENDING_CONTACTS';
+   if(pendingGap)return 'PARTIAL_WITH_PENDING_CONTACTS';
    return 'TERMINAL_DATA_EXHAUSTED';
  }
  return 'COMPLETE';

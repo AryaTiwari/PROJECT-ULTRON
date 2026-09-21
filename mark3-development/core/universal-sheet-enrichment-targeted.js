@@ -758,7 +758,7 @@ async function runInternal(request = {}, options = {}) {
       completionState: result?.stats?.haltedEarly
         ? (result.stats.haltError?.type === 'RATE_LIMIT' ? 'PARTIAL_PROVIDER_LIMIT' : 'PARTIAL_PROVIDER_UNAVAILABLE')
         : (postPrimaryError || completionGate?.status === 'AUDIT_FAILED' ? 'PARTIAL_PROVIDER_UNAVAILABLE'
-          : (!completionGate?.complete ? 'TERMINAL_DATA_EXHAUSTED'
+          : (!completionGate?.complete ? ((result?.stats?.phoneStillPending || result?.stats?.emailStillPending) ? 'PARTIAL_WITH_PENDING_CONTACTS' : 'TERMINAL_DATA_EXHAUSTED')
             : ((completionGate.contactGaps || []).length
               ? ((result?.stats?.phoneStillPending || result?.stats?.emailStillPending) ? 'COMPLETE_WITH_PENDING_CONTACTS' : 'TERMINAL_DATA_EXHAUSTED')
               : 'COMPLETE'))),

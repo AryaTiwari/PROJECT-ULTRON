@@ -587,6 +587,28 @@ function phoneSyncWaitMs(options = {}) {
   return Number.isFinite(raw) ? Math.max(250, Math.min(5000, Math.floor(raw))) : 1800;
 }
 
+function phoneDirectBatchLimit(options = {}, pendingCount = 0) {
+  if (!backgroundFirstPendingContacts(options, pendingCount)) return Math.max(1, Number(pendingCount || 1));
+  const raw = Number(options.phoneDirectBatchLimit ?? process.env.ULTRON_M3_APOLLO_PHONE_DIRECT_BATCH_LIMIT ?? 3);
+  return Number.isFinite(raw) ? Math.max(1, Math.min(10, Math.floor(raw))) : 3;
+}
+
+function phoneDirectRetryMs() {
+  const raw = Number(process.env.ULTRON_M3_APOLLO_PHONE_DIRECT_RETRY_MS || 600000);
+  return Number.isFinite(raw) ? Math.max(60000, Math.min(3600000, Math.floor(raw))) : 600000;
+}
+
+function phoneDirectQuotaCooldownMs() {
+  const raw = Number(process.env.ULTRON_M3_APOLLO_PHONE_DIRECT_QUOTA_COOLDOWN_MS || 3900000);
+  return Number.isFinite(raw) ? Math.max(3600000, Math.min(7200000, Math.floor(raw))) : 3900000;
+}
+
+function apolloPhonePollRateLimited(error) {
+  return Number(error?.status || 0) === 429
+    || String(error?.code || '').toUpperCase() === 'APOLLO_RATE_LIMITED'
+    || /maximum number of api calls|rate limit/i.test(String(error?.message || error || ''));
+}
+
 
 function backgroundPhoneKey(source, item) {
   return `${source.spreadsheetId}|${source.sheetName}|${item.rowNumber}|${item.columnIndex}`;
@@ -630,6 +652,13 @@ async function syncBackgroundPhoneAssignments() {
   let resolved = 0;
   let written = 0;
   const handledIds = new Set();
+  const now = Date.now();
+  const directBatchLimit = phoneDirectBatchLimit({ backgroundFirstPendingContacts: true }, items.length);
+  const directPollKeys = new Set(webhookItems
+    .filter(([, item]) => item.phoneRequestId && Number(item.nextDirectPollAt || 0) <= now)
+    .slice(0, directBatchLimit)
+    .map(([key]) => key));
+  let directQuotaLimited = false;
 
   for (const [key, item] of items) {
     let phone = null;
@@ -649,7 +678,16 @@ async function syncBackgroundPhoneAssignments() {
         continue;
       }
     } else {
-      if (item.phoneRequestId) {
+      // Prefer the callback worker's batch store. It resolves every delivered
+      // webhook with one read and does not spend Apollo's per-request result-check
+      // quota. Direct request-id checks are a small rotating fallback only.
+      const callbackResult = byId.get(item.apolloPersonId);
+      if (callbackResult) {
+        phone = apollo.validPhone(callbackResult?.phone);
+        apollo.recordPhoneResult(item.apolloPersonId, phone);
+        handledIds.add(item.apolloPersonId);
+        terminal = true;
+      } else if (item.phoneRequestId && directPollKeys.has(key) && !directQuotaLimited) {
         try {
           const direct = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0 });
           phone = apollo.validPhone(direct?.phone);
@@ -665,19 +703,18 @@ async function syncBackgroundPhoneAssignments() {
         } catch (error) {
           item.lastError = text(error?.message || error).slice(0, 300);
           item.lastAttemptAt = new Date().toISOString();
+          if (apolloPhonePollRateLimited(error)) {
+            directQuotaLimited = true;
+            const resumeAt = now + phoneDirectQuotaCooldownMs();
+            for (const [, pendingItem] of items) pendingItem.nextDirectPollAt = resumeAt;
+          }
         }
+        if (!terminal && !directQuotaLimited) item.nextDirectPollAt = now + phoneDirectRetryMs();
       }
 
       if (!terminal) {
-        const result = byId.get(item.apolloPersonId);
-        if (!result) {
-          backgroundPhoneAssignments.set(key, item);
-          continue;
-        }
-        phone = apollo.validPhone(result?.phone);
-        apollo.recordPhoneResult(item.apolloPersonId, phone);
-        handledIds.add(item.apolloPersonId);
-        terminal = true;
+        backgroundPhoneAssignments.set(key, item);
+        continue;
       }
     }
 
@@ -716,7 +753,7 @@ function startBackgroundPhoneWatcher() {
   if (backgroundPhoneWatcher || (!backgroundPhoneAssignments.size && !emailStore.read().length)) return;
   backgroundPhoneWatcherRemaining = Math.max(
     1,
-    Math.min(60, Number(process.env.ULTRON_M3_APOLLO_PHONE_WATCHER_ATTEMPTS || 30)),
+    Math.min(240, Number(process.env.ULTRON_M3_APOLLO_PHONE_WATCHER_ATTEMPTS || 120)),
   );
 
   const tick = async () => {
@@ -837,7 +874,8 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
   // Apollo returns a signed request_id for native phone reveal. Poll it directly
   // before relying on the local webhook worker. Polling webhook_result is a
   // zero-credit read and substantially reduces unnecessary "still pending" runs.
-  const directPending = [...unresolved.values()].filter((item) => text(item.phoneRequestId));
+  const directPendingAll = [...unresolved.values()].filter((item) => text(item.phoneRequestId));
+  const directPending = directPendingAll.slice(0, phoneDirectBatchLimit(options, pending.length));
   if (directPending.length) {
     const directPollsRaw = Number(options.phoneDirectPolls ?? process.env.ULTRON_M3_APOLLO_PHONE_DIRECT_POLLS ?? 4);
     const directPolls = backgroundFirstPendingContacts(options, pending.length)
@@ -854,10 +892,19 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
     );
 
     const directChanges = [];
-    for (const outcome of outcomes) {
+    for (let directIndex = 0; directIndex < outcomes.length; directIndex++) {
+      const outcome = outcomes[directIndex];
       stats.phoneDirectPolls++;
       if (outcome.status !== 'fulfilled') {
         stats.phoneDirectPollErrors++;
+        if (apolloPhonePollRateLimited(outcome.reason)) {
+          const resumeAt = Date.now() + phoneDirectQuotaCooldownMs();
+          for (const pendingItem of unresolved.values()) pendingItem.nextDirectPollAt = resumeAt;
+          stats.phoneSyncLastError = typedFailureSummary(outcome.reason, { stage: 'apollo-phone-result-poll' });
+          break;
+        }
+        const attemptedItem = directPending[directIndex];
+        if (attemptedItem) attemptedItem.nextDirectPollAt = Date.now() + phoneDirectRetryMs();
         continue;
       }
       const { item, result } = outcome.value;
