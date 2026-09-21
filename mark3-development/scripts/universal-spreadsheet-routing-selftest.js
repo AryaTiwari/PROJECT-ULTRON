@@ -58,6 +58,15 @@ assert.equal(
   'Arya 2',
   'unquoted on-the worksheet wording must resolve the exact tab',
 );
+assert.equal(
+  spreadsheetController.parseSheetName([
+    'Run UNIVERSAL FULL-SHEET enrichment on the Google Sheet below.',
+    'Target only the "Arya 2" worksheet:',
+    url,
+  ].join('\n')),
+  'Arya 2',
+  'an explicit worksheet target must outrank earlier generic Google Sheet prose',
+);
 
 assert.match(spreadsheetController.rowLimitNotice(8), /VALIDATION MODE IS ACTIVE/i);
 assert.match(spreadsheetController.rowLimitNotice(8), /first 8 non-empty data rows/i);
