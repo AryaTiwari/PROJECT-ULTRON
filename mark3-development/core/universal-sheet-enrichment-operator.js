@@ -2234,6 +2234,19 @@ function cachedVerifiedPeopleForCompany(companyContext = {}, cacheState = null) 
     const maxAge = Math.max(1, Number(apollo.cacheDays(record) || 1)) * 86400000;
     if (!Number.isFinite(checkedAt) || now - checkedAt > maxAge) continue;
     if (!ranker.sameEmployer(record, companyContext)) continue;
+    const expectedDomain = websiteDomain(companyContext.domain || '');
+    const actualDomain = websiteDomain(apollo.organizationDomainOf(record));
+    const domainsEqual = expectedDomain && actualDomain
+      && (expectedDomain === actualDomain || expectedDomain.endsWith(`.${actualDomain}`) || actualDomain.endsWith(`.${expectedDomain}`));
+    if (expectedDomain && actualDomain && !domainsEqual) {
+      const expectedCompany = ranker.companyKey(companyContext.company || '');
+      const actualCompany = ranker.companyKey(apollo.organizationNameOf(record));
+      // Cross-row cache reuse must not inherit the general fuzzy matcher's
+      // broad "tech/services" relaxation. Different domains are allowed only
+      // when the normalized company brand itself is exactly the same (for
+      // example inkitsolutions.com vs inkitsolutions.com.au).
+      if (!expectedCompany || expectedCompany !== actualCompany) continue;
+    }
     rows.push({
       ...record,
       id: record.apolloPersonId,

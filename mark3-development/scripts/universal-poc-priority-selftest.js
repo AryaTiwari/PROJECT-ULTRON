@@ -25,6 +25,16 @@ const cachedPeers = base.cachedVerifiedPeopleForCompany(companyContext, { people
 } });
 assert.deepEqual(cachedPeers.map((person) => person.name), ['Cached Director'], 'fresh exact Apollo cache peers must be reusable only for the verified same employer');
 assert.equal(cachedPeers[0].candidateSource, 'verified-apollo-cache');
+assert.deepEqual(base.cachedVerifiedPeopleForCompany(
+  { company: 'mewartechservices', domain: 'mewartechservices.com' },
+  { people: {
+    'https://www.linkedin.com/in/artech-recruiter': {
+      apolloPersonId: 'cached-tech-collision', name: 'Artech Recruiter', title: 'Lead Recruiter',
+      organizationName: 'Artech L.L.C.', organizationDomain: 'artech.com',
+      checkedAt: new Date().toISOString(),
+    },
+  } },
+), [], 'cross-row cache reuse must reject different domains whose only fuzzy overlap is a generic tech/services token');
 
 const candidates = [
   { id: 'recruiter', name: 'Recruiter One', title: 'Technical Recruiter', organizationName: 'Example Technologies Pvt Ltd', organizationDomain: 'example.com' },
