@@ -210,12 +210,26 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     }
   }
 
-  const issues = requiredIdentityIssues.map(item => ({
-    code: 'REQUIRED_POC_NOT_VERIFIED', category: 'identity', severity: 'BLOCKER', blocking: true,
-    retryable: false, rowNumber: item.rowNumber, groupOrdinal: item.groupOrdinal, target: 'POC-' + item.groupOrdinal,
-    message: item.reason, detail: 'No safe identity is present in this requested contact slot.',
-    nextAction: 'Supply current-employer evidence or retry when new verified candidates are available.',
-  }));
+  const issues = requiredIdentityIssues.map((item) => {
+    const scopedReasons = (reasonMap.get(item.rowNumber) || []).filter((entry) =>
+      (!entry.groupOrdinal || Number(entry.groupOrdinal) === Number(item.groupOrdinal))
+    );
+    const contactability = scopedReasons.find((entry) => entry.reason === 'contactability-top3-exhausted');
+    if (contactability) {
+      return diagnostics.issueFromReason(contactability.reason, {
+        rowNumber: item.rowNumber,
+        groupOrdinal: item.groupOrdinal,
+        target: 'POC-' + item.groupOrdinal,
+        detail: contactability.detail,
+      });
+    }
+    return {
+      code: 'REQUIRED_POC_NOT_VERIFIED', category: 'identity', severity: 'BLOCKER', blocking: true,
+      retryable: false, rowNumber: item.rowNumber, groupOrdinal: item.groupOrdinal, target: 'POC-' + item.groupOrdinal,
+      message: item.reason, detail: 'No safe identity is present in this requested contact slot.',
+      nextAction: 'Supply current-employer evidence or retry when new verified candidates are available.',
+    };
+  });
   for (const rowNumber of unresolvedRows) {
     if (
       !poc1IdentityIssues.some(item => item.rowNumber === rowNumber)
@@ -703,6 +717,8 @@ async function runInternal(request = {}, options = {}) {
     let completionGate = null;
     try {
       const terminalReasons = [
+        ...(primaryStats?.leftoverQueue || []),
+        ...(primaryStats?.contactabilityExhaustedTargets || []),
         ...providerRetryReasons,
         ...(aiRescue?.unresolvedReasons || []),
         ...(fb?.unresolvedReasons || []),

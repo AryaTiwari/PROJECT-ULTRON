@@ -67,6 +67,15 @@ const ISSUE_CATALOG = Object.freeze({
     message: 'POC-2 candidates existed, but none survived identity/employer/write verification.',
     nextAction: 'Try the remaining verified candidates and bounded fallback strategies.',
   },
+  'contactability-top3-exhausted': {
+    code: 'POC_CONTACTABILITY_TOP3_EXHAUSTED',
+    category: 'contactability',
+    severity: 'BLOCKER',
+    blocking: true,
+    retryable: false,
+    message: 'Verified preferred POC candidates were found, but none returned an actual usable phone within the bounded top-3 policy.',
+    nextAction: 'Leave the slot blank for this run. Retry only when provider contact data changes; do not spend more credits on the same candidate set or ask AI to reselect it.',
+  },
   'existing-contact-repair-unresolved': {
     code: 'EXISTING_CONTACT_REPAIR_UNRESOLVED',
     category: 'repair',

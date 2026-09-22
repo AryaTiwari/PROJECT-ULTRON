@@ -212,9 +212,8 @@ const protectedPhonePlan = planner.replacementWritesForGroup(
 assert.equal(protectedPhonePlan.allowed, false);
 assert.ok(protectedPhonePlan.conflicts.includes('existing-phone-protected'));
 
-// Brand-new POC groups with a phone destination must never receive identity-only
-// writes. This planner-level rule protects every execution path, not just the
-// manual top-3 selector.
+// Preserve the protected working-baseline boundary: the planner owns identity
+// and cell-write safety only. Contactability must be decided before the planner.
 const emptyPocGroup = {
   id: 'empty-person-1',
   kind: 'person',
@@ -225,7 +224,7 @@ const emptyPocGroup = {
     email: { index: 2, header: 'EMAIL' },
   },
 };
-const noPhoneNewPoc = planner.safeWritesForGroup(
+const plannerIdentityOnly = planner.safeWritesForGroup(
   ['', '', ''],
   emptyPocGroup,
   {
@@ -234,8 +233,8 @@ const noPhoneNewPoc = planner.safeWritesForGroup(
     email: 'recruiter@acme.com',
   },
 );
-assert.equal(noPhoneNewPoc.allowed, false);
-assert.ok(noPhoneNewPoc.conflicts.includes('new-poc-requires-phone'));
+assert.equal(plannerIdentityOnly.allowed, true, 'planner must not own contactability policy');
+assert.ok(plannerIdentityOnly.writes.some((write) => write.field === 'name'));
 
 const phoneNewPoc = planner.safeWritesForGroup(
   ['', '', ''],
@@ -270,6 +269,7 @@ for (const file of [
 const operatorSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-sheet-enrichment-operator.js'), 'utf8');
 const liveGuardSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-live-write-guard.js'), 'utf8');
 const aiBatchSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-ai-batch-rescue.js'), 'utf8');
+const plannerSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-enrichment-planner.js'), 'utf8');
 assert.match(operatorSource, /apollo\.searchCompanyPeopleBroad/);
 assert.match(operatorSource, /ranker\.rankCandidates/);
 assert.match(operatorSource, /apollo\.resolveDecisionMaker/);
@@ -295,6 +295,8 @@ assert.match(operatorSource, /ULTRON_M3_TOP3_PHONE_SETTLEMENT_POLLS/);
 assert.match(operatorSource, /pollWebhookResult/);
 assert.match(operatorSource, /pollPhoneRequest/);
 assert.match(aiBatchSource, /settleVerifiedPhoneForSelection/, 'bounded AI rescue must settle an already-started phone reveal before planner write verification');
+assert.match(aiBatchSource, /contactabilityExhaustedTargets/, 'AI rescue must not spend provider calls on a target already exhausted by deterministic top-3 contactability');
+assert.doesNotMatch(plannerSource, /new-poc-requires-phone/, 'generic planner must preserve the working-baseline write boundary');
 
 (async () => {
   const settlementStats = {};
@@ -308,6 +310,7 @@ assert.match(aiBatchSource, /settleVerifiedPhoneForSelection/, 'bounded AI rescu
     phoneRequestId: 'request-test-1',
   }, settlementStats, {
     phoneSettlementPolls: 1,
+    fetchPhoneResults: async () => [],
     pollNativePhone: async () => ({ state: 'found', phone: '+91 98765 43210' }),
     recordPhoneResult: (id, phone) => { recorded = { id, phone }; },
   });
@@ -325,16 +328,37 @@ assert.match(aiBatchSource, /settleVerifiedPhoneForSelection/, 'bounded AI rescu
     phoneStatus: 'pending',
     phoneRequestId: 'request-test-2',
   }, {}, {
+    fetchPhoneResults: async () => [],
     pollNativePhone: async () => ({ state: 'pending', phone: null }),
     recordPhoneResult: () => { throw new Error('pending phone must not be recorded as terminal'); },
   });
   assert.equal(stillPending.phone || null, null);
   assert.equal(operator.contactabilityTier(stillPending), 0, 'pending reveal must remain ineligible until an actual phone is returned');
 
-  console.log('Top-3 phone settlement self-test passed: pending Apollo reveals are checked before the hard contactability filter and only real phones become eligible.');
+  const callbackSettled = await operator.settleVerifiedPhoneForSelection({
+    identityVerified: true,
+    apolloPersonId: 'apollo-test-3',
+    name: 'Callback Recruiter',
+    phone: null,
+    phoneStatus: 'pending',
+    phoneRequestId: 'request-test-3',
+  }, {}, {
+    fetchPhoneResults: async () => [{ apollo_person_id: 'apollo-test-3', phone: '+91 99887 76655' }],
+    pollNativePhone: async () => { throw new Error('callback hit should avoid direct polling'); },
+    recordPhoneResult: () => {},
+  });
+  assert.equal(callbackSettled.phone, '+91 99887 76655');
+
+  const exhaustedStats = {};
+  operator.markContactabilityExhausted(exhaustedStats, 13, 1, 'Bytespoke');
+  operator.markContactabilityExhausted(exhaustedStats, 13, 1, 'Bytespoke');
+  assert.equal(exhaustedStats.contactabilityExhaustedTargets.length, 1);
+  assert.equal(exhaustedStats.contactabilityExhaustedTargets[0].key, '13:1');
+
+  console.log('Top-3 phone settlement self-test passed: callback results are reused, bounded pending reveals are checked, and only real phones become eligible.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
 
-console.log('Universal enrichment operator self-test passed: empty POC slots require an actual phone, contactable replacements are atomic and bounded, populated phones stay protected, arbitrary schema execution uses Apollo only after approval, and the full decision path has zero AI/model dependencies.');
+console.log('Universal enrichment operator self-test passed: working-baseline planner/write safety is preserved, contactability is isolated before writes, contactable replacements remain atomic/bounded, and deterministic execution retains zero AI/model dependencies.');
