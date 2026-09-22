@@ -1683,7 +1683,12 @@ function jobLevelFailures(record, request = {}) {
   if (request.filters?.postingAge) {
     const age = leadIntent.postedAgeDays(record?.jobEvidenceText || '');
     const spec = request.filters.postingAge;
-    if (age == null || (spec.maxAgeDays != null && age > spec.maxAgeDays)) failures.push('posting_age');
+    if (spec.preset === 'custom') {
+      const date = leadIntent.postedDate(record?.jobEvidenceText || '');
+      if (!date || date < spec.from || date > spec.to) failures.push('posting_age');
+    } else if (age == null
+      || (spec.minAgeDays != null && age < spec.minAgeDays)
+      || (spec.maxAgeDays != null && age > spec.maxAgeDays)) failures.push('posting_age');
   }
   if (request.filters?.applicantMax != null) {
     const count = leadIntent.applicantNumber(record?.applicants);

@@ -57,6 +57,10 @@ assert.equal(intent.postingAge('posted today').maxAgeDays, 1);
 assert.equal(intent.postingAge('posted in the past week').maxAgeDays, 7);
 assert.equal(intent.postingAge('posted this month').maxAgeDays, 30);
 assert.equal(intent.postingAge('posted in the past 3 days').maxAgeDays, 3);
+assert.deepEqual(intent.postingAge('from 2026-08-01 to 2026-08-15'), {
+  preset: 'custom', linkedinPreset: null, maxAgeDays: null, from: '2026-08-01', to: '2026-08-15',
+});
+assert.equal(intent.postingAge('yesterday').minAgeDays, 1);
 assert.deepEqual(intent.workplace('remote or hybrid'), { hard: ['remote', 'hybrid'], preferred: [] });
 assert.deepEqual(intent.workplace('remote or hybrid preferred'), { hard: [], preferred: ['remote', 'hybrid'] });
 assert.equal(intent.applicantFilter('fewer than 100 applicants').max, 100);
@@ -79,6 +83,9 @@ const rejectedUnknownApplicants = operator.jobLevelFailures({
   applicants: '',
 }, { hiring: false, topic: null, filters: { workplaceTypes: ['remote'], applicantMax: 50 } });
 assert.ok(rejectedUnknownApplicants.includes('applicant_count'), 'unknown applicant evidence cannot satisfy a hard applicant cap');
+assert.ok(operator.jobLevelFailures({ jobEvidenceText: 'AI Engineer · 2026-08-20' }, {
+  hiring: false, topic: null, filters: { postingAge: intent.postingAge('from 2026-08-01 to 2026-08-15') },
+}).includes('posting_age'));
 
 assert.deepEqual(intent.roleVariants('HR'), ['HR Executive', 'HR Recruiter', 'Talent Acquisition', 'Human Resources Specialist']);
 assert.ok(intent.roleVariants('AI engineer').includes('Machine Learning Engineer'));

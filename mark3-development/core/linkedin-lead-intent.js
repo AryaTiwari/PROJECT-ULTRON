@@ -30,7 +30,7 @@ function postingAge(text) {
   const range = value.match(/\b(?:from|between)\s+(\d{4}-\d{2}-\d{2})\s+(?:to|and)\s+(\d{4}-\d{2}-\d{2})\b/i);
   if (range) return { preset: 'custom', linkedinPreset: null, maxAgeDays: null, from: range[1], to: range[2] };
   if (/\b(?:today|past\s+(?:day|24\s+hours?)|last\s+24\s+hours?)\b/i.test(value)) return { preset: 'past_24_hours', linkedinPreset: 'past_24_hours', maxAgeDays: 1 };
-  if (/\byesterday\b/i.test(value)) return { preset: 'yesterday', linkedinPreset: 'past_week', maxAgeDays: 2 };
+  if (/\byesterday\b/i.test(value)) return { preset: 'yesterday', linkedinPreset: 'past_week', minAgeDays: 1, maxAgeDays: 1 };
   const days = value.match(/\b(?:past|last)\s+(\d{1,2})\s+days?\b/i);
   if (days) {
     const count = Math.max(1, Math.min(30, Number(days[1])));
@@ -146,6 +146,13 @@ function postedAgeDays(text, now = new Date()) {
   return null;
 }
 
+function postedDate(text) {
+  const match = String(text || '').match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (!match) return null;
+  const value = new Date(`${match[1]}T00:00:00Z`);
+  return Number.isNaN(value.getTime()) ? null : match[1];
+}
+
 function compile(text, legacy = {}) {
   const age = postingAge(text);
   const work = workplace(text);
@@ -180,5 +187,6 @@ module.exports = {
   roleFromText,
   applicantNumber,
   postedAgeDays,
+  postedDate,
   compile,
 };
