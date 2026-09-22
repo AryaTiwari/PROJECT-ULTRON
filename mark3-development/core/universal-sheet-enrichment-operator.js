@@ -2383,31 +2383,62 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
   const immediate = apollo.validPhone(person.phone || '');
   if (immediate) return { ...person, phone: immediate, phoneStatus: 'found' };
 
+  const apolloPersonId = text(person.apolloPersonId || person.id);
   const pollsRaw = Number(
     options.phoneSettlementPolls
     ?? process.env.ULTRON_M3_TOP3_PHONE_SETTLEMENT_POLLS
-    ?? 1
+    ?? 2
   );
-  const polls = Number.isFinite(pollsRaw) ? Math.max(0, Math.min(2, Math.floor(pollsRaw))) : 1;
-  const apolloPersonId = text(person.apolloPersonId || person.id);
+  const polls = Number.isFinite(pollsRaw) ? Math.max(0, Math.min(2, Math.floor(pollsRaw))) : 2;
+  const waitMs = Math.max(500, Math.min(3000, Number(options.phoneSettlementWaitMs || 2200)));
 
   stats.candidatePhoneSettlementAttempts = Number(stats.candidatePhoneSettlementAttempts || 0) + 1;
 
-  try {
-    let outcome = null;
+  const recordResolved = (phone) => {
+    const valid = apollo.validPhone(phone || '');
+    if (!valid) return null;
+    stats.candidatePhoneSettlementFound = Number(stats.candidatePhoneSettlementFound || 0) + 1;
+    if (apolloPersonId) {
+      const recordPhoneResult = typeof options.recordPhoneResult === 'function'
+        ? options.recordPhoneResult
+        : apollo.recordPhoneResult;
+      recordPhoneResult(apolloPersonId, valid);
+    }
+    return { ...person, phone: valid, phoneStatus: 'found' };
+  };
 
-    // Native Apollo reveal path used by production resolveDecisionMaker().
+  const callbackPhone = async () => {
+    if (!apolloPersonId) return null;
+    const fetchResults = typeof options.fetchPhoneResults === 'function'
+      ? options.fetchPhoneResults
+      : apollo.fetchPhoneResults;
+    try {
+      const results = await fetchResults();
+      const hit = (Array.isArray(results) ? results : []).find((item) =>
+        text(item?.apollo_person_id || item?.apolloPersonId || item?.person_id) === apolloPersonId
+      );
+      return apollo.validPhone(hit?.phone || '');
+    } catch {
+      return null;
+    }
+  };
+
+  try {
+    // Callback-worker results are cheapest to reuse and may already have landed
+    // while the candidate was being hydrated.
+    const callbackBefore = await callbackPhone();
+    if (callbackBefore) return recordResolved(callbackBefore);
+
+    let outcome = null;
     if (text(person.phoneRequestId)) {
       const pollNativePhone = typeof options.pollNativePhone === 'function'
         ? options.pollNativePhone
         : apollo.pollWebhookResult;
       outcome = await pollNativePhone(person.phoneRequestId, {
         polls,
-        maxWaitMs: Number(options.phoneSettlementWaitMs || 1400),
+        maxWaitMs: waitMs,
       });
     } else if (text(person.phoneWaterfallRequestId)) {
-      // Legacy/compatibility phone waterfall requests are still supported, but
-      // only the already-started request is polled. No extra person is revealed.
       const quality = require('./apollo-three-poc-quality');
       const pollWaterfallPhone = typeof options.pollWaterfallPhone === 'function'
         ? options.pollWaterfallPhone
@@ -2416,42 +2447,20 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       quality.recordPhoneWaterfallOutcome?.({ apolloPersonId }, outcome);
     }
 
-    if (!outcome) {
-      stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
-      return person;
-    }
+    const directPhone = apollo.validPhone(outcome?.phone || '');
+    if (directPhone) return recordResolved(directPhone);
 
-    const phone = apollo.validPhone(outcome.phone || '');
-    if (phone) {
-      stats.candidatePhoneSettlementFound = Number(stats.candidatePhoneSettlementFound || 0) + 1;
-      if (apolloPersonId) {
-        const recordPhoneResult = typeof options.recordPhoneResult === 'function'
-          ? options.recordPhoneResult
-          : apollo.recordPhoneResult;
-        recordPhoneResult(apolloPersonId, phone);
-      }
-      return {
-        ...person,
-        phone,
-        phoneStatus: 'found',
-        phoneWaterfallStatus: text(person.phoneWaterfallRequestId) ? 'found' : person.phoneWaterfallStatus,
-      };
-    }
+    // One final callback-store read catches reveals delivered during direct polling.
+    const callbackAfter = await callbackPhone();
+    if (callbackAfter) return recordResolved(callbackAfter);
 
-    const state = text(outcome.state).toLowerCase();
-    if (state === 'pending') {
+    const state = text(outcome?.state).toLowerCase();
+    if (state === 'pending' || person.phoneStatus === 'pending' || person.phoneStatus === 'waterfall_pending') {
       stats.candidatePhoneSettlementPending = Number(stats.candidatePhoneSettlementPending || 0) + 1;
       return person;
     }
-
     if (['not_found', 'terminal', 'unavailable'].includes(state)) {
       stats.candidatePhoneSettlementNotFound = Number(stats.candidatePhoneSettlementNotFound || 0) + 1;
-      if (apolloPersonId && state !== 'pending') {
-        const recordPhoneResult = typeof options.recordPhoneResult === 'function'
-          ? options.recordPhoneResult
-          : apollo.recordPhoneResult;
-        recordPhoneResult(apolloPersonId, null);
-      }
       return { ...person, phone: null, phoneStatus: 'not_found' };
     }
 
@@ -2463,6 +2472,27 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
     return person;
   }
 }
+
+function contactabilityTargetKey(rowNumber, ordinal) {
+  return `${Number(rowNumber) || 0}:${Number(ordinal) || 0}`;
+}
+
+function markContactabilityExhausted(stats, rowNumber, ordinal, company = '', detail = '') {
+  if (!Array.isArray(stats.contactabilityExhaustedTargets)) stats.contactabilityExhaustedTargets = [];
+  const key = contactabilityTargetKey(rowNumber, ordinal);
+  if (!stats.contactabilityExhaustedTargets.some((item) => item.key === key)) {
+    stats.contactabilityExhaustedTargets.push({
+      key,
+      rowNumber: Number(rowNumber) || null,
+      groupOrdinal: Number(ordinal) || null,
+      target: `POC-${Number(ordinal) || '?'}`,
+      company: text(company),
+      reason: 'contactability-top3-exhausted',
+      detail: text(detail) || 'Verified preferred candidates were checked, but none produced an actual usable phone within the bounded top-3 contactability budget.',
+    });
+  }
+}
+
 
 function contactabilityTier(person = {}) {
   const phone = apollo.validPhone(person?.phone || '');
@@ -2678,6 +2708,13 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
 
   if (!selected || selected.tier <= 0) {
     stats.emptyPocNoPhoneRejected = Number(stats.emptyPocNoPhoneRejected || 0) + 1;
+    markContactabilityExhausted(
+      stats,
+      options.rowNumber,
+      ordinal,
+      companyContext?.company || '',
+      'The bounded preferred shortlist was verified, but none of its candidates returned an actual usable phone.'
+    );
     stats.selectionAudit.push({
       groupId: target.group.id,
       ordinal,
@@ -2686,7 +2723,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       phoneAvailable: false,
       reason: 'No preferred candidate produced an actual usable phone within the bounded shortlist.',
     });
-    return { writes: [], filled: false, selected: null };
+    return { writes: [], filled: false, selected: null, reason: 'contactability-top3-exhausted' };
   }
 
   const { raw, rawKey, person, writePlan, tier } = selected;
@@ -2792,6 +2829,7 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
 
       if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) continue;
       person = await settleVerifiedPhoneForSelection(person, stats, options);
+      if (target.group?.fields?.phone && !apollo.validPhone(person?.phone || '')) continue;
       const hydratedName = ranker.normalize(person?.name || '');
       const hydratedLinkedin = ranker.linkedinKey(person?.linkedinUrl || person?.returnedLinkedIn || '');
       if (candidateAlreadyPresent(person, existing)) {
@@ -3015,6 +3053,7 @@ function freshStats() {
     existingGroupsReplaced: 0,
     replacementCandidateChecks: 0,
     emptyPocNoPhoneRejected: 0,
+    contactabilityExhaustedTargets: [],
     candidatePhoneSettlementAttempts: 0,
     candidatePhoneSettlementFound: 0,
     candidatePhoneSettlementPending: 0,
@@ -3439,7 +3478,16 @@ async function run(request = {}, options = {}) {
             : 5,
         });
         writes.push(...result.writes);
-        if (!result.filled) { stats.unfilledOpenGroups++; markLeftover(stats,rowNumber,'requested-contact-unresolved',{groupOrdinal:targetOrdinal,company:companyContext.company}); }
+        if (!result.filled) {
+          stats.unfilledOpenGroups++;
+          markLeftover(stats, rowNumber, result.reason || 'requested-contact-unresolved', {
+            groupOrdinal: targetOrdinal,
+            company: companyContext.company,
+            detail: result.reason === 'contactability-top3-exhausted'
+              ? 'Verified preferred candidates existed, but none returned an actual usable phone within the bounded top-3 policy.'
+              : '',
+          });
+        }
       }
       if ((!phaseOrdinal || phaseOrdinal === 2) && poc2Targets.length) {
         stats.manualPoc2Attempts += poc2Targets.length;
@@ -3466,12 +3514,16 @@ async function run(request = {}, options = {}) {
           // Mandatory POC-2 residue must always enter the deterministic leftover
           // queue. Phased execution intentionally disables AI/Big Pickle, but that
           // must not also disable the deep Apollo/LinkedIn/public-index recheck.
-          markLeftover(stats, rowNumber, people.length ? 'poc2-verification-unresolved' : 'poc2-no-candidates', {
+          const poc2Reason = result.reason
+            || (people.length ? 'poc2-verification-unresolved' : 'poc2-no-candidates');
+          markLeftover(stats, rowNumber, poc2Reason, {
             groupOrdinal: 2,
             company: companyContext.company,
-            detail: options.resultsFirstSweep
-              ? 'Fast sweep deferred deeper deterministic discovery/hydration until all rows are processed.'
-              : 'Deep deterministic pass still has no safe verified POC-2.',
+            detail: poc2Reason === 'contactability-top3-exhausted'
+              ? 'Verified preferred candidates existed, but none returned an actual usable phone within the bounded top-3 policy.'
+              : (options.resultsFirstSweep
+                ? 'Fast sweep deferred deeper deterministic discovery/hydration until all rows are processed.'
+                : 'Deep deterministic pass still has no safe verified POC-2.'),
           });
         }
       }
@@ -3744,6 +3796,8 @@ module.exports = {
   cachedVerifiedPeopleForCompany,
   manualPriorityCandidates,
   settleVerifiedPhoneForSelection,
+  contactabilityTargetKey,
+  markContactabilityExhausted,
   contactabilityTier,
   preferredContactShortlist,
   chooseContactabilityCandidate,
