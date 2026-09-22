@@ -2357,6 +2357,21 @@ function preferredContactShortlist(candidates = [], plan = {}, companyContext = 
   return pool.slice(0, limit);
 }
 
+
+function chooseContactabilityCandidate(entries = []) {
+  const normalized = (Array.isArray(entries) ? entries : []).map((entry, index) => ({
+    ...entry,
+    index: Number.isInteger(entry?.index) ? entry.index : index,
+    tier: Number.isFinite(Number(entry?.tier))
+      ? Number(entry.tier)
+      : contactabilityTier(entry?.person || entry),
+  }));
+  const qualified = normalized
+    .filter((entry) => entry.tier > 0)
+    .sort((a, b) => b.tier - a.tier || a.index - b.index);
+  return qualified[0] || normalized[0] || null;
+}
+
 async function fillManualPriorityGroup(row, plan, companyContext, candidates, stats, options = {}) {
   const ordinal = Number(options.ordinal || 0);
   if (!ordinal) return { writes: [], filled: false, selected: null };
@@ -2433,10 +2448,9 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   // Normal selection is phone-hard. Within phone-bearing candidates: +91 wins;
   // email strongly breaks ties. If all three preferred candidates lack a usable
   // phone, fall back to the first verified preferred POC instead of leaving blank.
-  const selected = checked
-    .slice()
-    .sort((a, b) => b.tier - a.tier || a.index - b.index)[0]
-    || firstVerified;
+  const selected = chooseContactabilityCandidate(
+    checked.length ? checked : (firstVerified ? [firstVerified] : []),
+  );
 
   if (!selected) return { writes: [], filled: false, selected: null };
 
@@ -3478,6 +3492,7 @@ module.exports = {
   manualPriorityCandidates,
   contactabilityTier,
   preferredContactShortlist,
+  chooseContactabilityCandidate,
   fillManualPriorityGroup,
   fillOpenGroups,
   applyRecoveredHeaderRepairs,
