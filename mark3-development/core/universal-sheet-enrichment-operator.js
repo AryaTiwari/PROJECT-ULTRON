@@ -2449,10 +2449,13 @@ async function selectContactableReplacement(item, plan, companyContext, stats, o
         { ...options, contactabilityCandidateLimit: 3 },
       );
 
+  // The existing no-phone POC was already checked as the first contact attempt.
+  // Inspect at most two replacement candidates so the total contactability budget
+  // remains capped at three people for this slot.
   const shortlist = shared.filter((candidate) => {
     const key = candidateDiscoveryKey(candidate);
     return key && !claimed.has(key) && !candidateAlreadyPresent(candidate, existing);
-  }).slice(0, 3);
+  }).slice(0, 2);
 
   const checked = [];
   for (let attempt = 0; attempt < shortlist.length; attempt++) {
