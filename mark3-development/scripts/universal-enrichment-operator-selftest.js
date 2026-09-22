@@ -71,11 +71,9 @@ assert.equal(hrFallbackCandidates.length, 2, 'two distinct same-company recruite
 assert.notEqual(hrFallbackCandidates[0].id, hrFallbackCandidates[1].id, 'POC slots must remain distinct people');
 assert.ok(hrFallbackCandidates.every((person) => /technical recruiter/i.test(person.title)));
 
-// Contactability is now a first-class preference. A verified same-company HR
-// candidate with Apollo's direct-phone signal should outrank a higher-title
-// candidate with no phone signal, but no candidate is rejected solely for lacking
-// a phone.
-const phonePreferredCandidates = operator.manualPriorityCandidates([
+// Role/relevance builds one company-level shortlist first. Contactability is
+// enforced only inside that shortlist so provider spend is bounded.
+const contactabilityCandidates = [
   {
     id: 'founder-no-phone',
     name: 'Founder Without Phone',
@@ -86,23 +84,76 @@ const phonePreferredCandidates = operator.manualPriorityCandidates([
     linkedinUrl: 'https://www.linkedin.com/in/founder-no-phone/',
   },
   {
-    id: 'hr-with-phone',
-    name: 'HR With Phone',
+    id: 'hr-india-no-email',
+    name: 'India HR',
     title: 'Human Resources Manager',
     hasDirectPhone: 'Yes',
-    directPhoneAvailability: 2,
     organizationName: 'Acme Systems',
     organizationDomain: 'acme.com',
-    linkedinUrl: 'https://www.linkedin.com/in/hr-with-phone/',
+    linkedinUrl: 'https://www.linkedin.com/in/india-hr/',
   },
-], {
-  company: 'Acme Systems',
-  domain: 'acme.com',
-}, { names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set() });
+  {
+    id: 'recruiter-foreign-email',
+    name: 'Foreign Recruiter',
+    title: 'Technical Recruiter',
+    hasDirectPhone: 'Yes',
+    organizationName: 'Acme Systems',
+    organizationDomain: 'acme.com',
+    linkedinUrl: 'https://www.linkedin.com/in/foreign-recruiter/',
+  },
+  {
+    id: 'fourth-perfect-but-forbidden',
+    name: 'Fourth Candidate',
+    title: 'Technical Recruiter',
+    hasDirectPhone: 'Yes',
+    organizationName: 'Acme Systems',
+    organizationDomain: 'acme.com',
+    linkedinUrl: 'https://www.linkedin.com/in/fourth-candidate/',
+  },
+];
 
-assert.equal(phonePreferredCandidates.length, 2);
-assert.equal(phonePreferredCandidates[0].id, 'hr-with-phone', 'phone-available POC should be attempted first');
-assert.equal(phonePreferredCandidates[1].id, 'founder-no-phone', 'no-phone candidate must remain a valid fallback');
+const roleOrdered = operator.manualPriorityCandidates(
+  contactabilityCandidates,
+  { company: 'Acme Systems', domain: 'acme.com' },
+  { names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set() },
+);
+assert.equal(roleOrdered[0].id, 'founder-no-phone', 'role authority must define preferred POC order before contact checks');
+
+const shortlist = operator.preferredContactShortlist(
+  contactabilityCandidates,
+  { context: {} },
+  { company: 'Acme Systems', domain: 'acme.com' },
+  { names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set() },
+  { contactabilityCandidateLimit: 3 },
+);
+assert.equal(shortlist.length, 3, 'contactability review must never exceed three preferred people');
+assert.equal(shortlist.some((person) => person.id === 'fourth-perfect-but-forbidden'), false, 'fourth candidate must never enter the contactability budget');
+
+assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210', email: 'hr@acme.com' }), 4);
+assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210' }), 3);
+assert.equal(operator.contactabilityTier({ phone: '+1 415 555 0100', email: 'hr@acme.com' }), 2);
+assert.equal(operator.contactabilityTier({ phone: '+1 415 555 0100' }), 1);
+assert.equal(operator.contactabilityTier({ email: 'hr@acme.com' }), 0, 'email alone cannot satisfy compulsory phone contactability');
+
+const indiaWins = operator.chooseContactabilityCandidate([
+  { person: { name: 'Founder', title: 'Founder' }, tier: 0, index: 0 },
+  { person: { name: 'India HR', phone: '+919876543210' }, tier: 3, index: 1 },
+  { person: { name: 'Foreign Recruiter', phone: '+14155550100', email: 'r@acme.com' }, tier: 2, index: 2 },
+]);
+assert.equal(indiaWins.person.name, 'India HR', '+91 phone must beat a foreign phone even when the foreign candidate has email');
+
+const emailBreaksIndiaTie = operator.chooseContactabilityCandidate([
+  { person: { name: 'India No Email', phone: '+919876543210' }, tier: 3, index: 0 },
+  { person: { name: 'India With Email', phone: '+919812345678', email: 'hr@acme.com' }, tier: 4, index: 1 },
+]);
+assert.equal(emailBreaksIndiaTie.person.name, 'India With Email', 'email should strongly decide between otherwise valid +91 candidates');
+
+const noPhoneFallback = operator.chooseContactabilityCandidate([
+  { person: { name: 'First Preferred' }, tier: 0, index: 0 },
+  { person: { name: 'Second Preferred', email: 'second@acme.com' }, tier: 0, index: 1 },
+  { person: { name: 'Third Preferred' }, tier: 0, index: 2 },
+]);
+assert.equal(noPhoneFallback.person.name, 'First Preferred', 'if none of the three has a usable phone, use the first preferred verified POC');
 
 assert.equal(planner.samePerson(
   { name: 'Rajeev Ranjan — Recruitment Manager' },
@@ -133,5 +184,8 @@ assert.match(
   /ULTRON_M3_UNIVERSAL_PRIMARY_POC1_HYDRATION_ATTEMPTS \|\| 3/,
   'POC-1 fast sweep must try multiple verified candidates before leaving the slot unresolved',
 );
+assert.match(operatorSource, /contactabilityCandidateLimit:\s*3/);
+assert.match(operatorSource, /top3-contactability/);
+assert.match(operatorSource, /top3-first-preferred-fallback/);
 
 console.log('Universal enrichment operator self-test passed: exact-profile employer parsing is deterministic, existing identity is preserved, arbitrary schema execution uses Apollo only after approval, and the full decision path has zero AI/model dependencies.');
