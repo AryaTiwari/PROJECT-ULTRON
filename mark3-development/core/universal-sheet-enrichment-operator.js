@@ -2237,9 +2237,15 @@ function pragmaticSameEmployerCandidates(candidates = [], companyContext = {}, e
         candidate,
         priority: priority < 99 ? priority : 50,
         score: Number(scored?.score || 0),
+        phonePreference: Number(apollo.phoneAvailabilityPriority(candidate) || 0),
       };
     })
-    .sort((a, b) => a.priority - b.priority || b.score - a.score || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || '')))
+    .sort((a, b) =>
+      b.phonePreference - a.phonePreference
+      || a.priority - b.priority
+      || b.score - a.score
+      || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || ''))
+    )
     .map((item) => item.candidate);
 }
 
@@ -2294,10 +2300,20 @@ function manualPriorityCandidates(candidates = [], companyContext = {}, existing
       company: companyContext.company,
       companyDomain: companyContext.domain,
     }, candidates || []);
-    rows.push({ candidate, priority, score: Number(scored?.score || 0) });
+    rows.push({
+      candidate,
+      priority,
+      score: Number(scored?.score || 0),
+      phonePreference: Number(apollo.phoneAvailabilityPriority(candidate) || 0),
+    });
   }
   return rows
-    .sort((a, b) => a.priority - b.priority || b.score - a.score || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || '')))
+    .sort((a, b) =>
+      b.phonePreference - a.phonePreference
+      || a.priority - b.priority
+      || b.score - a.score
+      || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || ''))
+    )
     .map((item) => item.candidate);
 }
 
@@ -2392,6 +2408,11 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       ordinal,
       strategy: 'manual-priority',
       priority: apollo.decisionPriority(person.title || raw.title || ''),
+      phonePreference: Math.max(
+        Number(apollo.phoneAvailabilityPriority(person) || 0),
+        Number(apollo.phoneAvailabilityPriority(raw) || 0),
+      ),
+      phoneAvailable: Boolean(apollo.validPhone(person.phone || '')),
       apolloPersonId: text(person.apolloPersonId || person.id),
       name: person.name || '',
       title: person.title || '',
