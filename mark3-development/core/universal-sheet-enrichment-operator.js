@@ -2398,7 +2398,10 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
 
     // Native Apollo reveal path used by production resolveDecisionMaker().
     if (text(person.phoneRequestId)) {
-      outcome = await apollo.pollWebhookResult(person.phoneRequestId, {
+      const pollNativePhone = typeof options.pollNativePhone === 'function'
+        ? options.pollNativePhone
+        : apollo.pollWebhookResult;
+      outcome = await pollNativePhone(person.phoneRequestId, {
         polls,
         maxWaitMs: Number(options.phoneSettlementWaitMs || 1400),
       });
@@ -2406,7 +2409,10 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       // Legacy/compatibility phone waterfall requests are still supported, but
       // only the already-started request is polled. No extra person is revealed.
       const quality = require('./apollo-three-poc-quality');
-      outcome = await quality.pollPhoneRequest(person.phoneWaterfallRequestId, { polls });
+      const pollWaterfallPhone = typeof options.pollWaterfallPhone === 'function'
+        ? options.pollWaterfallPhone
+        : quality.pollPhoneRequest;
+      outcome = await pollWaterfallPhone(person.phoneWaterfallRequestId, { polls });
       quality.recordPhoneWaterfallOutcome?.({ apolloPersonId }, outcome);
     }
 
@@ -2418,7 +2424,12 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
     const phone = apollo.validPhone(outcome.phone || '');
     if (phone) {
       stats.candidatePhoneSettlementFound = Number(stats.candidatePhoneSettlementFound || 0) + 1;
-      if (apolloPersonId) apollo.recordPhoneResult(apolloPersonId, phone);
+      if (apolloPersonId) {
+        const recordPhoneResult = typeof options.recordPhoneResult === 'function'
+          ? options.recordPhoneResult
+          : apollo.recordPhoneResult;
+        recordPhoneResult(apolloPersonId, phone);
+      }
       return {
         ...person,
         phone,
@@ -2435,7 +2446,12 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
 
     if (['not_found', 'terminal', 'unavailable'].includes(state)) {
       stats.candidatePhoneSettlementNotFound = Number(stats.candidatePhoneSettlementNotFound || 0) + 1;
-      if (apolloPersonId && state !== 'pending') apollo.recordPhoneResult(apolloPersonId, null);
+      if (apolloPersonId && state !== 'pending') {
+        const recordPhoneResult = typeof options.recordPhoneResult === 'function'
+          ? options.recordPhoneResult
+          : apollo.recordPhoneResult;
+        recordPhoneResult(apolloPersonId, null);
+      }
       return { ...person, phone: null, phoneStatus: 'not_found' };
     }
 
