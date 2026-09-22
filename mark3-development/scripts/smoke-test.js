@@ -85,9 +85,10 @@ if (web.normalizeUrl('www.elevateos.in').hostname !== 'www.elevateos.in') throw 
 if (web.extractFirstUrl('Review www.elevateos.in please') !== 'www.elevateos.in') throw new Error('Web URL extraction invariant failed.');
 const elevateVariants = web.urlVariants('www.elevateos.in');
 if (elevateVariants.length !== 2 || elevateVariants[1].hostname !== 'elevateos.in') throw new Error('WWW URLs must generate an apex-domain retry for remote web fetching.');
-if (!web.status().remoteDns || !web.status().canonicalHostRetry) throw new Error('TinyFish must remain remote-DNS-first with canonical host retry enabled.');
-if (!web.shouldSearch('Search the web for the latest Gemini updates')) throw new Error('Explicit live-web search intent must trigger TinyFish Search.');
+if (!web.status().remoteDns || !web.status().canonicalHostRetry) throw new Error('Remote web access must keep remote-DNS-first resolution with canonical host retry enabled.');
+if (!web.shouldSearch('Search the web for the latest Gemini updates')) throw new Error('Explicit live-web search intent must trigger the web search control plane.');
 if (web.shouldSearch('Explain how transformers work')) throw new Error('Evergreen questions must not trigger unnecessary web search.');
-if (web.status().primary !== 'tinyfish') throw new Error('TinyFish must remain the primary web provider.');
+if (!['direct-bing-html', 'tinyfish'].includes(web.status().primary)) throw new Error('The primary web provider must be the keyless direct search module or TinyFish fallback.');
+if (web.status().primary === 'direct-bing-html' && !web.status().directSearch?.enabled) throw new Error('Direct web search cannot be primary unless its runtime is enabled.');
 
 console.log(`ULTRON Mark 3 smoke test passed: ${files.length} JS files checked.`);

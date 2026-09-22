@@ -3,7 +3,7 @@ const assert = require('assert/strict');
 const direct = require('../core/direct-provider-router');
 const compiler = require('../core/linkedin-request-compiler');
 
-assert.equal(compiler.shouldCompile('Find SAP companies'), false);
+assert.equal(compiler.shouldCompile('Find SAP companies'), true);
 assert.equal(compiler.shouldCompile('Could you look through LinkedIn for SAP companies in Maharashtra?'), true);
 
 const normalized = compiler.normalizedIR({

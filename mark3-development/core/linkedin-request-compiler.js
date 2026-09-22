@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const direct = require('./direct-provider-router');
+const leadIntent = require('./linkedin-lead-intent');
 
 const COMPILER_MODEL = String(process.env.ULTRON_M3_LINKEDIN_COMPILER_MODEL || 'gemini/gemini-3.6-flash').trim();
 const COMPILER_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_LINKEDIN_COMPILER_TIMEOUT_MS || 15000));
@@ -20,6 +21,14 @@ const MissionIR = z.object({
   jobType: z.enum(['full_time', 'part_time', 'contract', 'temporary', 'volunteer', 'internship', 'other']).nullable().default(null),
   experienceLevel: z.enum(['internship', 'entry', 'associate', 'mid_senior', 'director', 'executive']).nullable().default(null),
   datePosted: z.enum(['past_hour', 'past_24_hours', 'past_week', 'past_month']).nullable().default(null),
+  postingAgeDays: z.number().int().min(1).max(365).nullable().default(null),
+  workplaceTypes: z.array(z.enum(['remote', 'hybrid', 'on_site'])).max(3).default([]),
+  preferredWorkplaceTypes: z.array(z.enum(['remote', 'hybrid', 'on_site'])).max(3).default([]),
+  applicantMax: z.number().int().min(1).max(1000000).nullable().default(null),
+  locationRadiusKm: z.number().int().min(0).max(500).nullable().default(null),
+  locationExpandable: z.boolean().default(false),
+  locationMaximumRadiusKm: z.number().int().min(0).max(500).nullable().default(null),
+  outputMode: z.enum(['lead-discovery', 'contact-enrichment']).default('lead-discovery'),
   easyApply: z.boolean().default(false),
   useFinalMaster: z.boolean().default(false),
   resumeExistingPool: z.boolean().default(false),
@@ -76,7 +85,7 @@ function normalizedIR(raw) {
 
 function shouldCompile(text) {
   const value = String(text || '').trim();
-  if (!/\blinkedin\b|linkedin\.com\//i.test(value)) return false;
+  if (!/\blinkedin\b|linkedin\.com\//i.test(value) && !leadIntent.isDiscoveryRequest(value)) return false;
   if (!/\b(?:find|get|search|research|source|collect|bring|list|show|extract|discover|companies?|company|people|profiles?|jobs?|roles?|hiring|recruiters?|founders?|leads?)\b/i.test(value)) return false;
   return true;
 }
@@ -112,13 +121,17 @@ function canonicalPrompt(ir) {
   if (ir.jobType) lines.push(`Job type: ${ir.jobType.replace(/_/g, ' ')}.`);
   if (ir.experienceLevel) lines.push(`Experience level: ${ir.experienceLevel.replace(/_/g, ' ')}.`);
   if (ir.datePosted) lines.push(`Date posted: ${ir.datePosted.replace(/_/g, ' ')}.`);
+  if (ir.postingAgeDays) lines.push(`Reject jobs older than ${ir.postingAgeDays} days when posting evidence is available.`);
+  if (ir.applicantMax) lines.push(`Fewer than ${ir.applicantMax} applicants.`);
+  if (ir.locationRadiusKm != null) lines.push(`Initial location radius: ${ir.locationRadiusKm} km.`);
+  if (ir.locationExpandable) lines.push(`Location may expand up to ${ir.locationMaximumRadiusKm || 100} km only when the target is not reached.`);
   if (ir.easyApply) lines.push('Easy Apply only.');
 
   if (ir.resumeExistingPool || ir.reuseCachedEvidence) {
     lines.push('Reuse saved discovery, cached evidence and previously rejected compatible candidates before fresh LinkedIn calls.');
   }
   if (ir.useFinalMaster) lines.push('Use my canonical Final Master and deduplicate against it.');
-  if (!ir.wantsContacts) lines.push('Do not use Apollo or contact enrichment unless I request it separately.');
+  if (!ir.wantsContacts || ir.outputMode === 'lead-discovery') lines.push('Do not use Apollo or contact enrichment unless I request it separately.');
 
   return lines.join(' ');
 }
@@ -172,6 +185,7 @@ async function compile(text) {
         'If the user asks to reach a total in a Final Master, use targetMode=master_total and useFinalMaster=true.',
         'If the user asks to reuse saved discovery/cache, set resumeExistingPool and reuseCachedEvidence true.',
         'If the user explicitly says no Apollo or leaves contact enrichment for later, wantsContacts=false.',
+        'Ordinary company/job discovery defaults to outputMode=lead-discovery and wantsContacts=false, even if a destination sheet contains contact columns.',
         'linkedinOnly must always be true.',
       ].join(' '),
     },

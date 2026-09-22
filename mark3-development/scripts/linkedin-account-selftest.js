@@ -28,7 +28,7 @@ assert.equal(company.entityMode, 'company');
 assert.equal(company.location, 'Maharashtra');
 assert.equal(company.hiring, true);
 assert.equal(company.topic, 'SAP');
-assert.equal(company.wantsContacts, true);
+assert.equal(company.wantsContacts, false);
 
 const filtered = operator.parseRequest('Find me 20 companies on LinkedIn with SAP roles under 1000 employees, remote, located in Maharashtra');
 const agenticSapRequest = operator.parseRequest('LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total. Allowed locations: Maharashtra and Bengaluru/Bangalore. Prioritize Maharashtra first, then use Bengaluru. Remote roles preferred. Maximum 1000 employees. Companies only.');
@@ -120,7 +120,7 @@ assert.equal(exact.exactUrl, 'https://www.linkedin.com/company/acme-tech');
 assert.equal(exact.count, 1);
 
 const companyHeaders = operator.ensureHeaders(operator.COMPANY_HEADERS, company);
-assert.deepEqual(companyHeaders, ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS', 'SAP ROLE', 'JOB LINK', 'LOCATION', 'HIRING SIGNAL']);
+assert.deepEqual(companyHeaders, ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS', 'LOCATION', 'SAP ROLE', 'JOB LINK', 'HIRING SIGNAL']);
 assert.equal(operator.headerKey(operator.INTERNAL_CONTACT_HEADER), 'contactLinkedin');
 assert.equal(operator.headerKey('NO. OF APPLICANTS'), 'applicants');
 assert.equal(operator.headerKey('REMARKS'), 'remarks');

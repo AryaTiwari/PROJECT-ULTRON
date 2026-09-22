@@ -1,3 +1,5 @@
+const leadIntent = require('./linkedin-lead-intent');
+
 function uniq(values = []) {
   const seen = new Set();
   return values.map(v => String(v || '').trim()).filter(Boolean).filter(v => {
@@ -101,6 +103,7 @@ function target(text, legacy = {}) {
 
 function compile(text, legacy = {}, options = {}) {
   const value = String(text || '').toLowerCase();
+  const lead = leadIntent.compile(text, legacy);
   const explicitLocations = extractLocations(text, '', options.knownLocations || []);
   const legacyLocations = uniq(
     (legacy.allowedLocations && legacy.allowedLocations.length ? legacy.allowedLocations : null)
@@ -151,13 +154,24 @@ function compile(text, legacy = {}, options = {}) {
       employeeMin: legacy.filters?.employeeMin ?? null,
       employeeMax: legacy.filters?.employeeMax ?? null,
       locations,
-      workType: wt.strictness === 'hard' ? wt.value : null,
+      workType: lead.preferredWorkplaceTypes.length ? null : (wt.strictness === 'hard' ? wt.value : null),
       jobType: legacy.filters?.jobType || null,
       experienceLevel: legacy.filters?.experienceLevel || null,
       datePosted: legacy.filters?.datePosted || null,
+      postingAge: legacy.filters?.postingAge || lead.postingAge || null,
+      workplaceTypes: legacy.filters?.workplaceTypes?.length ? legacy.filters.workplaceTypes : lead.workplaceTypes,
+      applicantMax: legacy.filters?.applicantMax ?? lead.applicantMax,
       easyApply: Boolean(legacy.filters?.easyApply),
     },
-    preferences: { locations: preferredLocations, workType: wt.strictness === 'preference' ? wt.value : null },
+    preferences: {
+      locations: preferredLocations,
+      workType: lead.preferredWorkplaceTypes[0] || (wt.strictness === 'preference' ? wt.value : null),
+      workplaceTypes: legacy.filters?.preferredWorkplaceTypes?.length ? legacy.filters.preferredWorkplaceTypes : lead.preferredWorkplaceTypes,
+    },
+    locationExpansion: legacy.locationExpansion || lead.locationExpansion || null,
+    company: legacy.companyFilters || lead.company,
+    outputMode: lead.outputMode,
+    contactEnrichment: lead.contactEnrichment,
     dedupe: { scope: legacy.entityMode === 'company' ? 'global-company' : 'mission', allowPreviouslySeen: Boolean(legacy.allowPreviouslySeenCompanies) },
     output: { useFinalMaster: Boolean(legacy.useFinalMaster || targetSpec.mode === 'master_total'), destinationSheetUrl: legacy.destinationSheetUrl || null },
     relaxation: { hardConstraintsLocked: true, preferencesMayRelax: true, requiresUserApprovalForHardConstraintChange: true },
@@ -173,7 +187,17 @@ function apply(contract, request = {}) {
   next.filters.jobType = contract.hard.jobType;
   next.filters.experienceLevel = contract.hard.experienceLevel;
   next.filters.datePosted = contract.hard.datePosted;
+  next.filters.postingAge = contract.hard.postingAge || null;
+  next.filters.postingAgeDays = contract.hard.postingAge?.maxAgeDays ?? null;
+  next.filters.workplaceTypes = contract.hard.workplaceTypes || [];
+  next.filters.preferredWorkplaceTypes = contract.preferences.workplaceTypes || [];
+  next.filters.applicantMax = contract.hard.applicantMax ?? null;
   next.filters.easyApply = contract.hard.easyApply;
+  next.locationExpansion = contract.locationExpansion || null;
+  next.companyFilters = contract.company || {};
+  next.outputMode = contract.outputMode || (request.wantsContacts ? 'contact-enrichment' : 'lead-discovery');
+  next.contactEnrichment = Boolean(contract.contactEnrichment || request.wantsContacts);
+  next.wantsContacts = next.contactEnrichment;
   if (contract.target.mode === 'master_total') { next.targetMode = 'master_total'; next.targetTotal = contract.target.value; next.useFinalMaster = true; }
   else { next.targetMode = 'additional'; next.count = contract.target.value; }
   return next;

@@ -14,15 +14,23 @@ const finalMaster = require('./linkedin-final-master');
 const sheetProgress = require('./linkedin-sheet-progress');
 const missionContract = require('./linkedin-mission-contract');
 const queryStrategist = require('./linkedin-query-strategist');
+const leadIntent = require('./linkedin-lead-intent');
+const locationExpander = require('./linkedin-location-expander');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'linkedin-account', 'operator-state.json');
 const PENDING_TTL_MS = 45 * 60 * 1000;
 
 const COMPANY_HEADERS = ['NAME', 'COMPANY NAME', 'COMPANY LINK', 'NO. OF APPLICANTS', 'PHONE NUMBER', 'EMAIL', 'REMARKS'];
+const LEAD_DISCOVERY_HEADERS = ['COMPANY NAME', 'COMPANY LINK', 'LOCATION', 'JOB TITLE', 'JOB LINK', 'POSTED', 'WORKPLACE TYPE', 'NO. OF APPLICANTS', 'COMPANY SIZE', 'REMARKS'];
 const PERSON_HEADERS = ['Name', 'Company', 'Role', 'LinkedIn', 'Location', 'Post Details', 'Email', 'Phone No', 'Source', 'Lead Score'];
 const INTERNAL_CONTACT_HEADER = '__ULTRON CONTACT LINKEDIN';
 const APOLLO_SECTION_HEADERS = ['APOLLO CONTACT', 'APOLLO ROLE', 'APOLLO LINKEDIN', 'APOLLO PHONE', 'APOLLO EMAIL', 'APOLLO STATUS'];
+
+function defaultHeadersFor(request = {}) {
+  if (request.entityMode !== 'company') return PERSON_HEADERS;
+  return request.wantsContacts ? COMPANY_HEADERS : LEAD_DISCOVERY_HEADERS;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -91,7 +99,7 @@ function rememberWorkspaceSheet(sheetUrl, metadata = {}, state = null) {
 
 function isRequest(text) {
   const value = String(text || '').trim();
-  if (!/linkedin\.com\/(?:in|company)\//i.test(value) && !/\blinkedin\b/i.test(value)) return false;
+  if (!/linkedin\.com\/(?:in|company)\//i.test(value) && !/\blinkedin\b/i.test(value) && !leadIntent.isDiscoveryRequest(value)) return false;
   if (/\b(?:status|health|doctor|setup|login|unlock)\b/i.test(value) && !/\b(?:find|get|scrape|research|source|bring|collect|search|list)\b/i.test(value)) return false;
   return /\b(?:find|get|scrape|research|source|bring|collect|search|list|show|extract|companies|company|people|profiles?|recruiters?|founders?|hiring)\b/i.test(value)
     || /linkedin\.com\/(?:in|company)\//i.test(value);
@@ -142,16 +150,21 @@ function parseFilters(text) {
     : /\bassociate\b/i.test(value) ? 'associate'
       : /\bmid[- ]?senior\b/i.test(value) ? 'mid_senior'
         : /\bexecutive\b/i.test(value) ? 'executive' : null;
-  const datePosted = /\bpast\s+24\s+hours?\b|\blast\s+24\s+hours?\b/i.test(value) ? 'past_24_hours'
-    : /\bpast\s+week\b|\blast\s+week\b/i.test(value) ? 'past_week'
-      : /\bpast\s+month\b|\blast\s+month\b/i.test(value) ? 'past_month' : null;
+  const compiled = leadIntent.compile(value);
+  const datePosted = compiled.postingAge?.linkedinPreset || null;
   return {
     employeeMin: Number.isFinite(employeeRange.min) ? employeeRange.min : null,
     employeeMax: Number.isFinite(employeeRange.max) ? employeeRange.max : null,
-    workType,
+    workType: compiled.workplaceTypes.length > 1 || compiled.preferredWorkplaceTypes.length ? null : workType,
     jobType,
     experienceLevel,
     datePosted,
+    postingAge: compiled.postingAge,
+    postingAgeDays: compiled.postingAge?.maxAgeDays ?? null,
+    workplaceTypes: compiled.workplaceTypes,
+    preferredWorkplaceTypes: compiled.preferredWorkplaceTypes,
+    applicantMax: compiled.applicantMax,
+    lowCompetition: compiled.lowCompetition,
     easyApply: /\beasy apply\b/i.test(value),
   };
 }
@@ -163,6 +176,10 @@ function requestTopic(text, entityMode, location) {
     .replace(/\b(?:under|below|fewer than|less than|up to|maximum|max|over|above|more than|at least|minimum|min)\s*\d[\d,]*\b/gi, ' ')
     .replace(/\b\d[\d,]*\s*(?:-|to)\s*\d[\d,]*\s+employees?\b/gi, ' ')
     .replace(/\b(?:remote|hybrid|on[- ]?site|in[- ]?office|easy apply|full[- ]?time|part[- ]?time|contract|internship)\b/gi, ' ')
+    .replace(/\b(?:posted\s+)?(?:today|yesterday|this\s+month|past|last)\s+(?:\d+\s+)?(?:hours?|days?|weeks?|months?|week|month|24\s+hours?)\b/gi, ' ')
+    .replace(/\bwithin\s+\d+(?:\.\d+)?\s*(?:km|kilomet(?:er|re)s?|mi|miles?)(?:\s+of)?\b/gi, ' ')
+    .replace(/\b(?:under|below|fewer\s+than|less\s+than|maximum|max|up\s+to)\s+\d[\d,]*\s+(?:applicants?|applications?)\b/gi, ' ')
+    .replace(/\b(?:remote|hybrid|on[- ]?site)\s+(?:preferred|only)\b/gi, ' ')
     .replace(/\b(?:roles?|positions?|should be|must be|located|location|with|employees?|and|from|in|at|near|around)\b/gi, ' ')
     .replace(/[.,;:!?()[\]{}]+/g, ' ');
   if (location) {
@@ -256,7 +273,9 @@ function parseRequest(text) {
     .trim();
 
   const entity = linkedinPublic.normalizeLinkedInEntityUrl(criteriaText);
-  const location = linkedinPublic.locationFromText(criteriaText);
+  const phraseLocation = criteriaText.match(/\b(?:near|around)\s+([A-Za-z][A-Za-z .-]{1,60}?)(?=\s+(?:within|posted|in\s+the|remote|hybrid|onsite|on-site|under|with|and\s+(?:put|fill|write))\b|[,.;]|$)/i)?.[1]
+    || criteriaText.match(/\bwithin\s+\d+(?:\.\d+)?\s*(?:km|kilomet(?:er|re)s?|mi|miles?)\s+of\s+([A-Za-z][A-Za-z .-]{1,60}?)(?=\s+(?:posted|in\s+the|remote|hybrid|onsite|on-site|under|with|and\s+(?:put|fill|write))\b|[,.;]|$)/i)?.[1];
+  const location = linkedinPublic.locationFromText(criteriaText) || String(phraseLocation || '').trim();
   const filters = parseFilters(criteriaText);
   const hiring = hiringIntentFromText(criteriaText, filters);
 
@@ -269,6 +288,8 @@ function parseRequest(text) {
   const explicitlyPeople = /\b(?:people|persons?|professionals?|recruiters?|founders?|employees?|candidates?|profiles?)\b/i.test(peopleIntentText);
   const inferredMode = linkedinPublic.entityModeFromText(criteriaText);
   const entityMode = entity?.type || (hiring && !explicitlyPeople ? 'company' : inferredMode);
+  const compiledLeadIntent = leadIntent.compile(criteriaText);
+  const compiledTopic = leadIntent.roleFromText(criteriaText) || requestTopic(criteriaText, entityMode, location);
   const baseRequest = {
     originalMessage: value,
     criteriaText,
@@ -279,8 +300,13 @@ function parseRequest(text) {
     location,
     locationScope: locationScopeFromText(criteriaText, hiring),
     hiring,
-    topic: requestTopic(criteriaText, entityMode, location),
-    wantsContacts: true,
+    topic: compiledTopic,
+    wantsContacts: compiledLeadIntent.contactEnrichment,
+    outputMode: compiledLeadIntent.outputMode,
+    contactEnrichment: compiledLeadIntent.contactEnrichment,
+    locationExpansion: compiledLeadIntent.locationExpansion,
+    companyFilters: compiledLeadIntent.company,
+    roleFamily: leadIntent.roleVariants(compiledTopic),
     filters,
     destinationSheetUrl,
     useFinalMaster: wantsFinalMaster,
@@ -316,6 +342,9 @@ function headerKey(value) {
   if (/email|e mail/.test(h)) return 'email';
   if (/^(?:remarks?|contact remarks?|contact person|contact identity)$/.test(h)) return 'remarks';
   if (/applicants?/.test(h)) return 'applicants';
+  if (/^(?:posted|posted date|posting date|date posted|job age|posting age)$/.test(h)) return 'posted';
+  if (/^(?:industry|company industry|sector)$/.test(h)) return 'industry';
+  if (/^(?:company size confidence|size confidence|headcount confidence)$/.test(h)) return 'companySizeConfidence';
   if (/^(?:source|source url|linkedin source)$/.test(h)) return 'source';
   if (/^(?:lead score|score|quality|relevance)$/.test(h)) return 'score';
   return null;
@@ -326,14 +355,15 @@ function isFinalMasterRequest(request = {}) {
     && Boolean(request.useFinalMaster || request.targetMode === 'master_total');
 }
 
-function ensureHeaders(headers, request) {
+function ensureHeaders(headers, request, options = {}) {
   if (isFinalMasterRequest(request)) return [...finalMaster.FINAL_MASTER_HEADERS];
-  const defaults = request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS;
+  const defaults = request.entityMode === 'company' && !request.wantsContacts ? LEAD_DISCOVERY_HEADERS : (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS);
   const source = Array.isArray(headers) && headers.length ? headers : defaults;
   const out = source.map((value) => String(value ?? '').trim()).slice(0, 30);
+  if (options.preserveExisting) return out;
   const keys = new Set(out.map(headerKey).filter(Boolean));
   const needed = request.entityMode === 'company'
-    ? [['name', 'NAME'], ['company', 'COMPANY NAME'], ['linkedin', 'COMPANY LINK'], ['applicants', 'NO. OF APPLICANTS'], ['phone', 'PHONE NUMBER'], ['email', 'EMAIL']]
+    ? [['company', 'COMPANY NAME'], ['linkedin', 'COMPANY LINK'], ['location', 'LOCATION']]
     : [['name', 'Name'], ['company', 'Company'], ['role', 'Role'], ['linkedin', 'LinkedIn'], ['location', 'Location'], ['details', 'Post Details'], ['source', 'Source'], ['score', 'Lead Score']];
   if (request.entityMode === 'company') {
     if (request.hiring) needed.push(['role', 'SAP ROLE'], ['jobLink', 'JOB LINK']);
@@ -346,7 +376,7 @@ function ensureHeaders(headers, request) {
     needed.push(['email', 'Email'], ['phone', 'Phone No']);
   }
   for (const [key, label] of needed) if (!keys.has(key)) { out.push(label); keys.add(key); }
-  if (request.entityMode === 'company' && !keys.has('remarks')) {
+  if (request.entityMode === 'company' && request.wantsContacts && !keys.has('remarks')) {
     const emailIndex = out.findIndex((header) => headerKey(header) === 'email');
     out.splice(emailIndex >= 0 ? emailIndex + 1 : out.length, 0, 'REMARKS');
   }
@@ -369,7 +399,7 @@ function setPending(request, template) {
   const state = loadState();
   state.pending = {
     ...request,
-    suggestedHeaders: template?.headers || (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS),
+    suggestedHeaders: template?.headers || defaultHeadersFor(request),
     suggestedSourceTitle: template?.sourceTitle || null,
     createdAt: nowIso(),
   };
@@ -434,8 +464,8 @@ async function inspectDestinationSheet(url, request) {
 
   const baseHeaders = chosen.headers.some(Boolean)
     ? chosen.headers
-    : (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS);
-  const headers = ensureHeaders(baseHeaders, request);
+    : defaultHeadersFor(request);
+  const headers = ensureHeaders(baseHeaders, request, { preserveExisting: chosen.headers.some(Boolean) });
   const fullRows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(chosen.sheetName)}!A:ZZ`);
   let lastNonEmptyRow = 0;
   for (let i = 0; i < fullRows.length; i++) {
@@ -603,7 +633,7 @@ async function prepare(request) {
     } catch (error) {
       if (!isGoogleSheetsError(error)) throw error;
       const fallbackHeaders = ensureHeaders(
-        request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS,
+        defaultHeadersFor(request),
         request,
       );
       return {
@@ -617,7 +647,7 @@ async function prepare(request) {
     }
   }
   if (request.entityMode === 'company' && !request.explicitHeaders?.length && !request.usePrevious) {
-    return { type: 'run', request, headers: ensureHeaders([...COMPANY_HEADERS], request) };
+    return { type: 'run', request, headers: ensureHeaders([...defaultHeadersFor(request)], request) };
   }
   if (request.exactUrl || request.explicitHeaders?.length || request.useDefault || request.usePrevious) {
     let headers = request.explicitHeaders;
@@ -625,17 +655,17 @@ async function prepare(request) {
       const template = v2.latestTemplate();
       headers = template?.headers;
     }
-    if (!headers) headers = request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS;
+    if (!headers) headers = defaultHeadersFor(request);
     return { type: 'run', request, headers: ensureHeaders(headers, request) };
   }
   const template = v2.latestTemplate();
   const pending = setPending(request, template);
   const previous = template?.headers?.length ? v2.templatePreview(template) : 'none remembered yet';
-  const defaults = (request.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS).join(' | ');
+  const defaults = defaultHeadersFor(request).join(' | ');
   return {
     type: 'clarification',
     pending,
-    text: `This is a dedicated LinkedIn-only mission. I will not use Google Jobs, Maps, TinyFish or SerpApi for discovery. Apollo may enrich only a LinkedIn-verified decision-maker after one-run approval. Previous sheet headings: ${previous}. LinkedIn default: ${defaults}. Use previous format, default format, send headers: ..., or send a Google Sheets URL and I will fill that sheet directly.`,
+    text: `This is a dedicated LinkedIn-only mission. I will not use Google Jobs, Maps, TinyFish, SerpApi or Apollo for discovery. Contact enrichment runs only when you explicitly request it. Previous sheet headings: ${previous}. LinkedIn default: ${defaults}. Use previous format, default format, send headers: ..., or send a Google Sheets URL and I will fill that sheet directly.`,
   };
 }
 
@@ -672,7 +702,7 @@ async function resolvePending(text) {
   }
   if (/\b(?:default|standard|linkedin default)\b/i.test(value)) {
     clearPending();
-    const defaults = pending.entityMode === 'company' ? COMPANY_HEADERS : PERSON_HEADERS;
+    const defaults = defaultHeadersFor(pending);
     return { type: 'run', request: pending, headers: ensureHeaders(defaults, pending) };
   }
   if (/\b(?:different|custom|new)\b[\s\S]{0,30}\b(?:format|headers?|columns?|layout)\b/i.test(value)) {
@@ -826,6 +856,13 @@ function applicantCountFromDetail(detail, company = '') {
     return '';
   }
   return scan(detail) || applicantCountFromText(flattenText(detail), company);
+}
+
+function postedEvidenceFromText(text) {
+  const source = String(text || '');
+  const match = source.match(/\b(?:posted\s+)?(?:just\s+now|today|yesterday|\d{1,3}\s+(?:minutes?|hours?|days?|weeks?|months?)\s+ago)\b/i)
+    || source.match(/\b20\d{2}-\d{2}-\d{2}\b/);
+  return match?.[0] || '';
 }
 
 function employeeCountFromText(text) {
@@ -1074,10 +1111,15 @@ function locationEvidenceMatches(record, requestedLocation, options = {}) {
 function requestedLocations(request = {}) {
   const allowed = Array.isArray(request.allowedLocations) ? request.allowedLocations.filter(Boolean) : [];
   const explicit = String(request.location || '').trim();
+  const expansionRoots = allowed.length ? allowed : (explicit ? [explicit] : []);
+  const expanded = request.locationExpansion
+    ? expansionRoots.flatMap((root) => locationExpander.stages(root, request.locationExpansion).map((stage) => stage.location))
+    : [];
+  const combined = leadIntent.uniq([...allowed, ...expanded]);
   if (explicit && allowed.length && !allowed.some((item) => String(item).toLowerCase() === explicit.toLowerCase())) {
-    return [explicit];
+    return leadIntent.uniq([explicit, ...expanded]);
   }
-  if (allowed.length) return allowed;
+  if (combined.length) return combined;
   return explicit ? [explicit] : [];
 }
 
@@ -1178,6 +1220,18 @@ function companyFilterFailures(record, request = {}) {
   })) failures.push('location');
   if (request.filters?.workType && !workTypeEvidenceMatches(record, request.filters.workType)) failures.push('work_type');
   if (request.hiring && request.topic && !topicEvidenceMatches(record, request.topic)) failures.push('topic');
+  const companyName = String(record?.company || record?.name || '').toLowerCase();
+  const companyFilters = request.companyFilters || {};
+  if ((companyFilters.excludeCompanies || []).some((name) => companyName.includes(String(name).toLowerCase()))) failures.push('excluded_company');
+  if ((companyFilters.includeCompanies || []).length && !(companyFilters.includeCompanies || []).some((name) => companyName.includes(String(name).toLowerCase()))) failures.push('included_company');
+  if (companyFilters.industry) {
+    const evidence = `${record?.companyEvidenceText || ''} ${record?.companySearchEvidenceText || ''}`;
+    if (!containsEvidenceTerm(evidence, companyFilters.industry)) failures.push('industry');
+  }
+  if (companyFilters.startup) {
+    const evidence = `${record?.companyEvidenceText || ''} ${record?.companySearchEvidenceText || ''}`;
+    if (!/\bstartup\b/i.test(evidence)) failures.push('startup');
+  }
   return [...new Set(failures)];
 }
 
@@ -1416,7 +1470,7 @@ function searchKeyword(request) {
 
 function sapRoleKeywordVariants(topic) {
   const base = String(topic || '').trim();
-  if (!/^sap$/i.test(base)) return [base].filter(Boolean);
+  if (!/^sap$/i.test(base)) return leadIntent.roleVariants(base);
   return [
     'SAP',
     'SAP Consultant',
@@ -1457,18 +1511,29 @@ function jobSearchPlan(request) {
   if (!roots.length) roots.push('');
 
   const hubs = [];
+  const addHub = (location, metadata = {}) => {
+    if (!location) return;
+    if (!hubs.some((item) => String(item.location).toLowerCase() === String(location).toLowerCase())) hubs.push({ location, ...metadata });
+  };
   for (const root of roots) {
-    const normalized = String(root || '').trim().toLowerCase();
-    const expanded = LOCATION_SEARCH_HUBS[normalized] || [root];
-    for (const place of expanded) {
-      if (!hubs.some((item) => String(item).toLowerCase() === String(place).toLowerCase())) hubs.push(place);
+    const stages = locationExpander.stages(root, request.locationExpansion);
+    const initial = stages[0] || { location: root, radiusKm: 0, expanded: false };
+    const normalized = String(initial.location || '').trim().toLowerCase();
+    const regional = request.locationExpansion ? [initial.location] : (LOCATION_SEARCH_HUBS[normalized] || [initial.location]);
+    for (const place of regional) addHub(place, { radiusKm: initial.radiusKm || 0, expanded: false, rootLocation: root });
+    for (const stage of stages.slice(1)) {
+      addHub(stage.location, stage);
     }
   }
 
   const plan = [];
-  const hardWorkType = request.filters?.workType || null;
-  const preferredWorkType = !hardWorkType ? (request.preferredWorkType || null) : null;
-  const add = (keyword, loc, workType = hardWorkType || preferredWorkType || null) => {
+  const hardWorkTypes = leadIntent.uniq(request.filters?.workplaceTypes?.length ? request.filters.workplaceTypes : [request.filters?.workType].filter(Boolean));
+  const preferredWorkTypes = !hardWorkTypes.length
+    ? leadIntent.uniq(request.filters?.preferredWorkplaceTypes?.length ? request.filters.preferredWorkplaceTypes : [request.preferredWorkType].filter(Boolean))
+    : [];
+  const defaultWorkTypes = hardWorkTypes.length ? hardWorkTypes : (preferredWorkTypes.length ? preferredWorkTypes : [null]);
+  const add = (keyword, hub, workType = defaultWorkTypes[0] || null) => {
+    const loc = typeof hub === 'object' ? hub.location : hub;
     const key = String(keyword || '').trim().toLowerCase() + '|' + String(loc || '').trim().toLowerCase() + '|' + String(workType || '').trim().toLowerCase();
     if (!keyword || plan.some((item) => item.key === key)) return;
     plan.push({
@@ -1476,23 +1541,27 @@ function jobSearchPlan(request) {
       keyword: String(keyword).trim(),
       location: String(loc || '').trim() || null,
       workType: workType || null,
+      radiusKm: Number(typeof hub === 'object' ? hub.radiusKm || 0 : 0),
+      expanded: Boolean(typeof hub === 'object' && hub.expanded),
+      rootLocation: typeof hub === 'object' ? hub.rootLocation || null : null,
     });
   };
 
   // Search preferences first.
-  for (const place of hubs) add(keywords[0], place || null);
+  for (const hub of hubs) for (const workType of defaultWorkTypes) add(keywords[0], hub, workType);
 
   // Preferences are not hard filters. Add broader equivalents so the adaptive
   // strategist can relax them when preferred queries underperform.
-  if (preferredWorkType) {
-    for (const place of hubs) add(keywords[0], place || null, null);
+  if (preferredWorkTypes.length) {
+    for (const hub of hubs) add(keywords[0], hub, null);
   }
 
   const broadLocations = roots.filter(Boolean);
   for (const keyword of keywords.slice(1)) {
     for (const root of broadLocations.length ? broadLocations : [null]) {
-      add(keyword, root);
-      if (preferredWorkType) add(keyword, root, null);
+      const hub = hubs.find((item) => String(item.location).toLowerCase() === String(root).toLowerCase()) || { location: root };
+      for (const workType of defaultWorkTypes) add(keyword, hub, workType);
+      if (preferredWorkTypes.length) add(keyword, hub, null);
       if (plan.length >= 30) break;
     }
     if (plan.length >= 30) break;
@@ -1606,8 +1675,20 @@ function jobLevelFailures(record, request = {}) {
     allowJobEvidence: true,
     allowCompanyEvidence: request.locationScope === 'company',
   })) failures.push('location');
-  if (request.filters?.workType && !workTypeEvidenceMatches(record, request.filters.workType)) failures.push('work_type');
+  const hardWorkTypes = leadIntent.uniq(request.filters?.workplaceTypes?.length ? request.filters.workplaceTypes : [request.filters?.workType].filter(Boolean));
+  if (hardWorkTypes.length) {
+    if (!hardWorkTypes.some((workType) => workTypeEvidenceMatches(record, workType))) failures.push('work_type');
+  }
   if (request.hiring && request.topic && !topicEvidenceMatches(record, request.topic)) failures.push('topic');
+  if (request.filters?.postingAge) {
+    const age = leadIntent.postedAgeDays(record?.jobEvidenceText || '');
+    const spec = request.filters.postingAge;
+    if (age == null || (spec.maxAgeDays != null && age > spec.maxAgeDays)) failures.push('posting_age');
+  }
+  if (request.filters?.applicantMax != null) {
+    const count = leadIntent.applicantNumber(record?.applicants);
+    if (count == null || count >= Number(request.filters.applicantMax)) failures.push('applicant_count');
+  }
   return [...new Set(failures)];
 }
 
@@ -1928,6 +2009,9 @@ async function companyMission(request) {
         droppedFilters: trust.dropped,
         warning: warning?.error_type || null,
         workType: step.workType || null,
+        radiusKm: Number(step.radiusKm || 0),
+        expanded: Boolean(step.expanded),
+        rootLocation: step.rootLocation || null,
       });
       missionRunner.updateProgress({
         phase: 'searching',
@@ -2064,6 +2148,7 @@ async function companyMission(request) {
       record.hiringVerified = Boolean(detailText && preferred);
       record.workType = detectWorkType(detailText);
       record.applicants = applicantCountFromDetail(detail, record.company);
+      record.posted = postedEvidenceFromText(detailText);
       record.relevanceScore = qualityScore(record, request, { hiring: record.hiringVerified, deep: true });
       record.searchProvenance = {
         title: meta.title || '',
@@ -2091,6 +2176,7 @@ async function companyMission(request) {
           record.role = jobTitleFromDetail(fallbackDetail, record.role || meta.title || '');
           record.workType = detectWorkType(record.jobEvidenceText);
           record.applicants = record.applicants || applicantCountFromDetail(fallbackDetail, fallbackCompany?.text || record.company);
+          record.posted = record.posted || postedEvidenceFromText(fallbackText);
           record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'joeyism-structured-job-fallback'])];
 
           if (fallbackCompany) {
@@ -2369,12 +2455,16 @@ async function companyMission(request) {
       ? (jobLocation || locationMatch.label || locationMatch.requestedLocation || request.location || '')
       : (record.companyLocation || linkedinPublic.locationFromText(record.companySearchEvidenceText) || locationMatch.label || locationMatch.requestedLocation || '');
     record.locationEvidenceSource = locationMatch.source;
-    const desiredWorkType = request.filters?.workType || request.preferredWorkType || null;
+    const preferredWorkTypes = leadIntent.uniq(request.filters?.preferredWorkplaceTypes?.length
+      ? request.filters.preferredWorkplaceTypes
+      : [request.preferredWorkType].filter(Boolean));
+    const desiredWorkType = request.filters?.workType || request.filters?.workplaceTypes?.[0] || preferredWorkTypes[0] || null;
     const workTypeMatch = workTypeEvidenceDetails(record, desiredWorkType);
     record.workType = workTypeMatch.value || detectWorkType(record.jobEvidenceText);
     record.workTypeEvidenceSource = workTypeMatch.source;
     record.preferenceScore = 0;
-    if (request.preferredWorkType && record.workType === request.preferredWorkType) record.preferenceScore += 10;
+    const preferredWorkTypeIndex = preferredWorkTypes.indexOf(record.workType);
+    if (preferredWorkTypeIndex >= 0) record.preferenceScore += Math.max(4, 12 - preferredWorkTypeIndex * 4);
     const preferredLocationIndex = (request.preferredLocations || []).findIndex((item) =>
       String(item).toLowerCase() === String(locationMatch.requestedLocation || '').toLowerCase()
     );
@@ -2384,7 +2474,9 @@ async function companyMission(request) {
 
   merged = accepted
     .sort((a, b) => (Number(b.relevanceScore || 0) + Number(b.preferenceScore || 0))
-      - (Number(a.relevanceScore || 0) + Number(a.preferenceScore || 0)))
+      - (Number(a.relevanceScore || 0) + Number(a.preferenceScore || 0))
+      || (leadIntent.postedAgeDays(a.jobEvidenceText) ?? 9999) - (leadIntent.postedAgeDays(b.jobEvidenceText) ?? 9999)
+      || (leadIntent.applicantNumber(a.applicants) ?? 999999) - (leadIntent.applicantNumber(b.applicants) ?? 999999))
     .slice(0, request.count);
 
   return {
@@ -2413,6 +2505,7 @@ async function companyMission(request) {
       cachedJobDetailMisses,
       cachedCompanyProfileHits,
       cachedCompanyProfileMisses,
+      locationExpansion: locationExpander.summarize(searchCalls, request.location),
     },
     budgetStopped: budget.stopped,
     filters: request.filters,
@@ -3509,6 +3602,9 @@ function rowFor(record, headers) {
     if (key === 'email') return record.email || '';
     if (key === 'remarks') return record.remarks || contactRemark(record.name, record.role);
     if (key === 'applicants') return record.applicants || '';
+    if (key === 'posted') return record.posted || postedEvidenceFromText(record.jobEvidenceText) || '';
+    if (key === 'industry') return record.industry || '';
+    if (key === 'companySizeConfidence') return record.employeeCount ? (record.employeeCount.estimated ? 'estimated' : 'verified') : 'unknown';
     if (key === 'source') return record.source || record.linkedin || '';
     if (key === 'score') return record.relevanceScore ?? '';
     return '';
@@ -3791,7 +3887,7 @@ async function run(request, headers) {
     try {
       if (request.destinationSheetUrl) {
         destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
-        outputHeaders = ensureHeaders(destination.headers, request);
+        outputHeaders = ensureHeaders(destination.headers, request, { preserveExisting: true });
         storageHeaders = [...outputHeaders];
         if (needsInternalContact && !storageHeaders.some((header) => headerKey(header) === 'contactLinkedin')) {
           storageHeaders.push(INTERNAL_CONTACT_HEADER);
@@ -3888,6 +3984,9 @@ async function run(request, headers) {
     mission.added = added;
     mission.duplicateRowsSkipped = duplicateRowsSkipped;
     mission.toolCalls = researched.toolCalls;
+    mission.locationExpansion = researched.toolCalls?.locationExpansion || null;
+    mission.outputMode = request.wantsContacts ? 'contact-enrichment' : 'lead-discovery';
+    mission.apolloCalls = 0;
     mission.averageScore = researched.records.length
       ? Math.round(researched.records.reduce((sum, record) => sum + Number(record.relevanceScore || 0), 0) / researched.records.length)
       : 0;
@@ -4002,8 +4101,10 @@ function formatMission(mission) {
     ? ` Global dedupe skipped ${mission.globalSeenSkipped} previously seen compan${mission.globalSeenSkipped === 1 ? 'y' : 'ies'}.`
     : '';
   const shortfall = mission.found < mission.requested ? ` I found ${mission.found}/${mission.requested} high-confidence LinkedIn records within the account-safety budget.` : '';
-  const contact = mission.request?.entityMode === 'company'
-    ? ` ${mission.contactCandidates || 0} verified company rows are ready for Apollo to select one highest-priority head and enrich that person’s contact details.`
+  const contact = mission.request?.entityMode === 'company' && !mission.request?.wantsContacts
+    ? ' POC/contact enrichment: not requested. Apollo calls: 0.'
+    : mission.request?.entityMode === 'company'
+      ? ` ${mission.contactCandidates || 0} verified company rows are ready for explicitly requested contact enrichment.`
     : ` ${mission.contactCandidates || 0} LinkedIn person profiles are ready for direct Apollo matching.`;
   const budget = mission.budgetStopped ? ` Safety stop: ${mission.budgetStopped}.` : '';
   const rejected = mission.filterVerification?.rejected || {};
@@ -4030,14 +4131,18 @@ function formatMission(mission) {
       ? ` The requested master Sheet could not be written (${mission.destinationWriteError?.code || 'GOOGLE_SHEETS_API_ERROR'}: ${mission.destinationWriteError?.message || 'unknown Sheets error'}). I preserved the verified results in this recovery Sheet instead; your remembered master Sheet was not changed.`
       : '';
   const label = mission.found < mission.requested || mission.budgetStopped
-    ? 'LinkedIn-only research batch complete'
-    : 'LinkedIn-only mission complete';
-  return `${label}, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination}${masterTargetText}${globalSkipText} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
+    ? 'Partial result — safe search exhausted'
+    : 'LinkedIn lead discovery complete';
+  const expansion = mission.locationExpansion
+    ? ` Location expansion: ${mission.locationExpansion.requested || mission.request?.location || 'requested area'} → approximately ${mission.locationExpansion.currentRadiusKm} km (${mission.locationExpansion.searchedLocations.join(', ')}).`
+    : '';
+  return `${label}, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination}${masterTargetText}${globalSkipText} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${expansion}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
 }
 
 module.exports = {
   verifyAppend,
   COMPANY_HEADERS,
+  LEAD_DISCOVERY_HEADERS,
   PERSON_HEADERS,
   INTERNAL_CONTACT_HEADER,
   APOLLO_SECTION_HEADERS,
@@ -4068,6 +4173,7 @@ module.exports = {
   qualityScore,
   applicantCountFromText,
   applicantCountFromDetail,
+  postedEvidenceFromText,
   employeeCountFromText,
   passesEmployeeFilter,
   scopedCompanyEvidence,
