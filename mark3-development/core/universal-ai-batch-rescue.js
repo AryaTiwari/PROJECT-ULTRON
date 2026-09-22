@@ -494,6 +494,18 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   stats.maxCalls = maxCalls(options);
   if (!stats.enabled || options.dryRun || options.apolloApproved !== true) return stats;
 
+  // Deterministic contactability exhaustion is terminal for this run. Re-offering
+  // the same top-3 candidates to AI only repeats Apollo hydration/reveal spend;
+  // AI cannot create a phone number that the verified provider did not return.
+  const exhaustedTargets = new Set(
+    (primaryResult?.stats?.contactabilityExhaustedTargets || primaryResult?.primaryStats?.contactabilityExhaustedTargets || [])
+      .map((item) => text(item?.key || base.contactabilityTargetKey(item?.rowNumber, item?.groupOrdinal)))
+      .filter(Boolean)
+  );
+  const rescueTargetsForRecord = (record) => rescueTargets(record?.plan).filter((target) =>
+    !exhaustedTargets.has(base.contactabilityTargetKey(record?.rowNumber, target?.group?.ordinal))
+  );
+
   const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
     ...options,
     sheetName: request.sheetName || options.sheetName,
@@ -501,7 +513,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema });
   const exactResidueRows = [...new Set(
     (analysis.rowPlans || [])
-      .filter((record) => rescueTargets(record.plan).length > 0)
+      .filter((record) => rescueTargetsForRecord(record).length > 0)
       .map((record) => Number(record.rowNumber))
       .filter(Number.isInteger)
   )];
@@ -519,7 +531,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   for (const record of analysis.rowPlans) {
     const { row, rowNumber, plan } = record;
     if (!residueSet.has(Number(rowNumber))) continue;
-    const targets = rescueTargets(plan);
+    const targets = rescueTargetsForRecord(record);
     if (!plan.anchor || !targets.length) continue;
     stats.rowsConsidered++;
     const evidence = compactEvidence(row, source.schema, plan);
@@ -859,6 +871,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           phoneSettlementPolls: options.phoneSettlementPolls,
           phoneSettlementWaitMs: options.phoneSettlementWaitMs,
         });
+
+        if (assignment.target.group?.fields?.phone && !apollo.validPhone(person?.phone || '')) {
+          stats.aiSelectionRejects++;
+          continue;
+        }
 
         const nameKey = ranker.normalize(person.name || '');
         const linkedinKey = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
