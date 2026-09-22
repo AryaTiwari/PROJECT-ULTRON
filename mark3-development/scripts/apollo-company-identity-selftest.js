@@ -36,6 +36,21 @@ assert.equal(apollo.validPhone('+91 98765 43210'), '+91 98765 43210');
 assert.equal(apollo.validPhone('12'), null);
 assert.equal(apollo.validPhone('null'), null);
 
+assert.equal(apollo.phoneAvailabilityPriority({ phone: '+91 98765 43210' }), 3);
+assert.equal(apollo.phoneAvailabilityPriority({ has_direct_phone: 'Yes' }), 2);
+assert.equal(apollo.phoneAvailabilityPriority({ has_direct_phone: 'Maybe: request direct dial via people/bulk_match' }), 1);
+assert.equal(apollo.phoneAvailabilityPriority({ has_direct_phone: 'No' }), 0);
+
+const searchCandidateWithPhone = apollo.searchCandidateFromPerson({
+  id: 'phone-hint-1',
+  name: 'Phone Hint',
+  title: 'Technical Recruiter',
+  has_direct_phone: 'Yes',
+  organization: { name: 'Acme', primary_domain: 'acme.test' },
+}, 'Acme', 'acme.test');
+assert.equal(searchCandidateWithPhone.hasDirectPhone, 'Yes');
+assert.equal(searchCandidateWithPhone.directPhoneAvailability, 2);
+
 (async () => {
   let searchCalls = 0;
   global.fetch = async url => {
