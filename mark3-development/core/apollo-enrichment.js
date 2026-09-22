@@ -207,28 +207,7 @@ function requestIdFromRaw(raw, parsed = {}) {
 }
 
 function phoneFromWebhookPayload(payload) {
-  const visit = (value) => {
-    if (!value) return null;
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        const phone = visit(item);
-        if (phone) return phone;
-      }
-      return null;
-    }
-    if (typeof value !== 'object') return null;
-
-    for (const key of ['sanitized_number','raw_number','phone_number','phone','number']) {
-      const phone = validPhone(value[key]);
-      if (phone) return phone;
-    }
-    for (const key of ['phone_numbers','vendors','person','contact','people','matches','waterfall','data']) {
-      const phone = visit(value[key]);
-      if (phone) return phone;
-    }
-    return null;
-  };
-  return visit(payload);
+  return preferredPhoneFromPayload(payload);
 }
 
 async function pollWebhookResult(requestId, options = {}) {
@@ -311,6 +290,77 @@ function validPhone(value) {
   if (!text || /^(?:null|none|n\/?a|unknown|not\s+found|unavailable|-+)$/i.test(text)) return null;
   const digits = text.replace(/\D/g, '');
   return digits.length >= 7 && digits.length <= 15 ? text : null;
+}
+
+function indianPhone(value, countryHint = '') {
+  const phone = validPhone(value);
+  if (!phone) return null;
+  const raw = String(phone).trim();
+  const digits = raw.replace(/\D/g, '');
+  const hint = String(countryHint || '').trim().toLowerCase();
+  const hintedIndia = ['in', 'ind', 'india', '+91', '91'].includes(hint) || /\bindia\b/i.test(hint);
+
+  let national = '';
+  if (digits.length === 12 && digits.startsWith('91')) national = digits.slice(2);
+  else if (hintedIndia && digits.length === 10) national = digits;
+  else if (hintedIndia && digits.length === 11 && digits.startsWith('0')) national = digits.slice(1);
+
+  // Prefer Indian mobile numbers only when country evidence is explicit enough.
+  // This avoids misclassifying arbitrary 10-digit foreign numbers as Indian.
+  if (!/^[6-9]\d{9}$/.test(national)) return null;
+  return `+91${national}`;
+}
+
+function preferredPhoneFromPayload(payload) {
+  const candidates = [];
+  const seen = new Set();
+
+  const add = (value, countryHint = '') => {
+    const valid = validPhone(value);
+    if (!valid) return;
+    const indian = indianPhone(valid, countryHint);
+    const phone = indian || valid;
+    const key = String(phone).replace(/\D/g, '');
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ phone, indian: Boolean(indian), order: candidates.length });
+  };
+
+  const visit = (value, inheritedHint = '') => {
+    if (!value) return;
+    if (typeof value === 'string' || typeof value === 'number') {
+      add(value, inheritedHint);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, inheritedHint);
+      return;
+    }
+    if (typeof value !== 'object') return;
+
+    const localHint = String(
+      value.country_code
+      || value.countryCode
+      || value.country
+      || value.country_name
+      || value.countryName
+      || value.iso2
+      || value.country_iso2
+      || inheritedHint
+      || ''
+    ).trim();
+
+    for (const key of ['sanitized_number','sanitized_phone','raw_number','phone_number','phone','number']) {
+      if (value[key] != null) add(value[key], localHint);
+    }
+    for (const key of ['phone_numbers','vendors','person','contact','people','matches','waterfall','data']) {
+      if (value[key] != null) visit(value[key], localHint);
+    }
+  };
+
+  visit(payload);
+  candidates.sort((a, b) => Number(b.indian) - Number(a.indian) || a.order - b.order);
+  return candidates[0]?.phone || null;
 }
 
 function normalizedWords(value) {
@@ -854,7 +904,7 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
   const finalOrganizationDomain = searchEmployerOverride
     ? hostname(candidate.organizationDomain || domain || '')
     : organization.organizationDomain;
-  const immediatePhone = validPhone(person.phone_number || person.sanitized_phone || '');
+  const immediatePhone = preferredPhoneFromPayload(person);
   const phoneStatus = needPhone ? (immediatePhone ? 'found' : 'pending') : null;
   const record = {
     name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || candidate.name || '').trim(),
@@ -933,7 +983,7 @@ async function resolvePersonByBusinessEmail(email, company = '', domain = '', op
   }
 
   const organization = personOrganization(person);
-  const immediatePhone = validPhone(person.phone_number || person.sanitized_phone || '');
+  const immediatePhone = preferredPhoneFromPayload(person);
   const record = {
     name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || '').trim(),
     title: String(person.title || '').trim(),
@@ -1017,7 +1067,7 @@ async function resolvePersonByNameCompany(name, company, domain, options = {}) {
   }
 
   const organization = personOrganization(person);
-  const immediatePhone = validPhone(person.phone_number || person.sanitized_phone || '');
+  const immediatePhone = preferredPhoneFromPayload(person);
   const record = {
     name: returnedName,
     title: String(person.title || '').trim(),
@@ -1071,7 +1121,7 @@ async function enrich(input, options = {}) {
       emailKnown: needEmail ? true : Boolean(previous.emailKnown),
       email: needEmail ? null : (previous.email ?? null),
       phoneStatus: needPhone ? 'not_found' : (previous.phoneStatus || null),
-      phone: needPhone ? null : (previous.phone ?? null),
+      phone: needPhone ? immediatePhone : (previous.phone ?? null),
       matchConfidence: decision.confidence || 'none',
       returnedLinkedIn: null,
       checkedAt: new Date().toISOString(),
@@ -1091,6 +1141,7 @@ async function enrich(input, options = {}) {
   } else {
     const person = decision.person;
     const organization = personOrganization(person);
+    const immediatePhone = needPhone ? preferredPhoneFromPayload(person) : null;
     record = {
       ...previous,
       noMatch: false,
@@ -1104,13 +1155,13 @@ async function enrich(input, options = {}) {
       organizationDomain: organization.organizationDomain || previous.organizationDomain || '',
       emailKnown: needEmail ? true : Boolean(previous.emailKnown),
       email: needEmail ? validEmail(person.email) : (previous.email ?? null),
-      phoneStatus: needPhone ? 'pending' : (previous.phoneStatus || null),
+      phoneStatus: needPhone ? (immediatePhone ? 'found' : 'pending') : (previous.phoneStatus || null),
       phone: needPhone ? null : (previous.phone ?? null),
       matchConfidence: decision.confidence || '',
       returnedLinkedIn: decision.returnedLinkedIn || null,
       checkedAt: new Date().toISOString(),
-      phoneRequestedAt: needPhone ? new Date().toISOString() : (previous.phoneRequestedAt || null),
-      phoneRequestId: needPhone ? String(data.__requestId || '') : (previous.phoneRequestId || null),
+      phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : (previous.phoneRequestedAt || null),
+      phoneRequestId: needPhone && !immediatePhone ? String(data.__requestId || '') : (previous.phoneRequestId || null),
     };
   }
 
@@ -1164,7 +1215,12 @@ async function fetchPhoneResults() {
     error.status = response.status;
     throw error;
   }
-  return Array.isArray(data.results) ? data.results : [];
+  return Array.isArray(data.results)
+    ? data.results.map((result) => ({
+        ...result,
+        phone: preferredPhoneFromPayload(result) || validPhone(result?.phone),
+      }))
+    : [];
 }
 
 async function consumePhoneResult(apolloPersonId) {
@@ -1195,7 +1251,7 @@ function recordPhoneResult(apolloPersonId, phone) {
   const changed = [];
   for (const [linkedinUrl, record] of Object.entries(cache.people)) {
     if (String(record?.apolloPersonId || '') !== id) continue;
-    record.phone = validPhone(phone);
+    record.phone = preferredPhoneFromPayload(phone) || validPhone(phone);
     record.phoneStatus = record.phone ? 'found' : 'not_found';
     record.phoneResolvedAt = new Date().toISOString();
     record.checkedAt = new Date().toISOString();
@@ -1225,6 +1281,8 @@ module.exports = {
   setting,
   validEmail,
   validPhone,
+  indianPhone,
+  preferredPhoneFromPayload,
   normalizeLinkedIn,
   personOrganization,
   matchDecision,
