@@ -379,7 +379,9 @@ assert.ok(deferPoc2Index > manualPoc2Index, 'AI deferral must happen only after 
 assert.match(runSource, /if \(\(!phaseOrdinal \|\| phaseOrdinal === 3\) && poc3Targets\.length\) \{[\s\S]*?if \(people\.length\)/);
 
 assert.match(rescueSource, /candidateFillTargets\(plan\)/);
-assert.match(rescueSource, /rescueTargets\(record\.plan\)\.length > 0/);
+assert.match(rescueSource, /rescueTargetsForRecord\(record\)\.length > 0/);
+assert.match(rescueSource, /contactabilityExhaustedTargets/);
+assert.match(rescueSource, /base\.contactabilityTargetKey/);
 assert.match(rescueSource, /no-open-secondary-poc-residue/);
 assert.doesNotMatch(rescueSource, /const wantedOrdinal = 2/);
 assert.match(rescueSource, /unresolvedContextInput/);
