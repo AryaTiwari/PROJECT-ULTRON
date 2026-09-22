@@ -269,6 +269,7 @@ for (const file of [
 
 const operatorSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-sheet-enrichment-operator.js'), 'utf8');
 const liveGuardSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-live-write-guard.js'), 'utf8');
+const aiBatchSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-ai-batch-rescue.js'), 'utf8');
 assert.match(operatorSource, /apollo\.searchCompanyPeopleBroad/);
 assert.match(operatorSource, /ranker\.rankCandidates/);
 assert.match(operatorSource, /apollo\.resolveDecisionMaker/);
@@ -289,5 +290,51 @@ assert.match(operatorSource, /slice\(0, 2\)/, 'existing POC plus at most two rep
 assert.match(operatorSource, /replaced-no-phone-poc/);
 assert.match(liveGuardSource, /missing-phone-contactability/);
 assert.match(liveGuardSource, /change\.allowReplace === true/);
+assert.match(operatorSource, /settleVerifiedPhoneForSelection/);
+assert.match(operatorSource, /ULTRON_M3_TOP3_PHONE_SETTLEMENT_POLLS/);
+assert.match(operatorSource, /pollWebhookResult/);
+assert.match(operatorSource, /pollPhoneRequest/);
+assert.match(aiBatchSource, /settleVerifiedPhoneForSelection/, 'bounded AI rescue must settle an already-started phone reveal before planner write verification');
+
+(async () => {
+  const settlementStats = {};
+  let recorded = null;
+  const settled = await operator.settleVerifiedPhoneForSelection({
+    identityVerified: true,
+    apolloPersonId: 'apollo-test-1',
+    name: 'Test Recruiter',
+    phone: null,
+    phoneStatus: 'pending',
+    phoneRequestId: 'request-test-1',
+  }, settlementStats, {
+    phoneSettlementPolls: 1,
+    pollNativePhone: async () => ({ state: 'found', phone: '+91 98765 43210' }),
+    recordPhoneResult: (id, phone) => { recorded = { id, phone }; },
+  });
+  assert.equal(settled.phone, '+91 98765 43210');
+  assert.equal(settled.phoneStatus, 'found');
+  assert.deepEqual(recorded, { id: 'apollo-test-1', phone: '+91 98765 43210' });
+  assert.equal(settlementStats.candidatePhoneSettlementAttempts, 1);
+  assert.equal(settlementStats.candidatePhoneSettlementFound, 1);
+
+  const stillPending = await operator.settleVerifiedPhoneForSelection({
+    identityVerified: true,
+    apolloPersonId: 'apollo-test-2',
+    name: 'Pending Recruiter',
+    phone: null,
+    phoneStatus: 'pending',
+    phoneRequestId: 'request-test-2',
+  }, {}, {
+    pollNativePhone: async () => ({ state: 'pending', phone: null }),
+    recordPhoneResult: () => { throw new Error('pending phone must not be recorded as terminal'); },
+  });
+  assert.equal(stillPending.phone || null, null);
+  assert.equal(operator.contactabilityTier(stillPending), 0, 'pending reveal must remain ineligible until an actual phone is returned');
+
+  console.log('Top-3 phone settlement self-test passed: pending Apollo reveals are checked before the hard contactability filter and only real phones become eligible.');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 
 console.log('Universal enrichment operator self-test passed: empty POC slots require an actual phone, contactable replacements are atomic and bounded, populated phones stay protected, arbitrary schema execution uses Apollo only after approval, and the full decision path has zero AI/model dependencies.');
