@@ -363,6 +363,27 @@ function preferredPhoneFromPayload(payload) {
   return candidates[0]?.phone || null;
 }
 
+
+function phoneAvailabilityPriority(person = {}) {
+  // Actual verified/revealed phone wins. Apollo People Search itself is zero-credit
+  // and exposes has_direct_phone as an availability signal, so use that to rank
+  // candidates before paying to hydrate them.
+  if (preferredPhoneFromPayload(person)) return 3;
+
+  const raw = String(
+    person?.hasDirectPhone
+    ?? person?.has_direct_phone
+    ?? person?.directPhoneAvailability
+    ?? ''
+  ).trim().toLowerCase();
+
+  if (!raw) return 0;
+  if (/^(?:yes|true|available|found|confirmed|1)$/.test(raw)) return 2;
+  if (/\b(?:yes|available|direct phone available)\b/.test(raw)) return 2;
+  if (/\b(?:maybe|request direct dial|possible|potential|likely)\b/.test(raw)) return 1;
+  return 0;
+}
+
 function normalizedWords(value) {
   return String(value || '').toLowerCase().replace(/\b(?:private|pvt|limited|ltd|llp|plc|inc|incorporated|corp|corporation|company|co)\b/g, ' ')
     .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -542,6 +563,8 @@ function searchCandidateFromPerson(person, cleanCompany = '', cleanDomain = '') 
     organizationDomain: returnedOrganizationDomain,
     email: null,
     phone: null,
+    hasDirectPhone: person?.has_direct_phone ?? null,
+    directPhoneAvailability: phoneAvailabilityPriority(person),
     searchLimitedIdentity: !linkedinUrl,
     lastNameObfuscated: Boolean(person?.last_name_obfuscated && !person?.last_name),
     apolloSearchEmployerVerified: currentEmployerVerified,
@@ -628,7 +651,11 @@ function rankedDecisionMakers(people, company, domain = '', priorityMode = 'gene
       linkedinUrl: normalizeLinkedIn(person.linkedin_url || person.linkedin || ''),
     }))
     .filter((person) => person.decisionPriority < 99 && (person.id || person.linkedinUrl))
-    .sort((a, b) => a.decisionPriority - b.decisionPriority || String(a.name || '').localeCompare(String(b.name || '')));
+    .sort((a, b) =>
+      phoneAvailabilityPriority(b) - phoneAvailabilityPriority(a)
+      || a.decisionPriority - b.decisionPriority
+      || String(a.name || '').localeCompare(String(b.name || ''))
+    );
 }
 
 async function searchCompanyDecisionMaker({ company, domain = '', location = '', priorityMode = 'general' } = {}) {
@@ -1283,6 +1310,7 @@ module.exports = {
   validPhone,
   indianPhone,
   preferredPhoneFromPayload,
+  phoneAvailabilityPriority,
   normalizeLinkedIn,
   personOrganization,
   matchDecision,
