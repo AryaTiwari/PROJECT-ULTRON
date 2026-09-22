@@ -142,7 +142,9 @@ assert.match(rescueSource, /Return at most one candidate per target slot and nev
 assert.match(rescueSource, /candidateKey values supplied inside that same row/);
 assert.match(rescueSource, /unresolvedContextInput/);
 assert.match(rescueSource, /base\.inferHiringCompanyFromEvidence\(plan, row\)/);
-assert.match(rescueSource, /rescueTargets\(record\.plan\)\.length > 0/);
+assert.match(rescueSource, /rescueTargetsForRecord\(record\)\.length > 0/);
+assert.match(rescueSource, /contactabilityExhaustedTargets/);
+assert.match(rescueSource, /base\.contactabilityTargetKey/);
 assert.match(rescueSource, /no-open-secondary-poc-residue/);
 assert.match(rescueSource, /if \(!residueSet\.has\(Number\(rowNumber\)\)\) continue/);
 assert.match(rescueSource, /unresolvedRows: \[\]/);
