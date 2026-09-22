@@ -2616,7 +2616,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   stats.selectionAudit.push({
     groupId: target.group.id,
     ordinal,
-    strategy: tier > 0 ? 'top3-contactability' : 'top3-first-preferred-fallback',
+    strategy: 'top3-contactability',
     priority: apollo.decisionPriority(person.title || raw.title || ''),
     shortlistSize: shared.length,
     contactabilityTier: tier,
