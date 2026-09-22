@@ -201,13 +201,6 @@ function safeWritesForGroup(row, group, person, options = {}) {
   const conflicts = [];
   const existingIdentity = snapshot.hasIdentity;
 
-  // Global Leads Enricher invariant: a brand-new POC assignment into a group
-  // that owns a phone field is not useful unless the selected person already has
-  // an actual valid phone. Pending/no-phone identities must leave the slot blank.
-  if (!existingIdentity && group?.fields?.phone && !contact.phone(values.phone)) {
-    return { writes, conflicts: ['new-poc-requires-phone'], allowed: false };
-  }
-
   if (!existingIdentity && (snapshot.values.phone || snapshot.values.email)
       && !orphanPolicy.verify(snapshot, person).verified) {
     return { writes, conflicts: ['orphan-contact-mismatch'], allowed: false };
