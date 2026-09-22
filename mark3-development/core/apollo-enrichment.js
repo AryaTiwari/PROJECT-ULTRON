@@ -652,8 +652,8 @@ function rankedDecisionMakers(people, company, domain = '', priorityMode = 'gene
     }))
     .filter((person) => person.decisionPriority < 99 && (person.id || person.linkedinUrl))
     .sort((a, b) =>
-      phoneAvailabilityPriority(b) - phoneAvailabilityPriority(a)
-      || a.decisionPriority - b.decisionPriority
+      a.decisionPriority - b.decisionPriority
+      || phoneAvailabilityPriority(b) - phoneAvailabilityPriority(a)
       || String(a.name || '').localeCompare(String(b.name || ''))
     );
 }
