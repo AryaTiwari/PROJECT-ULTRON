@@ -42,6 +42,35 @@ assert.equal(operator.candidateAlreadyPresent({ name: 'Person One' }, existing),
 assert.equal(operator.candidateAlreadyPresent({ name: 'Different Person', linkedinUrl: 'https://www.linkedin.com/in/person-one/' }, existing), true);
 assert.equal(operator.candidateAlreadyPresent({ name: 'Fresh Person', linkedinUrl: 'https://www.linkedin.com/in/fresh-person/' }, existing), false);
 
+// POC fallback must not require role diversity. If there is no founder/director,
+// two distinct verified same-company recruiting/HR people remain valid candidates
+// for POC-1 and POC-2.
+const hrFallbackCandidates = operator.manualPriorityCandidates([
+  {
+    id: 'hr-1',
+    name: 'Recruiter One',
+    title: 'Technical Recruiter',
+    organizationName: 'Acme Systems',
+    organizationDomain: 'acme.com',
+    linkedinUrl: 'https://www.linkedin.com/in/recruiter-one/',
+  },
+  {
+    id: 'hr-2',
+    name: 'Recruiter Two',
+    title: 'Technical Recruiter',
+    organizationName: 'Acme Systems',
+    organizationDomain: 'acme.com',
+    linkedinUrl: 'https://www.linkedin.com/in/recruiter-two/',
+  },
+], {
+  company: 'Acme Systems',
+  domain: 'acme.com',
+}, { names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set() });
+
+assert.equal(hrFallbackCandidates.length, 2, 'two distinct same-company recruiters must both stay eligible');
+assert.notEqual(hrFallbackCandidates[0].id, hrFallbackCandidates[1].id, 'POC slots must remain distinct people');
+assert.ok(hrFallbackCandidates.every((person) => /technical recruiter/i.test(person.title)));
+
 assert.equal(planner.samePerson(
   { name: 'Rajeev Ranjan — Recruitment Manager' },
   { name: 'Rajeev Ranjan', title: 'Recruitment Manager' },
@@ -66,5 +95,10 @@ assert.match(operatorSource, /apollo\.resolveDecisionMaker/);
 assert.match(operatorSource, /profileParser\.resolveCurrentEmployer/);
 assert.match(operatorSource, /APOLLO_APPROVAL_REQUIRED/);
 assert.match(operatorSource, /modelCalls:\s*0/);
+assert.match(
+  operatorSource,
+  /ULTRON_M3_UNIVERSAL_PRIMARY_POC1_HYDRATION_ATTEMPTS \|\| 3/,
+  'POC-1 fast sweep must try multiple verified candidates before leaving the slot unresolved',
+);
 
 console.log('Universal enrichment operator self-test passed: exact-profile employer parsing is deterministic, existing identity is preserved, arbitrary schema execution uses Apollo only after approval, and the full decision path has zero AI/model dependencies.');
