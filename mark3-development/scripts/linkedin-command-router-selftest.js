@@ -2,6 +2,8 @@
 const assert = require('assert');
 const router = require('../core/linkedin-command-router');
 const controlPlane = require('../core/command-control-plane');
+const operator = require('../core/linkedin-account-operator');
+const leadIntent = require('../core/linkedin-lead-intent');
 
 const group = String(process.env.ULTRON_LINKEDIN_COMMAND_TEST_GROUP || 'all').trim().toLowerCase();
 const run = (name) => group === 'all' || group === name;
@@ -160,6 +162,15 @@ if (run('refinement')) {
       },
     },
   };
+
+  const freshSheetDiscovery = 'Find 10 unique companies with active SAP job openings in Mumbai, posted within the past week. Remote jobs only. Fill the Google Sheet at https://docs.google.com/spreadsheets/d/1KZKJAe-QqZcreG3mr32JNbdiwBYDFWndynaXqid8wKY/edit?gid=306985105#gid=306985105 in worksheet Arya-22 sept. Follow the existing worksheet headings. Discovery only—do not find POCs, emails, or phone numbers, and do not use Apollo.';
+  assert.equal(router.isMissionRefinementRequest(freshSheetDiscovery, mission), false);
+  const freshParsed = operator.parseRequest(freshSheetDiscovery);
+  assert.equal(freshParsed.count, 10);
+  assert.equal(freshParsed.targetMode, 'additional');
+  assert.equal(freshParsed.useFinalMaster, false);
+  assert.equal(freshParsed.wantsContacts, false);
+  assert.deepEqual(leadIntent.companyQualifiers(freshSheetDiscovery).excludeCompanies, []);
 
   assert.equal(router.isMissionRefinementRequest('remove the remote filter and expand to all India', mission), true);
 

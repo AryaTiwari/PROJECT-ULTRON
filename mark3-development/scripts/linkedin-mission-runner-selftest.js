@@ -105,5 +105,43 @@ const waitFor = async predicate => {
   assert.equal(runner.get(auto.id).continuationCount, 1);
   assert.equal(finalMaster.masterCount(), 2);
 
-  console.log('LinkedIn mission runner tests passed: quick enqueue, equivalent-mission dedupe, serialization, persistent research, call reuse, automatic safety-window waiting/resume, immediate parked-mission cancellation, replacement enqueue and master-target continuation.');
+  // A mission that found candidates but wrote no requested rows is partial,
+  // never a successful completion.
+  runner.start(async prepared => ({
+    text: 'zero rows delivered',
+    linkedinMission: {
+      found: Number(prepared.request.count || 0),
+      requested: Number(prepared.request.count || 0),
+      added: 0,
+      budgetStopped: null,
+      safety: {},
+    },
+  }));
+  const zero = runner.enqueue({ request: { entityMode: 'company', topic: 'Zero Delivery', count: 3, filters: {} } });
+  await waitFor(() => runner.get(zero.id).status === 'partial');
+  const zeroSaved = runner.get(zero.id);
+  assert.equal(zeroSaved.progress.phase, 'partial');
+  assert.equal(zeroSaved.progress.added, 0);
+  assert.equal(zeroSaved.progress.remaining, 3);
+  assert.equal(runner.summary(zeroSaved).addedSinceStart, 0);
+
+  // Completed mission elapsed time freezes at completedAt; a later progress
+  // request must not make a one-second run look two minutes long.
+  const started = Date.now() - 120000;
+  const frozen = runner.summary({
+    id: 'elapsed-freeze',
+    status: 'completed',
+    startedAt: new Date(started).toISOString(),
+    completedAt: new Date(started + 1000).toISOString(),
+    updatedAt: new Date().toISOString(),
+    prepared: { request: { targetMode: 'additional', count: 1 } },
+    result: { linkedinMission: { added: 1 } },
+    calls: 1,
+    cacheHits: 0,
+    activeWorkMs: 900,
+  });
+  assert.equal(frozen.elapsedMs, 1000);
+  assert.equal(frozen.addedSinceStart, 1);
+
+  console.log('LinkedIn mission runner tests passed: quick enqueue, equivalent-mission dedupe, serialization, persistent research, call reuse, automatic safety-window waiting/resume, immediate parked-mission cancellation, replacement enqueue, master-target continuation, delivered-row completion and frozen terminal timing.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

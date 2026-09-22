@@ -176,12 +176,14 @@ function isMissionRefinementRequest(text, mission = null) {
   const value = String(text || '').trim();
   if (!value) return false;
 
-  // A complete standalone LinkedIn brief should compile as a new mission,
-  // even when it contains words like "reach", "master", or "total".
-  const standaloneResearch = /\blinkedin\b/i.test(value)
-    && /\b(?:find|search|research|source|collect)\b/i.test(value)
-    && /\b(?:companies?|jobs?|roles?|leads?)\b/i.test(value)
-    && !/^\s*(?:continue|resume|same|previous|last|again|instead|change|switch|expand|broaden|relax|remove|drop|ignore|without|keep)\b/i.test(value);
+  // A complete standalone discovery brief is a new mission even when it omits
+  // the word LinkedIn or contains a hard constraint such as "remote only".
+  // Relative phrases remain refinements of the previous mission.
+  const relativeResearch = /^\s*(?:continue|resume|same|previous|last|again|instead|change|switch|expand|broaden|relax|remove|drop|ignore|without|keep)\b/i.test(value)
+    || /\b(?:same|previous|last)\s+(?:search|mission|request|results?)\b/i.test(value)
+    || /\b(?:add|find|get|bring|append|search\s+for)\s+(?:me\s+)?\d{1,3}\s+more\s+(?:companies|company|people|profiles?|results?|leads?)\b/i.test(value)
+    || /\b\d{1,3}\s+more\s+(?:companies|company|people|profiles?|results?|leads?)\b/i.test(value);
+  const standaloneResearch = leadIntent.isLeadDiscoveryRequest(value) && !relativeResearch;
   if (standaloneResearch) return false;
   if (requestedContactEnrichment(value) && !/\b(?:same|previous|last|more|continue|filter|location|remote|hybrid|employee|company\s+size)\b/i.test(value)) return false;
   const referencesPrevious = /\b(?:same|previous|last|continue|resume|more|remaining|again|instead|change|switch|expand|broaden|relax|remove|drop|ignore|without|keep|only|all|across|nationwide|anywhere|fulfil|fulfill|complete|finish|reach|filter)\b/i.test(value);

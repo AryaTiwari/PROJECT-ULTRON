@@ -98,7 +98,9 @@ function persistentTarget(m) {
 
 function elapsedMetrics(m, current = null, targetTotal = null) {
   const startedAt = Date.parse(String(m.startedAt || m.createdAt || ''));
-  const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
+  const completedAt = m.status === 'completed' ? Date.parse(String(m.completedAt || '')) : NaN;
+  const endMs = Number.isFinite(completedAt) ? completedAt : Date.now();
+  const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, endMs - startedAt) : 0;
   const activeWorkMs = Math.max(0, Number(m.activeWorkMs || 0));
   const initial = Number.isFinite(Number(m.initialSheetCount)) ? Number(m.initialSheetCount) : null;
   const added = initial != null && Number.isFinite(Number(current))
@@ -122,6 +124,9 @@ function summary(m) {
     ? (Number.isFinite(sheetCurrent) ? sheetCurrent : Number(m.progress?.masterCurrent ?? finalMaster.masterCount()))
     : null;
   const timing = elapsedMetrics(m, masterCurrent, targetTotal);
+  if (!targetTotal && Number.isFinite(Number(m.result?.linkedinMission?.added))) {
+    timing.addedSinceStart = Math.max(0, Number(m.result.linkedinMission.added));
+  }
   return { id: m.id, status: m.status, updatedAt: m.updatedAt, calls: m.calls || 0,
     cacheHits: m.cacheHits || 0, progress: m.progress || null,
     contract: request.missionContract || null,
@@ -532,8 +537,19 @@ async function pump() {
     if (targetTotal > 0) {
       m.status = remainingTarget === 0 ? 'completed' : 'partial';
     } else {
+      const requested = Math.max(0, Number(mission?.requested ?? request.count ?? 0));
+      const delivered = Math.max(0, Number(mission?.added ?? mission?.found ?? 0));
       m.status = /COOLDOWN|CAP|RATE_LIMIT/.test(m.stopCode || '') ? 'paused_rate_limit'
-        : mission && (mission.budgetStopped || mission.found < mission.requested) ? 'partial' : 'completed';
+        : mission && (mission.budgetStopped || delivered < requested) ? 'partial' : 'completed';
+      if (mission) {
+        m.progress = {
+          ...(m.progress || {}),
+          phase: m.status,
+          requested,
+          added: delivered,
+          remaining: Math.max(0, requested - delivered),
+        };
+      }
     }
     if (m.status === 'completed') m.completedAt = m.completedAt || new Date().toISOString();
     save(m);

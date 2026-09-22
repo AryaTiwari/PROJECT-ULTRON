@@ -98,7 +98,7 @@ function applicantFilter(text) {
 
 function companyQualifiers(text) {
   const value = String(text || '');
-  const excludes = [...value.matchAll(/\b(?:exclude|except|not)\s+(?:company|companies)?\s*["']?([A-Za-z0-9& .-]{2,60})["']?(?=,|\.|\band\b|$)/gi)].map((match) => match[1]);
+  const excludes = [...value.matchAll(/\b(?:(?:exclude|except)\s+(?:company|companies)?|not\s+(?:company|companies))\s*["']?([A-Za-z0-9& .-]{2,60})["']?(?=,|\.|\band\b|$)/gi)].map((match) => match[1]);
   const includes = [...value.matchAll(/\binclude\s+(?:company|companies)?\s*["']?([A-Za-z0-9& .-]{2,60})["']?(?=,|\.|\band\b|$)/gi)].map((match) => match[1]);
   const industry = value.match(/\b(SaaS|software|manufacturing|fintech|healthcare|pharmaceutical|consulting|retail|e-?commerce)\s+(?:companies|company|startups?|firms?)\b/i)?.[1] || null;
   return { industry, startup: /\bstartups?\b/i.test(value), includeCompanies: uniq(includes), excludeCompanies: uniq(excludes) };
