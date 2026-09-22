@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const quality = require('../core/apollo-three-poc-quality');
+const apollo = require('../core/apollo-enrichment');
 
 // Apollo request IDs are signed 64-bit values; never round them through JS Number.
 assert.equal(
@@ -24,6 +25,45 @@ assert.equal(quality.emailFromPayload({ people: [{ emails: [
   { email: 'private.person@gmail.com', type: 'personal' },
 ] }] }), null);
 assert.equal(quality.emailFromPayload({ people: [{ email: 'person@company.com' }] }), 'person@company.com');
+
+// Phone preference is India-first whenever Apollo exposes multiple valid numbers.
+// Explicit Indian country evidence is normalized to canonical +91 form, while a
+// foreign number remains a valid fallback when no Indian number exists.
+assert.equal(
+  apollo.preferredPhoneFromPayload({
+    phone_numbers: [
+      { sanitized_number: '+1 415 555 0100', country_code: 'US' },
+      { sanitized_number: '98765 43210', country_code: 'IN' },
+    ],
+  }),
+  '+919876543210'
+);
+assert.equal(
+  apollo.preferredPhoneFromPayload({
+    phone_numbers: [
+      { sanitized_number: '+44 20 7946 0958', country_code: 'GB' },
+      { sanitized_number: '+91 99887 76655', country_code: 'IN' },
+    ],
+  }),
+  '+919988776655'
+);
+assert.equal(
+  apollo.preferredPhoneFromPayload({
+    phone_numbers: [{ sanitized_number: '+1 650 555 0182', country_code: 'US' }],
+  }),
+  '+1 650 555 0182'
+);
+assert.equal(
+  quality.phoneFromPayload({
+    person: {
+      phone_numbers: [
+        { raw_number: '+1 212 555 0101', country: 'United States' },
+        { raw_number: '9123456789', country: 'India' },
+      ],
+    },
+  }),
+  '+919123456789'
+);
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'apollo-three-poc-quality.js'), 'utf8');
 const controller = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc-domain-controller.js'), 'utf8');

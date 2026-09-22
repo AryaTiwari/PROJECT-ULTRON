@@ -3074,14 +3074,23 @@ async function run(request = {}, options = {}) {
       const manualClaimed = new Set();
 
       // The same verified path applies to a first contact in company-led sheets
-      // and to any additional contact groups beyond three.
+      // and to any additional contact groups beyond three. POC-1 is NOT
+      // founder-only: when founder/director/owner candidates are absent or fail
+      // verification, keep trying distinct same-company HR/recruiting authorities.
+      // This lets two verified HR managers/technical recruiters legitimately fill
+      // POC-1 and POC-2 instead of leaving POC-1 blank.
       for (const target of openPersonTargets.filter(target => ![2,3].includes(Number(target.group.ordinal)))) {
+        const targetOrdinal = Number(target.group.ordinal || 0);
         const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
-          ...rowOptions, ordinal: target.group.ordinal, claimed: manualClaimed,
-          maxHydrationAttempts: options.resultsFirstSweep ? 1 : 5,
+          ...rowOptions, ordinal: targetOrdinal, claimed: manualClaimed,
+          maxHydrationAttempts: options.resultsFirstSweep
+            ? (targetOrdinal === 1
+              ? Number(process.env.ULTRON_M3_UNIVERSAL_PRIMARY_POC1_HYDRATION_ATTEMPTS || 3)
+              : 1)
+            : 5,
         });
         writes.push(...result.writes);
-        if (!result.filled) { stats.unfilledOpenGroups++; markLeftover(stats,rowNumber,'requested-contact-unresolved',{groupOrdinal:target.group.ordinal,company:companyContext.company}); }
+        if (!result.filled) { stats.unfilledOpenGroups++; markLeftover(stats,rowNumber,'requested-contact-unresolved',{groupOrdinal:targetOrdinal,company:companyContext.company}); }
       }
       if ((!phaseOrdinal || phaseOrdinal === 2) && poc2Targets.length) {
         stats.manualPoc2Attempts += poc2Targets.length;
