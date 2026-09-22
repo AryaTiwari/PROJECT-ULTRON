@@ -3183,6 +3183,9 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
   primary.rowsWithoutEmployer = Number(recheck?.rowsWithoutEmployer || 0);
   primary.existingVerificationFailures = Number(recheck?.existingVerificationFailures || 0);
   primary.leftoverQueue = Array.isArray(recheck?.leftoverQueue) ? recheck.leftoverQueue : [];
+  primary.contactabilityExhaustedTargets = Array.isArray(recheck?.contactabilityExhaustedTargets)
+    ? recheck.contactabilityExhaustedTargets
+    : [];
   primary.phoneStillPending = Math.max(Number(primary.phoneStillPending || 0), Number(recheck?.phoneStillPending || 0));
   primary.emailStillPending = Math.max(Number(primary.emailStillPending || 0), Number(recheck?.emailStillPending || 0));
   primary.pendingEmailRequests = Math.max(Number(primary.pendingEmailRequests || 0), Number(recheck?.pendingEmailRequests || 0));
