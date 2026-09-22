@@ -16,6 +16,7 @@ const missionContract = require('./linkedin-mission-contract');
 const queryStrategist = require('./linkedin-query-strategist');
 const leadIntent = require('./linkedin-lead-intent');
 const locationExpander = require('./linkedin-location-expander');
+const sheetSchema = require('./linkedin-sheet-schema-resolver');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'linkedin-account', 'operator-state.json');
@@ -324,7 +325,9 @@ function normalizeHeader(value) {
   return String(value || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function headerKey(value) {
+function headerKey(value, mappings = null) {
+  const mapped = sheetSchema.mappedKey(value, mappings);
+  if (mapped) return mapped;
   const h = normalizeHeader(value);
   if (/ultron contact linkedin/.test(h)) return 'contactLinkedin';
   if (/^(?:person or company name|name|person|full name|contact name)$/.test(h)) return 'name';
@@ -361,7 +364,7 @@ function ensureHeaders(headers, request, options = {}) {
   const source = Array.isArray(headers) && headers.length ? headers : defaults;
   const out = source.map((value) => String(value ?? '').trim()).slice(0, 30);
   if (options.preserveExisting) return out;
-  const keys = new Set(out.map(headerKey).filter(Boolean));
+  const keys = new Set(out.map((header) => headerKey(header, request.headerMappings)).filter((key) => key && key !== 'ignore'));
   const needed = request.entityMode === 'company'
     ? [['company', 'COMPANY NAME'], ['linkedin', 'COMPANY LINK'], ['location', 'LOCATION']]
     : [['name', 'Name'], ['company', 'Company'], ['role', 'Role'], ['linkedin', 'LinkedIn'], ['location', 'Location'], ['details', 'Post Details'], ['source', 'Source'], ['score', 'Lead Score']];
@@ -377,7 +380,7 @@ function ensureHeaders(headers, request, options = {}) {
   }
   for (const [key, label] of needed) if (!keys.has(key)) { out.push(label); keys.add(key); }
   if (request.entityMode === 'company' && request.wantsContacts && !keys.has('remarks')) {
-    const emailIndex = out.findIndex((header) => headerKey(header) === 'email');
+    const emailIndex = out.findIndex((header) => headerKey(header, request.headerMappings) === 'email');
     out.splice(emailIndex >= 0 ? emailIndex + 1 : out.length, 0, 'REMARKS');
   }
   return out.slice(0, 30);
@@ -462,10 +465,14 @@ async function inspectDestinationSheet(url, request) {
     throw error;
   }
 
+  const schema = await sheetSchema.resolve(chosen.headers, request, headerKey, {
+    allowModel: request.resolveUnknownHeaders !== false,
+  });
+  const requestWithMappings = { ...request, headerMappings: schema.mappings };
   const baseHeaders = chosen.headers.some(Boolean)
     ? chosen.headers
-    : defaultHeadersFor(request);
-  const headers = ensureHeaders(baseHeaders, request, { preserveExisting: chosen.headers.some(Boolean) });
+    : defaultHeadersFor(requestWithMappings);
+  const headers = ensureHeaders(baseHeaders, requestWithMappings, { preserveExisting: chosen.headers.some(Boolean) });
   const fullRows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(chosen.sheetName)}!A:ZZ`);
   let lastNonEmptyRow = 0;
   for (let i = 0; i < fullRows.length; i++) {
@@ -482,6 +489,10 @@ async function inspectDestinationSheet(url, request) {
     headerRowNumber: chosen.rowNumber,
     originalHeaders: chosen.headers,
     headers,
+    headerMappings: schema.mappings,
+    unresolvedHeaders: schema.unresolved,
+    schemaModel: schema.model,
+    schemaProvider: schema.provider,
     rows: fullRows,
     lastNonEmptyRow,
     url,
@@ -590,10 +601,10 @@ async function repairFinalMasterSheetSchema(url = finalMaster.masterSheetUrl()) 
   };
 }
 
-function destinationExistingKeys(destination, headers) {
-  const linkedinIndex = headers.findIndex((header) => headerKey(header) === 'linkedin');
-  const jobIndex = headers.findIndex((header) => headerKey(header) === 'jobLink');
-  const companyIndex = headers.findIndex((header) => headerKey(header) === 'company');
+function destinationExistingKeys(destination, headers, request = {}) {
+  const linkedinIndex = headers.findIndex((header) => headerKey(header, request.headerMappings) === 'linkedin');
+  const jobIndex = headers.findIndex((header) => headerKey(header, request.headerMappings) === 'jobLink');
+  const companyIndex = headers.findIndex((header) => headerKey(header, request.headerMappings) === 'company');
   const keys = new Set();
   for (let r = destination.headerRowNumber; r < (destination.rows || []).length; r++) {
     const row = destination.rows[r] || [];
@@ -619,8 +630,18 @@ async function prepare(request) {
   if (request.destinationSheetUrl) {
     try {
       const destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
+      if (destination.unresolvedHeaders?.length) {
+        const pending = setPending({
+          ...request,
+          schemaClarification: true,
+          headerMappings: destination.headerMappings,
+          unresolvedHeaders: destination.unresolvedHeaders,
+        }, { headers: destination.headers, sourceTitle: destination.spreadsheetTitle });
+        return { type: 'clarification', pending, text: sheetSchema.clarificationText(destination.unresolvedHeaders) };
+      }
       const nextRequest = {
         ...request,
+        headerMappings: destination.headerMappings,
         destinationSheet: {
           spreadsheetId: destination.spreadsheetId,
           spreadsheetTitle: destination.spreadsheetTitle,
@@ -677,11 +698,53 @@ async function resolvePending(text) {
     clearPending();
     return { type: 'cancelled', text: 'LinkedIn-only mission cancelled before account scraping started.' };
   }
+  if (pending.schemaClarification && pending.destinationSheetUrl) {
+    const supplied = sheetSchema.userMappings(value, pending.unresolvedHeaders || [], headerKey);
+    if (!Object.keys(supplied).length) {
+      return { type: 'clarification', pending, text: sheetSchema.clarificationText(pending.unresolvedHeaders || []) };
+    }
+    const request = {
+      ...pending,
+      schemaClarification: false,
+      resolveUnknownHeaders: false,
+      headerMappings: { ...(pending.headerMappings || {}), ...supplied },
+    };
+    const destination = await inspectDestinationSheet(request.destinationSheetUrl, request);
+    if (destination.unresolvedHeaders?.length) {
+      const nextPending = setPending({
+        ...request,
+        schemaClarification: true,
+        unresolvedHeaders: destination.unresolvedHeaders,
+        headerMappings: destination.headerMappings,
+      }, { headers: destination.headers, sourceTitle: destination.spreadsheetTitle });
+      return { type: 'clarification', pending: nextPending, text: sheetSchema.clarificationText(destination.unresolvedHeaders) };
+    }
+    clearPending();
+    request.headerMappings = destination.headerMappings;
+    request.destinationSheet = {
+      spreadsheetId: destination.spreadsheetId,
+      spreadsheetTitle: destination.spreadsheetTitle,
+      sheetName: destination.sheetName,
+      sheetId: destination.sheetId,
+      headerRowNumber: destination.headerRowNumber,
+    };
+    return { type: 'run', request, headers: destination.headers };
+  }
   const destinationSheetUrl = sheets.extractSheetUrl(value);
   if (destinationSheetUrl) {
     const request = { ...pending, destinationSheetUrl };
-    clearPending();
     const destination = await inspectDestinationSheet(destinationSheetUrl, request);
+    if (destination.unresolvedHeaders?.length) {
+      const nextPending = setPending({
+        ...request,
+        schemaClarification: true,
+        headerMappings: destination.headerMappings,
+        unresolvedHeaders: destination.unresolvedHeaders,
+      }, { headers: destination.headers, sourceTitle: destination.spreadsheetTitle });
+      return { type: 'clarification', pending: nextPending, text: sheetSchema.clarificationText(destination.unresolvedHeaders) };
+    }
+    clearPending();
+    request.headerMappings = destination.headerMappings;
     request.destinationSheet = {
       spreadsheetId: destination.spreadsheetId,
       spreadsheetTitle: destination.spreadsheetTitle,
@@ -3288,14 +3351,14 @@ async function fillLatestMissionIntoSheet(sheetUrl = null) {
   }
   await syncDestinationHeaders(destination, storageHeaders);
 
-  const existingKeys = destinationExistingKeys(destination, storageHeaders);
+  const existingKeys = destinationExistingKeys(destination, storageHeaders, request);
   const records = mission.verifiedRecords.filter((record) => {
     const keys = recordDestinationKeys(record);
     const duplicate = keys.some((key) => existingKeys.has(key));
     if (!duplicate) for (const key of keys) existingKeys.add(key);
     return !duplicate;
   });
-  const rows = records.map((record) => rowFor(record, storageHeaders));
+  const rows = records.map((record) => rowFor(record, storageHeaders, request));
   const firstAppendedRow = Math.max(destination.lastNonEmptyRow + 1, destination.headerRowNumber + 1);
   const added = await appendRows(destination.spreadsheetId, destination.sheetName, rows);
 
@@ -3464,14 +3527,14 @@ async function consolidateVerifiedMissions(text = '') {
     sheet = await v2.createSpreadsheet(title, outputHeaders, records.length);
   }
 
-  const existingKeys = destination ? destinationExistingKeys(destination, outputHeaders) : new Set();
+  const existingKeys = destination ? destinationExistingKeys(destination, outputHeaders, request) : new Set();
   const writeRecords = records.filter((record) => {
     const keys = recordDestinationKeys(record);
     const duplicate = keys.some((key) => existingKeys.has(key));
     if (!duplicate) for (const key of keys) existingKeys.add(key);
     return !duplicate;
   });
-  const added = await appendRows(sheet.spreadsheetId, sheet.sheetName, writeRecords.map((record) => rowFor(record, outputHeaders)));
+  const added = await appendRows(sheet.spreadsheetId, sheet.sheetName, writeRecords.map((record) => rowFor(record, outputHeaders, request)));
 
   rememberWorkspaceSheet(sheet.url, {
     sheetName: sheet.sheetName,
@@ -3588,9 +3651,11 @@ async function dedupeWorkspaceSheet(text = '') {
 }
 
 
-function rowFor(record, headers) {
+function rowFor(record, headers, request = {}) {
   return headers.map((header) => {
-    const key = headerKey(header);
+    const key = headerKey(header, request.headerMappings);
+    if (key === 'ignore') return '';
+    if (request.wantsContacts === false && ['contactLinkedin', 'phone', 'email', 'remarks'].includes(key)) return '';
     if (key === 'name') return record.name || '';
     if (key === 'company') return finalMaster.cleanCompanyDisplay(record.company || '');
     if (key === 'role') return record.role || '';
@@ -3899,7 +3964,7 @@ async function run(request, headers) {
         }
 
         await syncDestinationHeaders(destination, storageHeaders);
-        const existingKeys = destinationExistingKeys(destination, storageHeaders);
+        const existingKeys = destinationExistingKeys(destination, storageHeaders, request);
         recordsToWrite = researched.records.filter((record) => {
           const keys = recordDestinationKeys(record);
           const duplicate = keys.some((key) => existingKeys.has(key));
@@ -3924,7 +3989,7 @@ async function run(request, headers) {
         minColumns: Math.max(1, storageHeaders.length),
         minRows: Math.max(200, firstAppendedRow + recordsToWrite.length + 5),
       });
-      const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders));
+      const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders, request));
       added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows, writeReceipt);
     } catch (error) {
       if (!request.destinationSheetUrl || !isGoogleSheetsError(error)) throw error;
@@ -3943,7 +4008,7 @@ async function run(request, headers) {
       try {
         sheet = await v2.createSpreadsheet(recoveryTitle, storageHeaders, request.count);
         firstAppendedRow = 2;
-        const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders));
+        const rows = recordsToWrite.map((record) => rowFor(record, storageHeaders, request));
         added = await appendRows(sheet.spreadsheetId, sheet.sheetName, rows);
       } catch (fallbackError) {
         const combined = new Error(
