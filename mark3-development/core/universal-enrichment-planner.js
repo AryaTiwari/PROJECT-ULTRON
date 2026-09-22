@@ -243,6 +243,53 @@ function safeWritesForGroup(row, group, person, options = {}) {
   return { writes, conflicts, allowed: true };
 }
 
+
+function replacementWritesForGroup(row, group, person, options = {}) {
+  const snapshot = groupSnapshot(row, group);
+  const values = personValues(person);
+  const writes = [];
+  const conflicts = [];
+
+  // Replacement is an explicit contactability repair, never a generic overwrite.
+  // The current slot must identify someone, must currently lack a usable phone,
+  // and the replacement must carry a usable phone.
+  if (!snapshot.hasIdentity) return { writes, conflicts: ['replacement-requires-existing-identity'], allowed: false };
+  if (contact.phone(snapshot.values.phone)) return { writes, conflicts: ['existing-phone-protected'], allowed: false };
+  if (!contact.phone(values.phone)) return { writes, conflicts: ['replacement-requires-phone'], allowed: false };
+  if (!values.name && !values.linkedin) return { writes, conflicts: ['replacement-requires-identity'], allowed: false };
+  if (samePerson(snapshot.values, person)) return { writes, conflicts: ['replacement-must-change-person'], allowed: false };
+
+  require('./universal-run-context').verified(row, group);
+
+  for (const field of expectedPersonFields(group)) {
+    const descriptor = group.fields[field];
+    const current = snapshot.values[field];
+    const next = field === 'name' ? displayNameForGroup(group, values) : values[field];
+
+    // Identity replacement is atomic across the group. If the old POC had a
+    // value the new verified person does not, explicitly clear it rather than
+    // leaving cross-wired contact data behind.
+    if (text(current) === text(next)) continue;
+    writes.push({
+      field,
+      columnIndex: descriptor.index,
+      value: next || '',
+      groupId: group.id,
+      replaces: current || '',
+      allowReplace: true,
+      replacementReason: options.reason || 'missing-phone-contactability',
+      ...(field === 'name' && next && next !== values.name ? { embeddedRole: true } : {}),
+    });
+  }
+
+  return {
+    writes,
+    conflicts,
+    allowed: writes.length > 0,
+    replacement: true,
+  };
+}
+
 function assignmentPlan(row, schema, candidates = [], context = {}, options = {}) {
   const plan = planRow(row, schema, options);
   const openTargets = plan.targets.filter((item) => item.snapshot.empty);
@@ -276,5 +323,6 @@ module.exports = {
   displayNameForGroup,
   hasEmbeddedDesignation,
   safeWritesForGroup,
+  replacementWritesForGroup,
   assignmentPlan,
 };
