@@ -7,6 +7,7 @@ const config = require('./config');
 const CACHE_FILE = path.join(config.projectRoot, '.ultron', 'direct-web-search-cache.json');
 const SEARCH_ENDPOINT = 'https://www.bing.com/search';
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_EMPTY_TTL_MS = 30 * 60 * 1000;
 let cache = null;
 let nextRequestAt = 0;
 
@@ -120,8 +121,13 @@ async function search(query, options = {}) {
   const limit = Math.max(1, Math.min(20, Number(options.limit || 10)));
   const key = `v2|${text.toLowerCase().replace(/\s+/g, ' ')}`;
   const ttlMs = Math.max(60000, Number(options.cacheTtlMs || process.env.ULTRON_M3_DIRECT_WEB_SEARCH_CACHE_TTL_MS || DEFAULT_TTL_MS));
+  const emptyTtlMs = Math.max(60000, Number(options.emptyCacheTtlMs || process.env.ULTRON_M3_DIRECT_WEB_SEARCH_EMPTY_CACHE_TTL_MS || DEFAULT_EMPTY_TTL_MS));
   const cached = readCache()[key];
-  if (cached && Date.now() - Number(cached.savedAt || 0) < ttlMs && Array.isArray(cached.results)) {
+  const cachedAge = cached ? Date.now() - Number(cached.savedAt || 0) : Infinity;
+  if (cached?.empty === true && cachedAge < emptyTtlMs) {
+    throw Object.assign(new Error('Direct public search recently returned no indexed results.'), { code: 'DIRECT_WEB_SEARCH_EMPTY_CACHED', cached: true });
+  }
+  if (cached && cachedAge < ttlMs && Array.isArray(cached.results)) {
     return { query: text, results: cached.results.slice(0, limit), provider: 'direct-bing-html', cached: true };
   }
 
@@ -146,7 +152,11 @@ async function search(query, options = {}) {
     // RSS is a useful keyless fallback for broad searches, but it can ignore
     // site: filters. Never accept it for constrained identity discovery.
     if (!results.length && !site) results = parseBingRss(raw, limit);
-    if (!results.length) throw Object.assign(new Error('Direct public search returned no indexed results.'), { code: 'DIRECT_WEB_SEARCH_EMPTY' });
+    if (!results.length) {
+      readCache()[key] = { savedAt: Date.now(), results: [], empty: true };
+      try { persistCache(); } catch {}
+      throw Object.assign(new Error('Direct public search returned no indexed results.'), { code: 'DIRECT_WEB_SEARCH_EMPTY' });
+    }
     readCache()[key] = { savedAt: Date.now(), results };
     try { persistCache(); } catch {}
     return { query: text, results, provider: 'direct-bing-html', cached: false };

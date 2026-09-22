@@ -1098,15 +1098,24 @@ async function repairExistingContactFromPublicIndex(item, companyContext, stats,
   // Keyless direct search is the default. SerpApi is opt-in only so a worksheet
   // run cannot silently consume a monthly paid-search allowance.
   if (web.status()?.configured) {
-    for (const query of queries) {
-      if (refs.size >= 4) break;
+    const searchOne = async (query) => {
       try {
-        const result = await web.searchWeb(query, { limit: 10, timeoutMs: 10000 });
+        const result = await runContext.memo(`public-search:${text(query).toLowerCase()}`, () =>
+          web.searchWeb(query, { limit: 10, timeoutMs: 10000 })
+        );
         stats.existingPublicIndexSearches = Number(stats.existingPublicIndexSearches || 0) + 1;
-        addItems(result?.results, result?.provider || 'direct-public-search');
+        return { result, provider: result?.provider || 'direct-public-search' };
       } catch (error) {
         stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
+        return null;
       }
+    };
+    const first = await searchOne(queries[0]);
+    if (first) addItems(first.result?.results, first.provider);
+    const remaining = refs.size >= 4 ? [] : queries.slice(1);
+    const outcomes = await runContext.settledMap(remaining, searchOne, Math.min(3, remaining.length || 1));
+    for (const outcome of outcomes) {
+      if (outcome.status === 'fulfilled' && outcome.value) addItems(outcome.value.result?.results, outcome.value.provider);
     }
   }
 
@@ -1852,12 +1861,14 @@ async function discoverPublicIndexPeople(companyContext, stats, options = {}) {
   };
 
   if (web.status()?.configured) {
-    for (const query of queries.slice(0, 3)) {
-      if (refs.size >= 12) break;
+    const searchQueries = queries.slice(0, 3);
+    const searchOne = async (query) => {
       try {
-        const result = await web.searchWeb(query, { limit: 10, timeoutMs: 10000 });
+        const result = await runContext.memo(`public-search:${text(query).toLowerCase()}`, () =>
+          web.searchWeb(query, { limit: 10, timeoutMs: 10000 })
+        );
         stats.publicIndexSearchCalls = Number(stats.publicIndexSearchCalls || 0) + 1;
-        addItems(result?.results, result?.provider || 'direct-public-search');
+        return { result, provider: result?.provider || 'direct-public-search' };
       } catch (error) {
         stats.publicIndexFailures = Number(stats.publicIndexFailures || 0) + 1;
         stats.discoveryDiagnostics.push({
@@ -1868,7 +1879,15 @@ async function discoverPublicIndexPeople(companyContext, stats, options = {}) {
           stage: 'public-linkedin-index-search',
           message: String(error?.message || error || '').slice(0, 300),
         });
+        return null;
       }
+    };
+    const first = await searchOne(searchQueries[0]);
+    if (first) addItems(first.result?.results, first.provider);
+    const remaining = refs.size >= 12 ? [] : searchQueries.slice(1);
+    const outcomes = await runContext.settledMap(remaining, searchOne, Math.min(2, remaining.length || 1));
+    for (const outcome of outcomes) {
+      if (outcome.status === 'fulfilled' && outcome.value) addItems(outcome.value.result?.results, outcome.value.provider);
     }
   }
 
@@ -2068,8 +2087,9 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // queued for the post-sweep deterministic recheck.
   if (options.primarySweep) {
     stats.candidatesDiscovered += merged.length;
-    if (merged.length) cache.set(key, merged);
-    else cache.delete(key);
+    // An empty result is still useful run-local evidence. Repeating the same
+    // company/location search on another row moments later cannot improve it.
+    cache.set(key, merged);
     return merged;
   }
 

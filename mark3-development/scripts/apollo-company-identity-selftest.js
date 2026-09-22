@@ -119,9 +119,15 @@ assert.equal(apollo.validPhone('null'), null);
   const enriched = await apollo.enrich(resolved.linkedinUrl, { needEmail: true, needPhone: true });
   assert.equal(enriched.cached, true);
   assert.equal(enriched.email, 'test@example.com');
+  const byEmail = await apollo.resolvePersonByBusinessEmail('test@example.com', 'Acme', 'acme.test');
+  const byName = await apollo.resolvePersonByNameCompany('Test Person', 'Acme', 'acme.test');
+  assert.equal(byEmail.cached, true);
+  assert.equal(byName.cached, true);
+  assert.equal(byEmail.apolloPersonId, 'person-1');
+  assert.equal(byName.apolloPersonId, 'person-1');
   assert.equal(identityCalls, 1);
 
-  console.log('Apollo identity tests passed: strict company tier order, manager fallback, verified company identity, and exact-person phone/email cache reuse.');
+  console.log('Apollo identity tests passed: strict company tier order, manager fallback, verified company identity, and LinkedIn/email/name-company cache reuse without duplicate reveal calls.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

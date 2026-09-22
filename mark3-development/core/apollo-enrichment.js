@@ -900,6 +900,21 @@ async function resolvePersonByBusinessEmail(email, company = '', domain = '', op
   const cleanDomain = hostname(domain || String(cleanEmail).split('@').pop() || '');
   const needEmail = options.needEmail !== false;
   const needPhone = options.needPhone !== false;
+  const cached = Object.entries(readCache().people).find(([, record]) =>
+    validEmail(record?.email)?.toLowerCase() === cleanEmail.toLowerCase()
+    && sameOrganization(record, cleanCompany, cleanDomain)
+    && satisfies(record, { needEmail, needPhone })
+  );
+  if (cached) {
+    const [linkedinUrl, record] = cached;
+    return {
+      ...record,
+      id: String(record.apolloPersonId),
+      linkedinUrl: normalizeLinkedIn(linkedinUrl || record.returnedLinkedIn),
+      identityVerified: true,
+      cached: true,
+    };
+  }
   const data = await apiCall({ email: cleanEmail }, { needPhone });
   const person = data.person;
   const confidence = String(data?.match_confidence || person?.match_confidence || '').toLowerCase();
@@ -962,6 +977,22 @@ async function resolvePersonByNameCompany(name, company, domain, options = {}) {
 
   const needEmail = options.needEmail !== false;
   const needPhone = options.needPhone !== false;
+  const cached = Object.entries(readCache().people).find(([, record]) =>
+    record?.apolloPersonId
+    && normalizedWords(record.name) === normalizedWords(cleanName)
+    && sameOrganization(record, cleanCompany, cleanDomain)
+    && satisfies(record, { needEmail, needPhone })
+  );
+  if (cached) {
+    const [linkedinUrl, record] = cached;
+    return {
+      ...record,
+      id: String(record.apolloPersonId),
+      linkedinUrl: normalizeLinkedIn(linkedinUrl || record.returnedLinkedIn),
+      identityVerified: true,
+      cached: true,
+    };
+  }
   const data = await apiCall({
     name: cleanName,
     domain: cleanDomain,

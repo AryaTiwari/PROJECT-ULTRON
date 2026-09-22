@@ -196,8 +196,9 @@ const manualSelectorIndex = operatorRunSource.indexOf('fillManualPriorityGroup(r
 const aiDeferIndex = operatorRunSource.indexOf('stats.deferredOpenGroups += poc2Targets.length');
 assert.ok(manualSelectorIndex >= 0, 'manual POC-2 selection must exist');
 assert.ok(aiDeferIndex > manualSelectorIndex, 'manual POC-2 must run before AI deferral');
-assert.match(operatorSource, /if \(merged\.length\) cache\.set\(key, merged\)/);
-assert.match(operatorSource, /else cache\.delete\(key\)/);
+assert.match(operatorSource, /An empty result is still useful run-local evidence/);
+assert.match(operatorSource, /cache\.set\(key, merged\)/);
+assert.doesNotMatch(operatorSource, /else cache\.delete\(key\)/);
 assert.match(operatorSource, /optionalPoc3Deferred/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS/);
