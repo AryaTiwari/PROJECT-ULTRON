@@ -311,7 +311,9 @@ assert.match(qualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', 
 assert.match(qualitySource, /Native Apollo reveal \+ webhook settlement is the production default/);
 assert.match(operatorSource, /Mandatory POC-2 residue must always enter the deterministic leftover/);
 assert.match(operatorSource, /Fast sweep deferred deeper deterministic discovery\/hydration until all rows are processed/);
-assert.match(operatorSource, /markLeftover\(stats, rowNumber, people\.length \? 'poc2-verification-unresolved' : 'poc2-no-candidates'/);
+assert.match(operatorSource, /const poc2Reason = result\.reason/);
+assert.match(operatorSource, /'poc2-verification-unresolved' : 'poc2-no-candidates'/);
+assert.match(operatorSource, /contactability-top3-exhausted/);
 assert.match(operatorSource, /companyBrandFromDomain/);
 assert.match(operatorSource, /adaptiveBroadCandidateLimit/);
 assert.match(operatorSource, /APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED/);
