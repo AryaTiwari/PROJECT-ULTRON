@@ -15,8 +15,19 @@ function uniq(values = []) {
 
 function contactEnrichmentRequested(text) {
   const value = String(text || '');
-  if (/\b(?:no|without)\s+(?:(?:contact\s+)?enrichment|apollo)\b|\b(?:do\s+not|don['’]t)\s+(?:use\s+)?(?:apollo|enrich)\b/i.test(value)) return false;
+  const explicitDiscoveryOnly = /\b(?:discovery|lead\s+discovery|company\s+discovery)\s+only\b/i.test(value);
+  const negatedContacts = /\b(?:do\s+not|don['’]t|never)\s+(?:(?:find|search(?:\s+for)?|discover|enrich|fill|populate|use|call)\s+)?[^.!?;\n]{0,140}\b(?:pocs?|recruiters?|decision[- ]?makers?|contacts?|emails?|e-?mails?|phones?|mobiles?|phone\s+numbers?|apollo)\b/i.test(value);
+  if (/\b(?:no|without)\s+(?:(?:contact\s+)?enrichment|apollo)\b|\b(?:do\s+not|don['’]t)\s+(?:use\s+|call\s+)?(?:apollo|enrich)\b/i.test(value)) return false;
+  if (explicitDiscoveryOnly || negatedContacts) return false;
   return CONTACT_RE.test(value);
+}
+
+function isLeadDiscoveryRequest(text) {
+  const value = String(text || '').trim();
+  if (!isDiscoveryRequest(value) || contactEnrichmentRequested(value)) return false;
+  const leadTarget = /\b(?:companies?|employers?|startups?|jobs?|openings?|vacanc(?:y|ies))\b/i.test(value);
+  const hiringContext = /\b(?:hiring|job\s+openings?|vacanc(?:y|ies)|roles?|posted|past\s+(?:day|week|month)|remote|hybrid|on[- ]?site|applicants?)\b/i.test(value);
+  return leadTarget && hiringContext;
 }
 
 function isDiscoveryRequest(text) {
@@ -178,6 +189,7 @@ module.exports = {
   uniq,
   contactEnrichmentRequested,
   isDiscoveryRequest,
+  isLeadDiscoveryRequest,
   postingAge,
   radius,
   workplace,

@@ -8,7 +8,7 @@ const router = require('../core/linkedin-command-router');
   assert.equal(receipt.rows, 1);
   await assert.rejects(verifyAppend({}, rows, async () => rows), { code: 'LINKEDIN_SHEET_WRITE_UNVERIFIED' });
   await assert.rejects(verifyAppend(response, rows, async () => []), { code: 'LINKEDIN_SHEET_WRITE_UNVERIFIED' });
-  for (const text of ['No Apollo', 'Resume SAP. No Apollo', 'Find email without Apollo', 'Do not use Apollo']) {
+  for (const text of ['No Apollo', 'Resume SAP. No Apollo', 'Find email without Apollo', 'Do not use Apollo', 'Discovery only—do not find POCs, emails, or phone numbers, and do not use Apollo']) {
     assert.equal(router.requestedContactEnrichment(text), false);
     assert.equal(router.isApolloEnrichmentRequest(text), false);
   }

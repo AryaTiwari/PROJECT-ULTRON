@@ -2,6 +2,7 @@ const googleAuth = require('./google-sheets-auth');
 const sheets = require('./google-sheets-operator');
 const finalMaster = require('./linkedin-final-master');
 const missionContract = require('./linkedin-mission-contract');
+const leadIntent = require('./linkedin-lead-intent');
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
@@ -15,8 +16,7 @@ function normalize(value) {
 }
 
 function requestedContactEnrichment(text) {
-  if (/\b(?:no\s+apollo|without\s+apollo|(?:do\s+not|don['’]t)\s+(?:use\s+)?apollo)\b/i.test(String(text || ''))) return false;
-  return /\b(?:enrich|enrichment|apollo|email|e-?mail|phone|mobile|contact\s+(?:info|information|details?|number)|decision[- ]?maker|head(?:s)?|recruiter(?:s)?|talent\s+acquisition|hr\s+contact)\b/i.test(String(text || ''));
+  return leadIntent.contactEnrichmentRequested(text);
 }
 
 function isApolloEnrichmentRequest(text) {

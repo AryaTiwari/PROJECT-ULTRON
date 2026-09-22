@@ -13,6 +13,15 @@ if (run('intent')) {
   assert.equal(router.isApolloEnrichmentRequest('now enrich those leads with email and number using Apollo'), true);
   assert.equal(router.isApolloEnrichmentRequest('also add their numbers using apollo'), true);
 
+  const discoveryOnlySheetCommand = 'Find 30 unique companies with active SAP job openings in Mumbai, posted within the past week. Remote jobs only. Write the results into https://docs.google.com/spreadsheets/d/1KZKJAe-QqZcreG3mr32JNbdiwBYDFWndynaXqid8wKY/edit?gid=306985105#gid=306985105 Sheet Arya-22 sept. Discovery only—do not find POCs, emails, or phone numbers, and do not use Apollo. Continue through pagination and relevant SAP role variants until the target is reached or all safe search strategies are exhausted.';
+  assert.equal(router.requestedContactEnrichment(discoveryOnlySheetCommand), false);
+  assert.equal(router.isApolloEnrichmentRequest(discoveryOnlySheetCommand), false);
+  assert.equal(controlPlane.isUniversalSpreadsheetEnrichmentRequest(discoveryOnlySheetCommand), false);
+  const discoveryOnlySheetRoute = controlPlane.claim(discoveryOnlySheetCommand);
+  assert.equal(discoveryOnlySheetRoute.domain, 'linkedin');
+  assert.equal(discoveryOnlySheetRoute.controller, 'linkedin-domain-controller');
+  assert.equal(discoveryOnlySheetRoute.exclusive, true);
+
   const anchoredPocCommand = [
     'Use @New_Sheet_14-09-25 and perform the Mark 3 anchored 3-POC enrichment.',
     'Person or Company Name = POC-1 name.',

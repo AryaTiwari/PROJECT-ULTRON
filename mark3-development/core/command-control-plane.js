@@ -1,6 +1,7 @@
 'use strict';
 const { AsyncLocalStorage } = require('node:async_hooks');
 const scope = new AsyncLocalStorage();
+const linkedinIntent = require('./linkedin-lead-intent');
 
 // Ownership precedes interpretation. No model/bootstrap import belongs here.
 // HTTP dispatch owns exclusive domain routing and paid-tool approval re-entry.
@@ -43,6 +44,7 @@ function isThreePocSpreadsheetRequest(message, options = {}) {
 function isUniversalSpreadsheetEnrichmentRequest(message, options = {}) {
   const text = normalize(message);
   if (!text) return false;
+  if (linkedinIntent.isLeadDiscoveryRequest(text)) return false;
   const source = spreadsheetSourceSignals(text, options);
   if (!source.hasSource) return false;
 
@@ -59,6 +61,13 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
 
 function claim(message, options = {}) {
   const text = normalize(message);
+  if (linkedinIntent.isLeadDiscoveryRequest(text)) {
+    return Object.freeze({
+      domain: 'linkedin', claimed: true, exclusive: true,
+      controller: 'linkedin-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+    });
+  }
   if (isThreePocSpreadsheetRequest(text, options)) {
     return Object.freeze({
       domain: 'three-poc-spreadsheet', claimed: true, exclusive: true,
@@ -75,7 +84,7 @@ function claim(message, options = {}) {
   }
 
   const linkedin = /\blinkedin\b|linkedin\.com\/|\b(?:search_jobs|get_job_details|get_company_profile|search_companies|search_people|get_person_profile)\b/i.test(text);
-  const apolloEnrichment = /\bapollo\b/i.test(text)
+  const apolloEnrichment = linkedinIntent.contactEnrichmentRequested(text) && /\bapollo\b/i.test(text)
     && /\b(?:enrich|enrichment|email|e-?mail|phone|mobile|numbers?|contacts?|leads?|compan(?:y|ies)|sheet|master)\b/i.test(text);
   const emailOutreach = !apolloEnrichment
     && /\b(?:email outreach|email campaign|personalized emails?|send emails?|follow[- ]?up emails?)\b/i.test(text)

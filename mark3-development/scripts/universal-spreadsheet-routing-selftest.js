@@ -40,6 +40,8 @@ assert.notEqual(calculation.domain, 'spreadsheet-enrichment');
 assert.equal(control.invariantCodeForDomain('spreadsheet-enrichment'), 'SPREADSHEET_ENRICHMENT_ROUTE_INVARIANT_VIOLATION');
 assert.equal(control.isUniversalSpreadsheetEnrichmentRequest(`Fill missing contacts in ${url}`), true);
 assert.equal(control.isUniversalSpreadsheetEnrichmentRequest(`Change formatting in ${url}`), false);
+assert.equal(control.isUniversalSpreadsheetEnrichmentRequest(`Find 30 companies with active SAP job openings in Mumbai, remote only, past week. Write them to ${url}. Discovery only; do not find POCs, emails, phones, or use Apollo.`), false);
+assert.equal(control.claim(`Find 30 companies with active SAP job openings in Mumbai, remote only, past week. Write them to ${url}. Discovery only; do not find POCs, emails, phones, or use Apollo.`).domain, 'linkedin');
 
 // Natural-language tab targeting forms used by the chat UI.
 assert.equal(spreadsheetController.parseSheetName('Target only the `Gaurav 2` tab.'), 'Gaurav 2');
