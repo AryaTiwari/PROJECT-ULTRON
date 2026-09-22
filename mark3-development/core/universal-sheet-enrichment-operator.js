@@ -2241,8 +2241,8 @@ function pragmaticSameEmployerCandidates(candidates = [], companyContext = {}, e
       };
     })
     .sort((a, b) =>
-      b.phonePreference - a.phonePreference
-      || a.priority - b.priority
+      a.priority - b.priority
+      || b.phonePreference - a.phonePreference
       || b.score - a.score
       || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || ''))
     )
@@ -2309,31 +2309,32 @@ function manualPriorityCandidates(candidates = [], companyContext = {}, existing
   }
   return rows
     .sort((a, b) =>
-      b.phonePreference - a.phonePreference
-      || a.priority - b.priority
+      a.priority - b.priority
+      || b.phonePreference - a.phonePreference
       || b.score - a.score
       || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || ''))
     )
     .map((item) => item.candidate);
 }
 
-async function fillManualPriorityGroup(row, plan, companyContext, candidates, stats, options = {}) {
-  const ordinal = Number(options.ordinal || 0);
-  if (!ordinal) return { writes: [], filled: false, selected: null };
-  const target = candidateFillTargets(plan).find((item) => Number(item.group?.ordinal || 0) === ordinal);
-  if (!target) return { writes: [], filled: false, selected: null };
+function contactabilityTier(person = {}) {
+  const phone = apollo.validPhone(person?.phone || '');
+  if (!phone) return 0;
 
-  const existing = options.existingIdentities || existingIdentityKeys(plan);
-  const claimed = options.claimed instanceof Set ? options.claimed : new Set();
-  const priorityPool = manualPriorityCandidates(candidates, companyContext, existing)
-    .filter((candidate) => {
-      const key = candidateDiscoveryKey(candidate);
-      return key && !claimed.has(key);
-    });
+  // Indian phone is the strongest contact requirement. Email then decides
+  // quality inside the same phone-country tier. Foreign phones are accepted
+  // only when the bounded preferred shortlist yields no +91 result.
+  const indian = Boolean(apollo.indianPhone(phone));
+  const email = Boolean(apollo.validEmail(person?.email || ''));
+  if (indian && email) return 4;
+  if (indian) return 3;
+  if (email) return 2;
+  return 1;
+}
 
-  // If the canonical title ladder has no candidate, append the strongest
-  // deterministic evidence-ranked candidates. This keeps functional hiring
-  // authorities available without making the common path expensive.
+function preferredContactShortlist(candidates = [], plan = {}, companyContext = {}, existing = { names: new Set(), linkedins: new Set() }, options = {}) {
+  const priorityPool = manualPriorityCandidates(candidates, companyContext, existing);
+
   const fallbackRanking = ranker.rankCandidates(
     (candidates || []).filter((candidate) => !candidateAlreadyPresent(candidate, existing)),
     {
@@ -2346,22 +2347,41 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     { minimumScore: Number(options.fallbackMinimumScore ?? 28) },
   ).ranked.map((item) => item.candidate);
 
-  // Results-first final fallback: if the formal priority ladder/ranker is too
-  // selective, keep useful same-company HR/talent/staffing/leadership contacts in
-  // play. They still must survive exact Apollo hydration + employer verification.
   const pragmaticPool = pragmaticSameEmployerCandidates(candidates, companyContext, existing);
+  const pool = mergeCandidatePools(priorityPool, fallbackRanking, pragmaticPool);
 
-  const pool = mergeCandidatePools(priorityPool, fallbackRanking, pragmaticPool)
-    .filter((candidate) => {
-      const key = candidateDiscoveryKey(candidate);
-      return key && !claimed.has(key);
-    });
+  // Hard budget: contactability is evaluated for no more than three preferred
+  // people for a company. This shortlist is shared across POC-1/POC-2/POC-3.
+  const requested = Number(options.contactabilityCandidateLimit ?? 3);
+  const limit = Number.isFinite(requested) ? Math.max(1, Math.min(3, Math.floor(requested))) : 3;
+  return pool.slice(0, limit);
+}
 
-  const maxAttempts = integer(options.maxHydrationAttempts, ordinal === 2 ? 3 : 1, 1, 5);
-  for (let attempt = 0; attempt < Math.min(maxAttempts, pool.length); attempt++) {
-    const raw = pool[attempt];
+async function fillManualPriorityGroup(row, plan, companyContext, candidates, stats, options = {}) {
+  const ordinal = Number(options.ordinal || 0);
+  if (!ordinal) return { writes: [], filled: false, selected: null };
+  const target = candidateFillTargets(plan).find((item) => Number(item.group?.ordinal || 0) === ordinal);
+  if (!target) return { writes: [], filled: false, selected: null };
+
+  const existing = options.existingIdentities || existingIdentityKeys(plan);
+  const claimed = options.claimed instanceof Set ? options.claimed : new Set();
+  const shared = Array.isArray(options.contactabilityShortlist)
+    ? options.contactabilityShortlist
+    : preferredContactShortlist(candidates, plan, companyContext, existing, options);
+
+  const shortlist = shared.filter((candidate) => {
+    const key = candidateDiscoveryKey(candidate);
+    return key && !claimed.has(key) && !candidateAlreadyPresent(candidate, existing);
+  });
+
+  const checked = [];
+  let firstVerified = null;
+
+  for (let attempt = 0; attempt < shortlist.length; attempt++) {
+    const raw = shortlist[attempt];
     const rawKey = candidateDiscoveryKey(raw);
     stats.hydrationAttempts++;
+
     let person = null;
     try {
       person = await hydrateDecisionMakerVerified(raw, companyContext, stats, {
@@ -2381,15 +2401,12 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       continue;
     }
 
-    const hydratedName = ranker.normalize(person.name || '');
-    const hydratedLinkedin = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
     if (candidateAlreadyPresent(person, existing)) {
       stats.postHydrationDuplicates++;
       claimed.add(rawKey);
       continue;
     }
 
-    queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, person);
     const writePlan = planner.safeWritesForGroup(row, target.group, person);
     if (!writePlan.allowed || (!writePlan.writes.length && person.phoneStatus !== 'pending')) {
       stats.identityConflicts++;
@@ -2397,31 +2414,65 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       continue;
     }
 
-    claimed.add(rawKey);
-    rememberCandidate(existing, person);
-      if (hydratedName) existing.names.add(hydratedName);
-    if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
-    stats.newPeopleSelected++;
-    stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
-    stats.selectionAudit.push({
-      groupId: target.group.id,
-      ordinal,
-      strategy: 'manual-priority',
-      priority: apollo.decisionPriority(person.title || raw.title || ''),
-      phonePreference: Math.max(
-        Number(apollo.phoneAvailabilityPriority(person) || 0),
-        Number(apollo.phoneAvailabilityPriority(raw) || 0),
-      ),
-      phoneAvailable: Boolean(apollo.validPhone(person.phone || '')),
-      apolloPersonId: text(person.apolloPersonId || person.id),
-      name: person.name || '',
-      title: person.title || '',
-      fields: writePlan.writes.map((write) => write.field),
-    });
-    return { writes: writePlan.writes, filled: true, selected: person };
+    const entry = {
+      raw,
+      rawKey,
+      person,
+      writePlan,
+      index: attempt,
+      tier: contactabilityTier(person),
+    };
+    if (!firstVerified) firstVerified = entry;
+    if (entry.tier > 0) checked.push(entry);
+
+    // +91 phone + email is the maximum possible result. Stop immediately rather
+    // than spending more credits merely to confirm that perfection remains perfect.
+    if (entry.tier === 4) break;
   }
 
-  return { writes: [], filled: false, selected: null };
+  // Normal selection is phone-hard. Within phone-bearing candidates: +91 wins;
+  // email strongly breaks ties. If all three preferred candidates lack a usable
+  // phone, fall back to the first verified preferred POC instead of leaving blank.
+  const selected = checked
+    .slice()
+    .sort((a, b) => b.tier - a.tier || a.index - b.index)[0]
+    || firstVerified;
+
+  if (!selected) return { writes: [], filled: false, selected: null };
+
+  const { raw, rawKey, person, writePlan, tier } = selected;
+  queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, person);
+
+  claimed.add(rawKey);
+  rememberCandidate(existing, person);
+  const hydratedName = ranker.normalize(person.name || '');
+  const hydratedLinkedin = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
+  if (hydratedName) existing.names.add(hydratedName);
+  if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
+
+  const phone = apollo.validPhone(person.phone || '');
+  const indianPhone = phone ? apollo.indianPhone(phone) : null;
+  const email = apollo.validEmail(person.email || '');
+
+  stats.newPeopleSelected++;
+  stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
+  stats.selectionAudit.push({
+    groupId: target.group.id,
+    ordinal,
+    strategy: tier > 0 ? 'top3-contactability' : 'top3-first-preferred-fallback',
+    priority: apollo.decisionPriority(person.title || raw.title || ''),
+    shortlistSize: shared.length,
+    contactabilityTier: tier,
+    phoneAvailable: Boolean(phone),
+    indianPhone: Boolean(indianPhone),
+    emailAvailable: Boolean(email),
+    apolloPersonId: text(person.apolloPersonId || person.id),
+    name: person.name || '',
+    title: person.title || '',
+    fields: writePlan.writes.map((write) => write.field),
+  });
+
+  return { writes: writePlan.writes, filled: true, selected: person };
 }
 
 async function fillOpenGroups(row, plan, companyContext, candidates, stats, options = {}) {
@@ -3091,7 +3142,22 @@ async function run(request = {}, options = {}) {
         }
       }
 
-      const rowOptions = { ...runOptions, rowNumber, candidatePool: people, existingIdentities: existingIdentityKeys(plan) };
+      const rowExistingIdentities = existingIdentityKeys(plan);
+      const contactabilityShortlist = preferredContactShortlist(
+        people,
+        plan,
+        companyContext,
+        rowExistingIdentities,
+        { fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26, contactabilityCandidateLimit: 3 },
+      );
+      const rowOptions = {
+        ...runOptions,
+        rowNumber,
+        candidatePool: people,
+        existingIdentities: rowExistingIdentities,
+        contactabilityShortlist,
+        contactabilityCandidateLimit: 3,
+      };
       const manualClaimed = new Set();
 
       // The same verified path applies to a first contact in company-led sheets
@@ -3410,6 +3476,8 @@ module.exports = {
   pragmaticSameEmployerCandidates,
   cachedVerifiedPeopleForCompany,
   manualPriorityCandidates,
+  contactabilityTier,
+  preferredContactShortlist,
   fillManualPriorityGroup,
   fillOpenGroups,
   applyRecoveredHeaderRepairs,
