@@ -71,6 +71,39 @@ assert.equal(hrFallbackCandidates.length, 2, 'two distinct same-company recruite
 assert.notEqual(hrFallbackCandidates[0].id, hrFallbackCandidates[1].id, 'POC slots must remain distinct people');
 assert.ok(hrFallbackCandidates.every((person) => /technical recruiter/i.test(person.title)));
 
+// Contactability is now a first-class preference. A verified same-company HR
+// candidate with Apollo's direct-phone signal should outrank a higher-title
+// candidate with no phone signal, but no candidate is rejected solely for lacking
+// a phone.
+const phonePreferredCandidates = operator.manualPriorityCandidates([
+  {
+    id: 'founder-no-phone',
+    name: 'Founder Without Phone',
+    title: 'Founder',
+    hasDirectPhone: 'No',
+    organizationName: 'Acme Systems',
+    organizationDomain: 'acme.com',
+    linkedinUrl: 'https://www.linkedin.com/in/founder-no-phone/',
+  },
+  {
+    id: 'hr-with-phone',
+    name: 'HR With Phone',
+    title: 'Human Resources Manager',
+    hasDirectPhone: 'Yes',
+    directPhoneAvailability: 2,
+    organizationName: 'Acme Systems',
+    organizationDomain: 'acme.com',
+    linkedinUrl: 'https://www.linkedin.com/in/hr-with-phone/',
+  },
+], {
+  company: 'Acme Systems',
+  domain: 'acme.com',
+}, { names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set() });
+
+assert.equal(phonePreferredCandidates.length, 2);
+assert.equal(phonePreferredCandidates[0].id, 'hr-with-phone', 'phone-available POC should be attempted first');
+assert.equal(phonePreferredCandidates[1].id, 'founder-no-phone', 'no-phone candidate must remain a valid fallback');
+
 assert.equal(planner.samePerson(
   { name: 'Rajeev Ranjan — Recruitment Manager' },
   { name: 'Rajeev Ranjan', title: 'Recruitment Manager' },
