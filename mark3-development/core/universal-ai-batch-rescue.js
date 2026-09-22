@@ -855,6 +855,11 @@ async function run(request = {}, primaryResult = {}, options = {}) {
           continue;
         }
 
+        person = await base.settleVerifiedPhoneForSelection(person, stats, {
+          phoneSettlementPolls: options.phoneSettlementPolls,
+          phoneSettlementWaitMs: options.phoneSettlementWaitMs,
+        });
+
         const nameKey = ranker.normalize(person.name || '');
         const linkedinKey = ranker.linkedinKey(person.linkedinUrl || person.returnedLinkedIn || '');
         if (base.candidateAlreadyPresent(person, existing)) {

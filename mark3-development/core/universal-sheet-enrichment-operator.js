@@ -2377,6 +2377,93 @@ function manualPriorityCandidates(candidates = [], companyContext = {}, existing
     .map((item) => item.candidate);
 }
 
+async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
+  if (!person?.identityVerified) return person;
+
+  const immediate = apollo.validPhone(person.phone || '');
+  if (immediate) return { ...person, phone: immediate, phoneStatus: 'found' };
+
+  const pollsRaw = Number(
+    options.phoneSettlementPolls
+    ?? process.env.ULTRON_M3_TOP3_PHONE_SETTLEMENT_POLLS
+    ?? 1
+  );
+  const polls = Number.isFinite(pollsRaw) ? Math.max(0, Math.min(2, Math.floor(pollsRaw))) : 1;
+  const apolloPersonId = text(person.apolloPersonId || person.id);
+
+  stats.candidatePhoneSettlementAttempts = Number(stats.candidatePhoneSettlementAttempts || 0) + 1;
+
+  try {
+    let outcome = null;
+
+    // Native Apollo reveal path used by production resolveDecisionMaker().
+    if (text(person.phoneRequestId)) {
+      const pollNativePhone = typeof options.pollNativePhone === 'function'
+        ? options.pollNativePhone
+        : apollo.pollWebhookResult;
+      outcome = await pollNativePhone(person.phoneRequestId, {
+        polls,
+        maxWaitMs: Number(options.phoneSettlementWaitMs || 1400),
+      });
+    } else if (text(person.phoneWaterfallRequestId)) {
+      // Legacy/compatibility phone waterfall requests are still supported, but
+      // only the already-started request is polled. No extra person is revealed.
+      const quality = require('./apollo-three-poc-quality');
+      const pollWaterfallPhone = typeof options.pollWaterfallPhone === 'function'
+        ? options.pollWaterfallPhone
+        : quality.pollPhoneRequest;
+      outcome = await pollWaterfallPhone(person.phoneWaterfallRequestId, { polls });
+      quality.recordPhoneWaterfallOutcome?.({ apolloPersonId }, outcome);
+    }
+
+    if (!outcome) {
+      stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
+      return person;
+    }
+
+    const phone = apollo.validPhone(outcome.phone || '');
+    if (phone) {
+      stats.candidatePhoneSettlementFound = Number(stats.candidatePhoneSettlementFound || 0) + 1;
+      if (apolloPersonId) {
+        const recordPhoneResult = typeof options.recordPhoneResult === 'function'
+          ? options.recordPhoneResult
+          : apollo.recordPhoneResult;
+        recordPhoneResult(apolloPersonId, phone);
+      }
+      return {
+        ...person,
+        phone,
+        phoneStatus: 'found',
+        phoneWaterfallStatus: text(person.phoneWaterfallRequestId) ? 'found' : person.phoneWaterfallStatus,
+      };
+    }
+
+    const state = text(outcome.state).toLowerCase();
+    if (state === 'pending') {
+      stats.candidatePhoneSettlementPending = Number(stats.candidatePhoneSettlementPending || 0) + 1;
+      return person;
+    }
+
+    if (['not_found', 'terminal', 'unavailable'].includes(state)) {
+      stats.candidatePhoneSettlementNotFound = Number(stats.candidatePhoneSettlementNotFound || 0) + 1;
+      if (apolloPersonId && state !== 'pending') {
+        const recordPhoneResult = typeof options.recordPhoneResult === 'function'
+          ? options.recordPhoneResult
+          : apollo.recordPhoneResult;
+        recordPhoneResult(apolloPersonId, null);
+      }
+      return { ...person, phone: null, phoneStatus: 'not_found' };
+    }
+
+    stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
+    return person;
+  } catch (error) {
+    throwSystemic(error);
+    stats.candidatePhoneSettlementErrors = Number(stats.candidatePhoneSettlementErrors || 0) + 1;
+    return person;
+  }
+}
+
 function contactabilityTier(person = {}) {
   const phone = apollo.validPhone(person?.phone || '');
   if (!phone) return 0;
@@ -2482,6 +2569,9 @@ async function selectContactableReplacement(item, plan, companyContext, stats, o
       claimed.add(rawKey);
       continue;
     }
+
+    person = await settleVerifiedPhoneForSelection(person, stats, options);
+
     if (candidateAlreadyPresent(person, existing)) {
       stats.postHydrationDuplicates++;
       claimed.add(rawKey);
@@ -2550,6 +2640,8 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       claimed.add(rawKey);
       continue;
     }
+
+    person = await settleVerifiedPhoneForSelection(person, stats, options);
 
     if (candidateAlreadyPresent(person, existing)) {
       stats.postHydrationDuplicates++;
@@ -2699,6 +2791,7 @@ async function fillOpenGroups(row, plan, companyContext, candidates, stats, opti
       }
 
       if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) continue;
+      person = await settleVerifiedPhoneForSelection(person, stats, options);
       const hydratedName = ranker.normalize(person?.name || '');
       const hydratedLinkedin = ranker.linkedinKey(person?.linkedinUrl || person?.returnedLinkedIn || '');
       if (candidateAlreadyPresent(person, existing)) {
@@ -2922,6 +3015,12 @@ function freshStats() {
     existingGroupsReplaced: 0,
     replacementCandidateChecks: 0,
     emptyPocNoPhoneRejected: 0,
+    candidatePhoneSettlementAttempts: 0,
+    candidatePhoneSettlementFound: 0,
+    candidatePhoneSettlementPending: 0,
+    candidatePhoneSettlementNotFound: 0,
+    candidatePhoneSettlementUnavailable: 0,
+    candidatePhoneSettlementErrors: 0,
     existingRepairAudit: [],
     embeddedDesignationWrites: 0,
     newPeopleSelected: 0,
@@ -3016,7 +3115,9 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
     'linkedinHydrationRecoveryAttempts','linkedinHydrationRecoverySuccesses','linkedinHydrationRecoveryFailures',
     'postHydrationDuplicates','existingVerificationAttempts','existingPublicIndexSearches',
     'existingPublicIndexVerificationAttempts','existingPublicIndexVerified','existingGroupsRepaired','existingGroupsReplaced',
-    'replacementCandidateChecks','emptyPocNoPhoneRejected','embeddedDesignationWrites',
+    'replacementCandidateChecks','emptyPocNoPhoneRejected','candidatePhoneSettlementAttempts',
+    'candidatePhoneSettlementFound','candidatePhoneSettlementPending','candidatePhoneSettlementNotFound',
+    'candidatePhoneSettlementUnavailable','candidatePhoneSettlementErrors','embeddedDesignationWrites',
     'newPeopleSelected','hydrationAttempts','hydrationFailures','manualPoc2Attempts','manualPoc2Filled',
     'manualPoc3Attempts','manualPoc3Filled','optionalPoc3Deferred','requestedPoc3Deferred','orphanContactTargets','orphanContactVerified',
     'orphanContactBlocked','orphanContactMismatches','phoneCellsFilled','phoneRowsChanged','phoneNotFound',
@@ -3642,6 +3743,7 @@ module.exports = {
   pragmaticSameEmployerCandidates,
   cachedVerifiedPeopleForCompany,
   manualPriorityCandidates,
+  settleVerifiedPhoneForSelection,
   contactabilityTier,
   preferredContactShortlist,
   chooseContactabilityCandidate,
