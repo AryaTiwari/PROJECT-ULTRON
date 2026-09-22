@@ -155,6 +155,63 @@ const noPhoneFallback = operator.chooseContactabilityCandidate([
 ]);
 assert.equal(noPhoneFallback.person.name, 'First Preferred', 'if none of the three has a usable phone, use the first preferred verified POC');
 
+// Existing non-anchor POCs are replaceable when their phone is unusable.
+// Replacement must be atomic: stale email/LinkedIn values from the old person
+// are overwritten or cleared together with the identity.
+const replacementGroup = {
+  id: 'person-1',
+  kind: 'person',
+  ordinal: 1,
+  fields: {
+    name: { index: 0, header: '1st POC NAME' },
+    phone: { index: 1, header: 'PHONE' },
+    email: { index: 2, header: 'EMAIL' },
+    linkedin: { index: 3, header: 'LINKEDIN' },
+  },
+};
+const replacementRow = [
+  'Old Person — Founder',
+  '',
+  'old.person@acme.com',
+  'https://www.linkedin.com/in/old-person/',
+];
+const replacementPlan = planner.replacementWritesForGroup(
+  replacementRow,
+  replacementGroup,
+  {
+    name: 'New Recruiter',
+    title: 'Human Resources Manager',
+    phone: '+91 98765 43210',
+    email: '',
+    linkedinUrl: 'https://www.linkedin.com/in/new-recruiter/',
+  },
+  { reason: 'missing-phone-contactability' },
+);
+assert.equal(replacementPlan.allowed, true);
+const replacementByField = Object.fromEntries(replacementPlan.writes.map((write) => [write.field, write]));
+assert.match(replacementByField.name.value, /New Recruiter/);
+assert.equal(replacementByField.phone.value, '+91 98765 43210');
+assert.equal(replacementByField.email.value, '', 'old person email must be cleared when replacement has no verified email');
+assert.equal(replacementByField.linkedin.value, 'https://www.linkedin.com/in/new-recruiter/');
+assert.equal(replacementByField.name.allowReplace, true);
+assert.equal(replacementByField.email.allowReplace, true);
+assert.equal(replacementByField.email.replaces, 'old.person@acme.com');
+
+const protectedPhonePlan = planner.replacementWritesForGroup(
+  ['Old Person', '+91 99999 99999', 'old@acme.com', 'https://www.linkedin.com/in/old-person/'],
+  replacementGroup,
+  {
+    name: 'New Recruiter',
+    title: 'Technical Recruiter',
+    phone: '+91 98888 88888',
+    email: 'new@acme.com',
+    linkedinUrl: 'https://www.linkedin.com/in/new-recruiter/',
+  },
+  { reason: 'missing-phone-contactability' },
+);
+assert.equal(protectedPhonePlan.allowed, false);
+assert.ok(protectedPhonePlan.conflicts.includes('existing-phone-protected'));
+
 assert.equal(planner.samePerson(
   { name: 'Rajeev Ranjan — Recruitment Manager' },
   { name: 'Rajeev Ranjan', title: 'Recruitment Manager' },
@@ -173,6 +230,7 @@ for (const file of [
 }
 
 const operatorSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-sheet-enrichment-operator.js'), 'utf8');
+const liveGuardSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'universal-live-write-guard.js'), 'utf8');
 assert.match(operatorSource, /apollo\.searchCompanyPeopleBroad/);
 assert.match(operatorSource, /ranker\.rankCandidates/);
 assert.match(operatorSource, /apollo\.resolveDecisionMaker/);
@@ -187,5 +245,10 @@ assert.match(
 assert.match(operatorSource, /contactabilityCandidateLimit:\s*3/);
 assert.match(operatorSource, /top3-contactability/);
 assert.match(operatorSource, /top3-first-preferred-fallback/);
+assert.match(operatorSource, /selectContactableReplacement/);
+assert.match(operatorSource, /slice\(0, 2\)/, 'existing POC plus at most two replacement candidates must preserve the three-person budget');
+assert.match(operatorSource, /replaced-no-phone-poc/);
+assert.match(liveGuardSource, /missing-phone-contactability/);
+assert.match(liveGuardSource, /change\.allowReplace === true/);
 
-console.log('Universal enrichment operator self-test passed: exact-profile employer parsing is deterministic, existing identity is preserved, arbitrary schema execution uses Apollo only after approval, and the full decision path has zero AI/model dependencies.');
+console.log('Universal enrichment operator self-test passed: exact-profile employer parsing is deterministic, contactable replacements are atomic and bounded, populated phones stay protected, arbitrary schema execution uses Apollo only after approval, and the full decision path has zero AI/model dependencies.');

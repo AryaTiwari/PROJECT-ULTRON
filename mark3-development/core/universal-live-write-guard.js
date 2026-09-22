@@ -44,7 +44,15 @@ async function writeVerifiedRow(source, rowNumber, expectedRow, changes) {
     const upgrade = group && !group.fields.role && !planner.hasEmbeddedDesignation(current)
       && normalization.splitIdentity(change.value).designation
       && planner.normalizeName(current) === planner.normalizeName(change.value);
-    if (!upgrade) throw conflict('populated-destination');
+
+    // Deliberate POC replacement is allowed only when the planner recorded the
+    // exact value it expects to replace. The whole row was re-read immediately
+    // above, so a concurrent edit still fails safely.
+    const deliberateReplacement = change.allowReplace === true
+      && text(change.replaces) === current
+      && change.replacementReason === 'missing-phone-contactability';
+
+    if (!upgrade && !deliberateReplacement) throw conflict('populated-destination');
   }
   const result = await sheets.writeCells(source.spreadsheetId, changes);
   require('./universal-run-context').commit(source.spreadsheetId, changes);
