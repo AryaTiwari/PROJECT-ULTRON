@@ -173,28 +173,9 @@ function phoneFromEntry(entry) {
 }
 
 function phoneFromPayload(payload) {
-  const roots = [];
-  if (payload?.person) roots.push(payload.person);
-  if (payload?.contact) roots.push(payload.contact);
-  if (Array.isArray(payload?.people)) roots.push(...payload.people);
-  if (Array.isArray(payload?.matches)) roots.push(...payload.matches);
-
-  for (const person of roots) {
-    const direct = phoneFromEntry(person);
-    if (direct) return direct;
-
-    for (const entry of Array.isArray(person?.phone_numbers) ? person.phone_numbers : []) {
-      const phone = phoneFromEntry(entry);
-      if (phone) return phone;
-    }
-
-    const waterfall = person?.waterfall;
-    for (const entry of Array.isArray(waterfall?.phone_numbers) ? waterfall.phone_numbers : []) {
-      const phone = phoneFromEntry(entry);
-      if (phone) return phone;
-    }
-  }
-  return null;
+  // Keep every Apollo phone path on the same preference policy: verified Indian
+  // mobile numbers are normalized to +91 and preferred when multiple numbers exist.
+  return apollo.preferredPhoneFromPayload(payload);
 }
 
 function cacheEntryFor(result) {
