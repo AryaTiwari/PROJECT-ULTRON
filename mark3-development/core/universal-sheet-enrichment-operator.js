@@ -2429,7 +2429,7 @@ function chooseContactabilityCandidate(entries = []) {
   const qualified = normalized
     .filter((entry) => entry.tier > 0)
     .sort((a, b) => b.tier - a.tier || a.index - b.index);
-  return qualified[0] || normalized[0] || null;
+  return qualified[0] || null;
 }
 
 
