@@ -148,12 +148,12 @@ const emailBreaksIndiaTie = operator.chooseContactabilityCandidate([
 ]);
 assert.equal(emailBreaksIndiaTie.person.name, 'India With Email', 'email should strongly decide between otherwise valid +91 candidates');
 
-const noPhoneFallback = operator.chooseContactabilityCandidate([
+const noPhoneSelection = operator.chooseContactabilityCandidate([
   { person: { name: 'First Preferred' }, tier: 0, index: 0 },
   { person: { name: 'Second Preferred', email: 'second@acme.com' }, tier: 0, index: 1 },
   { person: { name: 'Third Preferred' }, tier: 0, index: 2 },
 ]);
-assert.equal(noPhoneFallback.person.name, 'First Preferred', 'if none of the three has a usable phone, use the first preferred verified POC');
+assert.equal(noPhoneSelection, null, 'empty POC selection must reject all candidates when none has an actual usable phone');
 
 // Existing non-anchor POCs are replaceable when their phone is unusable.
 // Replacement must be atomic: stale email/LinkedIn values from the old person
@@ -212,6 +212,44 @@ const protectedPhonePlan = planner.replacementWritesForGroup(
 assert.equal(protectedPhonePlan.allowed, false);
 assert.ok(protectedPhonePlan.conflicts.includes('existing-phone-protected'));
 
+// Brand-new POC groups with a phone destination must never receive identity-only
+// writes. This planner-level rule protects every execution path, not just the
+// manual top-3 selector.
+const emptyPocGroup = {
+  id: 'empty-person-1',
+  kind: 'person',
+  ordinal: 1,
+  fields: {
+    name: { index: 0, header: '1st POC NAME' },
+    phone: { index: 1, header: 'PHONE' },
+    email: { index: 2, header: 'EMAIL' },
+  },
+};
+const noPhoneNewPoc = planner.safeWritesForGroup(
+  ['', '', ''],
+  emptyPocGroup,
+  {
+    name: 'Uncontactable Recruiter',
+    title: 'Technical Recruiter',
+    email: 'recruiter@acme.com',
+  },
+);
+assert.equal(noPhoneNewPoc.allowed, false);
+assert.ok(noPhoneNewPoc.conflicts.includes('new-poc-requires-phone'));
+
+const phoneNewPoc = planner.safeWritesForGroup(
+  ['', '', ''],
+  emptyPocGroup,
+  {
+    name: 'Contactable Recruiter',
+    title: 'Technical Recruiter',
+    phone: '+91 98765 43210',
+    email: 'recruiter@acme.com',
+  },
+);
+assert.equal(phoneNewPoc.allowed, true);
+assert.ok(phoneNewPoc.writes.some((write) => write.field === 'phone' && write.value === '+91 98765 43210'));
+
 assert.equal(planner.samePerson(
   { name: 'Rajeev Ranjan — Recruitment Manager' },
   { name: 'Rajeev Ranjan', title: 'Recruitment Manager' },
@@ -244,11 +282,12 @@ assert.match(
 );
 assert.match(operatorSource, /contactabilityCandidateLimit:\s*3/);
 assert.match(operatorSource, /top3-contactability/);
-assert.match(operatorSource, /top3-first-preferred-fallback/);
+assert.match(operatorSource, /empty-poc-left-blank-no-phone/);
+assert.doesNotMatch(operatorSource, /top3-first-preferred-fallback/);
 assert.match(operatorSource, /selectContactableReplacement/);
 assert.match(operatorSource, /slice\(0, 2\)/, 'existing POC plus at most two replacement candidates must preserve the three-person budget');
 assert.match(operatorSource, /replaced-no-phone-poc/);
 assert.match(liveGuardSource, /missing-phone-contactability/);
 assert.match(liveGuardSource, /change\.allowReplace === true/);
 
-console.log('Universal enrichment operator self-test passed: exact-profile employer parsing is deterministic, contactable replacements are atomic and bounded, populated phones stay protected, arbitrary schema execution uses Apollo only after approval, and the full decision path has zero AI/model dependencies.');
+console.log('Universal enrichment operator self-test passed: empty POC slots require an actual phone, contactable replacements are atomic and bounded, populated phones stay protected, arbitrary schema execution uses Apollo only after approval, and the full decision path has zero AI/model dependencies.');
