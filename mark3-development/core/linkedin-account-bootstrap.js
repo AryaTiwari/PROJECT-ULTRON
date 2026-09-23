@@ -127,43 +127,45 @@ function formatDuration(ms) {
 
 function missionProgressText(job) {
   const p = job?.progress || {};
-  const parts = [
-    `LinkedIn mission ${job.id}: ${job.status}`,
-    `Calls: ${job.calls}`,
-    `cached results reused: ${job.cacheHits}`,
-  ];
-  if (p.phase) parts.push(`phase: ${p.phase}`);
-  if (Number.isFinite(Number(p.uniqueJobIds))) parts.push(`unique jobs: ${p.uniqueJobIds}`);
-  if (Number.isFinite(Number(p.jobDetailsChecked))) parts.push(`job details: ${p.jobDetailsChecked}`);
-  if (Number.isFinite(Number(p.companyProfilesChecked))) parts.push(`company profiles: ${p.companyProfilesChecked}`);
-  if (Number.isFinite(Number(p.verifiedCompanies))) parts.push(`verified companies this batch: ${p.verifiedCompanies}`);
-  if (Number.isFinite(Number(job.elapsedMs))) parts.push(`elapsed: ${formatDuration(job.elapsedMs)}`);
-  if (Number.isFinite(Number(job.activeWorkMs))) parts.push(`active work: ${formatDuration(job.activeWorkMs)}`);
-  if (Number.isFinite(Number(job.addedSinceStart))) parts.push(`rows added since start: ${job.addedSinceStart}`);
-  if (Number.isFinite(Number(job.avgActiveMsPerCompany)) && job.avgActiveMsPerCompany > 0) parts.push(`avg active time/new company: ${formatDuration(job.avgActiveMsPerCompany)}`);
-  if (Number.isFinite(Number(job.estimatedActiveMsRemaining)) && job.estimatedActiveMsRemaining >= 0) parts.push(`estimated active work remaining: ${formatDuration(job.estimatedActiveMsRemaining)}`);
-  if (job.lastProgressAt) parts.push(`last Sheet progress: ${job.lastProgressAt}`);
-  if (Number.isFinite(Number(job.batchCount))) parts.push(`batches: ${job.batchCount}`);
-  const additionalSheetTarget = job?.contract?.target?.mode === 'additional';
-  if (Number.isFinite(Number(job.masterCurrent))) parts.push(`${additionalSheetTarget ? 'Worksheet verified total' : 'Final Master total'}: ${job.masterCurrent}`);
-  if (Number.isFinite(Number(job.masterRemaining))) parts.push(`remaining to target: ${job.masterRemaining}`);
-  if (!Number.isFinite(Number(job.masterRemaining)) && Number.isFinite(Number(p.remaining))) parts.push(`remaining this run: ${p.remaining}`);
-  if (Number.isFinite(Number(p.durableCompanyProfileHits))) parts.push(`durable company profiles reused: ${p.durableCompanyProfileHits}`);
-  if (Number.isFinite(Number(p.budgetUsed)) && Number.isFinite(Number(p.budgetMaximum))) {
-    parts.push(`safe-call budget: ${p.budgetUsed}/${p.budgetMaximum}`);
+  const waiting = ['waiting_safety', 'waiting_retry'].includes(String(job.status || ''));
+  const headline = waiting
+    ? `LinkedIn mission ${job.id} is waiting for the account safety window and will resume automatically`
+    : `LinkedIn mission ${job.id} is ${String(p.phase || job.status || 'running').replace(/_/g, ' ')}`;
+  const parts = [headline];
+  const requested = Number(job.targetRequested);
+  const added = Number(job.addedSinceStart);
+  const remaining = Number(job.masterRemaining);
+  if (Number.isFinite(requested) && requested > 0 && Number.isFinite(added)) {
+    parts.push(`Progress: ${Math.min(added, requested)}/${requested} requested companies added${Number.isFinite(remaining) ? `; ${remaining} remain` : ''}`);
   }
-  if (Number.isFinite(Number(p.cachedReconsidered))) parts.push(`cached candidates reconsidered: ${p.cachedReconsidered}`);
-  if (Number.isFinite(Number(p.cachedJobDetailHits))) parts.push(`cached job details reused: ${p.cachedJobDetailHits}`);
-  if (Number.isFinite(Number(p.cachedJobDetailMisses))) parts.push(`job details still needing live verification: ${p.cachedJobDetailMisses}`);
-  if (Number.isFinite(Number(p.cachedCompanyProfileHits))) parts.push(`cached company profiles reused: ${p.cachedCompanyProfileHits}`);
-  if (Number.isFinite(Number(p.cachedCompanyProfileMisses))) parts.push(`company profiles still needing live verification: ${p.cachedCompanyProfileMisses}`);
-  if (p.cacheVerificationExhausted) parts.push('all reusable verification evidence has been scanned');
-  if (p.nextEligibleAt) parts.push(`next safe resume: ${p.nextEligibleAt}`);
-  if (p.safetyReason) parts.push(`waiting reason: ${p.safetyReason}`);
+  const additionalSheetTarget = job?.contract?.target?.mode === 'additional';
+  if (Number.isFinite(Number(job.masterCurrent)) && Number.isFinite(Number(job.targetTotal))) {
+    parts.push(`${additionalSheetTarget ? 'Worksheet' : 'Final Master'}: ${job.masterCurrent}/${job.targetTotal} verified companies`);
+  }
+  if (!Number.isFinite(Number(job.masterRemaining)) && Number.isFinite(Number(p.remaining))) parts.push(`remaining this run: ${p.remaining}`);
+  const batch = [];
+  if (Number.isFinite(Number(p.uniqueJobIds))) batch.push(`${p.uniqueJobIds} unique jobs found`);
+  if (Number.isFinite(Number(p.jobDetailsChecked))) batch.push(`${p.jobDetailsChecked} job pages checked`);
+  if (Number.isFinite(Number(p.companyProfilesChecked))) batch.push(`${p.companyProfilesChecked} separate company pages needed`);
+  if (Number.isFinite(Number(p.verificationCandidatesRemaining))) batch.push(`${p.verificationCandidatesRemaining} strong candidates queued`);
+  if (batch.length) parts.push(`Current batch: ${batch.join(', ')}`);
+  const timing = [];
+  if (Number.isFinite(Number(job.elapsedMs))) timing.push(`${formatDuration(job.elapsedMs)} wall time`);
+  if (Number.isFinite(Number(job.activeWorkMs))) timing.push(`${formatDuration(job.activeWorkMs)} active work`);
+  if (timing.length) parts.push(`Timing: ${timing.join(', ')}`);
+  if (waiting && Number.isFinite(Number(job.safetyWaitMsRemaining))) parts.push(`Safety wait remaining: ${formatDuration(job.safetyWaitMsRemaining)}`);
+  if (!waiting && Number.isFinite(Number(job.estimatedActiveMsRemaining)) && job.estimatedActiveMsRemaining >= 0) parts.push(`Estimated active work remaining: ${formatDuration(job.estimatedActiveMsRemaining)}`);
+  const safety = job.safety || {};
+  if (Number.isFinite(Number(safety.hourlyMax)) && safety.hourlyMax > 0) {
+    parts.push(`Account safety use: ${safety.burstUsed}/${safety.burstMax} short-window, ${safety.hourlyUsed}/${safety.hourlyMax} hourly, ${safety.dailyUsed}/${safety.dailyMax} daily calls`);
+  }
+  parts.push(`Mission calls: ${job.calls}; cached responses reused: ${job.cacheHits}`);
+  if (Number.isFinite(Number(p.budgetUsed)) && Number.isFinite(Number(p.budgetMaximum))) parts.push(`Current batch call budget: ${p.budgetUsed}/${p.budgetMaximum}`);
+  if (p.nextEligibleAt) parts.push(`Next automatic resume: ${p.nextEligibleAt}`);
+  if (p.safetyReason) parts.push(`Reason: ${p.safetyReason}`);
   if (job.error?.message && !p.safetyReason) parts.push(job.error.message);
   return parts.join('. ') + '.';
 }
-
 function missionContractText(job) {
   const contract = job?.contract;
   if (!contract) return 'This LinkedIn mission does not have a compiled mission contract.';
@@ -538,6 +540,8 @@ module.exports = {
   isSetupRequest,
   isUnlockRequest,
   isExplicitLinkedInOperationalIntent,
+  formatDuration,
+  missionProgressText,
   setupText,
   errorText,
   status: () => ({ installed, ...operator.status() }),

@@ -17,6 +17,20 @@ assert.equal(routeGuard.isExplicitLinkedInResearch('Could you look through Linke
 assert.equal(routeGuard.isExplicitLinkedInResearch('LinkedIn mission progress'), true);
 assert.equal(routeGuard.isExplicitLinkedInResearch('LinkedIn MCP status'), true);
 assert.equal(routeGuard.isExplicitLinkedInResearch('Tell me what LinkedIn is'), false);
+const progressText = bootstrap.missionProgressText({
+  id: 'status-report', status: 'waiting_safety', calls: 12, cacheHits: 20,
+  targetRequested: 10, targetTotal: 18, masterCurrent: 11, masterRemaining: 7,
+  addedSinceStart: 3, elapsedMs: 2700000, activeWorkMs: 240000, safetyWaitMsRemaining: 300000,
+  contract: { target: { mode: 'additional' } },
+  safety: { burstUsed: 12, burstMax: 12, hourlyUsed: 30, hourlyMax: 30, dailyUsed: 69, dailyMax: 100 },
+  progress: { phase: 'waiting_safety', uniqueJobIds: 190, jobDetailsChecked: 8, companyProfilesChecked: 1,
+    verificationCandidatesRemaining: 12, budgetUsed: 12, budgetMaximum: 12,
+    nextEligibleAt: '2026-09-23T10:45:31.953Z', safetyReason: 'Hourly safety cap' },
+});
+assert.match(progressText, /Progress: 3\/10 requested companies added; 7 remain/);
+assert.match(progressText, /Safety wait remaining: 5m 0s/);
+assert.match(progressText, /30\/30 hourly/);
+assert.doesNotMatch(progressText, /Estimated active work remaining/);
 
 assert.equal(operator.isBuildFinalMasterRequest('Build the final LinkedIn master'), true);
 assert.equal(operator.isBuildFinalMasterRequest('Create a clean final master from verified historical missions'), true);
@@ -251,6 +265,16 @@ assert.equal(openEndedSize.openEnded, true);
 assert.equal(openEndedSize.max, null);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: openEndedSize }, filtered.filters), false);
 assert.equal(operator.passesEmployeeFilter({ employeeCount: null }, filtered.filters), false);
+const embeddedCompanyDetail = {
+  sections: { job_posting: 'Acme\nSAP Consultant\nIndia · Remote · 2 days ago\nAbout the job\nSAP delivery\nAbout the company\nAcme\nIT Services\n • \n51-200 employees\n • \n100 on LinkedIn\nShow more\nMore jobs' },
+};
+const embeddedCompanyEvidence = operator.companyEvidenceFromJobDetail(embeddedCompanyDetail);
+assert.match(embeddedCompanyEvidence, /51-200 employees/);
+assert.doesNotMatch(embeddedCompanyEvidence, /More jobs/);
+const embeddedCompanyRecord = { employeeCount: operator.employeeCountFromText(embeddedCompanyEvidence), companyEvidenceText: embeddedCompanyEvidence };
+assert.equal(operator.companyProfileRequired(embeddedCompanyRecord, filtered), false);
+assert.equal(operator.companyProfileRequired({ employeeCount: null }, filtered), true);
+assert.equal(operator.indirectEmployerPosting('This position is listed on behalf of a partner company, who manages applications.'), true);
 
 const strictPass = {
   company: 'Acme Maharashtra',
@@ -339,6 +363,8 @@ assert.equal(operator.workTypeEvidenceDetails(trustedSearchOnly, 'remote').sourc
 const hiringIndependentOfTopic = { ...strictPass, hiringVerified: true, jobEvidenceText: 'Oracle Cloud Consultant · Remote · Maharashtra, India' };
 assert.ok(operator.jobLevelFailures(hiringIndependentOfTopic, filtered).includes('topic'));
 assert.ok(!operator.jobLevelFailures(hiringIndependentOfTopic, filtered).includes('hiring'));
+const indirectEmployer = { ...strictPass, jobEvidenceText: `${strictPass.jobEvidenceText}\nThis position is listed on behalf of a partner company.` };
+assert.ok(operator.jobLevelFailures(indirectEmployer, filtered).includes('employer_identity'));
 
 const remoteMaharashtraJobFromKarnatakaCompany = { ...strictPass, companyEvidenceText: 'Headquarters Bengaluru, Karnataka, India.' };
 assert.equal(operator.locationEvidenceMatches(remoteMaharashtraJobFromKarnatakaCompany, 'Maharashtra', { allowJobEvidence: true }), true);

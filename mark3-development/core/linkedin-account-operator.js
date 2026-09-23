@@ -974,6 +974,35 @@ function employeeCountFromText(text) {
   return count == null ? null : { min: count, max: count, label: exact[1], openEnded: false };
 }
 
+function companyEvidenceFromJobDetail(detail) {
+  const posting = String(detail?.sections?.job_posting || '');
+  if (!posting) return '';
+  const marker = /(?:^|\n)About the company\s*\n/i;
+  const match = marker.exec(posting);
+  if (!match) return '';
+  const start = Number(match.index || 0) + match[0].length;
+  let evidence = posting.slice(start);
+  const boundary = evidence.search(/\n(?:Show more|More jobs|Job search smarter with Premium|Looking for talent\?)\b/i);
+  if (boundary >= 0) evidence = evidence.slice(0, boundary);
+  return evidence.trim().slice(0, 12000);
+}
+
+function companyProfileRequired(record, request = {}) {
+  const filters = request.filters || {};
+  const companyFilters = request.companyFilters || {};
+  const needsEmployeeEvidence = filters.employeeMin != null || filters.employeeMax != null;
+  if (needsEmployeeEvidence && !record?.employeeCount) return true;
+  if (request.locationScope === 'company' && requestedLocations(request).length
+      && !locationEvidenceMatchesRequest(record, request, { allowJobEvidence: false, allowCompanyEvidence: true })) return true;
+  if (companyFilters.industry || companyFilters.startup) return true;
+  return false;
+}
+
+function indirectEmployerPosting(text) {
+  return /\b(?:listed|posted)\s+on\s+behalf\s+of\s+(?:a|an|the|our)\s+(?:partner|client)(?:\s+company)?\b/i.test(String(text || ''))
+    || /\bour\s+(?:partner|client)\s+(?:company\s+)?is\s+(?:currently\s+)?(?:looking|hiring|seeking)\b/i.test(String(text || ''));
+}
+
 function passesEmployeeFilter(record, filters = {}) {
   if (filters.employeeMin == null && filters.employeeMax == null) return true;
   const size = record.employeeCount;
@@ -1765,9 +1794,18 @@ function prioritizedJobIds(jobMeta, request = {}) {
     .map((item) => item.id);
 }
 
+function verificationReadyJobIds(jobMeta, request = {}, previouslyChecked = new Set(), destinationJobIds = new Set()) {
+  return prioritizedJobIds(jobMeta, request).filter((jobId) =>
+    !previouslyChecked.has(String(jobId))
+    && !destinationJobIds.has(String(jobId))
+    && searchTopicConfidence(jobMeta.get(jobId) || {}, request) > 0
+  );
+}
+
 function jobLevelFailures(record, request = {}) {
   const failures = [];
   if (request.hiring && !record?.hiringVerified) failures.push('hiring');
+  if (request.hiring && indirectEmployerPosting(record?.jobEvidenceText)) failures.push('employer_identity');
   if (requestedLocations(request).length && !locationEvidenceMatchesRequest(record, request, {
     allowJobEvidence: true,
     allowCompanyEvidence: request.locationScope === 'company',
@@ -2027,10 +2065,10 @@ async function companyMission(request) {
       : Math.min(plan.length, queryStrategist.searchAllowance(budget, Math.max(0, request.count - acceptedCompanies.size)));
     // LinkedIn can return broad promoted jobs even when its page claims the SAP
     // keyword was retained. Reserve at least three calls for verification, but
-    // spend up to three searches on narrower SAP variants before trusting titles.
+    // spend at most two searches so a ten-company run retains ten verification calls.
     const sapSearch = /^SAP(?:\s|$)/i.test(String(request.topic || ''));
     const adaptiveSearchAllowance = sapSearch && budget.maximum >= 5
-      ? Math.min(plan.length, 3, Math.max(normalSearchAllowance, budget.maximum - 3))
+      ? Math.min(plan.length, 2, Math.max(normalSearchAllowance, budget.maximum - 3))
       : normalSearchAllowance;
     // Even with zero fresh-call budget, enter one search step. missionRunner.call
     // will replay saved discovery at zero cost; if no cache exists, budgetedCall
@@ -2038,6 +2076,7 @@ async function companyMission(request) {
     const liveSearchAllowance = budget.maximum < 1 ? 1 : adaptiveSearchAllowance;
     const maxSearchSteps = acceptedCompanies.size >= request.count ? 0 : plan.length;
     let liveSearches = 0;
+    let freshSearchDeferredForVerification = 0;
 
     for (let searchIndex = 0; searchIndex < maxSearchSteps; searchIndex++) {
       const step = queryStrategist.selectNext(plan, {
@@ -2059,6 +2098,15 @@ async function companyMission(request) {
         sort_by: 'relevance',
       };
       const cachedSearch = Boolean(missionRunner.cachedExact?.('search_jobs', searchArgs, { recordHit: false })?.hit);
+      if (!cachedSearch) {
+        const ready = verificationReadyJobIds(jobMeta, request, previouslyChecked, destinationJobIds);
+        const remaining = Math.max(1, request.count - acceptedCompanies.size);
+        const reserveThreshold = Math.max(4, Math.min(12, remaining * 2));
+        if (ready.length >= reserveThreshold) {
+          freshSearchDeferredForVerification++;
+          break;
+        }
+      }
       if (!cachedSearch && liveSearches >= liveSearchAllowance) break;
       const budgetBeforeSearch = Number(budget.used || 0);
       let result;
@@ -2191,9 +2239,17 @@ async function companyMission(request) {
     searchStrategiesExhausted = searchCalls.length >= plan.length
       && liveSearches === 0
       && orderedJobIds.length === 0;
+    let verificationCandidatesProcessed = 0;
+    missionRunner.updateProgress({
+      phase: 'verifying_jobs',
+      verificationCandidatesQueued: orderedJobIds.length,
+      verificationCandidatesRemaining: orderedJobIds.length,
+      freshSearchDeferredForVerification,
+    });
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
+      verificationCandidatesProcessed++;
 
       let detail;
       try {
@@ -2251,6 +2307,8 @@ async function companyMission(request) {
         cachedJobDetailMisses,
         cachedCompanyProfileHits,
         cachedCompanyProfileMisses,
+        verificationCandidatesQueued: orderedJobIds.length,
+        verificationCandidatesRemaining: Math.max(0, orderedJobIds.length - verificationCandidatesProcessed),
       });
 
       let detailText = flattenText(detail);
@@ -2298,6 +2356,14 @@ async function companyMission(request) {
         priority: jobIdPriority(meta),
       };
       record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), `linkedin-job-${jobId}`, 'linkedin-job-detail'])];
+      const embeddedCompanyEvidence = companyEvidenceFromJobDetail(detail);
+      if (embeddedCompanyEvidence) {
+        record.companyEvidenceText = embeddedCompanyEvidence;
+        record.employeeCount = employeeCountFromText(embeddedCompanyEvidence) || record.employeeCount || null;
+        record.companyLocation = linkedinPublic.locationFromText(embeddedCompanyEvidence) || record.companyLocation || '';
+        record.website = websiteFromText(embeddedCompanyEvidence) || record.website || '';
+        record.sourceEvidence = [...new Set([...(record.sourceEvidence || []), 'linkedin-job-company-section'])];
+      }
       jobCandidatesLinked++;
 
       let jobFailures = jobLevelFailures(record, request);
@@ -2362,7 +2428,7 @@ async function companyMission(request) {
         continue;
       }
 
-      try {
+      if (companyProfileRequired(record, request)) try {
         const fetched = await cacheAwareVerificationCall(
           budget,
           'get_company_profile',
@@ -4319,6 +4385,9 @@ module.exports = {
   applicantCountFromDetail,
   postedEvidenceFromText,
   employeeCountFromText,
+  companyEvidenceFromJobDetail,
+  companyProfileRequired,
+  indirectEmployerPosting,
   passesEmployeeFilter,
   scopedCompanyEvidence,
   detectWorkType,
@@ -4341,6 +4410,7 @@ module.exports = {
   jobIdPriority,
   searchTopicConfidence,
   prioritizedJobIds,
+  verificationReadyJobIds,
   jobLevelFailures,
   activeJobPosting,
   jobTitleFromDetail,

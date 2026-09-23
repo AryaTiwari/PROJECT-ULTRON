@@ -124,10 +124,13 @@ function elapsedMetrics(m, current = null, targetTotal = null) {
   const remaining = targetTotal && Number.isFinite(Number(current))
     ? Math.max(0, Number(targetTotal) - Number(current))
     : null;
-  const estimatedActiveMsRemaining = avgActiveMsPerCompany != null && remaining != null
+  const waiting = ['waiting_safety', 'waiting_retry'].includes(String(m.status || ''));
+  const estimatedActiveMsRemaining = !waiting && avgActiveMsPerCompany != null && remaining != null
     ? avgActiveMsPerCompany * remaining
     : null;
-  return { elapsedMs, activeWorkMs, addedSinceStart: added, avgActiveMsPerCompany, estimatedActiveMsRemaining };
+  const nextEligibleMs = Date.parse(String(m.progress?.nextEligibleAt || m.notBefore || ''));
+  const safetyWaitMsRemaining = waiting && Number.isFinite(nextEligibleMs) ? Math.max(0, nextEligibleMs - Date.now()) : null;
+  return { elapsedMs, activeWorkMs, addedSinceStart: added, avgActiveMsPerCompany, estimatedActiveMsRemaining, safetyWaitMsRemaining };
 }
 
 function summary(m) {
@@ -142,10 +145,19 @@ function summary(m) {
   if (!targetTotal && Number.isFinite(Number(m.result?.linkedinMission?.added))) {
     timing.addedSinceStart = Math.max(0, Number(m.result.linkedinMission.added));
   }
+  const safetyStatus = policy.status();
+  const safety = {
+    burstUsed: Number(safetyStatus.burstUsed || 0), burstMax: Number(safetyStatus.burstMax || 0),
+    hourlyUsed: Number(safetyStatus.hourlyUsed || 0), hourlyMax: Number(safetyStatus.hourlyMax || 0),
+    dailyUsed: Number(safetyStatus.dailyUsed || 0), dailyMax: Number(safetyStatus.dailyMax || 0),
+    nextEligibleAt: safetyStatus.nextEligibleAt || null,
+  };
   return { id: m.id, status: m.status, updatedAt: m.updatedAt, calls: m.calls || 0,
     cacheHits: m.cacheHits || 0, progress: m.progress || null,
     contract: request.missionContract || null,
     targetTotal,
+    targetRequested: Number(request.targetRequested || request.count || 0) || null,
+    safety,
     masterCurrent,
     masterRemaining: targetTotal ? Math.max(0, targetTotal - Number(masterCurrent || 0)) : null,
     startedAt: m.startedAt || m.createdAt || null,
