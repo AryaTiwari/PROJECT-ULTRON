@@ -7,6 +7,8 @@ const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ultron-linkedin-test-
 require.cache[configPath] = { id: configPath, filename: configPath, loaded: true, exports: { projectRoot } };
 const runner = require('../core/linkedin-mission-runner');
 const finalMaster = require('../core/linkedin-final-master');
+const sheetProgress = require('../core/linkedin-sheet-progress');
+const sheets = require('../core/google-sheets-operator');
 const waitFor = async predicate => {
   for (let i = 0; i < 200; i++) {
     if (predicate()) return;
@@ -114,12 +116,32 @@ const waitFor = async predicate => {
         persistentUntilTarget: true,
         targetRequested: 10,
         count: 7,
-        destinationSheetUrl: 'https://docs.google.com/spreadsheets/d/test/edit#gid=7',
+        destinationSheetUrl: 'https://docs.google.com/spreadsheets/d/test/edit#gid=306985105',
+        destinationSheet: { sheetName: 'Arya-22 sept', sheetId: 306985105 },
+        hiring: true,
       },
     },
   };
   assert.equal(runner.persistentTarget(additionalTarget), true);
   assert.equal(runner.targetTotalForMission(additionalTarget), 41);
+  const originalSnapshot = sheetProgress.snapshot;
+  let snapshotCall = null;
+  sheetProgress.snapshot = async (url, options) => {
+    snapshotCall = { url, options };
+    return { uniqueCompanies: 31, validRows: 31, totalDataRows: 31, companyKeys: [], jobIds: [], readAt: new Date().toISOString() };
+  };
+  await runner.syncAuthoritativeSheet(additionalTarget, { complete: false });
+  sheetProgress.snapshot = originalSnapshot;
+  assert.equal(snapshotCall.options.sheetName, 'Arya-22 sept');
+  assert.equal(snapshotCall.options.requireJob, true);
+
+  const originalMetadata = sheets.metadata;
+  sheets.metadata = async () => ({ sheets: [{ properties: { sheetId: 306985105, title: 'Arya-22 sept' } }] });
+  assert.equal(await sheetProgress.resolveSheetName(
+    'https://docs.google.com/spreadsheets/d/test/edit?gid=306985105#gid=306985105',
+    'test',
+  ), 'Arya-22 sept');
+  sheets.metadata = originalMetadata;
 
   // A mission that found candidates but wrote no requested rows is partial,
   // never a successful completion.

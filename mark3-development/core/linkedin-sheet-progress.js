@@ -104,11 +104,29 @@ function snapshotRows(rows = [], options = {}) {
   };
 }
 
+async function resolveSheetName(url, spreadsheetId, options = {}) {
+  const explicit = String(options.sheetName || '').trim();
+  if (explicit) return explicit;
+
+  const gid = sheets.sheetGid(url);
+  if (Number.isInteger(gid)) {
+    const metadata = await sheets.metadata(spreadsheetId);
+    const matched = (metadata?.sheets || []).find((sheet) => Number(sheet?.properties?.sheetId) === gid);
+    const title = String(matched?.properties?.title || '').trim();
+    if (title) return title;
+    const error = new Error(`The worksheet identified by gid ${gid} was not found in the requested spreadsheet.`);
+    error.code = 'GOOGLE_SHEETS_TAB_NOT_FOUND';
+    throw error;
+  }
+
+  const state = finalMaster.loadState();
+  return state.sheetName || 'Leads';
+}
+
 async function snapshot(url = finalMaster.masterSheetUrl(), options = {}) {
   if (!url) return { ...snapshotRows([], options), sheetUrl: null, sheetName: null };
   const spreadsheetId = sheets.spreadsheetId(url);
-  const state = finalMaster.loadState();
-  const sheetName = options.sheetName || state.sheetName || 'Leads';
+  const sheetName = await resolveSheetName(url, spreadsheetId, options);
   const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(sheetName)}!A:ZZ`);
   return {
     ...snapshotRows(rows, options),
@@ -124,5 +142,6 @@ module.exports = {
   companyLinkedIn,
   jobId,
   snapshotRows,
+  resolveSheetName,
   snapshot,
 };

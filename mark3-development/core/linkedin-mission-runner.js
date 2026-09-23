@@ -162,7 +162,13 @@ async function syncAuthoritativeSheet(m, options = {}) {
     ? (finalMaster.masterSheetUrl() || request.destinationSheetUrl || null)
     : (request.destinationSheetUrl || null);
   if (!url) return null;
-  const snap = await sheetProgress.snapshot(url, { requireJob: Boolean(request.hiring) });
+  const sheetName = request.destinationSheet?.sheetName
+    || request.destinationSheetName
+    || undefined;
+  const snap = await sheetProgress.snapshot(url, {
+    requireJob: Boolean(request.hiring),
+    sheetName,
+  });
   const previous = Number(m.authoritativeSheet?.uniqueCompanies);
   m.authoritativeSheet = {
     uniqueCompanies: snap.uniqueCompanies,
