@@ -124,6 +124,7 @@ function roleFromText(text) {
     .replace(/^(?:companies?|startups?|employers?)\s+/i, '')
     .replace(/^\d{1,3}\s+/, '')
     .replace(/^(?:(?:remote|hybrid|on[- ]?site|full[- ]?time|part[- ]?time|contract|internship)\s+)+/i, '')
+    .replace(/^(?:(?:active|current|currently|ongoing|open|available|new|recent)\s+)+/i, '')
     .replace(/\b(?:people|persons?)\b/i, 'professional')
     .replace(/\bconsultants\b/i, 'consultant')
     .replace(/\bengineers\b/i, 'engineer')

@@ -637,7 +637,9 @@ function cachedExact(tool, args, options = {}) {
   check();
 
   const key = JSON.stringify([tool, args]);
-  const cacheTtl = m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  const cacheTtl = tool === 'get_job_details'
+    ? 5 * 60 * 1000
+    : (m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000);
   const current = m.responses?.[key];
   if (current && Date.now() - Number(current.at || 0) < cacheTtl) {
     if (options.recordHit !== false) {
@@ -655,7 +657,7 @@ function cachedExact(tool, args, options = {}) {
 
   if (/^(?:get_job_details|get_company_profile|get_person_profile)$/.test(tool)) {
     const crossMissionTtl = tool === 'get_job_details'
-      ? (m.prepared?.request?.resumeExistingPool ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000)
+      ? 5 * 60 * 1000
       : tool === 'get_company_profile'
         ? 7 * 24 * 60 * 60 * 1000
         : 24 * 60 * 60 * 1000;

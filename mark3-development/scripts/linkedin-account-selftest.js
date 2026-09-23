@@ -29,6 +29,17 @@ assert.equal(company.location, 'Maharashtra');
 assert.equal(company.hiring, true);
 assert.equal(company.topic, 'SAP');
 assert.equal(company.wantsContacts, false);
+const reportedPrompt = operator.parseRequest('Find 10 unique companies with active SAP job openings in Mumbai, posted within the past week. Remote jobs only. and employees should be under 1k. Fill the Google Sheet at https://docs.google.com/spreadsheets/d/1KZKJAe-QqZcreG3mr32JNbdiwBYDFWndynaXqid8wKY/edit?gid=306985105#gid=306985105 in worksheet Arya-22 sept. Discovery only—do not find POCs, emails, or phone numbers, and do not use Apollo.');
+assert.equal(reportedPrompt.count, 10);
+assert.equal(reportedPrompt.topic, 'SAP');
+assert.equal(reportedPrompt.location, 'Mumbai');
+assert.equal(reportedPrompt.filters.datePosted, 'past_week');
+assert.equal(reportedPrompt.filters.workType, 'remote');
+assert.equal(reportedPrompt.filters.employeeMax, 1000);
+assert.equal(reportedPrompt.wantsContacts, false);
+assert.equal(reportedPrompt.destinationSheetUrl, 'https://docs.google.com/spreadsheets/d/1KZKJAe-QqZcreG3mr32JNbdiwBYDFWndynaXqid8wKY/edit?gid=306985105#gid=306985105');
+assert.ok(operator.jobSearchPlan(reportedPrompt).length > 1);
+assert.equal(operator.jobSearchPlan(reportedPrompt)[0].keyword, 'SAP');
 
 const filtered = operator.parseRequest('Find me 20 companies on LinkedIn with SAP roles under 1000 employees, remote, located in Maharashtra');
 const agenticSapRequest = operator.parseRequest('LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total. Allowed locations: Maharashtra and Bengaluru/Bangalore. Prioritize Maharashtra first, then use Bengaluru. Remote roles preferred. Maximum 1000 employees. Companies only.');
@@ -250,6 +261,20 @@ assert.deepEqual(operator.companyFilterFailures({ ...strictPass, relevanceScore:
 assert.equal(operator.detectWorkType('We build hybrid cloud infrastructure. This role is fully remote.'), 'remote');
 assert.equal(operator.detectWorkType('Pune, Maharashtra, India · Remote · Full-time'), 'remote');
 assert.equal(operator.detectWorkType('We build hybrid cloud infrastructure for enterprises.'), '');
+assert.equal(operator.activeJobPosting('SAP Consultant · Mumbai · Remote · 2 days ago'), true);
+assert.equal(operator.activeJobPosting('SAP Consultant · No longer accepting applications'), false);
+const indiaRemoteForMumbai = operator.locationEvidenceDetails({
+  jobEvidenceText: 'SAP Consultant\nIndia · Remote\nPosted 2 days ago',
+  workType: 'remote',
+}, 'Mumbai', { allowJobEvidence: true });
+assert.equal(indiaRemoteForMumbai.matched, true);
+assert.equal(indiaRemoteForMumbai.source, 'job_remote_country');
+const otherCityOnsiteForMumbai = operator.locationEvidenceDetails({
+  jobEvidenceText: 'SAP Consultant\nBengaluru, Karnataka, India · On-site\nPosted 2 days ago',
+  workType: 'on-site',
+}, 'Mumbai', { allowJobEvidence: true });
+assert.equal(otherCityOnsiteForMumbai.matched, false);
+assert.equal(otherCityOnsiteForMumbai.source, 'job_conflict');
 
 const trustedSearchOnly = {
   company: 'Trusted Search Systems',

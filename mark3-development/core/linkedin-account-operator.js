@@ -125,15 +125,30 @@ function wantsContacts(text) {
   return /\b(?:email|e-mail|phone|mobile|number|contact info|contact details?)\b/i.test(String(text || ''));
 }
 
+function compactEmployeeNumber(value) {
+  const match = String(value || '').trim().match(/^(\d[\d,]*(?:\.\d+)?)\s*([km])?$/i);
+  if (!match) return null;
+  const base = Number(match[1].replace(/,/g, ''));
+  if (!Number.isFinite(base)) return null;
+  const multiplier = /^k$/i.test(match[2] || '') ? 1000 : /^m$/i.test(match[2] || '') ? 1000000 : 1;
+  return Math.round(base * multiplier);
+}
+
 function parseEmployeeRange(text) {
   const value = String(text || '');
-  const range = value.match(/\b(\d[\d,]*)\s*(?:-|to)\s*(\d[\d,]*)\s+employees?\b/i);
-  if (range) return { min: Number(range[1].replace(/,/g, '')), max: Number(range[2].replace(/,/g, '')) };
-  const max = value.match(/\b(?:under|below|fewer than|less than|up to|maximum|max)\s*(\d[\d,]*)\s+employees?\b/i);
-  const min = value.match(/\b(?:over|above|more than|at least|minimum|min)\s*(\d[\d,]*)\s+employees?\b/i);
+  const number = '(\\d[\\d,]*(?:\\.\\d+)?\\s*[kKmM]?)';
+  const range = value.match(new RegExp('\\b' + number + '\\s*(?:-|to)\\s*' + number + '\\s+employees?\\b', 'i'));
+  if (range) return { min: compactEmployeeNumber(range[1]), max: compactEmployeeNumber(range[2]) };
+  const upper = '(?:under|below|fewer than|less than|up to|maximum|max)';
+  const lower = '(?:over|above|more than|at least|minimum|min)';
+  const employeePrefix = '(?:employees?|employee\\s+count|company\\s+(?:size|headcount))(?:\\s+(?:should|must|needs?\s+to)\s+be|\\s+are)?';
+  const max = value.match(new RegExp('\\b' + upper + '\\s*' + number + '(?:\\s+employees?)?\\b', 'i'))
+    || value.match(new RegExp('\\b' + employeePrefix + '\\s*' + upper + '\\s*' + number + '\\b', 'i'));
+  const min = value.match(new RegExp('\\b' + lower + '\\s*' + number + '(?:\\s+employees?)?\\b', 'i'))
+    || value.match(new RegExp('\\b' + employeePrefix + '\\s*' + lower + '\\s*' + number + '\\b', 'i'));
   return {
-    min: min ? Number(min[1].replace(/,/g, '')) : null,
-    max: max ? Number(max[1].replace(/,/g, '')) : null,
+    min: min ? compactEmployeeNumber(min[1]) : null,
+    max: max ? compactEmployeeNumber(max[1]) : null,
   };
 }
 
@@ -1148,6 +1163,15 @@ function locationEvidenceDetails(record, requestedLocation, options = {}) {
     // requested region, do not let a retained search facet overrule it.
     const observedJobLocation = linkedinPublic.locationFromText(explicit);
     if (observedJobLocation && !locationLabelMatchesRequested(observedJobLocation, requested)) {
+      const knownIndianLocations = new Set([
+        'india',
+        ...Object.keys(LOCATION_SEARCH_HUBS),
+        ...Object.values(LOCATION_SEARCH_HUBS).flat().map((value) => String(value || '').trim().toLowerCase()),
+      ]);
+      const indiaWideRemote = /^india$/i.test(observedJobLocation)
+        && knownIndianLocations.has(requested)
+        && detectWorkType(explicit) === 'remote';
+      if (indiaWideRemote) return { matched: true, source: 'job_remote_country', label: observedJobLocation };
       return { matched: false, source: 'job_conflict', label: observedJobLocation };
     }
 
@@ -1760,6 +1784,12 @@ function jobLevelFailures(record, request = {}) {
   return [...new Set(failures)];
 }
 
+function activeJobPosting(text) {
+  const value = String(text || '');
+  if (!value.trim()) return false;
+  return !/\b(?:no longer accepting applications|not accepting applications|job (?:is )?no longer available|job has expired|posting has expired|position has been filled|applications? (?:are )?closed|role (?:is )?closed|vacancy (?:is )?closed)\b/i.test(value);
+}
+
 function jobTitleFromDetail(detail, fallback = '') {
   const raw = String(detail?.sections?.job_posting || '').trim();
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -1978,11 +2008,11 @@ async function companyMission(request) {
     // Even with zero fresh-call budget, enter one search step. missionRunner.call
     // will replay saved discovery at zero cost; if no cache exists, budgetedCall
     // raises the real safety gate and the mission parks instead of completing 0/target.
-    const maxSearchCalls = acceptedCompanies.size >= request.count
-      ? 0
-      : (budget.maximum < 1 ? Math.min(1, plan.length) : normalSearchAllowance);
+    const liveSearchAllowance = budget.maximum < 1 ? 1 : normalSearchAllowance;
+    const maxSearchSteps = acceptedCompanies.size >= request.count ? 0 : plan.length;
+    let liveSearches = 0;
 
-    for (let searchIndex = 0; searchIndex < maxSearchCalls; searchIndex++) {
+    for (let searchIndex = 0; searchIndex < maxSearchSteps; searchIndex++) {
       const step = queryStrategist.selectNext(plan, {
         history: searchCalls,
         preferredLocations: request.preferredLocations || requestedLocations(request),
@@ -1990,19 +2020,24 @@ async function companyMission(request) {
       });
       if (!step) break;
       const uniqueBefore = jobMeta.size;
+      const searchArgs = {
+        keywords: step.keyword,
+        location: step.location || undefined,
+        max_pages: budget.localBudgetBypass ? Math.max(2, Math.min(3, policy.settings().maxJobPages + 1)) : policy.settings().maxJobPages,
+        date_posted: request.filters?.datePosted || undefined,
+        job_type: request.filters?.jobType || undefined,
+        experience_level: request.filters?.experienceLevel || undefined,
+        work_type: step.workType || request.filters?.workType || request.preferredWorkType || undefined,
+        easy_apply: Boolean(request.filters?.easyApply),
+        sort_by: 'relevance',
+      };
+      const cachedSearch = Boolean(missionRunner.cachedExact?.('search_jobs', searchArgs, { recordHit: false })?.hit);
+      if (!cachedSearch && liveSearches >= liveSearchAllowance) break;
+      const budgetBeforeSearch = Number(budget.used || 0);
       let result;
       try {
-        result = await budgetedCall(budget, 'search_jobs', {
-          keywords: step.keyword,
-          location: step.location || undefined,
-          max_pages: budget.localBudgetBypass ? Math.max(2, Math.min(3, policy.settings().maxJobPages + 1)) : policy.settings().maxJobPages,
-          date_posted: request.filters?.datePosted || undefined,
-          job_type: request.filters?.jobType || undefined,
-          experience_level: request.filters?.experienceLevel || undefined,
-          work_type: step.workType || request.filters?.workType || request.preferredWorkType || undefined,
-          easy_apply: Boolean(request.filters?.easyApply),
-          sort_by: 'relevance',
-        });
+        result = await budgetedCall(budget, 'search_jobs', searchArgs);
+        if (Number(budget.used || 0) > budgetBeforeSearch) liveSearches++;
       } catch (error) {
         if (!isTransientMcpFailure(error)) throw error;
         searchWarnings.push({
@@ -2080,6 +2115,7 @@ async function companyMission(request) {
         radiusKm: Number(step.radiusKm || 0),
         expanded: Boolean(step.expanded),
         rootLocation: step.rootLocation || null,
+        cached: cachedSearch && Number(budget.used || 0) === budgetBeforeSearch,
       });
       missionRunner.updateProgress({
         phase: 'searching',
@@ -2213,7 +2249,7 @@ async function companyMission(request) {
       record.role = jobTitleFromDetail(detail, meta.title || '');
       record.jobEvidenceText = detailText;
       record.hiringSignal = detailText.slice(0, 1000) || `Verified LinkedIn job ${jobId}.`;
-      record.hiringVerified = Boolean(detailText && preferred);
+      record.hiringVerified = Boolean(detailText && preferred && activeJobPosting(detailText));
       record.workType = detectWorkType(detailText);
       record.applicants = applicantCountFromDetail(detail, record.company);
       record.posted = postedEvidenceFromText(detailText);
@@ -4206,7 +4242,10 @@ function formatMission(mission) {
   const expansion = mission.locationExpansion
     ? ` Location expansion: ${mission.locationExpansion.requested || mission.request?.location || 'requested area'} → approximately ${mission.locationExpansion.currentRadiusKm} km (${mission.locationExpansion.searchedLocations.join(', ')}).`
     : '';
-  return `${label}, Sir. Added ${mission.added} records to “${mission.spreadsheetTitle}”.${destination}${masterTargetText}${globalSkipText} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${expansion}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
+  const destinationLabel = mission.sheetName
+    ? `worksheet “${mission.sheetName}” in “${mission.spreadsheetTitle}”`
+    : `“${mission.spreadsheetTitle}”`;
+  return `${label}, Sir. Added ${mission.added} records to ${destinationLabel}.${destination}${masterTargetText}${globalSkipText} Discovery and filter verification used only the authenticated LinkedIn account tool; Google Jobs, Maps, TinyFish, public-index SerpApi and Apollo were not used for discovery. Average quality score ${mission.averageScore}/100.${jobTrace}${hardGate}${expansion}${contact}${shortfall}${budget}${searchWarning} ${mission.sheetUrl}`;
 }
 
 module.exports = {
@@ -4268,6 +4307,7 @@ module.exports = {
   searchTopicConfidence,
   prioritizedJobIds,
   jobLevelFailures,
+  activeJobPosting,
   jobTitleFromDetail,
   joeyismJobToDetail,
   joeyismCompanyText,
