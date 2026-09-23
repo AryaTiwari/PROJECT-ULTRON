@@ -157,6 +157,45 @@ function userMappings(text, expectedHeaders, headerKey) {
   return mappings;
 }
 
+const EXCLUSIVE_FIELD_PATTERNS = Object.freeze([
+  ['company', /\b(?:company|business|organisation|organization)\s+name\b/i],
+  ['linkedin', /\b(?:company\s+(?:linkedin|profile|link|url)|linkedin\s+company\s+(?:link|url|profile))\b/i],
+  ['jobLink', /\b(?:job|vacancy|opening|posting)\s+(?:link|url)\b/i],
+  ['role', /\b(?:job\s+role|job\s+title|sap\s+role|role|position)\b/i],
+  ['location', /\b(?:job\s+)?location\b/i],
+  ['workType', /\b(?:work\s+type|workplace\s+type|work\s+mode|remote\s+status)\b/i],
+  ['employees', /\b(?:employees?|employee\s+count|company\s+size|headcount)\b/i],
+  ['hiring', /\b(?:hiring|job)\s+(?:evidence|signal)\b/i],
+  ['details', /\b(?:details|description|post\s+details)\b/i],
+  ['website', /\b(?:company\s+)?website\b/i],
+  ['applicants', /\bapplicants?\b/i],
+  ['posted', /\b(?:posted|posting)\s+(?:date|age)\b/i],
+  ['industry', /\b(?:industry|sector)\b/i],
+  ['source', /\bsource\b/i],
+  ['score', /\b(?:lead|quality|relevance)\s+score\b/i],
+]);
+
+function exclusiveFieldsFromText(text) {
+  const value = String(text || '').trim();
+  const exclusive = /\bonly\s+(?:add|fill|write|include|keep|use|need|want)\b|\b(?:add|fill|write|include|keep|use|need|want)\s+only\b/i.test(value);
+  if (!exclusive) return null;
+  const selected = new Set(EXCLUSIVE_FIELD_PATTERNS.filter(([, pattern]) => pattern.test(value)).map(([key]) => key));
+  return selected.size ? selected : null;
+}
+
+function exclusiveUserMappings(text, headers, headerKey) {
+  const selected = exclusiveFieldsFromText(text);
+  if (!selected) return null;
+  const mappings = {};
+  for (const header of headers || []) {
+    const normalized = normalizeHeader(header);
+    if (!normalized) continue;
+    const key = headerKey(header);
+    mappings[normalized] = key && selected.has(key) ? key : 'ignore';
+  }
+  return mappings;
+}
+
 function clarificationText(headers) {
   const quoted = headers.map((header) => `“${header}”`).join(', ');
   return `I inspected the destination Sheet before starting LinkedIn research. These headings are still ambiguous: ${quoted}. Reply with mappings such as: map: "Priority" = lead score; "Owner Notes" = ignore. Available discovery fields are company name, company link, job role, job link, location, work type, employees, hiring evidence, details, website, applicants, posted date, industry, source and lead score. POC, phone and email columns will remain blank unless you separately request enrichment.`;
@@ -176,5 +215,7 @@ module.exports = {
   resolve,
   canonicalTarget,
   userMappings,
+  exclusiveFieldsFromText,
+  exclusiveUserMappings,
   clarificationText,
 };

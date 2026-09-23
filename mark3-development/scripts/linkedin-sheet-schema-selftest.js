@@ -24,6 +24,25 @@ assert.deepEqual(user, {
   'owner notes': 'ignore',
 });
 
+const exclusive = schema.exclusiveUserMappings(
+  'only add company name, company link and job link',
+  ['Company Name', 'Company Link', 'Job Link', 'Outcome', 'Employees', 'Location'],
+  operator.headerKey,
+);
+assert.deepEqual(exclusive, {
+  'company name': 'company',
+  'company link': 'linkedin',
+  'job link': 'jobLink',
+  outcome: 'ignore',
+  employees: 'ignore',
+  location: 'ignore',
+});
+assert.deepEqual(operator.rowFor(
+  { company: 'Acme', linkedin: 'https://linkedin.com/company/acme', jobUrl: 'https://linkedin.com/jobs/view/1', employeeCount: { label: '51-200' }, location: 'India' },
+  ['Company Name', 'Company Link', 'Job Link', 'Outcome', 'Employees', 'Location'],
+  { wantsContacts: false, headerMappings: exclusive },
+), ['Acme', 'https://linkedin.com/company/acme', 'https://linkedin.com/jobs/view/1', '', '', '']);
+
 const accepted = schema.acceptedMappings({ mappings: [
   { header: 'Vacancy URL', key: 'jobLink', confidence: 0.97 },
   { header: 'Mystery', key: 'industry', confidence: 0.5 },
