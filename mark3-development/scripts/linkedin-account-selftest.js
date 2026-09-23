@@ -37,6 +37,9 @@ assert.equal(reportedPrompt.filters.datePosted, 'past_week');
 assert.equal(reportedPrompt.filters.workType, 'remote');
 assert.equal(reportedPrompt.filters.employeeMax, 1000);
 assert.equal(reportedPrompt.wantsContacts, false);
+assert.equal(reportedPrompt.persistentUntilTarget, true);
+assert.equal(reportedPrompt.targetRequested, 10);
+assert.equal(reportedPrompt.autoContinue, true);
 assert.equal(reportedPrompt.destinationSheetUrl, 'https://docs.google.com/spreadsheets/d/1KZKJAe-QqZcreG3mr32JNbdiwBYDFWndynaXqid8wKY/edit?gid=306985105#gid=306985105');
 assert.ok(operator.jobSearchPlan(reportedPrompt).length > 1);
 assert.equal(operator.jobSearchPlan(reportedPrompt)[0].keyword, 'SAP');
@@ -200,6 +203,12 @@ assert.equal(droppedTrust.trustedWorkType, '');
 assert.ok(operator.droppedSearchFilters({ section_errors: { search_results: { error_type: 'filters_dropped', error_message: 'LinkedIn did not keep location and work type.' } } }).has('location'));
 assert.ok(operator.droppedSearchFilters({ section_errors: { search_results: { error_type: 'filters_dropped', error_message: 'LinkedIn did not keep location and work type.' } } }).has('work_type'));
 assert.equal(operator.jobTitleFromDetail(mockJobDetail), 'SAP FICO Consultant');
+assert.equal(operator.jobTitleFromDetail({
+  sections: { job_posting: 'Flexiple\n\nSAP Consultant\nIndia · Remote' },
+  references: { job_posting: [{ kind: 'company', text: 'Flexiple 59,069 followers', url: '/company/flexipletech/' }] },
+}, 'SAP Consultant with verification'), 'SAP Consultant');
+assert.equal(operator.searchTopicConfidence({ title: 'Business Analyst with verification' }, reportedPrompt), 0);
+assert.equal(operator.searchTopicConfidence({ title: 'SAP S/4HANA Consultant with verification' }, reportedPrompt), 2);
 const sapVariants = operator.sapRoleKeywordVariants('SAP');
 assert.ok(sapVariants.includes('SAP'));
 assert.ok(sapVariants.some((value) => /FICO/.test(value)));

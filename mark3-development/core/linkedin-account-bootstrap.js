@@ -144,7 +144,8 @@ function missionProgressText(job) {
   if (Number.isFinite(Number(job.estimatedActiveMsRemaining)) && job.estimatedActiveMsRemaining >= 0) parts.push(`estimated active work remaining: ${formatDuration(job.estimatedActiveMsRemaining)}`);
   if (job.lastProgressAt) parts.push(`last Sheet progress: ${job.lastProgressAt}`);
   if (Number.isFinite(Number(job.batchCount))) parts.push(`batches: ${job.batchCount}`);
-  if (Number.isFinite(Number(job.masterCurrent))) parts.push(`Final Master total: ${job.masterCurrent}`);
+  const additionalSheetTarget = job?.contract?.target?.mode === 'additional';
+  if (Number.isFinite(Number(job.masterCurrent))) parts.push(`${additionalSheetTarget ? 'Worksheet verified total' : 'Final Master total'}: ${job.masterCurrent}`);
   if (Number.isFinite(Number(job.masterRemaining))) parts.push(`remaining to target: ${job.masterRemaining}`);
   if (!Number.isFinite(Number(job.masterRemaining)) && Number.isFinite(Number(p.remaining))) parts.push(`remaining this run: ${p.remaining}`);
   if (Number.isFinite(Number(p.durableCompanyProfileHits))) parts.push(`durable company profiles reused: ${p.durableCompanyProfileHits}`);

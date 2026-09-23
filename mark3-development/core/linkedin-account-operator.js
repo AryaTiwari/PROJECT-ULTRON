@@ -333,7 +333,13 @@ function parseRequest(text) {
   };
   const knownLocations = Object.values(LOCATION_SEARCH_HUBS).flat();
   const contract = missionContract.compile(value, baseRequest, { knownLocations });
-  return missionContract.apply(contract, baseRequest);
+  const applied = missionContract.apply(contract, baseRequest);
+  if (applied.hiring && applied.destinationSheetUrl && applied.targetMode === 'additional' && Number(applied.count || 0) > 0) {
+    applied.persistentUntilTarget = true;
+    applied.targetRequested = Number(applied.count);
+    applied.autoContinue = true;
+  }
+  return applied;
 }
 
 function normalizeHeader(value) {
@@ -1501,10 +1507,14 @@ async function cacheAwareVerificationCall(budget, tool, args) {
 }
 
 function referenceRecord(ref, request) {
-  const snippet = [ref.text, ref.context].filter(Boolean).join(' · ').trim();
+  const cleanReferenceText = String(ref?.text || '')
+    .replace(/\s+\d[\d,.]*\s+followers?\s*$/i, '')
+    .replace(/\s+logo\s*$/i, '')
+    .trim();
+  const snippet = [cleanReferenceText || ref.text, ref.context].filter(Boolean).join(' · ').trim();
   if (request.entityMode === 'company') {
     const parsed = linkedinPublic.parseResult({
-      title: ref.text || ref.slug,
+      title: cleanReferenceText || ref.slug,
       snippet,
       url: ref.url,
     }, { entityMode: 'company' });
@@ -1791,11 +1801,20 @@ function activeJobPosting(text) {
 }
 
 function jobTitleFromDetail(detail, fallback = '') {
+  const cleanFallback = String(fallback || '').replace(/\s+with verification\s*$/i, '').trim();
+  if (cleanFallback) return cleanFallback;
   const raw = String(detail?.sections?.job_posting || '').trim();
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const ignored = /^(?:about the job|job description|show more|save|apply|easy apply)$/i;
-  const title = lines.find((line) => line.length >= 3 && line.length <= 140 && !ignored.test(line));
-  return title || String(fallback || '').trim();
+  const companyNames = new Set(linkedInReferences(detail, 'company')
+    .map((ref) => String(ref.text || '').replace(/\s+\d[\d,.]*\s+followers?\s*$/i, '').trim().toLowerCase())
+    .filter(Boolean));
+  const title = lines.find((line) => line.length >= 3
+    && line.length <= 140
+    && !ignored.test(line)
+    && !companyNames.has(line.toLowerCase())
+    && !/^https?:\/\//i.test(line));
+  return title || '';
 }
 
 function joeyismJobToDetail(job, jobId = '') {
@@ -1995,6 +2014,7 @@ async function companyMission(request) {
   const destinationJobIds = new Set((request.existingDestinationJobIds || []).map((value) => String(value)));
   const destinationCompanyKeys = new Set((request.existingDestinationCompanyKeys || []).map((value) => String(value)));
   let weakLiveDeferred = 0;
+  let searchStrategiesExhausted = false;
   const acceptedCompanies = new Set(
     reconsidered.map((record) => finalMaster.companyKey(record)).filter(Boolean)
   );
@@ -2005,10 +2025,17 @@ async function companyMission(request) {
     const normalSearchAllowance = budget.localBudgetBypass
       ? plan.length
       : Math.min(plan.length, queryStrategist.searchAllowance(budget, Math.max(0, request.count - acceptedCompanies.size)));
+    // LinkedIn can return broad promoted jobs even when its page claims the SAP
+    // keyword was retained. Reserve at least three calls for verification, but
+    // spend up to three searches on narrower SAP variants before trusting titles.
+    const sapSearch = /^SAP(?:\s|$)/i.test(String(request.topic || ''));
+    const adaptiveSearchAllowance = sapSearch && budget.maximum >= 5
+      ? Math.min(plan.length, 3, Math.max(normalSearchAllowance, budget.maximum - 3))
+      : normalSearchAllowance;
     // Even with zero fresh-call budget, enter one search step. missionRunner.call
     // will replay saved discovery at zero cost; if no cache exists, budgetedCall
     // raises the real safety gate and the mission parks instead of completing 0/target.
-    const liveSearchAllowance = budget.maximum < 1 ? 1 : normalSearchAllowance;
+    const liveSearchAllowance = budget.maximum < 1 ? 1 : adaptiveSearchAllowance;
     const maxSearchSteps = acceptedCompanies.size >= request.count ? 0 : plan.length;
     let liveSearches = 0;
 
@@ -2148,8 +2175,11 @@ async function companyMission(request) {
       !cachedDetailIds.has(jobId) && searchTopicConfidence(jobMeta.get(jobId) || {}, request) > 0);
     const liveWeak = availableJobIds.filter((jobId) =>
       !cachedDetailIds.has(jobId) && searchTopicConfidence(jobMeta.get(jobId) || {}, request) === 0);
+    const strictSearchTopic = /^SAP(?:\s|$)/i.test(String(request.topic || ''));
     const strongEnough = liveStrong.length >= Math.max(request.count * 2, request.count + 5);
-    const orderedJobIds = [...cachedOrdered, ...liveStrong, ...(strongEnough ? [] : liveWeak)]
+    // A retained search keyword is not job-level topic evidence. For SAP
+    // missions, never spend account calls opening a title with zero SAP signal.
+    const orderedJobIds = [...cachedOrdered, ...liveStrong, ...(!strictSearchTopic && !strongEnough ? liveWeak : [])]
       .sort((left, right) =>
         Number(cachedDetailIds.has(right)) - Number(cachedDetailIds.has(left))
         || searchTopicConfidence(jobMeta.get(right) || {}, request) - searchTopicConfidence(jobMeta.get(left) || {}, request)
@@ -2157,7 +2187,10 @@ async function companyMission(request) {
         - Number(request.transientJobAttempts[String(right)] || 0)
         || jobIdPriority(jobMeta.get(right) || {}, request) - jobIdPriority(jobMeta.get(left) || {}, request)
       );
-    weakLiveDeferred = strongEnough ? liveWeak.length : 0;
+    weakLiveDeferred = strictSearchTopic || strongEnough ? liveWeak.length : 0;
+    searchStrategiesExhausted = searchCalls.length >= plan.length
+      && liveSearches === 0
+      && orderedJobIds.length === 0;
 
     for (const jobId of orderedJobIds) {
       if (acceptedCompanies.size >= request.count) break;
@@ -2612,6 +2645,7 @@ async function companyMission(request) {
       locationExpansion: locationExpander.summarize(searchCalls, request.location),
     },
     budgetStopped: budget.stopped,
+    searchStrategiesExhausted,
     filters: request.filters,
     linkedinSearchWarnings: searchWarnings,
     filterVerification: {
@@ -4115,6 +4149,7 @@ async function run(request, headers) {
     mission.missingContacts = recordsToWrite.filter((record) => !record.email || !record.phone).length;
     mission.internalContactColumnHidden = needsInternalContact;
     mission.budgetStopped = researched.budgetStopped || null;
+    mission.searchStrategiesExhausted = Boolean(researched.searchStrategiesExhausted);
     mission.filters = researched.filters || request.filters || {};
     mission.filterVerification = researched.filterVerification || null;
     mission.linkedinSearchWarning = researched.linkedinSearchWarning || null;

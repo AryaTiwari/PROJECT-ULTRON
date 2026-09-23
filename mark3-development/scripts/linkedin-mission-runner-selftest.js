@@ -105,6 +105,22 @@ const waitFor = async predicate => {
   assert.equal(runner.get(auto.id).continuationCount, 1);
   assert.equal(finalMaster.masterCount(), 2);
 
+  const additionalTarget = {
+    initialSheetCount: 31,
+    targetSheetTotal: 41,
+    prepared: {
+      request: {
+        targetMode: 'additional',
+        persistentUntilTarget: true,
+        targetRequested: 10,
+        count: 7,
+        destinationSheetUrl: 'https://docs.google.com/spreadsheets/d/test/edit#gid=7',
+      },
+    },
+  };
+  assert.equal(runner.persistentTarget(additionalTarget), true);
+  assert.equal(runner.targetTotalForMission(additionalTarget), 41);
+
   // A mission that found candidates but wrote no requested rows is partial,
   // never a successful completion.
   runner.start(async prepared => ({

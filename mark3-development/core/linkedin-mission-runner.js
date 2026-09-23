@@ -93,7 +93,21 @@ function save(mission, preserveControl = true) {
 }
 function persistentTarget(m) {
   const request = m?.prepared?.request || {};
-  return request.targetMode === 'master_total' && Number(request.targetTotal || 0) > 0;
+  if (request.targetMode === 'master_total' && Number(request.targetTotal || 0) > 0) return true;
+  return request.targetMode === 'additional'
+    && request.persistentUntilTarget === true
+    && Number(request.targetRequested || request.count || 0) > 0
+    && Boolean(request.destinationSheetUrl);
+}
+
+function targetTotalForMission(m) {
+  const request = m?.prepared?.request || {};
+  if (request.targetMode === 'master_total') return Math.max(0, Number(request.targetTotal || 0));
+  if (!persistentTarget(m)) return 0;
+  if (Number.isFinite(Number(m.targetSheetTotal))) return Math.max(0, Number(m.targetSheetTotal));
+  const initial = Number(m.initialSheetCount);
+  const requested = Number(request.targetRequested || request.count || 0);
+  return Number.isFinite(initial) && Number.isFinite(requested) ? Math.max(0, initial + requested) : 0;
 }
 
 function elapsedMetrics(m, current = null, targetTotal = null) {
@@ -118,7 +132,8 @@ function elapsedMetrics(m, current = null, targetTotal = null) {
 
 function summary(m) {
   const request = m.prepared?.request || {};
-  const targetTotal = request.targetMode === 'master_total' ? Number(request.targetTotal || 0) : null;
+  const computedTarget = targetTotalForMission(m);
+  const targetTotal = computedTarget > 0 ? computedTarget : null;
   const sheetCurrent = Number(m.authoritativeSheet?.uniqueCompanies);
   const masterCurrent = targetTotal
     ? (Number.isFinite(sheetCurrent) ? sheetCurrent : Number(m.progress?.masterCurrent ?? finalMaster.masterCount()))
@@ -143,7 +158,9 @@ function summary(m) {
 async function syncAuthoritativeSheet(m, options = {}) {
   if (!persistentTarget(m)) return null;
   const request = m.prepared?.request || {};
-  const url = finalMaster.masterSheetUrl() || request.destinationSheetUrl || null;
+  const url = request.targetMode === 'master_total'
+    ? (finalMaster.masterSheetUrl() || request.destinationSheetUrl || null)
+    : (request.destinationSheetUrl || null);
   if (!url) return null;
   const snap = await sheetProgress.snapshot(url, { requireJob: Boolean(request.hiring) });
   const previous = Number(m.authoritativeSheet?.uniqueCompanies);
@@ -156,10 +173,14 @@ async function syncAuthoritativeSheet(m, options = {}) {
   if (!Number.isFinite(Number(m.initialSheetCount))) {
     m.initialSheetCount = Number(snap.uniqueCompanies || 0);
   }
+  if (request.targetMode === 'additional') {
+    request.targetRequested = Math.max(0, Number(request.targetRequested || request.count || 0));
+    m.targetSheetTotal = Number(m.initialSheetCount || 0) + request.targetRequested;
+  }
   if (!Number.isFinite(previous) || snap.uniqueCompanies > previous) {
     m.lastProgressAt = snap.readAt || new Date().toISOString();
   }
-  const targetTotal = Number(request.targetTotal || 0);
+  const targetTotal = targetTotalForMission(m);
   const remaining = Math.max(0, targetTotal - Number(snap.uniqueCompanies || 0));
   m.progress = {
     ...(m.progress || {}),
@@ -424,8 +445,10 @@ async function pump() {
   try {
     if (!m.startedAt) m.startedAt = new Date(batchStartedMs).toISOString();
     m.batchCount = Number(m.batchCount || 0) + 1;
+    let batchStartTargetCount = null;
     if (persistentTarget(m)) {
       await syncAuthoritativeSheet(m, { complete: true });
+      batchStartTargetCount = Number(m.authoritativeSheet?.uniqueCompanies || 0);
       if (m.status === 'completed') {
         save(m);
         events.emit('linkedin:complete', summary(m));
@@ -438,14 +461,14 @@ async function pump() {
     m.result = result;
     const mission = result?.linkedinMission;
     const request = m.prepared?.request || {};
-    const targetTotal = request.targetMode === 'master_total' ? Number(request.targetTotal || 0) : 0;
+    const targetTotal = targetTotalForMission(m);
     let currentMaster = targetTotal > 0 ? finalMaster.masterCount() : 0;
     if (targetTotal > 0) {
       const snap = await syncAuthoritativeSheet(m, { complete: false });
       if (snap) currentMaster = Number(snap.uniqueCompanies || 0);
     }
     const remainingTarget = targetTotal > 0 ? Math.max(0, targetTotal - currentMaster) : 0;
-    const priorMaster = Number(m.lastMasterCount ?? request.masterTarget?.current ?? currentMaster);
+    const priorMaster = Number(m.lastMasterCount ?? request.masterTarget?.current ?? batchStartTargetCount ?? currentMaster);
     const madeProgress = currentMaster > priorMaster;
     const budgetLimited = Boolean(mission?.budgetStopped);
     m.stagnantBatches = remainingTarget > 0
@@ -458,7 +481,8 @@ async function pump() {
     const canAutoContinue = targetTotal > 0
       && remainingTarget > 0
       && request.autoContinue !== false
-      && !safetyLocked;
+      && !safetyLocked
+      && !mission?.searchStrategiesExhausted;
 
     if (canAutoContinue) {
       let nextAt = policy.nextEligibleAt();
@@ -1074,4 +1098,4 @@ function resumeSaved(text) {
   save(m);
   return control(m.id, 'resume');
 }
-module.exports = { start, enqueue, get, list, summary, refreshSheetProgress, syncAuthoritativeSheet, persistentTarget, isRetryableMissionError, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, queuedMissionRunnable, nextRunnableQueueIndex, hasCachedTool, recoveryProfile, recoverySourceMissions, compileResumeRequest, resumeSaved };
+module.exports = { start, enqueue, get, list, summary, refreshSheetProgress, syncAuthoritativeSheet, persistentTarget, targetTotalForMission, isRetryableMissionError, missionSignature, equivalentActiveMission, compatibleDiscoveryMissions, cachedExact, control, call, persistResearch, updateProgress, currentUsage, isSafetyWaitCode, parkForSafety, defer, active, queuedMissionRunnable, nextRunnableQueueIndex, hasCachedTool, recoveryProfile, recoverySourceMissions, compileResumeRequest, resumeSaved };
