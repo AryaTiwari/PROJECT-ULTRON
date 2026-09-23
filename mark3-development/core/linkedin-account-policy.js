@@ -64,12 +64,12 @@ function settings() {
     // Fast-safe defaults: higher throughput without disabling account safety.
     // Existing legacy/balanced-fast values automatically migrate unless the
     // operator explicitly chooses ULTRON_M3_LINKEDIN_SPEED_PROFILE=custom.
-    minGapMs: profiledNumber('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 5000, [9000, 6000], 5000, 60000),
-    jitterMs: profiledNumber('ULTRON_M3_LINKEDIN_JITTER_MS', 500, [4000, 1200], 0, 15000),
+    minGapMs: profiledNumber('ULTRON_M3_LINKEDIN_MIN_GAP_MS', 3000, [9000, 6000, 5000], 2500, 60000),
+    jitterMs: profiledNumber('ULTRON_M3_LINKEDIN_JITTER_MS', 250, [4000, 1200, 500], 0, 15000),
     burstMax: profiledNumber('ULTRON_M3_LINKEDIN_BURST_MAX', 12, [10, 12], 2, 12),
     burstWindowMs: profiledNumber('ULTRON_M3_LINKEDIN_BURST_WINDOW_MS', 5 * 60 * 1000, [10 * 60 * 1000, 8 * 60 * 1000], 5 * 60 * 1000, 30 * 60 * 1000),
     hourlyMax: profiledNumber('ULTRON_M3_LINKEDIN_HOURLY_MAX', 30, [24, 28], 2, 30),
-    dailyMax: profiledNumber('ULTRON_M3_LINKEDIN_DAILY_MAX', 100, [75, 90], 5, 120),
+    dailyMax: profiledNumber('ULTRON_M3_LINKEDIN_DAILY_MAX', 120, [75, 90, 100], 5, 120),
     missionToolMax: profiledNumber('ULTRON_M3_LINKEDIN_MISSION_TOOL_MAX', 16, [12], 3, 20),
     rateLimitCooldownMs: profiledNumber('ULTRON_M3_LINKEDIN_RATE_LIMIT_COOLDOWN_MS', 10 * 60 * 1000, [30 * 60 * 1000], 5 * 60 * 1000, 6 * 60 * 60 * 1000),
     errorBackoffCooldownMs: profiledNumber('ULTRON_M3_LINKEDIN_ERROR_BACKOFF_MS', 5 * 60 * 1000, [10 * 60 * 1000], 5 * 60 * 1000, 60 * 60 * 1000),
@@ -156,7 +156,7 @@ function classifyError(error) {
     return { kind: 'infrastructure', reason: 'The local LinkedIn MCP runtime failed before a LinkedIn account action could be confirmed. This is not an account-safety event.' };
   }
   if (/timeout|timed_out|request_timeout|connection_closed|etimedout|econnreset|epipe/.test(code)
-      || /timed out|timeout|connection reset|connection closed|transport closed|socket hang up|broken pipe|temporary browser failure/.test(text)) {
+      || /timed out|timeout|connection reset|connection closed|transport closed|socket hang up|broken pipe|temporary browser failure|another linkedin mcp client|browser.*(?:busy|using)|currently using the browser/.test(text)) {
     return { kind: 'transient', reason: 'The LinkedIn MCP/browser transport stalled temporarily. This is recoverable and is not treated as a LinkedIn account-safety event.' };
   }
   return { kind: 'other', reason: String(error?.message || error || 'LinkedIn tool error') };

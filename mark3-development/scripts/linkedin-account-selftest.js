@@ -501,7 +501,7 @@ if (previousBudgetBypass == null) delete process.env.ULTRON_M3_LINKEDIN_TEST_BYP
 else process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = previousBudgetBypass;
 if (previousRuntimeBudgetBypass == null) delete process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
 else process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS = previousRuntimeBudgetBypass;
-assert.ok(limits.minGapMs >= 5000);
+assert.ok(limits.minGapMs >= 2500);
 assert.ok(limits.burstMax <= 12);
 assert.ok(limits.hourlyMax <= 30);
 assert.ok(limits.dailyMax <= 120);

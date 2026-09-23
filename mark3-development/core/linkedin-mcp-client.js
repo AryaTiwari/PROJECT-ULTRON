@@ -51,7 +51,7 @@ function isTransientTransportError(error) {
   const code = String(error?.code || '');
   const message = String(error?.message || error || '');
   return /TIMEOUT|TIMED_OUT|REQUEST_TIMEOUT|CONNECTION_CLOSED|ETIMEDOUT|ECONNRESET|EPIPE/i.test(code)
-    || /timed out|timeout|connection (?:closed|reset)|transport closed|broken pipe|econnreset|epipe|temporary browser failure/i.test(message);
+    || /timed out|timeout|connection (?:closed|reset)|transport closed|broken pipe|econnreset|epipe|temporary browser failure|another linkedin mcp client|browser.*(?:busy|using)|currently using the browser/i.test(message);
 }
 
 function shouldRetryTransient(error) {

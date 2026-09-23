@@ -155,12 +155,12 @@ assert.equal(enrichmentSource.includes('finalizeApolloSheetStatuses(latest.sheet
 
 const limits = policy.settings();
 assert.equal(limits.speedProfile, 'fast-safe');
-assert.equal(limits.minGapMs, 5000, 'Fast-safe profile should use the bounded 5s minimum call gap.');
-assert.ok(limits.jitterMs <= 500, 'Fast-safe profile should keep jitter small.');
+assert.equal(limits.minGapMs, 3000, 'Fast-safe profile should use the bounded 3s minimum read-call gap.');
+assert.ok(limits.jitterMs <= 250, 'Fast-safe profile should keep jitter small.');
 assert.equal(limits.burstMax, 12);
 assert.equal(limits.burstWindowMs, 5 * 60 * 1000);
 assert.equal(limits.hourlyMax, 30);
-assert.equal(limits.dailyMax, 100);
+assert.equal(limits.dailyMax, 120);
 assert.equal(limits.missionToolMax, 16);
 assert.equal(limits.rateLimitCooldownMs, 10 * 60 * 1000);
 assert.equal(limits.errorBackoffCooldownMs, 5 * 60 * 1000);
@@ -176,5 +176,9 @@ assert.equal(runnerSource.includes('restart_recovery'), true, 'Persistent target
 assert.equal(typeof runner.refreshSheetProgress, 'function');
 assert.equal(typeof runner.syncAuthoritativeSheet, 'function');
 assert.equal(typeof runner.isRetryableMissionError, 'function');
+const busyError = Object.assign(new Error('Another LinkedIn MCP client is currently using the browser.'), { code: 'LINKEDIN_MCP_TOOL_ERROR' });
+assert.equal(policy.classifyError(busyError).kind, 'transient');
+assert.equal(require('../core/linkedin-mcp-client').isTransientTransportError(busyError), true);
+assert.equal(runner.isRetryableMissionError(busyError), true);
 
 console.log('LinkedIn lead-scraper safety self-test passed: Sheet-authoritative completion, persistent retries/restarts, Apollo separation, cache-first verification, SAP prioritization, and explicit-only deletion are enforced.');
