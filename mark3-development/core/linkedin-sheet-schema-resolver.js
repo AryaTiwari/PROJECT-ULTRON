@@ -35,6 +35,14 @@ function deterministicIgnore(header) {
     || /\b(?:poc|point of contact|contact person|contact name|contact number|contact email|phone|mobile|e mail|email)\b/.test(value);
 }
 
+function deterministicIgnoreMappings(headers) {
+  const mappings = {};
+  for (const header of headers || []) {
+    if (deterministicIgnore(header)) mappings[normalizeHeader(header)] = 'ignore';
+  }
+  return mappings;
+}
+
 function unresolvedHeaders(headers, headerKey, mappings = {}) {
   const known = normalizeMappings(mappings);
   return [...new Set((headers || [])
@@ -209,6 +217,7 @@ module.exports = {
   normalizeMappings,
   mappedKey,
   deterministicIgnore,
+  deterministicIgnoreMappings,
   unresolvedHeaders,
   parseCandidate,
   acceptedMappings,

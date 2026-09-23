@@ -720,8 +720,9 @@ async function resolvePending(text) {
     return { type: 'cancelled', text: 'LinkedIn-only mission cancelled before account scraping started.' };
   }
   if (pending.schemaClarification && pending.destinationSheetUrl) {
+    const automaticMappings = sheetSchema.deterministicIgnoreMappings(pending.unresolvedHeaders || []);
     const exclusiveMappings = sheetSchema.exclusiveUserMappings(value, pending.suggestedHeaders || [], headerKey);
-    const supplied = exclusiveMappings || sheetSchema.userMappings(value, pending.unresolvedHeaders || [], headerKey);
+    const supplied = { ...automaticMappings, ...(exclusiveMappings || sheetSchema.userMappings(value, pending.unresolvedHeaders || [], headerKey)) };
     if (!Object.keys(supplied).length) {
       return { type: 'clarification', pending, text: sheetSchema.clarificationText(pending.unresolvedHeaders || []) };
     }

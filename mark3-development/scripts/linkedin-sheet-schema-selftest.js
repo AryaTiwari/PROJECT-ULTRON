@@ -13,6 +13,7 @@ const noContactUnknowns = schema.unresolvedHeaders(
 );
 assert.deepEqual(noContactUnknowns, []);
 assert.equal(schema.deterministicIgnore('Outcome'), true);
+assert.deepEqual(schema.deterministicIgnoreMappings(['Outcome', 'Mystery']), { outcome: 'ignore' });
 assert.deepEqual(schema.unresolvedHeaders(
   ['COMPANY NAME', 'COMPANY LINK', 'JOB LINK', 'Outcome'],
   operator.headerKey,
