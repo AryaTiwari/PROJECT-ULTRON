@@ -145,6 +145,7 @@ assert.match(rescueSource, /base\.inferHiringCompanyFromEvidence\(plan, row\)/);
 assert.match(rescueSource, /rescueTargetsForRecord\(record\)\.length > 0/);
 assert.match(rescueSource, /contactabilityExhaustedTargets/);
 assert.match(rescueSource, /base\.contactabilityTargetKey/);
+assert.match(rescueSource, /targetRows\.has\(Number\(record\.rowNumber\)\)/, 'AI rescue must remain inside an explicit target-row set');
 assert.match(rescueSource, /no-open-secondary-poc-residue/);
 assert.match(rescueSource, /if \(!residueSet\.has\(Number\(rowNumber\)\)\) continue/);
 assert.match(rescueSource, /unresolvedRows: \[\]/);

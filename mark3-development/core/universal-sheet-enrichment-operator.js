@@ -2394,6 +2394,15 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
 
   stats.candidatePhoneSettlementAttempts = Number(stats.candidatePhoneSettlementAttempts || 0) + 1;
 
+  // A fresh cached terminal result is authoritative. Re-polling its historical
+  // request ID for every slot cannot produce a different person-specific result
+  // and caused the same Apollo result endpoint to be read repeatedly.
+  if (text(person.phoneStatus).toLowerCase() === 'not_found') {
+    stats.candidatePhoneSettlementNotFound = Number(stats.candidatePhoneSettlementNotFound || 0) + 1;
+    stats.candidatePhoneSettlementCachedTerminal = Number(stats.candidatePhoneSettlementCachedTerminal || 0) + 1;
+    return { ...person, phone: null, phoneStatus: 'not_found' };
+  }
+
   const recordResolved = (phone) => {
     const valid = apollo.validPhone(phone || '');
     if (!valid) return null;
@@ -2578,20 +2587,34 @@ async function selectContactableReplacement(item, plan, companyContext, stats, o
   for (let attempt = 0; attempt < shortlist.length; attempt++) {
     const raw = shortlist[attempt];
     const rawKey = candidateDiscoveryKey(raw);
-    stats.hydrationAttempts++;
     stats.replacementCandidateChecks = Number(stats.replacementCandidateChecks || 0) + 1;
+    const evidenceCache = options.contactabilityEvidenceCache instanceof Map
+      ? options.contactabilityEvidenceCache
+      : null;
 
     let person = null;
-    try {
-      person = await hydrateDecisionMakerVerified(raw, companyContext, stats, {
-        needEmail: Boolean(item.group?.fields?.email),
-        needPhone: true,
-      });
-    } catch (error) {
-      throwSystemic(error);
-      stats.hydrationFailures++;
-      claimed.add(rawKey);
-      continue;
+    if (evidenceCache?.has(rawKey)) {
+      person = evidenceCache.get(rawKey);
+      stats.contactabilityEvidenceCacheHits = Number(stats.contactabilityEvidenceCacheHits || 0) + 1;
+    } else {
+      stats.hydrationAttempts++;
+      try {
+        person = await hydrateDecisionMakerVerified(raw, companyContext, stats, {
+          needEmail: Boolean(item.group?.fields?.email),
+          needPhone: true,
+        });
+      } catch (error) {
+        throwSystemic(error);
+        stats.hydrationFailures++;
+        evidenceCache?.set(rawKey, null);
+        claimed.add(rawKey);
+        continue;
+      }
+
+      if (person?.identityVerified && person?.title && ranker.sameEmployer(person, companyContext)) {
+        person = await settleVerifiedPhoneForSelection(person, stats, options);
+      }
+      evidenceCache?.set(rawKey, person || null);
     }
 
     if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) {
@@ -2599,8 +2622,6 @@ async function selectContactableReplacement(item, plan, companyContext, stats, o
       claimed.add(rawKey);
       continue;
     }
-
-    person = await settleVerifiedPhoneForSelection(person, stats, options);
 
     if (candidateAlreadyPresent(person, existing)) {
       stats.postHydrationDuplicates++;
@@ -2650,19 +2671,33 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   for (let attempt = 0; attempt < shortlist.length; attempt++) {
     const raw = shortlist[attempt];
     const rawKey = candidateDiscoveryKey(raw);
-    stats.hydrationAttempts++;
+    const evidenceCache = options.contactabilityEvidenceCache instanceof Map
+      ? options.contactabilityEvidenceCache
+      : null;
 
     let person = null;
-    try {
-      person = await hydrateDecisionMakerVerified(raw, companyContext, stats, {
-        needEmail: Boolean(target.group.fields.email),
-        needPhone: Boolean(target.group.fields.phone),
-      });
-    } catch (error) {
-      throwSystemic(error);
-      stats.hydrationFailures++;
-      claimed.add(rawKey);
-      continue;
+    if (evidenceCache?.has(rawKey)) {
+      person = evidenceCache.get(rawKey);
+      stats.contactabilityEvidenceCacheHits = Number(stats.contactabilityEvidenceCacheHits || 0) + 1;
+    } else {
+      stats.hydrationAttempts++;
+      try {
+        person = await hydrateDecisionMakerVerified(raw, companyContext, stats, {
+          needEmail: Boolean(target.group.fields.email),
+          needPhone: Boolean(target.group.fields.phone),
+        });
+      } catch (error) {
+        throwSystemic(error);
+        stats.hydrationFailures++;
+        evidenceCache?.set(rawKey, null);
+        claimed.add(rawKey);
+        continue;
+      }
+
+      if (person?.identityVerified && person?.title && ranker.sameEmployer(person, companyContext)) {
+        person = await settleVerifiedPhoneForSelection(person, stats, options);
+      }
+      evidenceCache?.set(rawKey, person || null);
     }
 
     if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) {
@@ -2670,8 +2705,6 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       claimed.add(rawKey);
       continue;
     }
-
-    person = await settleVerifiedPhoneForSelection(person, stats, options);
 
     if (candidateAlreadyPresent(person, existing)) {
       stats.postHydrationDuplicates++;
@@ -3058,8 +3091,10 @@ function freshStats() {
     candidatePhoneSettlementFound: 0,
     candidatePhoneSettlementPending: 0,
     candidatePhoneSettlementNotFound: 0,
+    candidatePhoneSettlementCachedTerminal: 0,
     candidatePhoneSettlementUnavailable: 0,
     candidatePhoneSettlementErrors: 0,
+    contactabilityEvidenceCacheHits: 0,
     existingRepairAudit: [],
     embeddedDesignationWrites: 0,
     newPeopleSelected: 0,
@@ -3457,6 +3492,7 @@ async function run(request = {}, options = {}) {
       const rowOptions = {
         ...runOptions,
         rowNumber,
+        contactabilityEvidenceCache: new Map(),
         candidatePool: people,
         existingIdentities: rowExistingIdentities,
         contactabilityShortlist,

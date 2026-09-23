@@ -511,8 +511,12 @@ async function run(request = {}, primaryResult = {}, options = {}) {
     sheetName: request.sheetName || options.sheetName,
   });
   const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema });
+  const targetRows = Array.isArray(options.targetRows)
+    ? new Set(options.targetRows.map(Number).filter(Number.isInteger))
+    : null;
   const exactResidueRows = [...new Set(
     (analysis.rowPlans || [])
+      .filter((record) => !targetRows || targetRows.has(Number(record.rowNumber)))
       .filter((record) => rescueTargetsForRecord(record).length > 0)
       .map((record) => Number(record.rowNumber))
       .filter(Number.isInteger)

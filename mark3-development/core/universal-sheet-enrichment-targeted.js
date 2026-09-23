@@ -127,11 +127,14 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
   const contactGaps = [];
   const requestedCount = Number(options.expectedPersonGroups || options.schema?.expectedPersonGroups || 0);
   const checkedRows = [];
+  const targetRows = Array.isArray(options.targetRows)
+    ? new Set(options.targetRows.map(Number).filter(Number.isInteger))
+    : null;
 
   for (const record of analysis.rowPlans || []) {
     const rowNumber = Number(record.rowNumber);
     const plan = record.plan;
-    if (!Number.isInteger(rowNumber)) continue;
+    if (!Number.isInteger(rowNumber) || (targetRows && !targetRows.has(rowNumber))) continue;
     checkedRows.push(rowNumber);
     for (const group of source.schema.personGroups || []) {
       const ordinal = Number(group.ordinal || 1);

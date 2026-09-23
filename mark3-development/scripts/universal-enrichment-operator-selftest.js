@@ -292,6 +292,8 @@ assert.match(liveGuardSource, /missing-phone-contactability/);
 assert.match(liveGuardSource, /change\.allowReplace === true/);
 assert.match(operatorSource, /settleVerifiedPhoneForSelection/);
 assert.match(operatorSource, /ULTRON_M3_TOP3_PHONE_SETTLEMENT_POLLS/);
+assert.match(operatorSource, /contactabilityEvidenceCache/, 'the same top-3 person evidence must be reused across POC slots');
+assert.match(operatorSource, /candidatePhoneSettlementCachedTerminal/, 'terminal no-phone results must not be polled again');
 assert.match(operatorSource, /pollWebhookResult/);
 assert.match(operatorSource, /pollPhoneRequest/);
 assert.match(aiBatchSource, /settleVerifiedPhoneForSelection/, 'bounded AI rescue must settle an already-started phone reveal before planner write verification');
@@ -334,6 +336,23 @@ assert.doesNotMatch(plannerSource, /new-poc-requires-phone/, 'generic planner mu
   });
   assert.equal(stillPending.phone || null, null);
   assert.equal(operator.contactabilityTier(stillPending), 0, 'pending reveal must remain ineligible until an actual phone is returned');
+
+  let terminalProviderReads = 0;
+  const cachedTerminalStats = {};
+  const cachedTerminal = await operator.settleVerifiedPhoneForSelection({
+    identityVerified: true,
+    apolloPersonId: 'apollo-test-terminal',
+    name: 'Terminal Recruiter',
+    phone: null,
+    phoneStatus: 'not_found',
+    phoneRequestId: 'old-request-id',
+  }, cachedTerminalStats, {
+    fetchPhoneResults: async () => { terminalProviderReads++; return []; },
+    pollNativePhone: async () => { terminalProviderReads++; return { state: 'not_found', phone: null }; },
+  });
+  assert.equal(cachedTerminal.phoneStatus, 'not_found');
+  assert.equal(terminalProviderReads, 0, 'fresh terminal no-phone evidence must not trigger another provider read');
+  assert.equal(cachedTerminalStats.candidatePhoneSettlementCachedTerminal, 1);
 
   const callbackSettled = await operator.settleVerifiedPhoneForSelection({
     identityVerified: true,
