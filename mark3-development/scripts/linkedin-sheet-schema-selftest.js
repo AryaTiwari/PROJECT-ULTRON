@@ -12,6 +12,11 @@ const noContactUnknowns = schema.unresolvedHeaders(
   operator.headerKey,
 );
 assert.deepEqual(noContactUnknowns, []);
+assert.equal(schema.deterministicIgnore('Outcome'), true);
+assert.deepEqual(schema.unresolvedHeaders(
+  ['COMPANY NAME', 'COMPANY LINK', 'JOB LINK', 'Outcome'],
+  operator.headerKey,
+), []);
 
 const user = schema.userMappings(
   'map: "Vacancy URL" = job link; "Priority" = lead score; "Owner Notes" = ignore',
@@ -51,6 +56,16 @@ assert.deepEqual(accepted.mappings, { 'vacancy url': 'jobLink' });
 assert.deepEqual(accepted.unresolved, ['Mystery']);
 
 (async () => {
+  let outcomeModelCalls = 0;
+  const outcomeResolved = await schema.resolve(
+    ['COMPANY NAME', 'COMPANY LINK', 'JOB LINK', 'Outcome'],
+    { wantsContacts: false },
+    operator.headerKey,
+    { models: ['groq/should-not-run'], chat: async () => { outcomeModelCalls++; throw new Error('model should not run'); } },
+  );
+  assert.deepEqual(outcomeResolved.unresolved, []);
+  assert.equal(outcomeResolved.mappings.outcome, 'ignore');
+  assert.equal(outcomeModelCalls, 0);
   const inferred = await schema.resolve(
     ['COMPANY NAME', 'Vacancy URL', 'Priority'],
     { wantsContacts: false },

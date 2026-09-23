@@ -31,7 +31,7 @@ function mappedKey(header, mappings = {}) {
 function deterministicIgnore(header) {
   const value = normalizeHeader(header);
   if (!value) return true;
-  return /^(?:s\s*no|sr\s*no|serial(?: number)?|row(?: number)?|index|manual status|review status|owner notes?|internal notes?)$/.test(value)
+  return /^(?:s\s*no|sr\s*no|serial(?: number)?|row(?: number)?|index|manual status|review status|owner notes?|internal notes?|outcomes?)$/.test(value)
     || /\b(?:poc|point of contact|contact person|contact name|contact number|contact email|phone|mobile|e mail|email)\b/.test(value);
 }
 
