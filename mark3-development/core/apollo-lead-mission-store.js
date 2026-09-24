@@ -1,5 +1,5 @@
 'use strict';
-const fs = require('fs'); const path = require('path'); const crypto = require('crypto'); const config = require('./config');
+const fs = require('fs'); const path = require('path'); const crypto = require('crypto'); const config = require('./config'); const contract = require('./apollo-lead-contract');
 const FILE = path.join(config.projectRoot, '.ultron', 'apollo-lead-missions.json');
 function load() { try { const v = JSON.parse(fs.readFileSync(FILE, 'utf8')); return { missions: Array.isArray(v.missions) ? v.missions : [] }; } catch { return { missions: [] }; } }
 function save(state) { fs.mkdirSync(path.dirname(FILE), { recursive: true }); fs.writeFileSync(FILE, JSON.stringify({ missions: (state.missions || []).slice(-50) }, null, 2)); }
@@ -9,6 +9,10 @@ function create(compiled) {
   const mission = {
     missionId: `apollo-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
     missionType: compiled.missionType,
+    contractVersion: contract.VERSION,
+    runtimeBuildId: contract.runtimeBuild.id,
+    runtimeRevision: contract.runtimeBuild.revision,
+    runtimeSourceFingerprint: contract.runtimeBuild.fingerprint,
     query: compiled.query,
     entityType: compiled.entityType,
     targetCount: compiled.targetCount,
