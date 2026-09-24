@@ -17,9 +17,10 @@ const diagnostics = require('./universal-enrichment-diagnostics');
 const apollo = require('./apollo-enrichment');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
+function exactSheetTitle(value) { return value == null ? '' : String(value); }
 
 function syntheticResolution(request, sheetUrl) {
-  const name = text(request.sheetName);
+  const name = exactSheetTitle(request.sheetName);
   const requestedGid = targetResolver.parseGid(sheetUrl);
   const sheetId = Number.isFinite(Number(request.sheetId))
     ? Number(request.sheetId)
@@ -88,8 +89,11 @@ async function withExactTargetGuards(request, fn) {
     try {
       const meta = await originalMetadata(id);
       const list = Array.isArray(meta?.sheets) ? meta.sheets : [];
-      const target = list.find((sheet) => text(sheet?.properties?.title).toLowerCase() === text(request.sheetName).toLowerCase())
-        || (request.sheetId != null ? list.find((sheet) => Number(sheet?.properties?.sheetId) === Number(request.sheetId)) : null);
+      const target = (request.sheetId != null
+        ? list.find((sheet) => Number(sheet?.properties?.sheetId) === Number(request.sheetId))
+        : null)
+        || list.find((sheet) => exactSheetTitle(sheet?.properties?.title) === exactSheetTitle(request.sheetName))
+        || list.find((sheet) => text(sheet?.properties?.title).toLowerCase() === text(request.sheetName).toLowerCase());
       if (target) return { ...meta, sheets: [target], __ultronUniversalExactTargetScoped: true };
       return syntheticMetadata(spreadsheetId, request);
     } catch {
@@ -115,6 +119,7 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
   const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
     ...options,
     sheetName: request.sheetName || options.sheetName,
+    sheetId: request.sheetId ?? options.sheetId ?? null,
   });
   const analysis = engine.analyzeSheet(source.rows, {
     rowLimit: options.rowLimit,
