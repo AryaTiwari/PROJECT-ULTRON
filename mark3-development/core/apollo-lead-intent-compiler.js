@@ -11,6 +11,9 @@ const EXPANSIONS = Object.freeze({
   'hr tech': ['hrtech', 'human resources technology', 'talent technology'],
   fintech: ['financial technology', 'payments technology'],
   sap: ['enterprise resource planning', 'erp', 'sap services'],
+  product: ['software product', 'technology product', 'platform', 'software'],
+  technology: ['software', 'information technology', 'technology platform', 'tech company'],
+  software: ['software product', 'software company', 'platform', 'saas'],
 });
 
 function text(value) { return String(value == null ? '' : value).trim(); }
@@ -43,7 +46,7 @@ function parseEmployeeRange(input) {
   if (under) return { min: 0, max: Number(under[1].replace(/,/g, '')), explicit: true, hard: true };
   const over = value.match(/\b(?:over|above|more\s+than|at\s+least|min(?:imum)?)\s+(\d[\d,]*)\s+employees?\b/i);
   if (over) return { min: Number(over[1].replace(/,/g, '')), max: null, explicit: true, hard: true };
-  return { min: 0, max: 1000, preferredMin: 20, preferredMax: 500, explicit: false, hard: true };
+  return { min: 10, max: 500, preferredMin: 20, preferredMax: 300, explicit: false, hard: false };
 }
 
 function parseGeography(input) {
