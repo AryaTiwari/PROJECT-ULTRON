@@ -55,7 +55,15 @@ function rowValues(record, columns, includePeople) {
 }
 
 async function project(compiled, records = [], options = {}) {
-  if (!compiled.sheet.url) return { rowsWritten: 0, skippedDuplicates: 0, sheetUrl: '', sheetName: '' };
+  if (!compiled.sheet?.url) {
+    if (compiled.sheet?.requested) {
+      const error = new Error('A Sheet destination was requested, but no live Google Sheets URL was resolved.');
+      error.code = 'APOLLO_LEAD_SHEET_SOURCE_UNRESOLVED';
+      error.stage = 'apollo-lead-sheet-projection';
+      throw error;
+    }
+    return { rowsWritten: 0, cellsWritten: 0, skippedDuplicates: 0, sheetUrl: '', sheetName: '', liveVerified: true };
+  }
   const info = await inspect(compiled); const columns = schemaColumns(info);
   if (!Number.isInteger(columns.companyName) && !Number.isInteger(columns.personGroups?.[0]?.fields?.name?.index)) throw Object.assign(new Error('No recognized company or person-name heading exists in the target worksheet.'), { code: 'APOLLO_LEAD_COLUMN_NOT_FOUND' });
   const existing = new Set(info.rows.slice(info.headerRowIndex + 1).map((row) => companyKey(row[columns.companyName])).filter(Boolean));
@@ -65,7 +73,23 @@ async function project(compiled, records = [], options = {}) {
   const result = await sheets.writeCells(info.id, changes);
   const rereadRanges = written.map((entry) => `${sheets.quoteSheet(info.target.name)}!A${entry.row}:${sheets.columnName(Math.max(0, info.headers.length - 1))}${entry.row}`);
   const verified = rereadRanges.length ? await sheets.batchValues(info.id, rereadRanges, { formulas: false }) : [];
-  return { rowsWritten: written.length, cellsWritten: result.updatedCells || changes.length, skippedDuplicates, sheetUrl: compiled.sheet.url, sheetName: info.target.name, writtenRows: written.map((w) => w.row), rereadRows: verified.length, liveVerified: verified.length === written.length };
+  const liveVerified = verified.length === written.length;
+  if (written.length && !liveVerified) {
+    const error = new Error(`Apollo wrote ${written.length} row(s), but the mandatory live Sheet reread verified only ${verified.length}.`);
+    error.code = 'APOLLO_LEAD_SHEET_REREAD_FAILED';
+    error.stage = 'apollo-lead-sheet-verification';
+    throw error;
+  }
+  return {
+    rowsWritten: written.length,
+    cellsWritten: result.updatedCells || changes.length,
+    skippedDuplicates,
+    sheetUrl: compiled.sheet.url,
+    sheetName: info.target.name,
+    writtenRows: written.map((w) => w.row),
+    rereadRows: verified.length,
+    liveVerified,
+  };
 }
 
 module.exports = { header, companyKey, inspect, directColumns, schemaColumns, rowValues, project };
