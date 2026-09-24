@@ -33,7 +33,7 @@ function load() {
 function bind(alias, url, metadata = {}) {
   const key = normalizeAlias(alias);
   const targetUrl = text(url);
-  if (!key || !/^https://docs.google.com/spreadsheets/d/[A-Za-z0-9_-]+/i.test(targetUrl)) return null;
+  if (!key || !/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+/i.test(targetUrl)) return null;
 
   const state = load();
   const entry = {
