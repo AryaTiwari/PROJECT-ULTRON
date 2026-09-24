@@ -405,12 +405,9 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     rejected.push(rowNumber);
   }
 
-  let clearedRows = 0;
-  if (rejected.length) {
-    const lastColumnIndex = Math.max(0, ...(source.schema.columns || []).map((column) => Number(column.index) || 0));
-    const cleared = await sheets.clearRows(source.spreadsheetId, source.sheetName, rejected, lastColumnIndex);
-    clearedRows = Number(cleared?.clearedRows || 0);
-  }
+  // Contactability is allowed to reject a POC candidate, never the company row.
+  // Existing company rows are user-owned source data and are immutable to Apollo
+  // enrichment. Missing +91 evidence leaves the POC unresolved for this run.
   return {
     enabled: true,
     requiredCountryCode: '+91',
@@ -418,9 +415,13 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     candidateLimit: 3,
     acceptedRows: accepted,
     rejectedRows: rejected,
+    contactUnresolvedRows: [...rejected],
     pendingRows: pending,
     skippedRows: skipped,
-    clearedRows,
+    clearedRows: 0,
+    preservedCompanyRows: [...rejected],
+    companyRowDeletionAllowed: false,
+    nonDestructive: true,
   };
 }
 
@@ -818,9 +819,12 @@ async function runInternal(request = {}, options = {}) {
         Object.assign(primaryStats, {
           requireIndianPhone: true,
           indianPhoneAcceptedCompanies: indianPhoneGate.acceptedRows.length,
+          indianPhoneContactUnresolvedCompanies: indianPhoneGate.rejectedRows.length,
           indianPhoneRejectedCompanies: indianPhoneGate.rejectedRows.length,
           indianPhonePendingCompanies: indianPhoneGate.pendingRows.length,
-          indianPhoneRowsCleared: indianPhoneGate.clearedRows,
+          indianPhoneRowsCleared: 0,
+          companyRowsDeletedByEnrichment: 0,
+          companyRowDeletionAllowed: false,
         });
         result = { ...result, stats: { ...(result.stats || {}), ...primaryStats } };
       }
