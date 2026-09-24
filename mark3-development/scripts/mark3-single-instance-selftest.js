@@ -8,5 +8,10 @@ assert.equal(single.classify({ service: 'Other', buildId: 'old' }, 'new'), 'fore
 assert.equal(single.classify({ service: 'ULTRON Mark 3', buildId: 'new' }, 'new'), 'current');
 assert.equal(single.classify({ service: 'ULTRON Mark 3', buildId: 'old' }, 'new'), 'stale');
 assert.equal(single.classify({ service: 'ULTRON Mark 3' }, 'new'), 'stale');
-assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /req\.url === '\/api\/runtime'/);
-console.log('Mark 3 single-instance self-test passed: current builds are retained, stale/legacy ULTRON builds are replaceable, foreign port owners remain protected, and lightweight runtime identity is exposed.');
+const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+const packageSource = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
+assert.match(serverSource, /req\.url === '\/api\/runtime'/);
+assert.match(serverSource, /REFUSING stale runtime/);
+assert.match(serverSource, /\[Apollo Lead\] Contract:/);
+assert.match(packageSource, /"mark3:sync":\s*"node --env-file=\.\.\/\.env scripts\/sync-mark3\.js"/);
+console.log('Mark 3 single-instance self-test passed: current builds are retained, stale/legacy ULTRON builds are replaceable, foreign port owners remain protected, runtime identity is exposed, stale direct-server reuse is refused, and the safe sync command is registered.');
