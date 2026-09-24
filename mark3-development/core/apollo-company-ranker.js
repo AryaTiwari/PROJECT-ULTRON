@@ -34,7 +34,7 @@ function organizationKey(o = {}) { return text(o.id || o.organization_id) || dom
 function normalizeOrganization(o, mission = {}) {
   return { raw: o, id: text(o.id || o.organization_id), name: name(o), domain: domain(website(o)), website: website(o), linkedinUrl: linkedin(o), companyLink: linkedin(o) || website(o), employees: employeeCount(o), industry: text(o.industry), location: locationText(o), description: text(o.short_description || o.description), score: scoreOrganization(o, mission), key: organizationKey(o) };
 }
-function explicitSizePass(o, mission = {}) { const r = mission.employeeRange || {}; if (!r.explicit) return true; const n = employeeCount(o); return n != null && (r.min == null || n >= r.min) && (r.max == null || n <= r.max); }
+function explicitSizePass(o, mission = {}) { const r = mission.employeeRange || {}; if (!r.explicit && !r.hard) return true; const n = employeeCount(o); return n != null && (r.min == null || n >= r.min) && (r.max == null || n <= r.max); }
 function relevancePass(o, mission = {}) { const normalized = o.raw ? o : normalizeOrganization(o, mission); const evidence = words(evidenceText(normalized.raw || o)); const wanted = (mission.expandedKeywords || mission.keywords || []).flatMap((keyword) => [...words(keyword)]); const keywordMatch = !wanted.length || wanted.some((word) => evidence.has(word)); return normalized.name && normalized.companyLink && keywordMatch && normalized.score >= (mission.keywords?.length ? 20 : 5); }
 function rankOrganizations(items = [], mission = {}) {
   const seen = new Set();

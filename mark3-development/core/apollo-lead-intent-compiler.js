@@ -24,13 +24,26 @@ function parseCount(input, fallback = 20) {
 
 function parseEmployeeRange(input) {
   const value = text(input);
-  const range = value.match(/\b(?:with\s+)?(\d[\d,]*)\s*(?:-|to|–|—)\s*(\d[\d,]*)\s+employees?\b/i);
-  if (range) return { min: Number(range[1].replace(/,/g, '')), max: Number(range[2].replace(/,/g, '')), explicit: true };
+  const ranges = [...value.matchAll(/\b(\d[\d,]*)\s*(?:-|to|–|—)\s*(\d[\d,]*)\s+employees?\b/gi)]
+    .map((match) => ({ min: Number(match[1].replace(/,/g, '')), max: Number(match[2].replace(/,/g, '')) }))
+    .filter((range) => Number.isFinite(range.min) && Number.isFinite(range.max));
+  if (ranges.length) {
+    const hard = [...ranges].sort((a, b) => (b.max - b.min) - (a.max - a.min))[0];
+    const preferred = [...ranges].sort((a, b) => (a.max - a.min) - (b.max - b.min))[0];
+    return {
+      min: hard.min,
+      max: hard.max,
+      preferredMin: preferred.min,
+      preferredMax: preferred.max,
+      explicit: true,
+      hard: true,
+    };
+  }
   const under = value.match(/\b(?:under|below|fewer\s+than|less\s+than|up\s+to|max(?:imum)?)\s+(\d[\d,]*)\s+employees?\b/i);
-  if (under) return { min: 1, max: Number(under[1].replace(/,/g, '')), explicit: true };
+  if (under) return { min: 0, max: Number(under[1].replace(/,/g, '')), explicit: true, hard: true };
   const over = value.match(/\b(?:over|above|more\s+than|at\s+least|min(?:imum)?)\s+(\d[\d,]*)\s+employees?\b/i);
-  if (over) return { min: Number(over[1].replace(/,/g, '')), max: null, explicit: true };
-  return { min: 10, max: 500, preferredMin: 20, preferredMax: 300, explicit: false };
+  if (over) return { min: Number(over[1].replace(/,/g, '')), max: null, explicit: true, hard: true };
+  return { min: 0, max: 1000, preferredMin: 20, preferredMax: 500, explicit: false, hard: true };
 }
 
 function parseGeography(input) {
@@ -76,14 +89,14 @@ function parseSheet(input) {
 function enrichmentRequested(input) {
   const value = text(input);
   if (/\b(?:do\s+not|don't|without|no)\s+(?:find\s+)?(?:pocs?|contacts?|phones?|emails?|apollo|enrich)/i.test(value)) return false;
-  return /\b(?:enrich|fill|repair|complete)\b[\s\S]{0,80}\b(?:pocs?|contacts?|phones?|emails?)\b|\b(?:enrich|with)\s+both\s+pocs?\b/i.test(value);
+  return /\b(?:enrich(?:ment)?|fill|repair|complete|update)\b[\s\S]{0,80}\b(?:pocs?|contacts?(?:\s+groups?)?|phones?|emails?)\b|\b(?:enrich|with)\s+both\s+pocs?\b|\bcontact[- ]enrichment\b/i.test(value);
 }
 
 function existingSheetEnrichment(input) {
   const value = text(input);
   const sheet = parseSheet(value);
   const spreadsheetContext = Boolean(sheet.url || (/@[\w .()\-]{2,}/.test(value) && /\b(?:sheet|spreadsheet|workbook|tab|worksheet)\b/i.test(value)));
-  return Boolean(spreadsheetContext && /\b(?:enrich(?:ment)?|fill|repair|complete|update)\b/i.test(value) && /\b(?:poc|contact|phone|email)/i.test(value));
+  return Boolean(spreadsheetContext && enrichmentRequested(value));
 }
 
 function peopleEntity(input) {
