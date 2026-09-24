@@ -3341,7 +3341,11 @@ function prioritizeIdentityGapRows(records = [], targetRows = null, phaseOrdinal
 async function run(request = {}, options = {}) {
   const sheetUrl = request.sheetUrl || request.url;
   if (!sheetUrl) throw new Error('Universal enrichment requires a Google Sheet URL.');
-  const source = await readUniversalSheet(sheetUrl, { ...options, sheetName: request.sheetName || options.sheetName });
+  const source = await readUniversalSheet(sheetUrl, {
+    ...options,
+    sheetName: request.sheetName || options.sheetName,
+    sheetId: request.sheetId ?? options.sheetId ?? null,
+  });
   const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema });
   if (options.dryRun) return { ok: true, dryRun: true, deterministic: true, modelCalls: 0, ...source, analysis, schema: engine.schemaSummary(source.schema), stats: { ...freshStats(), rowsSeen: analysis.stats.dataRows } };
   if (options.apolloApproved !== true) {
