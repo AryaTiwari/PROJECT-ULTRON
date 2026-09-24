@@ -56,15 +56,15 @@ async function canonicalApprovedTarget(payload = {}) {
   const requestedSheetId = Number.isFinite(Number(payload.sheetId)) ? Number(payload.sheetId) : null;
   if (requestedSheetId != null) {
     const byId = tabs.find((tab) => tab.sheetId === requestedSheetId);
-    if (byId) return { ...byId, matchedBy: 'sheetId' };
+    if (byId) return { sheetName: byId.name, sheetId: byId.sheetId, matchedBy: 'sheetId' };
   }
 
   const rawName = payload.sheetName == null ? '' : String(payload.sheetName);
   if (rawName) {
     const exact = tabs.find((tab) => tab.name === rawName);
-    if (exact) return { ...exact, matchedBy: 'exact-name' };
+    if (exact) return { sheetName: exact.name, sheetId: exact.sheetId, matchedBy: 'exact-name' };
     const folded = tabs.filter((tab) => tab.name.trim().toLowerCase() === rawName.trim().toLowerCase());
-    if (folded.length === 1) return { ...folded[0], matchedBy: 'folded-name' };
+    if (folded.length === 1) return { sheetName: folded[0].name, sheetId: folded[0].sheetId, matchedBy: 'folded-name' };
   }
 
   const error = new Error(`Approved worksheet target could not be re-resolved. Requested name="${rawName}" sheetId=${requestedSheetId ?? 'none'}.`);
