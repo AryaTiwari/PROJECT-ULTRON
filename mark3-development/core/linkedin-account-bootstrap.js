@@ -154,7 +154,7 @@ function missionProgressText(job) {
   if (Number.isFinite(Number(job.activeWorkMs))) timing.push(`${formatDuration(job.activeWorkMs)} active work`);
   if (timing.length) parts.push(`Timing: ${timing.join(', ')}`);
   if (waiting && Number.isFinite(Number(job.safetyWaitMsRemaining))) parts.push(`Safety wait remaining: ${formatDuration(job.safetyWaitMsRemaining)}`);
-  if (!waiting && Number.isFinite(Number(job.estimatedActiveMsRemaining)) && job.estimatedActiveMsRemaining >= 0) parts.push(`Estimated active work remaining: ${formatDuration(job.estimatedActiveMsRemaining)}`);
+  if (!waiting && job.estimatedActiveMsRemaining != null && Number.isFinite(Number(job.estimatedActiveMsRemaining)) && job.estimatedActiveMsRemaining >= 0) parts.push(`Estimated active work remaining: ${formatDuration(job.estimatedActiveMsRemaining)}`);
   const safety = job.safety || {};
   if (Number.isFinite(Number(safety.hourlyMax)) && safety.hourlyMax > 0) {
     parts.push(`Account safety use: ${safety.burstUsed}/${safety.burstMax} short-window, ${safety.hourlyUsed}/${safety.hourlyMax} hourly, ${safety.dailyUsed}/${safety.dailyMax} rolling-24-hour calls${safety.dailyCapEnabled === false ? ' (daily cap temporarily disabled today)' : ''}`);

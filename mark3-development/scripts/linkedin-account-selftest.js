@@ -32,6 +32,18 @@ assert.match(progressText, /daily cap temporarily disabled today/);
 assert.match(progressText, /Safety wait remaining: 5m 0s/);
 assert.match(progressText, /30\/30 hourly/);
 assert.doesNotMatch(progressText, /Estimated active work remaining/);
+const searchingWithoutEstimate = bootstrap.missionProgressText({
+  id: 'searching-no-estimate',
+  status: 'searching',
+  calls: 1,
+  cacheHits: 0,
+  elapsedMs: 60000,
+  activeWorkMs: 1000,
+  estimatedActiveMsRemaining: null,
+  safety: { burstUsed: 1, burstMax: 12, hourlyUsed: 1, hourlyMax: 30, dailyUsed: 121, dailyMax: 120, dailyCapEnabled: false },
+  progress: { phase: 'searching', uniqueJobIds: 32, budgetUsed: 1, budgetMaximum: 12 },
+});
+assert.doesNotMatch(searchingWithoutEstimate, /Estimated active work remaining: 0s/);
 
 assert.equal(operator.isBuildFinalMasterRequest('Build the final LinkedIn master'), true);
 assert.equal(operator.isBuildFinalMasterRequest('Create a clean final master from verified historical missions'), true);
