@@ -3,6 +3,7 @@
 const COMPANY_WORDS = /\b(?:compan(?:y|ies)|startups?|businesses|firms|organizations?|organisations?|accounts?)\b/i;
 const PEOPLE_WORDS = /\b(?:founders?|co[- ]?founders?|owners?|directors?|recruiters?|hr\s+managers?|talent\s+acquisition|people|persons?|contacts?|decision[- ]?makers?|pocs?)\b/i;
 const ACTION_WORDS = /\b(?:find|discover|search|source|list|show|bring|get|identify|build|fill|add|enrich|repair|complete)\b/i;
+const sheetAliases = require('./sheet-source-alias-store');
 
 const EXPANSIONS = Object.freeze({
   ai: ['artificial intelligence', 'machine learning', 'generative ai', 'ai saas', 'ai platform', 'ai product'],
@@ -146,20 +147,27 @@ function parseSheet(input, context = {}) {
   // otherwise canonicalize a plain/escaped URL without consuming ](.
   const markdownUrl = value.match(/\[[^\]]*\]\((https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+[^\s)]*)\)/i)?.[1] || '';
   const plainUrl = value.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_\\-]+[^\s)\],]*/i)?.[0] || '';
-  const url = (markdownUrl || plainUrl || attachmentSheetUrl(context))
+  const alias = sheetAliases.aliasFromInput(value);
+  const attachmentUrl = attachmentSheetUrl(context);
+  const aliasEntry = !markdownUrl && !plainUrl && !attachmentUrl && alias
+    ? sheetAliases.resolve(alias)
+    : null;
+  const url = (markdownUrl || plainUrl || attachmentUrl || aliasEntry?.url || '')
     .replace(/\\([_-])/g, '$1')
     .replace(/[),.;!?]+$/, '');
   const name = value.match(/\b(?:worksheet|tab|sheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})["'`“”]?/i)?.[1]?.trim() || '';
   const requested = Boolean(
     url
-    || /@[\w .()\-]{2,}/.test(value)
+    || alias
     || /\b(?:fill|write|append|add|save|put)\b[\s\S]{0,120}\b(?:google\s+sheet|spreadsheet|worksheet|sheet|tab)\b/i.test(value)
   );
   return {
     url,
-    sheetName: /^(?:at|below|link)$/i.test(name) ? '' : name,
+    sheetName: /^(?:at|below|link)$/i.test(name) ? '' : (name || aliasEntry?.sheetName || ''),
     requested,
-    attachmentResolved: Boolean(!markdownUrl && !plainUrl && url),
+    alias,
+    aliasResolved: Boolean(aliasEntry?.url && url === aliasEntry.url),
+    attachmentResolved: Boolean(!markdownUrl && !plainUrl && attachmentUrl && url === attachmentUrl),
   };
 }
 
@@ -238,4 +246,4 @@ function isApolloLeadRequest(input) {
   return ACTION_WORDS.test(value) && (COMPANY_WORDS.test(value) || PEOPLE_WORDS.test(value)) && (/\bapollo\b/i.test(value) || /\b(?:startups?|saas|ai|cyber|fintech|product|technology|software|founders?|recruiters?)\b/i.test(value));
 }
 
-module.exports = { compile, isApolloLeadRequest, isApolloLeadControlRequest, parseCount, parseEmployeeRange, parseGeography, baseKeywords, keywordExpansion, parseSheet, attachmentSheetUrl, googleSheetUrlFromValue, enrichmentRequested, existingSheetEnrichment, titleTerms };
+module.exports = { compile, isApolloLeadRequest, isApolloLeadControlRequest, parseCount, parseEmployeeRange, parseGeography, baseKeywords, keywordExpansion, parseSheet, attachmentSheetUrl, googleSheetUrlFromValue, enrichmentRequested, existingSheetEnrichment, titleTerms, sheetAliases };
