@@ -27,7 +27,8 @@ const automaticSummary = controller.approvalSummary({
   schema: { personGroups: [{}, {}], companyGroups: [], headerRowNumber: 1 },
   analysis: { stats: { openPersonSlots: 2, partialPersonSlots: 0 } },
 }, { requireIndianPhone: true, indianPhonePolicySource: 'automatic-poc1-poc2-default' });
-assert.match(automaticSummary, /Indian-number hard gate \(automatic POC-1\/POC-2 default\)/);
+assert.match(automaticSummary, /Indian-number contact gate \(automatic POC-1\/POC-2 default\)/);
+assert.match(automaticSummary, /existing company row is always preserved/);
 
 assert.equal(operator.contactabilityTier({ phone: '+1 415 555 0123', email: 'hr@example.com' }), 2);
 assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210' }), 3);
@@ -53,11 +54,13 @@ assert.equal(typeof sheets.clearRows, 'function');
 const targetedSource = fs.readFileSync(require.resolve('../core/universal-sheet-enrichment-targeted'), 'utf8');
 assert.doesNotMatch(targetedSource, /indian-phone-two-candidate-budget/);
 assert.match(targetedSource, /apollo\.indianPhone/);
-assert.match(targetedSource, /sheets\.clearRows/);
+assert.doesNotMatch(targetedSource, /sheets\.clearRows\s*\(/);
+assert.match(targetedSource, /companyRowDeletionAllowed:\s*false/);
+assert.match(targetedSource, /preservedCompanyRows/);
 assert.match(targetedSource, /aiBatchRescue\.run/);
 assert.doesNotMatch(targetedSource, /deleteDimension/);
 
 const reportSource = fs.readFileSync(require.resolve('../core/universal-run-report'), 'utf8');
 assert.match(reportSource, /i\.rowNumber.*i\.target.*i\.problem/);
 
-console.log('Indian POC phone policy self-test passed: automatic two-POC defaults, explicit +91 company gating, POC-1\/POC-2 scope, India-first ranking, mature POC-2 rescue preservation, bounded three-person shortlist, pending-callback preservation, duplicate-report collapse and non-shifting rejected-row clearing are protected.');
+console.log('Indian POC phone policy self-test passed: automatic two-POC defaults, explicit +91 contact gating, POC-1/POC-2 scope, India-first ranking, mature POC-2 rescue preservation, bounded three-person shortlist, pending-callback preservation, and the invariant that contactability failures never clear or remove company rows are protected.');
