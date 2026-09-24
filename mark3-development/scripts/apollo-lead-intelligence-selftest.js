@@ -55,12 +55,47 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   let contactReveals = 0; await discovery.discover(mission,{fetchPage:async()=>({items:Array.from({length:20},(_,i)=>company(`zero-${i}`,`AI Zero ${i}`,50))}), reveal:async()=>{contactReveals++;}}); assert.equal(contactReveals,0);
   // Routing/source ownership
   assert.equal(control.claim('Find 20 AI startups in India').domain,'apollo-lead'); assert.equal(control.claim('Find 20 companies with active SAP jobs posted last week').domain,'linkedin'); assert.equal(control.claim('Find companies from LinkedIn').domain,'linkedin');
-  // Simple company commands use Apollo discovery with a default hard 0-1,000 employee filter.
+  // Simple company commands use an SMB-focused search preference, not a hidden hard cap.
   const simple = intent.compile('find me 25 tech product companies');
   assert.equal(control.claim(simple.query).domain, 'apollo-lead'); assert.equal(simple.targetCount, 25);
-  assert.deepEqual({ min:simple.employeeRange.min, max:simple.employeeRange.max, hard:simple.employeeRange.hard }, { min:0, max:1000, hard:true });
-  assert.equal(ranker.explicitSizePass(company('boundary','Boundary Product',1000), simple), true);
-  assert.equal(ranker.explicitSizePass(company('too-large','Large Product',1001), simple), false);
+  assert.deepEqual(
+    {
+      min:simple.employeeRange.min,
+      max:simple.employeeRange.max,
+      preferredMin:simple.employeeRange.preferredMin,
+      preferredMax:simple.employeeRange.preferredMax,
+      hard:simple.employeeRange.hard,
+    },
+    { min:10, max:500, preferredMin:20, preferredMax:300, hard:false }
+  );
+  assert.equal(ranker.explicitSizePass(company('boundary','Boundary Product',1000), simple), true, 'implicit SMB preference must not hard-reject a larger otherwise-relevant company');
+  assert.equal(ranker.explicitSizePass(company('too-large','Large Product',1001), simple), true);
+  // Real-world discovery must broaden deterministically when a compound Apollo keyword search returns zero.
+  const variants = discovery.buildSearchVariants(simple);
+  assert.ok(variants.some((v) => v.keywords.length > 1), 'keep a precise compound search first');
+  assert.ok(variants.some((v) => v.keywords.length === 1 && v.keywords[0] === 'product'));
+  assert.ok(variants.some((v) => v.keywords.length === 1 && v.keywords[0] === 'technology'));
+  assert.ok(variants.some((v) => v.relaxSize === true), 'implicit SMB preference must have a bounded relaxed-size fallback');
+
+  const attemptedVariants = [];
+  const broadened = await discovery.discover(simple, {
+    maxSearchCalls: 5,
+    fetchPage: async (_mission, _page, _perPage, variant) => {
+      attemptedVariants.push(variant.id);
+      if (variant.id === 'combined-keywords') return { items: [] };
+      if (variant.id === 'keyword:product') {
+        return { items: Array.from({ length: 30 }, (_, i) => company(`product-${i}`, `Product Tech ${i}`, 40 + i, 'technology software product platform')) };
+      }
+      return { items: [] };
+    },
+  });
+  assert.equal(broadened.organizations.length, 25);
+  assert.deepEqual(attemptedVariants.slice(0, 2), ['combined-keywords', 'keyword:product']);
+  assert.equal(broadened.apolloCalls, 2);
+  assert.equal(broadened.searchVariantsTried, 2);
+  assert.equal(broadened.searchDiagnostics[0].rawReturned, 0);
+  assert.equal(broadened.searchDiagnostics[1].qualifiedAfterMerge >= 25, true);
+
   // Negated contact clauses do not steal discovery-only Sheet prompts from Apollo lead discovery.
   const detailedQuery = 'Find 25 technology product startup companies in India. Fill https://docs.google.com/spreadsheets/d/example/edit?gid=123 worksheet Arya-24 sept. Discovery only - do not find POCs, emails, or phone numbers.';
   assert.equal(intent.existingSheetEnrichment(detailedQuery), false); assert.equal(control.claim(detailedQuery).domain, 'apollo-lead');
@@ -75,5 +110,5 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   // Multiple size bands preserve the wider hard allowance and narrower preference.
   const ranged = intent.parseEmployeeRange('Prefer 0-300 employees and allow 0-500 employees.');
   assert.deepEqual({ min:ranged.min, max:ranged.max, preferredMin:ranged.preferredMin, preferredMax:ranged.preferredMax }, { min:0, max:500, preferredMin:0, preferredMax:300 });
-  console.log('Apollo Lead Intelligence self-test passed: company discovery and enrichment contracts, simple, detailed and Markdown-link input routing, hard 0-1,000 employee default, source ownership, SMB bias, reserve replacement, verified two-POC selection, contactability policy, safe projection and zero-reveal discovery validated.');
+  console.log('Apollo Lead Intelligence self-test passed: company discovery broadening, SMB preference with bounded size relaxation, simple/detailed/Markdown routing, source ownership, reserve replacement, verified two-POC selection, contactability policy, safe projection and zero-reveal discovery validated.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
