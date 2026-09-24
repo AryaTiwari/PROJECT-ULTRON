@@ -460,6 +460,19 @@ async function writeCells(id, changes) {
   return { updatedCells: Number(result.totalUpdatedCells || data.length), raw: result };
 }
 
+async function clearRows(id, sheetName, rowNumbers = [], lastColumnIndex = 0) {
+  const rows = [...new Set((rowNumbers || []).map(Number).filter((row) => Number.isInteger(row) && row > 1))]
+    .sort((a, b) => a - b);
+  if (!rows.length) return { clearedRows: 0 };
+  const lastColumn = columnName(Math.max(0, Number(lastColumnIndex) || 0));
+  const ranges = rows.map((rowNumber) => `${quoteSheet(sheetName)}!A${rowNumber}:${lastColumn}${rowNumber}`);
+  const result = await request(`${API}/${encodeURIComponent(id)}/values:batchClear`, {
+    method: 'POST',
+    body: JSON.stringify({ ranges }),
+  });
+  return { clearedRows: rows.length, rowNumbers: rows, ranges, raw: result };
+}
+
 async function batchValues(id, ranges, options = {}) {
   if (!ranges.length) return [];
   const query=new URLSearchParams({majorDimension:'ROWS',valueRenderOption:options.formulas===false?'UNFORMATTED_VALUE':'FORMULA'});
@@ -498,6 +511,7 @@ module.exports = {
   inspect,
   readSheet,
   writeCells,
+  clearRows,
   readCell,
   cellRange,
   isBlank,

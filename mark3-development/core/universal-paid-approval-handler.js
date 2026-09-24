@@ -89,6 +89,8 @@ async function execute(decision) {
       rowLimit: payload.rowLimit || undefined,
       schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
       expectedPersonGroups: payload.expectedPersonGroups || undefined,
+      requireIndianPhone: Boolean(payload.requireIndianPhone),
+      contactabilityCandidateLimit: payload.requireIndianPhone ? 2 : undefined,
       allowLinkedInEmployerFallback: true,
       // Give pending callbacks one immediate check, then let the durable watcher
       // settle remaining exact-owned cells without holding the chat response.

@@ -18,6 +18,9 @@ function build(result = {}) {
   `Rows processed: ${count('rowsProcessed')}. Rows changed: ${count('rowsChanged')}. Cells changed: ${count('cellsChanged')}.`,
   `Contacts verified: ${count('contactsVerified')}. Existing contacts repaired: ${count('existingContactsRepaired','existingGroupsRepaired')}. New POCs added: ${count('newContactsAdded','newPeopleSelected')}.`,
   `Phone cells filled: ${count('phoneCellsFilled')}. Email cells filled: ${count('emailCellsFilled')}. Phone lookups pending: ${pending.filter(p=>p.kind==='phone').length}. Email lookups pending: ${pending.filter(p=>p.kind==='email').length}.`,
+  result.indianPhoneGate?.enabled
+    ? `Indian-number gate: ${result.indianPhoneGate.acceptedRows?.length||0} companies accepted with +91 evidence; ${result.indianPhoneGate.rejectedRows?.length||0} rejected and ${result.indianPhoneGate.clearedRows||0} cleared; ${result.indianPhoneGate.pendingRows?.length||0} waiting for exact Apollo callbacks. POC scope 1-2; paid candidate budget 2.`
+    : '',
   poc.join(' '),
   `Provider calls: Apollo ${calls.apollo??0}; LinkedIn ${calls.linkedin??0}; public search ${calls.publicSearch??0}; AI ${calls.ai??result.modelCalls??0}; Google Sheets ${calls.googleSheets??0}.`,
   s.haltError?errors.format(s.haltError):'',

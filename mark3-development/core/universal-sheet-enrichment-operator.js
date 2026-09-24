@@ -37,6 +37,23 @@ function integer(value, fallback, min = 1, max = 100000) {
 }
 function websiteDomain(value) { return ranker.hostname(value); }
 
+function phoneForPolicy(value, options = {}, countryHint = '') {
+  return options.requireIndianPhone === true
+    ? apollo.indianPhone(value, countryHint)
+    : apollo.validPhone(value);
+}
+
+function candidateIndiaPriority(candidate = {}) {
+  const values = [
+    candidate.country, candidate.countryName, candidate.country_name,
+    candidate.location, candidate.city, candidate.state,
+    candidate.organization?.country, candidate.organization?.countryName,
+  ].map(text).filter(Boolean).join(' ');
+  if (/\b(?:india|ind)\b/i.test(values)) return 2;
+  if (/\b(?:mumbai|delhi|bengaluru|bangalore|hyderabad|pune|chennai|kolkata|gurugram|gurgaon|noida|ahmedabad|kochi|jaipur|indore)\b/i.test(values)) return 1;
+  return 0;
+}
+
 const PHONE_ASSIGNMENTS_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'pending-phone-assignments.json');
 const backgroundPhoneAssignments = new Map();
 let backgroundPhoneWatcher = null;
@@ -304,7 +321,11 @@ async function resolvePersonAnchor(plan, row, options = {}) {
   const completeContacts = options.completeContacts !== false;
   const contactEvidence = options.contactEvidence || {};
   const needEmail = completeContacts && Boolean(group.fields.email && !values.email && !text(contactEvidence.email));
-  const needPhone = completeContacts && Boolean(group.fields.phone && !values.phone && !text(contactEvidence.phone));
+  const needPhone = completeContacts && Boolean(
+    group.fields.phone
+    && !phoneForPolicy(values.phone, options)
+    && !phoneForPolicy(contactEvidence.phone, options)
+  );
   const normalizedLinkedin = apollo.normalizeLinkedIn(values.linkedin || '');
   let profile = null;
   let company = '';
@@ -354,8 +375,8 @@ async function resolvePersonAnchor(plan, row, options = {}) {
         name: values.name || profile?.name || '',
         linkedinUrl: normalizedLinkedin || profile?.linkedinUrl || '',
         email: text(profile?.email) || text(contactEvidence.email),
-        phone: text(profile?.phone) || text(contactEvidence.phone),
-        phoneStatus: text(profile?.phone) || text(contactEvidence.phone) ? 'found' : profile?.phoneStatus,
+        phone: phoneForPolicy(profile?.phone, options) || phoneForPolicy(contactEvidence.phone, options) || '',
+        phoneStatus: phoneForPolicy(profile?.phone, options) || phoneForPolicy(contactEvidence.phone, options) ? 'found' : profile?.phoneStatus,
         identityVerified: true,
         apolloPersonId: text(profile?.apolloPersonId || profile?.id),
       }
@@ -368,8 +389,8 @@ async function resolvePersonAnchor(plan, row, options = {}) {
       ? {
           ...profile,
           email: text(profile.email) || text(contactEvidence.email),
-          phone: text(profile.phone) || text(contactEvidence.phone),
-          phoneStatus: text(profile.phone) || text(contactEvidence.phone) ? 'found' : profile.phoneStatus,
+          phone: phoneForPolicy(profile.phone, options) || phoneForPolicy(contactEvidence.phone, options) || '',
+          phoneStatus: phoneForPolicy(profile.phone, options) || phoneForPolicy(contactEvidence.phone, options) ? 'found' : profile.phoneStatus,
           linkedinUrl: normalizedLinkedin || profile.linkedinUrl || '',
           identityVerified: true,
         }
@@ -386,8 +407,8 @@ async function resolvePersonAnchor(plan, row, options = {}) {
       ? {
           ...profile,
           email: text(profile.email) || text(contactEvidence.email),
-          phone: text(profile.phone) || text(contactEvidence.phone),
-          phoneStatus: text(profile.phone) || text(contactEvidence.phone) ? 'found' : profile.phoneStatus,
+          phone: phoneForPolicy(profile.phone, options) || phoneForPolicy(contactEvidence.phone, options) || '',
+          phoneStatus: phoneForPolicy(profile.phone, options) || phoneForPolicy(contactEvidence.phone, options) ? 'found' : profile.phoneStatus,
           linkedinUrl: normalizedLinkedin || profile.linkedinUrl || '',
           identityVerified: profile?.ambiguous !== true && profile?.noMatch !== true && profile?.identityVerified !== false,
         }
@@ -612,6 +633,14 @@ function apolloPhonePollRateLimited(error) {
 
 function backgroundPhoneKey(source, item) {
   return `${source.spreadsheetId}|${source.sheetName}|${item.rowNumber}|${item.columnIndex}`;
+}
+
+function pendingPhoneRowsForSource(spreadsheetId, sheetName) {
+  loadBackgroundPhoneAssignments();
+  return new Set([...backgroundPhoneAssignments.values()]
+    .filter((item) => item.spreadsheetId === spreadsheetId && item.sheetName === sheetName)
+    .map((item) => Number(item.rowNumber))
+    .filter(Number.isInteger));
 }
 
 function registerBackgroundPhoneAssignments(source, items = []) {
@@ -1168,7 +1197,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     if (!snapshot.hasIdentity) continue;
 
     const needEmail = Boolean(group.fields.email && !apollo.validEmail(snapshot.values.email || ''));
-    const needPhone = Boolean(group.fields.phone && !apollo.validPhone(snapshot.values.phone || ''));
+    const needPhone = Boolean(group.fields.phone && !phoneForPolicy(snapshot.values.phone || '', options));
     const verificationContext = existingPersonVerificationContext(item, companyContext);
     let resolved = null;
     let verificationPath = '';
@@ -1226,11 +1255,15 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       }
     }
 
-    // Contactability now outranks identity preservation for non-anchor POC slots.
-    // If the existing person still has no actual usable phone, replace the WHOLE
-    // POC group with a different verified same-company person from the shared
-    // top-3 shortlist. +91/email policy is inherited from contactabilityTier().
-    if (needPhone && !apollo.validPhone(resolved?.phone || '')) {
+    if (resolved && options.requireIndianPhone === true) {
+      const indian = phoneForPolicy(resolved.phone || '', options);
+      resolved = { ...resolved, phone: indian || null, phoneStatus: indian ? 'found' : resolved.phoneStatus };
+    }
+
+    // Contactability outranks identity preservation for non-anchor POC slots.
+    // If the existing person still has no Indian number, replace the whole POC
+    // group using the same bounded two-person decision-maker shortlist.
+    if (needPhone && !phoneForPolicy(resolved?.phone || '', options)) {
       const replacement = await selectContactableReplacement(item, plan, companyContext, stats, {
         ...options,
         row,
@@ -1328,8 +1361,11 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
 
 async function enrichAnchorGroup(row, plan, companyContext, stats, options = {}) {
   if (plan.anchor?.type !== 'person' || !companyContext.anchorPerson) return [];
-  queuePendingPhone(options, Number(options.rowNumber), plan.anchor.group, plan.anchor.snapshot, companyContext.anchorPerson);
-  const writePlan = planner.safeWritesForGroup(row, plan.anchor.group, companyContext.anchorPerson);
+  const anchorPerson = options.requireIndianPhone === true
+    ? { ...companyContext.anchorPerson, phone: phoneForPolicy(companyContext.anchorPerson.phone, options) || null }
+    : companyContext.anchorPerson;
+  queuePendingPhone(options, Number(options.rowNumber), plan.anchor.group, plan.anchor.snapshot, anchorPerson);
+  const writePlan = planner.safeWritesForGroup(row, plan.anchor.group, anchorPerson);
   if (!writePlan.allowed) { stats.identityConflicts++; return []; }
   stats.anchorFieldsFilled += writePlan.writes.length;
   stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
@@ -2298,10 +2334,12 @@ function pragmaticSameEmployerCandidates(candidates = [], companyContext = {}, e
         priority: priority < 99 ? priority : 50,
         score: Number(scored?.score || 0),
         phonePreference: Number(apollo.phoneAvailabilityPriority(candidate) || 0),
+        indiaPriority: candidateIndiaPriority(candidate),
       };
     })
     .sort((a, b) =>
       a.priority - b.priority
+      || b.indiaPriority - a.indiaPriority
       || b.phonePreference - a.phonePreference
       || b.score - a.score
       || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || ''))
@@ -2365,11 +2403,13 @@ function manualPriorityCandidates(candidates = [], companyContext = {}, existing
       priority,
       score: Number(scored?.score || 0),
       phonePreference: Number(apollo.phoneAvailabilityPriority(candidate) || 0),
+      indiaPriority: candidateIndiaPriority(candidate),
     });
   }
   return rows
     .sort((a, b) =>
       a.priority - b.priority
+      || b.indiaPriority - a.indiaPriority
       || b.phonePreference - a.phonePreference
       || b.score - a.score
       || String(a.candidate?.name || '').localeCompare(String(b.candidate?.name || ''))
@@ -2380,7 +2420,7 @@ function manualPriorityCandidates(candidates = [], companyContext = {}, existing
 async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
   if (!person?.identityVerified) return person;
 
-  const immediate = apollo.validPhone(person.phone || '');
+  const immediate = phoneForPolicy(person.phone || '', options);
   if (immediate) return { ...person, phone: immediate, phoneStatus: 'found' };
 
   const apolloPersonId = text(person.apolloPersonId || person.id);
@@ -2404,7 +2444,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
   }
 
   const recordResolved = (phone) => {
-    const valid = apollo.validPhone(phone || '');
+    const valid = phoneForPolicy(phone || '', options);
     if (!valid) return null;
     stats.candidatePhoneSettlementFound = Number(stats.candidatePhoneSettlementFound || 0) + 1;
     if (apolloPersonId) {
@@ -2426,7 +2466,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       const hit = (Array.isArray(results) ? results : []).find((item) =>
         text(item?.apollo_person_id || item?.apolloPersonId || item?.person_id) === apolloPersonId
       );
-      return apollo.validPhone(hit?.phone || '');
+      return phoneForPolicy(hit?.phone || '', options);
     } catch {
       return null;
     }
@@ -2456,7 +2496,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       quality.recordPhoneWaterfallOutcome?.({ apolloPersonId }, outcome);
     }
 
-    const directPhone = apollo.validPhone(outcome?.phone || '');
+    const directPhone = phoneForPolicy(outcome?.phone || '', options);
     if (directPhone) return recordResolved(directPhone);
 
     // One final callback-store read catches reveals delivered during direct polling.
@@ -2503,14 +2543,12 @@ function markContactabilityExhausted(stats, rowNumber, ordinal, company = '', de
 }
 
 
-function contactabilityTier(person = {}) {
-  const phone = apollo.validPhone(person?.phone || '');
-  if (!phone) return 0;
+function contactabilityTier(person = {}, options = {}) {
+  const valid = apollo.validPhone(person?.phone || '');
+  if (!valid) return 0;
+  const indian = Boolean(apollo.indianPhone(valid));
+  if (options.requireIndianPhone === true && !indian) return 0;
 
-  // Indian phone is the strongest contact requirement. Email then decides
-  // quality inside the same phone-country tier. Foreign phones are accepted
-  // only when the bounded preferred shortlist yields no +91 result.
-  const indian = Boolean(apollo.indianPhone(phone));
   const email = Boolean(apollo.validEmail(person?.email || ''));
   if (indian && email) return 4;
   if (indian) return 3;
@@ -2536,21 +2574,21 @@ function preferredContactShortlist(candidates = [], plan = {}, companyContext = 
   const pragmaticPool = pragmaticSameEmployerCandidates(candidates, companyContext, existing);
   const pool = mergeCandidatePools(priorityPool, fallbackRanking, pragmaticPool);
 
-  // Hard budget: contactability is evaluated for no more than three preferred
-  // people for a company. This shortlist is shared across POC-1/POC-2/POC-3.
-  const requested = Number(options.contactabilityCandidateLimit ?? 3);
-  const limit = Number.isFinite(requested) ? Math.max(1, Math.min(3, Math.floor(requested))) : 3;
+  // Hard budget: reveal/contactability checks are limited to the two strongest
+  // hiring decision-makers and shared across POC-1 and POC-2.
+  const requested = Number(options.contactabilityCandidateLimit ?? 2);
+  const limit = Number.isFinite(requested) ? Math.max(1, Math.min(2, Math.floor(requested))) : 2;
   return pool.slice(0, limit);
 }
 
 
-function chooseContactabilityCandidate(entries = []) {
+function chooseContactabilityCandidate(entries = [], options = {}) {
   const normalized = (Array.isArray(entries) ? entries : []).map((entry, index) => ({
     ...entry,
     index: Number.isInteger(entry?.index) ? entry.index : index,
     tier: Number.isFinite(Number(entry?.tier))
       ? Number(entry.tier)
-      : contactabilityTier(entry?.person || entry),
+      : contactabilityTier(entry?.person || entry, options),
   }));
   const qualified = normalized
     .filter((entry) => entry.tier > 0)
@@ -2561,7 +2599,7 @@ function chooseContactabilityCandidate(entries = []) {
 
 async function selectContactableReplacement(item, plan, companyContext, stats, options = {}) {
   if (!item?.snapshot?.hasIdentity || item.isAnchor) return null;
-  if (apollo.validPhone(item.snapshot?.values?.phone || '')) return null;
+  if (phoneForPolicy(item.snapshot?.values?.phone || '', options)) return null;
 
   const existing = options.existingIdentities || existingIdentityKeys(plan);
   const claimed = options.claimed instanceof Set ? options.claimed : new Set();
@@ -2572,7 +2610,7 @@ async function selectContactableReplacement(item, plan, companyContext, stats, o
         plan,
         companyContext,
         existing,
-        { ...options, contactabilityCandidateLimit: 3 },
+        { ...options, contactabilityCandidateLimit: 2 },
       );
 
   // The existing no-phone POC was already checked as the first contact attempt.
@@ -2629,7 +2667,7 @@ async function selectContactableReplacement(item, plan, companyContext, stats, o
       continue;
     }
 
-    const tier = contactabilityTier(person);
+    const tier = contactabilityTier(person, options);
     if (tier <= 0) continue;
 
     const writePlan = planner.replacementWritesForGroup(
@@ -2644,7 +2682,7 @@ async function selectContactableReplacement(item, plan, companyContext, stats, o
     if (tier === 4) break;
   }
 
-  const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
+  const selected = checked.length ? chooseContactabilityCandidate(checked, options) : null;
   if (!selected || selected.tier <= 0) return null;
   return selected;
 }
@@ -2725,7 +2763,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       person,
       writePlan,
       index: attempt,
-      tier: contactabilityTier(person),
+      tier: contactabilityTier(person, options),
     };
     if (entry.tier > 0) checked.push(entry);
 
@@ -2737,7 +2775,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   // Empty POC slots are STRICTLY contactable-only. If none of the bounded
   // preferred candidates yields an actual usable phone, leave the slot empty.
   // Never write a verified-but-uncontactable identity merely to fill the sheet.
-  const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
+  const selected = checked.length ? chooseContactabilityCandidate(checked, options) : null;
 
   if (!selected || selected.tier <= 0) {
     stats.emptyPocNoPhoneRejected = Number(stats.emptyPocNoPhoneRejected || 0) + 1;
@@ -2769,8 +2807,8 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   if (hydratedName) existing.names.add(hydratedName);
   if (hydratedLinkedin) existing.linkedins.add(hydratedLinkedin);
 
-  const phone = apollo.validPhone(person.phone || '');
-  const indianPhone = phone ? apollo.indianPhone(phone) : null;
+  const phone = phoneForPolicy(person.phone || '', options);
+  const indianPhone = phone;
   const email = apollo.validEmail(person.email || '');
 
   stats.newPeopleSelected++;
@@ -3282,7 +3320,7 @@ async function run(request = {}, options = {}) {
   const stats = freshStats();
   const internalRecheck = Boolean(options.recheckPass);
   const phaseOrdinal = Number(options.contactPhaseOrdinal || 0) || null;
-  const phaseOrdinals = phaseOrdinal ? [phaseOrdinal] : null;
+  const phaseOrdinals = phaseOrdinal ? [phaseOrdinal] : (options.requireIndianPhone ? [1, 2] : null);
   stats.contactPhaseOrdinal = phaseOrdinal;
   stats.contactPhaseLabel = phaseOrdinal ? `POC-${phaseOrdinal}` : 'ALL';
   const requestedPersonGroups = Number(options.expectedPersonGroups || options.schema?.expectedPersonGroups || 0);
@@ -3394,7 +3432,7 @@ async function run(request = {}, options = {}) {
       const writes = [];
       const openPersonTargets = candidateFillTargets(plan).filter((target) =>
         !target.isAnchor
-        && (!phaseOrdinal || Number(target.group?.ordinal || 0) === phaseOrdinal)
+        && (!phaseOrdinals || phaseOrdinals.includes(Number(target.group?.ordinal || 0)))
       );
       const aiFallbackEnabled = Boolean(options.deferOpenGroupSelectionToAi);
 
@@ -3482,12 +3520,13 @@ async function run(request = {}, options = {}) {
       }
 
       const rowExistingIdentities = existingIdentityKeys(plan);
+      const companyContactBudget = plan.anchor?.type === 'person' ? 1 : 2;
       const contactabilityShortlist = preferredContactShortlist(
         people,
         plan,
         companyContext,
         rowExistingIdentities,
-        { fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26, contactabilityCandidateLimit: 3 },
+        { fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26, contactabilityCandidateLimit: companyContactBudget },
       );
       const rowOptions = {
         ...runOptions,
@@ -3496,7 +3535,7 @@ async function run(request = {}, options = {}) {
         candidatePool: people,
         existingIdentities: rowExistingIdentities,
         contactabilityShortlist,
-        contactabilityCandidateLimit: 3,
+        contactabilityCandidateLimit: companyContactBudget,
       };
       const manualClaimed = new Set();
 
@@ -3805,6 +3844,9 @@ module.exports = {
   startBackgroundPhoneWatcher,
   loadBackgroundPhoneAssignments,
   persistBackgroundPhoneAssignments,
+  pendingPhoneRowsForSource,
+  phoneForPolicy,
+  candidateIndiaPriority,
   backgroundPhoneStatus,
   syncPendingPhoneAssignments,
   repairExistingGroups,

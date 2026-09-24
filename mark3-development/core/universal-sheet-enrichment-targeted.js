@@ -14,6 +14,7 @@ const aiBatchRescue = require('./universal-ai-batch-rescue');
 const engine = require('./universal-enrichment-engine');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 const diagnostics = require('./universal-enrichment-diagnostics');
+const apollo = require('./apollo-enrichment');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 
@@ -330,6 +331,80 @@ function mergePrimaryAndFallback(primary, fb) {
 }
 
 
+async function enforceIndianPhoneCompanyGate(request, options = {}, result = {}) {
+  if (!options.requireIndianPhone || options.dryRun) {
+    return { enabled: false, acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
+  }
+  if (result?.stats?.haltedEarly || result?.postPrimaryError) {
+    return { enabled: true, skippedReason: 'provider-or-system-halt', acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
+  }
+
+  const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
+    ...options,
+    sheetName: request.sheetName || options.sheetName,
+  });
+  const analysis = engine.analyzeSheet(source.rows, {
+    rowLimit: options.rowLimit,
+    schema: { ...(options.schema || {}), expectedPersonGroups: options.expectedPersonGroups || 2 },
+  });
+  const pendingRows = base.pendingPhoneRowsForSource(source.spreadsheetId, source.sheetName);
+  const failedRows = new Set((result?.stats?.rowFailureAudit || [])
+    .map((item) => Number(item?.rowNumber))
+    .filter(Number.isInteger));
+  const targetRows = Array.isArray(options.targetRows)
+    ? new Set(options.targetRows.map(Number).filter(Number.isInteger))
+    : null;
+  const accepted = [];
+  const rejected = [];
+  const pending = [];
+  const skipped = [];
+
+  for (const record of analysis.rowPlans || []) {
+    const rowNumber = Number(record?.rowNumber);
+    if (!Number.isInteger(rowNumber) || (targetRows && !targetRows.has(rowNumber))) continue;
+    const phoneGroups = (source.schema.personGroups || [])
+      .filter((group) => Number(group?.ordinal || 1) <= 2 && group?.fields?.phone);
+    if (!phoneGroups.length || !record?.plan?.anchor) {
+      skipped.push(rowNumber);
+      continue;
+    }
+    const hasIndian = phoneGroups.some((group) =>
+      Boolean(apollo.indianPhone(record.row?.[group.fields.phone.index] || ''))
+    );
+    if (hasIndian) {
+      accepted.push(rowNumber);
+      continue;
+    }
+    if (pendingRows.has(rowNumber)) {
+      pending.push(rowNumber);
+      continue;
+    }
+    if (failedRows.has(rowNumber)) {
+      skipped.push(rowNumber);
+      continue;
+    }
+    rejected.push(rowNumber);
+  }
+
+  let clearedRows = 0;
+  if (rejected.length) {
+    const lastColumnIndex = Math.max(0, ...(source.schema.columns || []).map((column) => Number(column.index) || 0));
+    const cleared = await sheets.clearRows(source.spreadsheetId, source.sheetName, rejected, lastColumnIndex);
+    clearedRows = Number(cleared?.clearedRows || 0);
+  }
+  return {
+    enabled: true,
+    requiredCountryCode: '+91',
+    pocOrdinals: [1, 2],
+    candidateLimit: 2,
+    acceptedRows: accepted,
+    rejectedRows: rejected,
+    pendingRows: pending,
+    skippedRows: skipped,
+    clearedRows,
+  };
+}
+
 function providerRetryReasonsFromPrimary(stats = {}) {
   const unresolvedRows = new Set(
     (stats.deferredPoc2Rows || []).map((value) => Number(value)).filter(Number.isInteger)
@@ -565,6 +640,26 @@ async function runInternal(request = {}, options = {}) {
           modelCalls: 0,
           fallback: fallback.snapshot(),
         };
+      } else if (runOptions.requireIndianPhone) {
+        aiRescue = {
+          enabled: aiBatchRescue.enabled(),
+          attempted: false,
+          skippedReason: 'indian-phone-two-candidate-budget',
+          modelCalls: 0,
+          modelAttempts: 0,
+          rowsOfferedForSelection: 0,
+          unresolvedRows: [],
+          unresolvedReasons: [],
+        };
+        fb = {
+          enabled: fallback.enabled(),
+          attempted: false,
+          skippedReason: 'indian-phone-two-candidate-budget',
+          modelCalls: 0,
+          unresolvedRows: [],
+          unresolvedReasons: [],
+          fallback: fallback.snapshot(),
+        };
       } else if (phasedExecution) {
         aiRescue = {
           enabled: aiBatchRescue.enabled(),
@@ -717,6 +812,32 @@ async function runInternal(request = {}, options = {}) {
       };
     }
 
+    let indianPhoneGate = null;
+    try {
+      indianPhoneGate = await enforceIndianPhoneCompanyGate(exact.request, runOptions, result);
+      if (indianPhoneGate.enabled) {
+        Object.assign(primaryStats, {
+          requireIndianPhone: true,
+          indianPhoneAcceptedCompanies: indianPhoneGate.acceptedRows.length,
+          indianPhoneRejectedCompanies: indianPhoneGate.rejectedRows.length,
+          indianPhonePendingCompanies: indianPhoneGate.pendingRows.length,
+          indianPhoneRowsCleared: indianPhoneGate.clearedRows,
+        });
+        result = { ...result, stats: { ...(result.stats || {}), ...primaryStats } };
+      }
+    } catch (error) {
+      const typed = typedErrors.normalize(error, { stage: 'indian-phone-company-gate' });
+      postPrimaryError = postPrimaryError || {
+        code: typed.code,
+        subsystem: typed.subsystem,
+        type: typed.type,
+        stage: typed.stage,
+        message: typed.message,
+        hint: typed.hint,
+      };
+      indianPhoneGate = { enabled: true, error: postPrimaryError, acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
+    }
+
     let completionGate = null;
     try {
       const terminalReasons = [
@@ -765,6 +886,7 @@ async function runInternal(request = {}, options = {}) {
       aiBatchRescue: aiRescue,
       bigPickleFallback: fb,
       completionGate,
+      indianPhoneGate,
       diagnostics: diagnostics.uniqueIssues([
         ...(completionGate?.issues || []),
         ...diagnostics.classifyLeftovers(primaryStats?.leftoverQueue || []).issues,
@@ -974,6 +1096,7 @@ module.exports = {
   syntheticResolution,
   withExactTargetGuards,
   mandatoryCompletionAudit,
+  enforceIndianPhoneCompanyGate,
   mergePrimaryAndFallback,
   providerRetryReasonsFromPrimary,
   mergePocPhaseResults,
