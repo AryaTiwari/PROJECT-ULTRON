@@ -356,6 +356,7 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
   const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
     ...options,
     sheetName: request.sheetName || options.sheetName,
+    sheetId: request.sheetId ?? options.sheetId ?? null,
   });
   const analysis = engine.analyzeSheet(source.rows, {
     rowLimit: options.rowLimit,
