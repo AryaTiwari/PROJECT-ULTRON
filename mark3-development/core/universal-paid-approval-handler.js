@@ -53,7 +53,7 @@ async function canonicalApprovedTarget(payload = {}) {
     }))
     .filter((tab) => tab.name && Number.isFinite(tab.sheetId));
 
-  const requestedSheetId = Number.isFinite(Number(payload.sheetId)) ? Number(payload.sheetId) : null;
+  const requestedSheetId = payload.sheetId !== null && payload.sheetId !== undefined && String(payload.sheetId).trim() !== '' && Number.isFinite(Number(payload.sheetId)) ? Number(payload.sheetId) : null;
   if (requestedSheetId != null) {
     const byId = tabs.find((tab) => tab.sheetId === requestedSheetId);
     if (byId) return { sheetName: byId.name, sheetId: byId.sheetId, matchedBy: 'sheetId' };
