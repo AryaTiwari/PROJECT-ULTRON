@@ -8,7 +8,7 @@ function linkedin(o = {}) { return text(o.linkedin_url || o.linkedin || o.linked
 function website(o = {}) { return text(o.website_url || o.website || o.primary_domain || o.domain); }
 function name(o = {}) { return text(o.name || o.organization_name); }
 function locationText(o = {}) { return [o.city, o.state, o.country, o.raw_address, o.location].map(text).filter(Boolean).join(' '); }
-function evidenceText(o = {}) { return [name(o), o.short_description, o.description, o.industry, ...(o.keywords || []), ...(o.technology_names || [])].map(text).filter(Boolean).join(' '); }
+function evidenceText(o = {}) { return [name(o), o.short_description, o.description, o.industry, ...(o.keywords || []), ...(o.technology_names || []), ...(o.__apolloQueryEvidence || [])].map(text).filter(Boolean).join(' '); }
 
 function scoreOrganization(o, mission = {}) {
   const evidence = words(evidenceText(o));
@@ -23,8 +23,8 @@ function scoreOrganization(o, mission = {}) {
   else if (count != null && count >= 10 && count <= 500) score += 14;
   else if (count != null && count > 5000) score -= 35;
   else if (count != null && count > 1000) score -= 20;
-  if (/\b(product|platform|saas|software|startup|technology)\b/i.test(evidenceText(o))) score += 10;
-  if (/\b(staffing|recruitment agency|training institute)\b/i.test(evidenceText(o)) && !/\b(staffing|recruit)/i.test(mission.query || '')) score -= 25;
+  if (/\b(product|platform|saas|software|startup|technology|cloud|subscription)\b/i.test(evidenceText(o))) score += 10;
+  if (/\b(staffing|recruitment agency|training institute|outsourcing[- ]only|consulting[- ]only|body shopping|digital marketing agency|web development agency|service provider)\b/i.test(evidenceText(o)) && !/\b(staffing|recruit|consult|service provider)/i.test(mission.query || '')) score -= 30;
   if (linkedin(o)) score += 4;
   if (domain(website(o))) score += 4;
   return score;
@@ -34,7 +34,7 @@ function organizationKey(o = {}) { return text(o.id || o.organization_id) || dom
 function normalizeOrganization(o, mission = {}) {
   return { raw: o, id: text(o.id || o.organization_id), name: name(o), domain: domain(website(o)), website: website(o), linkedinUrl: linkedin(o), companyLink: linkedin(o) || website(o), employees: employeeCount(o), industry: text(o.industry), location: locationText(o), description: text(o.short_description || o.description), score: scoreOrganization(o, mission), key: organizationKey(o) };
 }
-function explicitSizePass(o, mission = {}) { const r = mission.employeeRange || {}; if (!r.explicit && !r.hard) return true; const n = employeeCount(o); return n != null && (r.min == null || n >= r.min) && (r.max == null || n <= r.max); }
+function explicitSizePass(o, mission = {}) { const r = mission.employeeRange || {}; if (!r.explicit && !r.hard) return true; const n = employeeCount(o); if (n == null) return Boolean(o.__apolloEmployeeRangeVerified); return (r.min == null || n >= r.min) && (r.max == null || n <= r.max); }
 function relevancePass(o, mission = {}) { const normalized = o.raw ? o : normalizeOrganization(o, mission); const evidence = words(evidenceText(normalized.raw || o)); const wanted = (mission.expandedKeywords || mission.keywords || []).flatMap((keyword) => [...words(keyword)]); const keywordMatch = !wanted.length || wanted.some((word) => evidence.has(word)); return normalized.name && normalized.companyLink && keywordMatch && normalized.score >= (mission.keywords?.length ? 20 : 5); }
 function rankOrganizations(items = [], mission = {}) {
   const seen = new Set();

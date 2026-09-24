@@ -15,6 +15,7 @@ const engine = require('./universal-enrichment-engine');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 const diagnostics = require('./universal-enrichment-diagnostics');
 const apollo = require('./apollo-enrichment');
+const companyOwnership = require('./company-ownership-guard');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 function exactSheetTitle(value) { return value == null ? '' : String(value); }
@@ -374,7 +375,8 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     ? new Set(options.targetRows.map(Number).filter(Number.isInteger))
     : null;
   const accepted = [];
-  const rejected = [];
+  const foreignFallback = [];
+  const unresolved = [];
   const pending = [];
   const skipped = [];
 
@@ -394,15 +396,23 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
       accepted.push(rowNumber);
       continue;
     }
+    const hasForeign = phoneGroups.some((group) => {
+      const phone = record.row?.[group.fields.phone.index] || '';
+      return apollo.validPhone(phone) && !apollo.indianPhone(phone);
+    });
     if (pendingRows.has(rowNumber)) {
       pending.push(rowNumber);
+      continue;
+    }
+    if (hasForeign) {
+      foreignFallback.push(rowNumber);
       continue;
     }
     if (failedRows.has(rowNumber)) {
       skipped.push(rowNumber);
       continue;
     }
-    rejected.push(rowNumber);
+    unresolved.push(rowNumber);
   }
 
   // Contactability is allowed to reject a POC candidate, never the company row.
@@ -410,16 +420,18 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
   // enrichment. Missing +91 evidence leaves the POC unresolved for this run.
   return {
     enabled: true,
-    requiredCountryCode: '+91',
+    preferredCountryCode: '+91',
     pocOrdinals: [1, 2],
-    candidateLimit: 3,
+    candidateLimit: 4,
     acceptedRows: accepted,
-    rejectedRows: rejected,
-    contactUnresolvedRows: [...rejected],
+    foreignFallbackRows: foreignFallback,
+    unresolvedRows: unresolved,
+    rejectedRows: [],
+    contactUnresolvedRows: [...unresolved],
     pendingRows: pending,
     skippedRows: skipped,
     clearedRows: 0,
-    preservedCompanyRows: [...rejected],
+    preservedCompanyRows: [...foreignFallback, ...unresolved],
     companyRowDeletionAllowed: false,
     nonDestructive: true,
   };
@@ -631,6 +643,7 @@ async function runInternal(request = {}, options = {}) {
     resultsFirstSweep: options.resultsFirstSweep !== false,
   };
   return withExactTargetGuards(exact.request, async () => {
+    const companyOwnershipBefore = await companyOwnership.capture(base.readUniversalSheet, exact.request, runOptions);
     // From this point onward, a successful deterministic primary is authoritative.
     // Optional fallback/decorating failures must never invalidate verified writes
     // that base.run() already committed to the worksheet.
@@ -842,6 +855,11 @@ async function runInternal(request = {}, options = {}) {
       indianPhoneGate = { enabled: true, error: postPrimaryError, acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
     }
 
+    const companyOwnershipAfter = await companyOwnership.capture(base.readUniversalSheet, exact.request, runOptions);
+    const companyOwnershipAudit = companyOwnership.verify(companyOwnershipBefore, companyOwnershipAfter);
+    Object.assign(primaryStats, companyOwnershipAudit);
+    result = { ...result, stats: { ...(result.stats || {}), ...primaryStats } };
+
     let completionGate = null;
     try {
       const terminalReasons = [
@@ -891,6 +909,7 @@ async function runInternal(request = {}, options = {}) {
       bigPickleFallback: fb,
       completionGate,
       indianPhoneGate,
+      companyOwnershipAudit,
       diagnostics: diagnostics.uniqueIssues([
         ...(completionGate?.issues || []),
         ...diagnostics.classifyLeftovers(primaryStats?.leftoverQueue || []).issues,

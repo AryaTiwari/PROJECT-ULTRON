@@ -58,8 +58,9 @@ const sheets = require('../core/google-sheets-operator');
     );
 
     assert.deepEqual(gate.acceptedRows, [2]);
-    assert.deepEqual(gate.rejectedRows, [3]);
-    assert.deepEqual(gate.contactUnresolvedRows, [3]);
+    assert.deepEqual(gate.foreignFallbackRows, [3]);
+    assert.deepEqual(gate.rejectedRows, []);
+    assert.deepEqual(gate.contactUnresolvedRows, []);
     assert.deepEqual(gate.preservedCompanyRows, [3]);
     assert.equal(gate.clearedRows, 0);
     assert.equal(gate.companyRowDeletionAllowed, false);
@@ -78,7 +79,7 @@ const sheets = require('../core/google-sheets-operator');
     assert.doesNotMatch(reportSource, /rejected and .* cleared/);
     assert.match(controllerSource, /existing company row is always preserved/);
 
-    console.log('Non-destructive enrichment self-test passed: Indian-number/contactability failures preserve existing company rows, never call clearRows, and are reported as unresolved contact data only.');
+    console.log('Non-destructive enrichment self-test passed: Indian-number/contactability failures preserve existing company rows, never call clearRows, and use verified foreign fallback when available, and report no-phone contacts as unresolved only.');
   } finally {
     base.readUniversalSheet = originals.readUniversalSheet;
     base.pendingPhoneRowsForSource = originals.pendingPhoneRowsForSource;

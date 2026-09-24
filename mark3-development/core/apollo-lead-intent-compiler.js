@@ -43,6 +43,8 @@ function parseEmployeeRange(input) {
       hard: true,
     };
   }
+  const plus = value.match(/\b(\d[\d,]*)\s*\+\s*employees?\b/i);
+  if (plus) return { min: Number(plus[1].replace(/,/g, '')), max: null, preferredMin: Number(plus[1].replace(/,/g, '')), preferredMax: 500, explicit: true, hard: true };
   const under = value.match(/\b(?:under|below|fewer\s+than|less\s+than|up\s+to|max(?:imum)?)\s+(\d[\d,]*)\s+employees?\b/i);
   if (under) return { min: 0, max: Number(under[1].replace(/,/g, '')), explicit: true, hard: true };
   const over = value.match(/\b(?:over|above|more\s+than|at\s+least|min(?:imum)?)\s+(\d[\d,]*)\s+employees?\b/i);

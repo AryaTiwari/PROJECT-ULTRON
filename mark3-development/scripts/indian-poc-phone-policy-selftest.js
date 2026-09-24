@@ -27,7 +27,7 @@ const automaticSummary = controller.approvalSummary({
   schema: { personGroups: [{}, {}], companyGroups: [], headerRowNumber: 1 },
   analysis: { stats: { openPersonSlots: 2, partialPersonSlots: 0 } },
 }, { requireIndianPhone: true, indianPhonePolicySource: 'automatic-poc1-poc2-default' });
-assert.match(automaticSummary, /Indian-number contact gate \(automatic POC-1\/POC-2 default\)/);
+assert.match(automaticSummary, /Indian-number preference \(automatic POC-1\/POC-2 default\)/);
 assert.match(automaticSummary, /existing company row is always preserved/);
 
 assert.equal(operator.contactabilityTier({ phone: '+1 415 555 0123', email: 'hr@example.com' }), 2);

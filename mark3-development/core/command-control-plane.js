@@ -67,7 +67,7 @@ function claim(message, options = {}) {
       domain: 'apollo-lead', claimed: true, exclusive: true,
       controller: 'apollo-lead-domain-controller', generalModelAllowed: false,
       artifactAllowed: false, allowWebFallback: false, yieldTo: null,
-      controlCommand: true,
+      controlCommand: true, readOnlyStatus: true,
     });
   }
   if (linkedinIntent.isLeadDiscoveryRequest(text)) {

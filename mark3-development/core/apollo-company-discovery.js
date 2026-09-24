@@ -3,6 +3,7 @@
 const paid = require('./paid-tool-approval');
 const apollo = require('./apollo-enrichment');
 const ranker = require('./apollo-company-ranker');
+const queryProvider = require('./apollo-company-query-provider');
 
 const ENDPOINT = 'https://api.apollo.io/api/v1/mixed_companies/search';
 
@@ -27,44 +28,7 @@ function searchEmployeeRange(mission = {}, variant = {}) {
   };
 }
 
-function buildSearchVariants(mission = {}) {
-  const base = unique(mission.keywords || []).slice(0, 5);
-  const expanded = unique(mission.expandedKeywords || []).filter((k) => !base.includes(k));
-  const variants = [];
-  const seen = new Set();
-
-  const add = (id, keywords, relaxSize = false) => {
-    const clean = unique(keywords).slice(0, 4);
-    const key = `${relaxSize ? 'relaxed' : 'focused'}:${clean.join('|')}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    variants.push({ id, keywords: clean, relaxSize });
-  };
-
-  // Keep the original precise shape first. Some Apollo datasets respond well to
-  // compound tags, so do not throw away a working fast path.
-  if (base.length > 1) add('combined-keywords', base, false);
-
-  // Apollo keyword tags can be much narrower in practice than natural language.
-  // Search strong terms independently and merge/dedupe locally instead of
-  // interpreting one empty compound query as "no companies exist".
-  for (const keyword of base) add(`keyword:${keyword}`, [keyword], false);
-
-  // Semantic expansion is bounded. These are still Apollo-side discovery calls,
-  // not an unbounded keyword spray.
-  for (const keyword of expanded.slice(0, 2)) add(`expanded:${keyword}`, [keyword], false);
-
-  if (!variants.length) add('unfiltered-focused-size', [], false);
-
-  // If small/medium-focused searches cannot meet the requested target, relax only
-  // the implicit size preference while keeping the strongest query term.
-  if (!(mission.employeeRange?.explicit || mission.employeeRange?.hard)) {
-    add('relaxed-size-primary', base.length ? [base[0]] : [], true);
-    if (base.length > 1) add('relaxed-size-secondary', [base[1]], true);
-  }
-
-  return variants.slice(0, 7);
-}
+function buildSearchVariants(mission = {}) { return queryProvider.compile(mission); }
 
 async function fetchPage(mission, page = 1, perPage = 100, variant = {}) {
   paid.assertPermitted('apollo');
@@ -140,9 +104,18 @@ async function discover(mission, options = {}) {
       calls++;
 
       const items = result.items || result.organizations || [];
+      const employeeRange = searchEmployeeRange(mission, variant);
       for (const item of items) {
-        const key = ranker.organizationKey(item);
-        if (key && !rawByKey.has(key)) rawByKey.set(key, item);
+        const annotated = {
+          ...item,
+          __apolloQueryEvidence: [...(variant.keywords || [])],
+          __apolloEmployeeRangeVerified: Boolean(employeeRange),
+          __apolloEmployeeRange: employeeRange,
+          __apolloLocationFilter: mission.geography || '',
+          __apolloQueryVariant: variant.id || 'default',
+        };
+        const key = ranker.organizationKey(annotated);
+        if (key && !rawByKey.has(key)) rawByKey.set(key, annotated);
       }
 
       ranked = ranker.rankOrganizations([...rawByKey.values()], mission);
