@@ -18,13 +18,18 @@ const apollo = require('./apollo-enrichment');
 const companyOwnership = require('./company-ownership-guard');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
+function exactSheetTitle(value) { return value == null ? '' : String(value); }
 
 function syntheticResolution(request, sheetUrl) {
-  const name = text(request.sheetName);
+  const name = exactSheetTitle(request.sheetName);
   const requestedGid = targetResolver.parseGid(sheetUrl);
-  const sheetId = Number.isFinite(Number(request.sheetId))
+  const explicitSheetId = request.sheetId !== null && request.sheetId !== undefined && String(request.sheetId).trim() !== '' && Number.isFinite(Number(request.sheetId))
     ? Number(request.sheetId)
-    : (Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null);
+    : null;
+  const gidSheetId = requestedGid !== null && requestedGid !== undefined && Number.isFinite(Number(requestedGid))
+    ? Number(requestedGid)
+    : null;
+  const sheetId = explicitSheetId ?? gidSheetId;
   return {
     targeted: Boolean(name || sheetId != null),
     targetSource: 'explicit-target-metadata-fallback',
@@ -89,8 +94,11 @@ async function withExactTargetGuards(request, fn) {
     try {
       const meta = await originalMetadata(id);
       const list = Array.isArray(meta?.sheets) ? meta.sheets : [];
-      const target = list.find((sheet) => text(sheet?.properties?.title).toLowerCase() === text(request.sheetName).toLowerCase())
-        || (request.sheetId != null ? list.find((sheet) => Number(sheet?.properties?.sheetId) === Number(request.sheetId)) : null);
+      const target = (request.sheetId != null
+        ? list.find((sheet) => Number(sheet?.properties?.sheetId) === Number(request.sheetId))
+        : null)
+        || list.find((sheet) => exactSheetTitle(sheet?.properties?.title) === exactSheetTitle(request.sheetName))
+        || list.find((sheet) => text(sheet?.properties?.title).toLowerCase() === text(request.sheetName).toLowerCase());
       if (target) return { ...meta, sheets: [target], __ultronUniversalExactTargetScoped: true };
       return syntheticMetadata(spreadsheetId, request);
     } catch {
@@ -116,6 +124,7 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
   const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
     ...options,
     sheetName: request.sheetName || options.sheetName,
+    sheetId: request.sheetId ?? options.sheetId ?? null,
   });
   const analysis = engine.analyzeSheet(source.rows, {
     rowLimit: options.rowLimit,
@@ -138,6 +147,11 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     const plan = record.plan;
     if (!Number.isInteger(rowNumber) || (targetRows && !targetRows.has(rowNumber))) continue;
     checkedRows.push(rowNumber);
+    const scopedPhoneGroups = (source.schema.personGroups || [])
+      .filter((group) => Number(group.ordinal || 1) <= 2 && group?.fields?.phone);
+    const rowHasIndianPhone = options.requireIndianPhone && scopedPhoneGroups.some((group) =>
+      Boolean(apollo.indianPhone(record.row?.[group.fields.phone.index] || ''))
+    );
     for (const group of source.schema.personGroups || []) {
       const ordinal = Number(group.ordinal || 1);
       if (phaseOrdinal && ordinal !== phaseOrdinal) continue;
@@ -147,6 +161,8 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
       if (required && !snapshot.hasIdentity) requiredIdentityIssues.push({ rowNumber, groupOrdinal: ordinal, reason: 'No verified same-company contact could be found.' });
       if (required && snapshot.hasIdentity) {
         for (const field of ['phone', 'email']) {
+          if (options.requireIndianPhone && field === 'email') continue;
+          if (options.requireIndianPhone && field === 'phone' && rowHasIndianPhone) continue;
           if (group.fields[field] && !text(snapshot.values[field])) contactGaps.push({ rowNumber, groupOrdinal: ordinal, field });
         }
       }
@@ -336,15 +352,16 @@ function mergePrimaryAndFallback(primary, fb) {
 
 async function enforceIndianPhoneCompanyGate(request, options = {}, result = {}) {
   if (!options.requireIndianPhone || options.dryRun) {
-    return { enabled: false, acceptedRows: [], foreignFallbackRows: [], unresolvedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [], clearedRows: 0, companyRowsDeleted: 0 };
+    return { enabled: false, acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
   }
   if (result?.stats?.haltedEarly || result?.postPrimaryError) {
-    return { enabled: true, skippedReason: 'provider-or-system-halt', acceptedRows: [], foreignFallbackRows: [], unresolvedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [], clearedRows: 0, companyRowsDeleted: 0 };
+    return { enabled: true, skippedReason: 'provider-or-system-halt', acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
   }
 
   const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
     ...options,
     sheetName: request.sheetName || options.sheetName,
+    sheetId: request.sheetId ?? options.sheetId ?? null,
   });
   const analysis = engine.analyzeSheet(source.rows, {
     rowLimit: options.rowLimit,
@@ -375,14 +392,14 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     const hasIndian = phoneGroups.some((group) =>
       Boolean(apollo.indianPhone(record.row?.[group.fields.phone.index] || ''))
     );
-    const hasForeign = phoneGroups.some((group) => {
-      const phone = record.row?.[group.fields.phone.index] || '';
-      return apollo.validPhone(phone) && !apollo.indianPhone(phone);
-    });
     if (hasIndian) {
       accepted.push(rowNumber);
       continue;
     }
+    const hasForeign = phoneGroups.some((group) => {
+      const phone = record.row?.[group.fields.phone.index] || '';
+      return apollo.validPhone(phone) && !apollo.indianPhone(phone);
+    });
     if (pendingRows.has(rowNumber)) {
       pending.push(rowNumber);
       continue;
@@ -398,19 +415,25 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     unresolved.push(rowNumber);
   }
 
+  // Contactability is allowed to reject a POC candidate, never the company row.
+  // Existing company rows are user-owned source data and are immutable to Apollo
+  // enrichment. Missing +91 evidence leaves the POC unresolved for this run.
   return {
     enabled: true,
     preferredCountryCode: '+91',
     pocOrdinals: [1, 2],
-    candidateLimitPerPoc: 4,
+    candidateLimit: 4,
     acceptedRows: accepted,
     foreignFallbackRows: foreignFallback,
     unresolvedRows: unresolved,
     rejectedRows: [],
+    contactUnresolvedRows: [...unresolved],
     pendingRows: pending,
     skippedRows: skipped,
     clearedRows: 0,
-    companyRowsDeleted: 0,
+    preservedCompanyRows: [...foreignFallback, ...unresolved],
+    companyRowDeletionAllowed: false,
+    nonDestructive: true,
   };
 }
 
@@ -808,14 +831,14 @@ async function runInternal(request = {}, options = {}) {
       if (indianPhoneGate.enabled) {
         Object.assign(primaryStats, {
           requireIndianPhone: true,
-          preferIndianPhone: true,
           indianPhoneAcceptedCompanies: indianPhoneGate.acceptedRows.length,
-          foreignPhoneFallbackCompanies: indianPhoneGate.foreignFallbackRows.length,
-          noPhoneUnresolvedCompanies: indianPhoneGate.unresolvedRows.length,
+          indianPhoneContactUnresolvedCompanies: indianPhoneGate.rejectedRows.length,
           indianPhoneRejectedCompanies: 0,
+          indianPhonePreservedCompanyRows: indianPhoneGate.preservedCompanyRows.length,
           indianPhonePendingCompanies: indianPhoneGate.pendingRows.length,
           indianPhoneRowsCleared: 0,
-          companyRowsDeleted: 0,
+          companyRowsDeletedByEnrichment: 0,
+          companyRowDeletionAllowed: false,
         });
         result = { ...result, stats: { ...(result.stats || {}), ...primaryStats } };
       }
@@ -829,7 +852,7 @@ async function runInternal(request = {}, options = {}) {
         message: typed.message,
         hint: typed.hint,
       };
-      indianPhoneGate = { enabled: true, error: postPrimaryError, acceptedRows: [], foreignFallbackRows: [], unresolvedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [], clearedRows: 0, companyRowsDeleted: 0 };
+      indianPhoneGate = { enabled: true, error: postPrimaryError, acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
     }
 
     const companyOwnershipAfter = await companyOwnership.capture(base.readUniversalSheet, exact.request, runOptions);

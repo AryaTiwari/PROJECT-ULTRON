@@ -87,12 +87,12 @@ function saveBuffer(buffer, options = {}) {
   return entry;
 }
 
-function saveBase64({ name, mime, dataBase64, kind = 'upload', metadata = null } = {}) {
+function saveBase64({ name, mime, dataBase64, kind = 'upload', metadata = null, source = 'local' } = {}) {
   const raw = String(dataBase64 || '').replace(/^data:[^;]+;base64,/i, '').replace(/\s+/g, '');
   if (!raw) throw new Error('File data is required.');
   let buffer;
   try { buffer = Buffer.from(raw, 'base64'); } catch { throw new Error('Invalid base64 file data.'); }
-  return saveBuffer(buffer, { name, mime, kind, metadata });
+  return saveBuffer(buffer, { name, mime, kind, metadata, source });
 }
 
 function get(id) {

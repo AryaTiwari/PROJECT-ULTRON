@@ -5,6 +5,7 @@ const fs = require('fs');
 const controller = require('../core/universal-spreadsheet-domain-controller');
 const operator = require('../core/universal-sheet-enrichment-operator');
 const targeted = require('../core/universal-sheet-enrichment-targeted');
+const sheets = require('../core/google-sheets-operator');
 
 assert.equal(controller.parseIndianPhonePolicy('Require Indian phone numbers (+91). Reject companies without one.'), true);
 assert.equal(controller.parseIndianPhonePolicy('Only accept India mobile numbers and remove foreign-only companies.'), true);
@@ -27,6 +28,7 @@ const automaticSummary = controller.approvalSummary({
   analysis: { stats: { openPersonSlots: 2, partialPersonSlots: 0 } },
 }, { requireIndianPhone: true, indianPhonePolicySource: 'automatic-poc1-poc2-default' });
 assert.match(automaticSummary, /Indian-number preference \(automatic POC-1\/POC-2 default\)/);
+assert.match(automaticSummary, /existing company row is always preserved/);
 
 assert.equal(operator.contactabilityTier({ phone: '+1 415 555 0123', email: 'hr@example.com' }), 2);
 assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210' }), 3);
@@ -47,15 +49,18 @@ assert.equal(shortlist.length, 3);
 
 assert.equal(typeof operator.pendingPhoneRowsForSource, 'function');
 assert.equal(typeof targeted.enforceIndianPhoneCompanyGate, 'function');
+assert.equal(typeof sheets.clearRows, 'function');
 
 const targetedSource = fs.readFileSync(require.resolve('../core/universal-sheet-enrichment-targeted'), 'utf8');
 assert.doesNotMatch(targetedSource, /indian-phone-two-candidate-budget/);
 assert.match(targetedSource, /apollo\.indianPhone/);
 assert.doesNotMatch(targetedSource, /sheets\.clearRows\s*\(/);
+assert.match(targetedSource, /companyRowDeletionAllowed:\s*false/);
+assert.match(targetedSource, /preservedCompanyRows/);
 assert.match(targetedSource, /aiBatchRescue\.run/);
 assert.doesNotMatch(targetedSource, /deleteDimension/);
 
 const reportSource = fs.readFileSync(require.resolve('../core/universal-run-report'), 'utf8');
 assert.match(reportSource, /i\.rowNumber.*i\.target.*i\.problem/);
 
-console.log('Indian POC phone policy self-test passed: automatic two-POC defaults, +91 preference with foreign fallback, POC-1/POC-2 scope, India-first ranking, mature POC-2 rescue preservation, bounded finalist shortlist, pending-callback preservation, duplicate-report collapse and zero company-row clearing are protected.');
+console.log('Indian POC phone policy self-test passed: automatic two-POC defaults, explicit +91 contact gating, POC-1/POC-2 scope, India-first ranking, mature POC-2 rescue preservation, bounded three-person shortlist, pending-callback preservation, and the invariant that contactability failures never clear or remove company rows are protected.');

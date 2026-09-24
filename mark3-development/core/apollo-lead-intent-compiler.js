@@ -3,16 +3,18 @@
 const COMPANY_WORDS = /\b(?:compan(?:y|ies)|startups?|businesses|firms|organizations?|organisations?|accounts?)\b/i;
 const PEOPLE_WORDS = /\b(?:founders?|co[- ]?founders?|owners?|directors?|recruiters?|hr\s+managers?|talent\s+acquisition|people|persons?|contacts?|decision[- ]?makers?|pocs?)\b/i;
 const ACTION_WORDS = /\b(?:find|discover|search|source|list|show|bring|get|identify|build|fill|add|enrich|repair|complete)\b/i;
+const sheetAliases = require('./sheet-source-alias-store');
 
 const EXPANSIONS = Object.freeze({
   ai: ['artificial intelligence', 'machine learning', 'generative ai', 'ai saas', 'ai platform', 'ai product'],
-  saas: ['software as a service', 'cloud software', 'b2b software', 'enterprise software', 'software platform'],
-  product: ['software product', 'product software', 'software platform', 'application platform'],
-  technology: ['software product', 'software platform', 'cloud software', 'b2b software'],
+  saas: ['software as a service', 'cloud software', 'b2b software'],
   cybersecurity: ['cyber security', 'information security', 'network security'],
   'hr tech': ['hrtech', 'human resources technology', 'talent technology'],
   fintech: ['financial technology', 'payments technology'],
   sap: ['enterprise resource planning', 'erp', 'sap services'],
+  product: ['software product', 'technology product', 'platform', 'software'],
+  technology: ['software', 'information technology', 'technology platform', 'tech company'],
+  software: ['software product', 'software company', 'platform', 'saas'],
 });
 
 function text(value) { return String(value == null ? '' : value).trim(); }
@@ -47,7 +49,7 @@ function parseEmployeeRange(input) {
   if (under) return { min: 0, max: Number(under[1].replace(/,/g, '')), explicit: true, hard: true };
   const over = value.match(/\b(?:over|above|more\s+than|at\s+least|min(?:imum)?)\s+(\d[\d,]*)\s+employees?\b/i);
   if (over) return { min: Number(over[1].replace(/,/g, '')), max: null, explicit: true, hard: true };
-  return { min: 0, max: 1000, preferredMin: 20, preferredMax: 500, explicit: false, hard: true };
+  return { min: 10, max: 500, preferredMin: 20, preferredMax: 300, explicit: false, hard: false };
 }
 
 function parseGeography(input) {
@@ -83,16 +85,92 @@ function keywordExpansion(keywords) {
   return unique(out).slice(0, 12);
 }
 
-function parseSheet(input) {
+function googleSheetUrlFromValue(value) {
+  const raw = text(value);
+  if (!raw) return '';
+  const direct = raw.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_\\-]+[^\s)\],]*/i)?.[0] || '';
+  if (direct) return direct.replace(/\\([_-])/g, '$1').replace(/[),.;!?]+$/, '');
+  return '';
+}
+
+function attachmentSheetUrl(context = {}) {
+  for (const candidate of [
+    context.sheetUrl,
+    context.spreadsheetUrl,
+    context.googleSheetUrl,
+    context.sourceUrl,
+    context.url,
+  ]) {
+    const url = googleSheetUrlFromValue(candidate);
+    if (url) return url;
+  }
+
+  const attachments = Array.isArray(context.attachments) ? context.attachments : [];
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== 'object') continue;
+    const meta = attachment.metadata && typeof attachment.metadata === 'object' ? attachment.metadata : {};
+    const candidates = [
+      attachment.sheetUrl,
+      attachment.spreadsheetUrl,
+      attachment.googleSheetUrl,
+      attachment.webViewLink,
+      attachment.sourceUrl,
+      attachment.url,
+      meta.sheetUrl,
+      meta.spreadsheetUrl,
+      meta.googleSheetUrl,
+      meta.webViewLink,
+      meta.sourceUrl,
+      meta.url,
+    ];
+    for (const candidate of candidates) {
+      const url = googleSheetUrlFromValue(candidate);
+      if (url) return url;
+    }
+
+    const provider = text(attachment.provider || attachment.source || meta.provider || meta.source).toLowerCase();
+    const spreadsheetId = text(
+      attachment.spreadsheetId
+      || attachment.googleSheetId
+      || meta.spreadsheetId
+      || meta.googleSheetId
+    );
+    if (spreadsheetId && /^(?:google|google[_ -]?drive|google[_ -]?sheets?)$/.test(provider)) {
+      return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+    }
+  }
+  return '';
+}
+
+function parseSheet(input, context = {}) {
   const value = text(input);
   // Chat renderers commonly turn pasted URLs into Markdown and escape
   // underscores in the visible label. Prefer the real Markdown destination;
-  // otherwise canonicalize a plain/escaped URL without consuming `](`.
+  // otherwise canonicalize a plain/escaped URL without consuming ](.
   const markdownUrl = value.match(/\[[^\]]*\]\((https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+[^\s)]*)\)/i)?.[1] || '';
   const plainUrl = value.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_\\-]+[^\s)\],]*/i)?.[0] || '';
-  const url = (markdownUrl || plainUrl).replace(/\\([_-])/g, '$1').replace(/[),.;!?]+$/, '');
+  const alias = sheetAliases.aliasFromInput(value);
+  const attachmentUrl = attachmentSheetUrl(context);
+  const aliasEntry = !markdownUrl && !plainUrl && !attachmentUrl && alias
+    ? sheetAliases.resolve(alias)
+    : null;
+  const url = (markdownUrl || plainUrl || attachmentUrl || aliasEntry?.url || '')
+    .replace(/\\([_-])/g, '$1')
+    .replace(/[),.;!?]+$/, '');
   const name = value.match(/\b(?:worksheet|tab|sheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})["'`“”]?/i)?.[1]?.trim() || '';
-  return { url, sheetName: /^(?:at|below|link)$/i.test(name) ? '' : name };
+  const requested = Boolean(
+    url
+    || alias
+    || /\b(?:fill|write|append|add|save|put)\b[\s\S]{0,120}\b(?:google\s+sheet|spreadsheet|worksheet|sheet|tab)\b/i.test(value)
+  );
+  return {
+    url,
+    sheetName: /^(?:at|below|link)$/i.test(name) ? '' : (name || aliasEntry?.sheetName || ''),
+    requested,
+    alias,
+    aliasResolved: Boolean(aliasEntry?.url && url === aliasEntry.url),
+    attachmentResolved: Boolean(!markdownUrl && !plainUrl && attachmentUrl && url === attachmentUrl),
+  };
 }
 
 function enrichmentRequested(input) {
@@ -124,9 +202,9 @@ function titleTerms(input) {
   return [...new Set(groups)];
 }
 
-function compile(input) {
+function compile(input, context = {}) {
   const query = text(input);
-  const sheet = parseSheet(query);
+  const sheet = parseSheet(query, context);
   const existing = existingSheetEnrichment(query);
   const people = !existing && peopleEntity(query);
   const enrich = enrichmentRequested(query);
@@ -153,6 +231,13 @@ function compile(input) {
   });
 }
 
+
+function isApolloLeadControlRequest(input) {
+  const value = text(input);
+  return /\bapollo\s+(?:lead\s+)?(?:mission\s+)?(?:progress|status|doctor|diagnostic|benchmark\s+status)\b/i.test(value)
+    || /\bapollo\s+mission\s+apollo-[a-z0-9-]+\b/i.test(value);
+}
+
 function isApolloLeadRequest(input) {
   const value = text(input);
   if (!value || /\blinkedin\b/i.test(value) || /\bgoogle\s+maps?\b/i.test(value)) return false;
@@ -163,6 +248,4 @@ function isApolloLeadRequest(input) {
   return ACTION_WORDS.test(value) && (COMPANY_WORDS.test(value) || PEOPLE_WORDS.test(value)) && (/\bapollo\b/i.test(value) || /\b(?:startups?|saas|ai|cyber|fintech|product|technology|software|founders?|recruiters?)\b/i.test(value));
 }
 
-function isApolloLeadStatusRequest(input) { return /\bapollo\s+(?:lead\s+)?(?:mission\s+)?(?:progress|status)\b/i.test(text(input)); }
-
-module.exports = { compile, isApolloLeadRequest, isApolloLeadStatusRequest, parseCount, parseEmployeeRange, parseGeography, baseKeywords, keywordExpansion, parseSheet, enrichmentRequested, existingSheetEnrichment, titleTerms };
+module.exports = { compile, isApolloLeadRequest, isApolloLeadControlRequest, parseCount, parseEmployeeRange, parseGeography, baseKeywords, keywordExpansion, parseSheet, attachmentSheetUrl, googleSheetUrlFromValue, enrichmentRequested, existingSheetEnrichment, titleTerms, sheetAliases };

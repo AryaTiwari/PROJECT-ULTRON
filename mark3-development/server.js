@@ -151,6 +151,7 @@ function artifactResponse(kind, result) {
 }
 
 const runtimeBuild = require('./core/runtime-build');
+const apolloLeadContract = require('./core/apollo-lead-contract');
 
 const server = http.createServer(async (req,res) => {
   try {
@@ -201,7 +202,13 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET' && req.url === '/api/files') return send(res,200,{ok:true,files:fileVault.list(40),status:fileVault.status()});
     if (req.method === 'POST' && req.url === '/api/files/upload') {
       const data = await body(req, 36 * 1024 * 1024);
-      const file = fileVault.saveBase64({ name:data.name, mime:data.mime, dataBase64:data.dataBase64 });
+      const file = fileVault.saveBase64({
+        name:data.name,
+        mime:data.mime,
+        dataBase64:data.dataBase64,
+        metadata:data.metadata || null,
+        source:data.source || 'local',
+      });
       emit('file_uploaded',{id:file.id,name:file.name,mime:file.mime,size:file.size});
       return send(res,200,{ok:true,file});
     }
@@ -294,7 +301,14 @@ const server = http.createServer(async (req,res) => {
         .map((item) => {
           if (item && typeof item === 'object') return item;
           const entry = fileVault.get(String(item || ''));
-          return entry ? { id: entry.id, name: entry.name, mime: entry.mime, size: entry.size } : { id: String(item || '') };
+          return entry ? {
+            id: entry.id,
+            name: entry.name,
+            mime: entry.mime,
+            size: entry.size,
+            source: entry.source || 'local',
+            metadata: entry.metadata || null,
+          } : { id: String(item || '') };
         })
         .filter((item) => item?.id);
       const controlled = await commandControl.dispatch(data.message, {
@@ -401,8 +415,13 @@ server.on('error', (error) => {
       let health = null;
       try { health = JSON.parse(raw); } catch {}
       if (response.statusCode === 200 && health?.service === 'ULTRON Mark 3') {
-        console.log(`[Mark 3] ULTRON is already running at http://${config.host}:${config.port}. Use that instance, or stop it with Ctrl+C before restarting.`);
-        process.exit(0);
+        if (health.buildId === runtimeBuild.id) {
+          console.log(`[Mark 3] Current ULTRON build ${runtimeBuild.id} is already running at http://${config.host}:${config.port}.`);
+          process.exit(0);
+        }
+        console.error(`[Mark 3] REFUSING stale runtime: port ${config.port} is serving build ${health.buildId || 'unknown'}, but this source tree is ${runtimeBuild.id}.`);
+        console.error('[Mark 3] Run npm start from this source tree so replace-stale-mark3 can terminate the old process safely.');
+        process.exit(2);
       }
       console.error(`[Mark 3] Port ${config.port} is already in use by another application. Stop that application or set ULTRON_M3_PORT to a free port.`);
       process.exit(1);
@@ -430,6 +449,8 @@ server.listen(config.port,config.host,()=>{
       .catch(error => console.error(`[LinkedIn] Startup unavailable: ${error.code || 'START_FAILED'}. Run npm run linkedin:status for diagnostics.`));
   }
   console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`);
+  console.log(`[Mark 3] Runtime build: ${runtimeBuild.id}`);
+  console.log(`[Apollo Lead] Contract: ${apolloLeadContract.VERSION} · build ${apolloLeadContract.shortRevision()} · src ${runtimeBuild.fingerprint}`);
   console.log('[Mark 3] Native-audio conversation flow active: browser speech is wake/timing support; server transcription is authoritative when available.');
   console.log(`[Mark 3] Conversational reply window: ${Math.round(REPLY_WINDOW_MS / 1000)} seconds minimum; voice sessions extend this automatically.`);
   console.log('[Mark 3] Multimodal runtime active: attachments + file reading + OmniRoute image/video + OmniRoute-composed local PDF/DOCX artifacts.');

@@ -20,7 +20,7 @@ function build(result = {}) {
   `Contacts verified: ${count('contactsVerified')}. Existing contacts repaired: ${count('existingContactsRepaired','existingGroupsRepaired')}. New POCs added: ${count('newContactsAdded','newPeopleSelected')}.`,
   `Phone cells filled: ${count('phoneCellsFilled')}. Email cells filled: ${count('emailCellsFilled')}. Phone lookups pending: ${pending.filter(p=>p.kind==='phone').length}. Email lookups pending: ${pending.filter(p=>p.kind==='email').length}.`,
   result.indianPhoneGate?.enabled
-    ? `Indian-number preference: ${result.indianPhoneGate.acceptedRows?.length||0} companies have +91 evidence; ${result.indianPhoneGate.foreignFallbackRows?.length||0} use verified foreign fallback; ${result.indianPhoneGate.unresolvedRows?.length||0} have no verified phone; ${result.indianPhoneGate.pendingRows?.length||0} wait for exact Apollo callbacks. Company rows deleted: 0. POC scope 1-2; at most four distinct finalist attempts per POC.`
+    ? `Indian-number preference: ${result.indianPhoneGate.acceptedRows?.length||0} company rows have +91 POC evidence; ${result.indianPhoneGate.foreignFallbackRows?.length||0} use verified foreign phone fallback; ${result.indianPhoneGate.unresolvedRows?.length||0} remain contact-unresolved and were preserved; ${result.indianPhoneGate.pendingRows?.length||0} wait for exact Apollo callbacks. Company rows deleted: 0. POC scope 1-2; at most four distinct finalist attempts per POC.`
     : '',
   poc.join(' '),
   `Provider calls: Apollo ${calls.apollo??0}; LinkedIn ${calls.linkedin??0}; public search ${calls.publicSearch??0}; AI ${calls.ai??result.modelCalls??0}; Google Sheets ${calls.googleSheets??0}.`,

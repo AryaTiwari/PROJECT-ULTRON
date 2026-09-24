@@ -6,16 +6,23 @@ class ApolloCompanyQueryProvider {
   constructor(options = {}) { this.strategy = options.strategy || 'deterministic-filter-compiler'; }
   officialApolloAiAvailable() { return false; }
   compile(mission = {}) {
-    const requested = unique([...(mission.keywords || []), ...(mission.expandedKeywords || [])]);
-    const technologyIntent = requested.some((word) => /(?:saas|software|tech|technology|product|platform|cloud)/.test(word));
-    const variants = technologyIntent
-      ? ['software product', 'software platform', 'saas', 'b2b software', 'cloud software', 'enterprise software', 'product software', 'technology']
-      : requested;
-    const focused = unique([...variants, ...requested]).slice(0, 10).map((keyword) => ({ label: keyword, keywords: [keyword], strategy: this.strategy }));
-    focused.push({ label: 'broad size/location search', keywords: [], strategy: this.strategy });
-    return focused;
+    const base = unique(mission.keywords || []).slice(0, 5);
+    const expanded = unique(mission.expandedKeywords || []).filter((keyword) => !base.includes(keyword));
+    const variants = []; const seen = new Set();
+    const add = (id, keywords, relaxSize = false) => {
+      const clean = unique(keywords).slice(0, 4); const key = `${relaxSize ? 'relaxed' : 'focused'}:${clean.join('|')}`;
+      if (seen.has(key)) return; seen.add(key); variants.push({ id, label:id, keywords:clean, relaxSize, strategy:this.strategy });
+    };
+    if (base.length > 1) add('combined-keywords', base);
+    for (const keyword of base) add(`keyword:${keyword}`, [keyword]);
+    for (const keyword of expanded.slice(0, 2)) add(`expanded:${keyword}`, [keyword]);
+    if (!variants.length) add('unfiltered-focused-size', []);
+    if (!(mission.employeeRange?.explicit || mission.employeeRange?.hard)) {
+      add('relaxed-size-primary', base.length ? [base[0]] : [], true);
+      if (base.length > 1) add('relaxed-size-secondary', [base[1]], true);
+    }
+    return variants.slice(0, 7);
   }
 }
-
 const baseline = new ApolloCompanyQueryProvider();
-module.exports = { ApolloCompanyQueryProvider, baseline, compile: (mission) => baseline.compile(mission) };
+module.exports = { ApolloCompanyQueryProvider, baseline, compile:(mission)=>baseline.compile(mission) };

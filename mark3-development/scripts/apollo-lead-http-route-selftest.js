@@ -14,6 +14,8 @@ for (const [key, value] of Object.entries(config)) {
 }
 require('../core/proactive').start = () => {};
 require('../core/voice-orchestrator').enqueue = async () => {};
+const projector = require('../core/apollo-lead-sheet-projector');
+projector.inspect = async () => ({ id:'example', target:{ name:'Arya', sheetId:1566066221 }, headers:['COMPANY NAME','COMPANY LINK','1ST POC NAME','PHONE','EMAIL'], schema:{ personGroups:[], companyGroups:[] } });
 const apollo = require('../core/apollo-enrichment');
 let apolloFetches = 0;
 apollo.fetchApolloResponse = async () => { apolloFetches++; throw new Error('Apollo must not be called before approval or for progress.'); };
@@ -30,8 +32,8 @@ async function post(message) {
   const queued=await post(command);
   assert.equal(queued.routing.domain,'apollo-lead'); assert.equal(queued.approvalRequired,true); assert.equal(queued.apolloCalled,false);
   const status=await post('Apollo lead progress');
-  assert.equal(status.routing.domain,'apollo-lead'); assert.equal(status.routing.readOnlyStatus,true); assert.equal(status.approvalRequired,undefined);
-  assert.match(status.response,/waiting_approval/i); assert.match(status.response,/Runtime build:/i); assert.equal(apolloFetches,0);
+  assert.equal(status.routing.domain,'apollo-lead'); assert.equal(status.routing.readOnlyStatus,true); assert.equal(status.approvalRequired,false);
+  assert.match(status.response,/waiting_approval/i); assert.match(status.response,/build /i); assert.equal(apolloFetches,0);
   console.log(`Apollo Lead HTTP routing self-test passed: discovery requested one approval; progress stayed read-only on mission ${status.mission.missionId}; Apollo calls 0.`);
   server.close(); fs.rmSync(temp,{recursive:true,force:true}); process.exit(0);
 })().catch((error)=>{console.error(error);server.close();fs.rmSync(temp,{recursive:true,force:true});process.exit(1);});
