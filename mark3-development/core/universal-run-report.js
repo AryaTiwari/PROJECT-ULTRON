@@ -8,7 +8,7 @@ function build(result = {}) {
   issues.push({rowNumber:gap.rowNumber,target:'POC-'+gap.groupOrdinal,problem:awaiting?`Apollo ${gap.field} lookup is still pending.`:`Verified ${gap.field} is unavailable.`,explanation:awaiting?'The paid request has been saved with this exact contact owner.':'No safe contact value was returned for this person.',action:awaiting?'Allow callback recovery to finish; do not purchase the lookup again.':'Leave the field blank or provide a verified source.'});
  }
  for(const failure of s.rowFailureAudit||[]){const typed=errors.normalize(Object.assign(new Error(failure.message),failure));issues.push({rowNumber:failure.rowNumber,problem:typed.humanTitle,explanation:typed.humanExplanation,action:typed.hint});}
- const seen=new Set(),unique=issues.filter(i=>{const key=JSON.stringify(i);if(seen.has(key))return false;seen.add(key);return true;});
+ const seen=new Set(),unique=issues.filter(i=>{const key=[i.rowNumber??'',i.target||'',i.problem||''].join('|');if(seen.has(key))return false;seen.add(key);return true;});
  const poc=(result.schema?.personGroups||[]).map(g=>{const missing=(gate.requiredIdentityIssues||[]).filter(i=>i.groupOrdinal===g.ordinal).length;const contacts=(gate.contactGaps||[]).filter(i=>i.groupOrdinal===g.ordinal).length;return `POC-${g.ordinal}: ${missing?missing+' unresolved identities':'identities present'}${contacts?', '+contacts+' missing contact fields':''}.`;});
  const count=(field,fallback)=>m[field]??s[fallback||field]??0;
  const calls=m.providerCalls||{};
@@ -19,7 +19,7 @@ function build(result = {}) {
   `Contacts verified: ${count('contactsVerified')}. Existing contacts repaired: ${count('existingContactsRepaired','existingGroupsRepaired')}. New POCs added: ${count('newContactsAdded','newPeopleSelected')}.`,
   `Phone cells filled: ${count('phoneCellsFilled')}. Email cells filled: ${count('emailCellsFilled')}. Phone lookups pending: ${pending.filter(p=>p.kind==='phone').length}. Email lookups pending: ${pending.filter(p=>p.kind==='email').length}.`,
   result.indianPhoneGate?.enabled
-    ? `Indian-number gate: ${result.indianPhoneGate.acceptedRows?.length||0} companies accepted with +91 evidence; ${result.indianPhoneGate.rejectedRows?.length||0} rejected and ${result.indianPhoneGate.clearedRows||0} cleared; ${result.indianPhoneGate.pendingRows?.length||0} waiting for exact Apollo callbacks. POC scope 1-2; paid candidate budget 2.`
+    ? `Indian-number gate: ${result.indianPhoneGate.acceptedRows?.length||0} companies accepted with +91 evidence; ${result.indianPhoneGate.rejectedRows?.length||0} rejected and ${result.indianPhoneGate.clearedRows||0} cleared; ${result.indianPhoneGate.pendingRows?.length||0} waiting for exact Apollo callbacks. POC scope 1-2; phone-reveal shortlist: two primary decision-makers plus at most one POC-2 fallback.`
     : '',
   poc.join(' '),
   `Provider calls: Apollo ${calls.apollo??0}; LinkedIn ${calls.linkedin??0}; public search ${calls.publicSearch??0}; AI ${calls.ai??result.modelCalls??0}; Google Sheets ${calls.googleSheets??0}.`,

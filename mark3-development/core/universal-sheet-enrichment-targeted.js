@@ -137,6 +137,11 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     const plan = record.plan;
     if (!Number.isInteger(rowNumber) || (targetRows && !targetRows.has(rowNumber))) continue;
     checkedRows.push(rowNumber);
+    const scopedPhoneGroups = (source.schema.personGroups || [])
+      .filter((group) => Number(group.ordinal || 1) <= 2 && group?.fields?.phone);
+    const rowHasIndianPhone = options.requireIndianPhone && scopedPhoneGroups.some((group) =>
+      Boolean(apollo.indianPhone(record.row?.[group.fields.phone.index] || ''))
+    );
     for (const group of source.schema.personGroups || []) {
       const ordinal = Number(group.ordinal || 1);
       if (phaseOrdinal && ordinal !== phaseOrdinal) continue;
@@ -145,7 +150,11 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
       const required = phaseOrdinal ? ordinal === phaseOrdinal : (!requestedCount || ordinal <= requestedCount);
       if (required && !snapshot.hasIdentity) requiredIdentityIssues.push({ rowNumber, groupOrdinal: ordinal, reason: 'No verified same-company contact could be found.' });
       if (required && snapshot.hasIdentity) {
-        for (const field of ['phone', 'email']) if (group.fields[field] && !text(snapshot.values[field])) contactGaps.push({ rowNumber, groupOrdinal: ordinal, field });
+        for (const field of ['phone', 'email']) {
+          if (options.requireIndianPhone && field === 'email') continue;
+          if (options.requireIndianPhone && field === 'phone' && rowHasIndianPhone) continue;
+          if (group.fields[field] && !text(snapshot.values[field])) contactGaps.push({ rowNumber, groupOrdinal: ordinal, field });
+        }
       }
     }
 
@@ -396,7 +405,7 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     enabled: true,
     requiredCountryCode: '+91',
     pocOrdinals: [1, 2],
-    candidateLimit: 2,
+    candidateLimit: 3,
     acceptedRows: accepted,
     rejectedRows: rejected,
     pendingRows: pending,
@@ -638,26 +647,6 @@ async function runInternal(request = {}, options = {}) {
           attempted: false,
           skippedReason: 'primary-systemic-halt',
           modelCalls: 0,
-          fallback: fallback.snapshot(),
-        };
-      } else if (runOptions.requireIndianPhone) {
-        aiRescue = {
-          enabled: aiBatchRescue.enabled(),
-          attempted: false,
-          skippedReason: 'indian-phone-two-candidate-budget',
-          modelCalls: 0,
-          modelAttempts: 0,
-          rowsOfferedForSelection: 0,
-          unresolvedRows: [],
-          unresolvedReasons: [],
-        };
-        fb = {
-          enabled: fallback.enabled(),
-          attempted: false,
-          skippedReason: 'indian-phone-two-candidate-budget',
-          modelCalls: 0,
-          unresolvedRows: [],
-          unresolvedReasons: [],
           fallback: fallback.snapshot(),
         };
       } else if (phasedExecution) {
