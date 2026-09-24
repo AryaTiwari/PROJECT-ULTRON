@@ -201,7 +201,13 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET' && req.url === '/api/files') return send(res,200,{ok:true,files:fileVault.list(40),status:fileVault.status()});
     if (req.method === 'POST' && req.url === '/api/files/upload') {
       const data = await body(req, 36 * 1024 * 1024);
-      const file = fileVault.saveBase64({ name:data.name, mime:data.mime, dataBase64:data.dataBase64 });
+      const file = fileVault.saveBase64({
+        name:data.name,
+        mime:data.mime,
+        dataBase64:data.dataBase64,
+        metadata:data.metadata || null,
+        source:data.source || 'local',
+      });
       emit('file_uploaded',{id:file.id,name:file.name,mime:file.mime,size:file.size});
       return send(res,200,{ok:true,file});
     }
@@ -294,7 +300,14 @@ const server = http.createServer(async (req,res) => {
         .map((item) => {
           if (item && typeof item === 'object') return item;
           const entry = fileVault.get(String(item || ''));
-          return entry ? { id: entry.id, name: entry.name, mime: entry.mime, size: entry.size } : { id: String(item || '') };
+          return entry ? {
+            id: entry.id,
+            name: entry.name,
+            mime: entry.mime,
+            size: entry.size,
+            source: entry.source || 'local',
+            metadata: entry.metadata || null,
+          } : { id: String(item || '') };
         })
         .filter((item) => item?.id);
       const controlled = await commandControl.dispatch(data.message, {
