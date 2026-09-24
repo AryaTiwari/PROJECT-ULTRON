@@ -104,28 +104,79 @@ async function patchRichLinkedInLinks(spreadsheetId, sheetName, rows, schema) {
   return rows;
 }
 
+function exactSheetTitle(value) {
+  return value == null ? '' : String(value);
+}
+
+function foldedSheetTitle(value) {
+  return exactSheetTitle(value).trim().toLocaleLowerCase();
+}
+
+function selectUniversalSheetTargets(meta = {}, options = {}) {
+  const requestedName = exactSheetTitle(options.sheetName);
+  const requestedSheetId = Number.isFinite(Number(options.sheetId)) ? Number(options.sheetId) : null;
+  const tabs = (meta.sheets || [])
+    .map((sheet) => ({
+      name: exactSheetTitle(sheet?.properties?.title),
+      sheetId: Number(sheet?.properties?.sheetId),
+    }))
+    .filter((sheet) => sheet.name && Number.isFinite(sheet.sheetId));
+
+  if (requestedSheetId != null) {
+    const byId = tabs.find((tab) => tab.sheetId === requestedSheetId);
+    if (byId) return { tabs, targets: [byId], requestedName, requestedSheetId, matchedBy: 'sheetId' };
+  }
+
+  if (requestedName) {
+    const exact = tabs.find((tab) => tab.name === requestedName);
+    if (exact) return { tabs, targets: [exact], requestedName, requestedSheetId, matchedBy: 'exact-name' };
+
+    const folded = tabs.filter((tab) => foldedSheetTitle(tab.name) === foldedSheetTitle(requestedName));
+    if (folded.length === 1) {
+      return { tabs, targets: [folded[0]], requestedName, requestedSheetId, matchedBy: 'folded-name' };
+    }
+    return { tabs, targets: [], requestedName, requestedSheetId, matchedBy: 'none' };
+  }
+
+  return { tabs, targets: tabs, requestedName: '', requestedSheetId, matchedBy: 'all-tabs' };
+}
+
 async function readUniversalSheet(sheetUrl, options = {}) {
   const spreadsheetId = sheets.spreadsheetId(sheetUrl);
   const meta = await sheets.metadata(spreadsheetId);
-  const requestedName = text(options.sheetName);
-  const tabs = (meta.sheets || []).map((sheet) => ({ name: sheet?.properties?.title, sheetId: sheet?.properties?.sheetId })).filter((sheet) => sheet.name);
-  const targets = requestedName ? tabs.filter((tab) => tab.name === requestedName) : tabs;
-  if (!requestedName && targets.length > 1) {
+  const selected = selectUniversalSheetTargets(meta, options);
+  const { targets, requestedName, requestedSheetId } = selected;
+
+  if (!requestedName && requestedSheetId == null && targets.length > 1) {
     throw Object.assign(new Error('Which worksheet should ULTRON enrich? Supply its name or tab identifier.'), { code: 'UNIVERSAL_SHEET_TARGET_REQUIRED', subsystem: 'TARGETING' });
   }
   if (!targets.length) {
-    const error = new Error(requestedName ? `Google Sheet tab not found: ${requestedName}` : 'Spreadsheet has no readable tabs.');
+    const label = requestedName || (requestedSheetId != null ? `sheetId=${requestedSheetId}` : '');
+    const error = new Error(label ? `Google Sheet tab not found: ${label}` : 'Spreadsheet has no readable tabs.');
     error.code = 'UNIVERSAL_SHEET_TAB_NOT_FOUND';
+    error.requestedSheetName = requestedName || null;
+    error.requestedSheetId = requestedSheetId;
+    error.availableTabs = selected.tabs.map((tab) => ({ name: tab.name, sheetId: tab.sheetId }));
     throw error;
   }
 
   let best = null;
   for (const tab of targets) {
+    // Always send Google's exact metadata title back in A1 notation. Matching may
+    // ignore accidental surrounding whitespace, but identifiers must not be trimmed.
     const rows = await sheets.values(spreadsheetId, `${sheets.quoteSheet(tab.name)}!A:ZZ`);
     let schema;
     try { schema = schemaTools.inferSchema(rows, options.schema || {}); }
-    catch (error) { if (requestedName) throw error; else continue; }
-    const candidate = { spreadsheetId, spreadsheetTitle: meta?.properties?.title || '', sheetName: tab.name, sheetId: tab.sheetId, rows, schema };
+    catch (error) { if (requestedName || requestedSheetId != null) throw error; else continue; }
+    const candidate = {
+      spreadsheetId,
+      spreadsheetTitle: meta?.properties?.title || '',
+      sheetName: tab.name,
+      sheetId: tab.sheetId,
+      sheetTargetMatchedBy: selected.matchedBy,
+      rows,
+      schema,
+    };
     if (!best || schema.confidence > best.schema.confidence) best = candidate;
   }
   if (!best) {
@@ -3797,6 +3848,9 @@ module.exports = {
   schemaLinkedInColumns,
   patchRichLinkedInLinks,
   readUniversalSheet,
+  exactSheetTitle,
+  foldedSheetTitle,
+  selectUniversalSheetTargets,
   companyFromCompanyAnchor,
   inferHiringCompanyFromEvidence,
   preferredHiringCompanyContext,
