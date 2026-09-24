@@ -18,6 +18,10 @@ assert.match(handlerSource, /const deterministicBootstrap = require\('\.\/univer
 assert.match(handlerSource, /deterministicBootstrap\.install\(\)/);
 assert.match(handlerSource, /paidTools\.withPermit\(decision/);
 assert.match(handlerSource, /universal\.run\(/);
+assert.match(handlerSource, /canonicalApprovedTarget/);
+assert.match(handlerSource, /matchedBy: 'sheetId'/);
+assert.match(handlerSource, /approved-target-canonicalization/);
+assert.match(handlerSource, /\[universal-sheet · build/);
 assert.doesNotMatch(handlerSource, /three-poc-enrichment-operator|handleThreePocCommand/);
 assert.doesNotMatch(handlerSource, /assistant\.handle\s*=/);
 assert.match(handlerSource, /owner: 'command-control-plane'/);
@@ -57,6 +61,7 @@ assert.doesNotMatch(controllerSource, /unknown-inspection-stage/);
 const control = require('../core/command-control-plane');
 const handler = require('../core/universal-paid-approval-handler');
 const controller = require('../core/universal-spreadsheet-domain-controller');
+const sheets = require('../core/google-sheets-operator');
 
 assert.equal(handler.OPERATION, 'universal-spreadsheet-enrichment');
 assert.match(handler.modePrefix(undefined), /FULL-SHEET MODE/);
@@ -91,6 +96,8 @@ assert.equal(gauravRoute.controller, 'universal-spreadsheet-domain-controller');
 assert.equal(gauravRoute.exclusive, true);
 assert.equal(gauravRoute.generalModelAllowed, false);
 assert.equal(controller.parseSheetName(gauravCommand), 'Gaurav 2');
+assert.equal(controller.parseSheetName('Worksheet Arya'), 'Arya');
+assert.equal(controller.parseSheetName('Worksheet "Arya".'), 'Arya');
 
 const googleThreePocRoute = control.claim(
   'Use https://docs.google.com/spreadsheets/d/example123/edit and run 3 POCs: first POC, second POC, third POC enrichment.',
@@ -99,4 +106,42 @@ const googleThreePocRoute = control.claim(
 assert.equal(googleThreePocRoute.domain, 'three-poc-spreadsheet');
 assert.equal(googleThreePocRoute.controller, 'three-poc-domain-controller');
 
-console.log('Universal approval routing self-test passed: approval re-entry installs deterministic hardening, handler failures are typed before the HTTP boundary, the Gaurav 2 full-sheet command remains first-class, pre-approval inspection is values/schema-only, explicit legacy 3-POC compatibility stays isolated, and typed inspection errors expose the canonical subsystem/type/code/stage contract.');
+
+(async () => {
+  const originalMetadata = sheets.metadata;
+  const originalSpreadsheetId = sheets.spreadsheetId;
+  try {
+    sheets.spreadsheetId = () => 'sheet-123';
+    sheets.metadata = async () => ({
+      sheets: [
+        { properties: { title: 'Divya', sheetId: 0 } },
+        { properties: { title: 'Arya ', sheetId: 1566066221 } },
+      ],
+    });
+
+    const exact = await handler.canonicalApprovedTarget({
+      url: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+      sheetName: 'Arya',
+      sheetId: 1566066221,
+    });
+    assert.equal(exact.sheetName, 'Arya ');
+    assert.equal(exact.sheetId, 1566066221);
+    assert.equal(exact.matchedBy, 'sheetId');
+
+    const folded = await handler.canonicalApprovedTarget({
+      url: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
+      sheetName: 'Arya',
+      sheetId: null,
+    });
+    assert.equal(folded.sheetName, 'Arya ');
+    assert.equal(folded.matchedBy, 'folded-name');
+  } finally {
+    sheets.metadata = originalMetadata;
+    sheets.spreadsheetId = originalSpreadsheetId;
+  }
+
+  console.log('Universal approval routing self-test passed: approval re-entry installs deterministic hardening, canonicalizes the live worksheet by sheetId before Apollo execution, preserves trailing-space Google titles, accepts plain Worksheet Arya targeting, handler failures are typed before the HTTP boundary, the Gaurav 2 full-sheet command remains first-class, and typed inspection errors expose the canonical subsystem/type/code/stage contract.');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
