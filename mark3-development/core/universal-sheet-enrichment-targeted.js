@@ -15,6 +15,7 @@ const engine = require('./universal-enrichment-engine');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 const diagnostics = require('./universal-enrichment-diagnostics');
 const apollo = require('./apollo-enrichment');
+const companyOwnership = require('./company-ownership-guard');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 
@@ -137,11 +138,6 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     const plan = record.plan;
     if (!Number.isInteger(rowNumber) || (targetRows && !targetRows.has(rowNumber))) continue;
     checkedRows.push(rowNumber);
-    const scopedPhoneGroups = (source.schema.personGroups || [])
-      .filter((group) => Number(group.ordinal || 1) <= 2 && group?.fields?.phone);
-    const rowHasIndianPhone = options.requireIndianPhone && scopedPhoneGroups.some((group) =>
-      Boolean(apollo.indianPhone(record.row?.[group.fields.phone.index] || ''))
-    );
     for (const group of source.schema.personGroups || []) {
       const ordinal = Number(group.ordinal || 1);
       if (phaseOrdinal && ordinal !== phaseOrdinal) continue;
@@ -151,8 +147,6 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
       if (required && !snapshot.hasIdentity) requiredIdentityIssues.push({ rowNumber, groupOrdinal: ordinal, reason: 'No verified same-company contact could be found.' });
       if (required && snapshot.hasIdentity) {
         for (const field of ['phone', 'email']) {
-          if (options.requireIndianPhone && field === 'email') continue;
-          if (options.requireIndianPhone && field === 'phone' && rowHasIndianPhone) continue;
           if (group.fields[field] && !text(snapshot.values[field])) contactGaps.push({ rowNumber, groupOrdinal: ordinal, field });
         }
       }
@@ -342,10 +336,10 @@ function mergePrimaryAndFallback(primary, fb) {
 
 async function enforceIndianPhoneCompanyGate(request, options = {}, result = {}) {
   if (!options.requireIndianPhone || options.dryRun) {
-    return { enabled: false, acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
+    return { enabled: false, acceptedRows: [], foreignFallbackRows: [], unresolvedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [], clearedRows: 0, companyRowsDeleted: 0 };
   }
   if (result?.stats?.haltedEarly || result?.postPrimaryError) {
-    return { enabled: true, skippedReason: 'provider-or-system-halt', acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
+    return { enabled: true, skippedReason: 'provider-or-system-halt', acceptedRows: [], foreignFallbackRows: [], unresolvedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [], clearedRows: 0, companyRowsDeleted: 0 };
   }
 
   const source = await base.readUniversalSheet(request.sheetUrl || request.url, {
@@ -364,7 +358,8 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     ? new Set(options.targetRows.map(Number).filter(Number.isInteger))
     : null;
   const accepted = [];
-  const rejected = [];
+  const foreignFallback = [];
+  const unresolved = [];
   const pending = [];
   const skipped = [];
 
@@ -380,6 +375,10 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     const hasIndian = phoneGroups.some((group) =>
       Boolean(apollo.indianPhone(record.row?.[group.fields.phone.index] || ''))
     );
+    const hasForeign = phoneGroups.some((group) => {
+      const phone = record.row?.[group.fields.phone.index] || '';
+      return apollo.validPhone(phone) && !apollo.indianPhone(phone);
+    });
     if (hasIndian) {
       accepted.push(rowNumber);
       continue;
@@ -388,29 +387,30 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
       pending.push(rowNumber);
       continue;
     }
+    if (hasForeign) {
+      foreignFallback.push(rowNumber);
+      continue;
+    }
     if (failedRows.has(rowNumber)) {
       skipped.push(rowNumber);
       continue;
     }
-    rejected.push(rowNumber);
+    unresolved.push(rowNumber);
   }
 
-  let clearedRows = 0;
-  if (rejected.length) {
-    const lastColumnIndex = Math.max(0, ...(source.schema.columns || []).map((column) => Number(column.index) || 0));
-    const cleared = await sheets.clearRows(source.spreadsheetId, source.sheetName, rejected, lastColumnIndex);
-    clearedRows = Number(cleared?.clearedRows || 0);
-  }
   return {
     enabled: true,
-    requiredCountryCode: '+91',
+    preferredCountryCode: '+91',
     pocOrdinals: [1, 2],
-    candidateLimit: 3,
+    candidateLimitPerPoc: 4,
     acceptedRows: accepted,
-    rejectedRows: rejected,
+    foreignFallbackRows: foreignFallback,
+    unresolvedRows: unresolved,
+    rejectedRows: [],
     pendingRows: pending,
     skippedRows: skipped,
-    clearedRows,
+    clearedRows: 0,
+    companyRowsDeleted: 0,
   };
 }
 
@@ -620,6 +620,7 @@ async function runInternal(request = {}, options = {}) {
     resultsFirstSweep: options.resultsFirstSweep !== false,
   };
   return withExactTargetGuards(exact.request, async () => {
+    const companyOwnershipBefore = await companyOwnership.capture(base.readUniversalSheet, exact.request, runOptions);
     // From this point onward, a successful deterministic primary is authoritative.
     // Optional fallback/decorating failures must never invalidate verified writes
     // that base.run() already committed to the worksheet.
@@ -807,10 +808,14 @@ async function runInternal(request = {}, options = {}) {
       if (indianPhoneGate.enabled) {
         Object.assign(primaryStats, {
           requireIndianPhone: true,
+          preferIndianPhone: true,
           indianPhoneAcceptedCompanies: indianPhoneGate.acceptedRows.length,
-          indianPhoneRejectedCompanies: indianPhoneGate.rejectedRows.length,
+          foreignPhoneFallbackCompanies: indianPhoneGate.foreignFallbackRows.length,
+          noPhoneUnresolvedCompanies: indianPhoneGate.unresolvedRows.length,
+          indianPhoneRejectedCompanies: 0,
           indianPhonePendingCompanies: indianPhoneGate.pendingRows.length,
-          indianPhoneRowsCleared: indianPhoneGate.clearedRows,
+          indianPhoneRowsCleared: 0,
+          companyRowsDeleted: 0,
         });
         result = { ...result, stats: { ...(result.stats || {}), ...primaryStats } };
       }
@@ -824,8 +829,13 @@ async function runInternal(request = {}, options = {}) {
         message: typed.message,
         hint: typed.hint,
       };
-      indianPhoneGate = { enabled: true, error: postPrimaryError, acceptedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [] };
+      indianPhoneGate = { enabled: true, error: postPrimaryError, acceptedRows: [], foreignFallbackRows: [], unresolvedRows: [], rejectedRows: [], pendingRows: [], skippedRows: [], clearedRows: 0, companyRowsDeleted: 0 };
     }
+
+    const companyOwnershipAfter = await companyOwnership.capture(base.readUniversalSheet, exact.request, runOptions);
+    const companyOwnershipAudit = companyOwnership.verify(companyOwnershipBefore, companyOwnershipAfter);
+    Object.assign(primaryStats, companyOwnershipAudit);
+    result = { ...result, stats: { ...(result.stats || {}), ...primaryStats } };
 
     let completionGate = null;
     try {
@@ -876,6 +886,7 @@ async function runInternal(request = {}, options = {}) {
       bigPickleFallback: fb,
       completionGate,
       indianPhoneGate,
+      companyOwnershipAudit,
       diagnostics: diagnostics.uniqueIssues([
         ...(completionGate?.issues || []),
         ...diagnostics.classifyLeftovers(primaryStats?.leftoverQueue || []).issues,

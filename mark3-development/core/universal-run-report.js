@@ -16,10 +16,11 @@ function build(result = {}) {
   `${result.sheetName||'Worksheet'} — ${state}`,
   result.validationMode||result.rowLimitApplied?`Validation mode: up to ${result.rowLimitApplied} rows.`:'Full-sheet mode.',
   `Rows processed: ${count('rowsProcessed')}. Rows changed: ${count('rowsChanged')}. Cells changed: ${count('cellsChanged')}.`,
+  `Companies processed: ${s.companyRowCountBefore ?? count('rowsProcessed')}. Companies preserved: ${s.companiesPreserved ?? s.companyRowCountAfter ?? s.companyRowCountBefore ?? 0}. Company rows deleted: ${s.companyRowsDeleted ?? 0}.`,
   `Contacts verified: ${count('contactsVerified')}. Existing contacts repaired: ${count('existingContactsRepaired','existingGroupsRepaired')}. New POCs added: ${count('newContactsAdded','newPeopleSelected')}.`,
   `Phone cells filled: ${count('phoneCellsFilled')}. Email cells filled: ${count('emailCellsFilled')}. Phone lookups pending: ${pending.filter(p=>p.kind==='phone').length}. Email lookups pending: ${pending.filter(p=>p.kind==='email').length}.`,
   result.indianPhoneGate?.enabled
-    ? `Indian-number gate: ${result.indianPhoneGate.acceptedRows?.length||0} companies accepted with +91 evidence; ${result.indianPhoneGate.rejectedRows?.length||0} rejected and ${result.indianPhoneGate.clearedRows||0} cleared; ${result.indianPhoneGate.pendingRows?.length||0} waiting for exact Apollo callbacks. POC scope 1-2; phone-reveal shortlist: two primary decision-makers plus at most one POC-2 fallback.`
+    ? `Indian-number preference: ${result.indianPhoneGate.acceptedRows?.length||0} companies have +91 evidence; ${result.indianPhoneGate.foreignFallbackRows?.length||0} use verified foreign fallback; ${result.indianPhoneGate.unresolvedRows?.length||0} have no verified phone; ${result.indianPhoneGate.pendingRows?.length||0} wait for exact Apollo callbacks. Company rows deleted: 0. POC scope 1-2; at most four distinct finalist attempts per POC.`
     : '',
   poc.join(' '),
   `Provider calls: Apollo ${calls.apollo??0}; LinkedIn ${calls.linkedin??0}; public search ${calls.publicSearch??0}; AI ${calls.ai??result.modelCalls??0}; Google Sheets ${calls.googleSheets??0}.`,

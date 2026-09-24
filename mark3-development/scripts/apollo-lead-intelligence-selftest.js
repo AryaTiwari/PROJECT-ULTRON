@@ -7,6 +7,10 @@ const selector = require('../core/apollo-poc-selector');
 const discovery = require('../core/apollo-company-discovery');
 const projector = require('../core/apollo-lead-sheet-projector');
 const control = require('../core/command-control-plane');
+const queryProvider = require('../core/apollo-company-query-provider');
+const ownership = require('../core/company-ownership-guard');
+const report = require('../core/universal-run-report');
+const fs = require('node:fs');
 
 function person(id, title, phone, email = '', extra = {}) { return { id, apolloPersonId: id, name: `Person ${id}`, title, phone, email, apolloSearchEmployerVerified: true, identityVerified: true, ...extra }; }
 function company(id, name, employees, description = 'AI software product startup', extra = {}) { return { id, name, estimated_num_employees: employees, short_description: description, linkedin_url: `https://www.linkedin.com/company/${id}`, website_url: `https://${id}.example`, country: 'India', ...extra }; }
@@ -72,6 +76,35 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   // A positive request to enrich POCs in an existing Sheet remains owned by universal enrichment.
   const enrichmentQuery = 'Use https://docs.google.com/spreadsheets/d/example/edit?gid=123 and enrich both POCs with Apollo.';
   assert.equal(intent.existingSheetEnrichment(enrichmentQuery), true); assert.equal(control.claim(enrichmentQuery).domain, 'spreadsheet-enrichment');
+  // Progress is read-only and is never claimed by contact enrichment.
+  const progressClaim = control.claim('Apollo lead progress');
+  assert.equal(progressClaim.domain, 'apollo-lead'); assert.equal(progressClaim.readOnlyStatus, true);
+  // 25+ remains open-ended and uses SMB/mid-market as ranking preference only.
+  const atLeast = intent.parseEmployeeRange('SaaS product companies in India with 25+ employees');
+  assert.deepEqual({ min:atLeast.min, max:atLeast.max, hard:atLeast.hard, preferredMax:atLeast.preferredMax }, { min:25, max:null, hard:true, preferredMax:500 });
+  const plans = queryProvider.compile(intent.compile('Find 65 SaaS product companies in India with 25+ employees'));
+  assert.ok(plans.some((plan) => plan.keywords.includes('saas'))); assert.ok(plans.some((plan) => plan.keywords.includes('software product')));
+  // The first empty variant broadens, and Apollo filter provenance can qualify
+  // an organization even when its compact search payload omits description/headcount.
+  let broadCalls = 0;
+  const broadened = await discovery.discover(intent.compile('Find 2 SaaS product companies in India with 25+ employees'), {
+    plans: [{ label:'saas', keywords:['saas'] }, { label:'software product', keywords:['software product'] }], concurrency:1,
+    fetchPage: async (_mission) => { broadCalls++; return broadCalls === 1 ? { items:[] } : { items:[
+      { id:'broad-1', name:'Broad Product One', linkedin_url:'https://linkedin.com/company/broad-1', country:'India' },
+      { id:'broad-2', name:'Broad Product Two', linkedin_url:'https://linkedin.com/company/broad-2', country:'India' },
+    ] }; },
+  });
+  assert.equal(broadCalls, 2); assert.equal(broadened.organizations.length, 2);
+  // Contact enrichment cannot clear company rows and the live ownership guard
+  // rejects count, order, or anchor mutations.
+  const targetedSource = fs.readFileSync(require.resolve('../core/universal-sheet-enrichment-targeted'), 'utf8');
+  assert.equal(/sheets\.clearRows\s*\(/.test(targetedSource), false);
+  const schema = { headerRowIndex:0, companyGroups:[{ fields:{ company:{ index:0 }, linkedin:{ index:1 } } }] };
+  const beforeOwnership = ownership.snapshot({ schema, rows:[['Company','Company Link','POC'],['A','https://linkedin.com/company/a',''],['B','https://linkedin.com/company/b','']] });
+  const afterOwnership = ownership.snapshot({ schema, rows:[['Company','Company Link','POC'],['A','https://linkedin.com/company/a','Person A'],['B','https://linkedin.com/company/b','Person B']] });
+  assert.equal(ownership.verify(beforeOwnership, afterOwnership).companyRowsDeleted, 0);
+  assert.throws(() => ownership.verify(beforeOwnership, ownership.snapshot({ schema, rows:[['Company','Company Link'],['A','https://linkedin.com/company/a']] })), { code:'ENRICHMENT_COMPANY_OWNERSHIP_VIOLATION' });
+  assert.match(report.build({ sheetName:'Arya', stats:{ companyRowCountBefore:2, companyRowCountAfter:2, companiesPreserved:2, companyRowsDeleted:0 }, schema:{ personGroups:[] } }), /Company rows deleted: 0/);
   // Multiple size bands preserve the wider hard allowance and narrower preference.
   const ranged = intent.parseEmployeeRange('Prefer 0-300 employees and allow 0-500 employees.');
   assert.deepEqual({ min:ranged.min, max:ranged.max, preferredMin:ranged.preferredMin, preferredMax:ranged.preferredMax }, { min:0, max:500, preferredMin:0, preferredMax:300 });

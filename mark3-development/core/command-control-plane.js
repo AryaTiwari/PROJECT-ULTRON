@@ -62,6 +62,13 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
 
 function claim(message, options = {}) {
   const text = normalize(message);
+  if (apolloLeadIntent.isApolloLeadStatusRequest(text)) {
+    return Object.freeze({
+      domain: 'apollo-lead', claimed: true, exclusive: true,
+      controller: 'apollo-lead-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null, readOnlyStatus: true,
+    });
+  }
   if (linkedinIntent.isLeadDiscoveryRequest(text)) {
     return Object.freeze({
       domain: 'linkedin', claimed: true, exclusive: true,

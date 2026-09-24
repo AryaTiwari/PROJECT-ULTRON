@@ -6,7 +6,9 @@ const ACTION_WORDS = /\b(?:find|discover|search|source|list|show|bring|get|ident
 
 const EXPANSIONS = Object.freeze({
   ai: ['artificial intelligence', 'machine learning', 'generative ai', 'ai saas', 'ai platform', 'ai product'],
-  saas: ['software as a service', 'cloud software', 'b2b software'],
+  saas: ['software as a service', 'cloud software', 'b2b software', 'enterprise software', 'software platform'],
+  product: ['software product', 'product software', 'software platform', 'application platform'],
+  technology: ['software product', 'software platform', 'cloud software', 'b2b software'],
   cybersecurity: ['cyber security', 'information security', 'network security'],
   'hr tech': ['hrtech', 'human resources technology', 'talent technology'],
   fintech: ['financial technology', 'payments technology'],
@@ -39,6 +41,8 @@ function parseEmployeeRange(input) {
       hard: true,
     };
   }
+  const plus = value.match(/\b(\d[\d,]*)\s*\+\s*employees?\b/i);
+  if (plus) return { min: Number(plus[1].replace(/,/g, '')), max: null, preferredMin: Number(plus[1].replace(/,/g, '')), preferredMax: 500, explicit: true, hard: true };
   const under = value.match(/\b(?:under|below|fewer\s+than|less\s+than|up\s+to|max(?:imum)?)\s+(\d[\d,]*)\s+employees?\b/i);
   if (under) return { min: 0, max: Number(under[1].replace(/,/g, '')), explicit: true, hard: true };
   const over = value.match(/\b(?:over|above|more\s+than|at\s+least|min(?:imum)?)\s+(\d[\d,]*)\s+employees?\b/i);
@@ -159,4 +163,6 @@ function isApolloLeadRequest(input) {
   return ACTION_WORDS.test(value) && (COMPANY_WORDS.test(value) || PEOPLE_WORDS.test(value)) && (/\bapollo\b/i.test(value) || /\b(?:startups?|saas|ai|cyber|fintech|product|technology|software|founders?|recruiters?)\b/i.test(value));
 }
 
-module.exports = { compile, isApolloLeadRequest, parseCount, parseEmployeeRange, parseGeography, baseKeywords, keywordExpansion, parseSheet, enrichmentRequested, existingSheetEnrichment, titleTerms };
+function isApolloLeadStatusRequest(input) { return /\bapollo\s+(?:lead\s+)?(?:mission\s+)?(?:progress|status)\b/i.test(text(input)); }
+
+module.exports = { compile, isApolloLeadRequest, isApolloLeadStatusRequest, parseCount, parseEmployeeRange, parseGeography, baseKeywords, keywordExpansion, parseSheet, enrichmentRequested, existingSheetEnrichment, titleTerms };
