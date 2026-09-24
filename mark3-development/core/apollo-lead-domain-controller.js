@@ -2,7 +2,14 @@
 const compiler = require('./apollo-lead-intent-compiler'); const paid = require('./paid-tool-approval'); const missionStore = require('./apollo-lead-mission-store'); const companies = require('./apollo-company-discovery'); const people = require('./apollo-people-discovery'); const apollo = require('./apollo-enrichment'); const selector = require('./apollo-poc-selector'); const contact = require('./apollo-contactability-policy'); const projector = require('./apollo-lead-sheet-projector');
 const OPERATION = 'apollo-lead-intelligence';
 function response(ok, body, extra = {}) { return { ok, response: body, text: body, model: 'apollo-lead-intelligence', provider: 'apollo', taskType: 'apollo-lead-intelligence', mode: 'operator', toolRounds: 0, ...extra }; }
-function summary(mission) { return `Mission ${mission.missionId}: ${mission.missionType}; target ${mission.targetCount}; geography ${mission.compiledFilters.geography || 'any'}; size ${mission.compiledFilters.employeeRange.min || 1}-${mission.compiledFilters.employeeRange.max || 'any'}; contact enrichment ${mission.compiledFilters.enrichmentRequested ? 'requested' : 'not requested'}.`; }
+function summary(mission) {
+  const filters = mission.compiledFilters || {};
+  const range = filters.employeeRange || {};
+  const size = range.explicit || range.hard
+    ? `size ${range.min == null ? 1 : range.min}-${range.max == null ? 'any' : range.max}`
+    : `SMB preferred ${range.preferredMin || 20}-${range.preferredMax || 300} employees; discovery focus ${range.min || 10}-${range.max || 500}, relax if needed`;
+  return `Mission ${mission.missionId}: ${mission.missionType}; target ${mission.targetCount}; geography ${filters.geography || 'any'}; ${size}; contact enrichment ${filters.enrichmentRequested ? 'requested' : 'not requested'}.`;
+}
 function formatCompanyLines(rows) { return rows.slice(0, 30).map((r, i) => `${i + 1}. ${r.name} — ${r.companyLink}`).join('\n'); }
 function formatPeopleLines(rows) { return rows.slice(0, 30).map((r, i) => `${i + 1}. ${r.name} — ${r.title || 'role unavailable'} — ${r.linkedinUrl || 'Apollo profile'}`).join('\n'); }
 
@@ -20,8 +27,33 @@ async function executeApproved(compiled, missionId) {
   const discovered = await companies.discover(compiled); state.apolloCalls += discovered.apolloCalls; state.paidCalls += discovered.paidCalls; let selected = discovered.organizations.slice(0, compiled.targetCount); let replacements = 0;
   if (compiled.enrichmentRequested) { selected = []; const foreignFallback = []; for (const company of discovered.organizations) { if (selected.length >= compiled.targetCount) break; const pocs = await hydrateCompanyPocs(company, compiled, state); const row = { ...company, ...pocs }; const qualities = pocs.selected.map(contact.quality); if (qualities.some((q) => q >= 3)) selected.push(row); else if (qualities.some((q) => q >= 1)) foreignFallback.push(row); else replacements++; } for (const row of foreignFallback) { if (selected.length >= compiled.targetCount) break; selected.push(row); } }
   const projection = await projector.project(compiled, selected, { includePeople: compiled.enrichmentRequested }); const p1 = selected.filter((r) => r.poc1).length; const p2 = selected.filter((r) => r.poc2).length; const india = selected.flatMap((r) => [r.poc1, r.poc2]).filter((p) => p && contact.indianPhone(p.phone, p.country || p.location)).length; const foreign = selected.flatMap((r) => [r.poc1, r.poc2]).filter((p) => p && contact.validPhone(p.phone) && !contact.indianPhone(p.phone, p.country || p.location)).length;
-  const final = missionStore.update(mission.missionId, { currentPhase: 'completed', completionReason: selected.length >= compiled.targetCount ? 'target_reached' : 'bounded_reserve_exhausted', companyCandidatesFound: discovered.candidatesFound, companiesQualified: discovered.qualified, companiesRejected: discovered.rejected, companiesSelected: selected.length, peopleDiscovered: state.peopleDiscovered, peopleVerified: state.peopleVerified, phoneAvailabilityChecked: state.phoneAvailabilityChecked, phoneReveals: state.phoneReveals, emailReveals: state.emailReveals, POC1Selected: p1, POC2Selected: p2, companiesReplacedForContactability: replacements, apolloCalls: state.apolloCalls, paidCalls: state.paidCalls, rowsWritten: projection.rowsWritten, remainingTarget: Math.max(0, compiled.targetCount - selected.length), safetyState: 'complete' });
-  const body = compiled.enrichmentRequested ? `Source: Apollo\nCompanies selected: ${selected.length}\nCompanies written: ${projection.rowsWritten}\nPOC-1 filled: ${p1}\nPOC-2 filled: ${p2}\nCompanies replaced due to poor contactability: ${replacements}\nIndian-number POCs: ${india}\nForeign-number fallback POCs: ${foreign}\nApollo contact reveals: ${state.phoneReveals}` : `Source: Apollo\nCompanies discovered: ${selected.length}\nCompanies written: ${projection.rowsWritten}\nPOC enrichment: not requested\nApollo contact reveals: 0\n${formatCompanyLines(selected)}`;
+  const final = missionStore.update(mission.missionId, {
+    currentPhase: 'completed',
+    completionReason: selected.length >= compiled.targetCount ? 'target_reached' : 'bounded_reserve_exhausted',
+    companyCandidatesFound: discovered.candidatesFound,
+    companiesQualified: discovered.qualified,
+    companiesRejected: discovered.rejected,
+    companiesSelected: selected.length,
+    searchVariantsTried: discovered.searchVariantsTried || 0,
+    searchDiagnostics: discovered.searchDiagnostics || [],
+    peopleDiscovered: state.peopleDiscovered,
+    peopleVerified: state.peopleVerified,
+    phoneAvailabilityChecked: state.phoneAvailabilityChecked,
+    phoneReveals: state.phoneReveals,
+    emailReveals: state.emailReveals,
+    POC1Selected: p1,
+    POC2Selected: p2,
+    companiesReplacedForContactability: replacements,
+    apolloCalls: state.apolloCalls,
+    paidCalls: state.paidCalls,
+    rowsWritten: projection.rowsWritten,
+    remainingTarget: Math.max(0, compiled.targetCount - selected.length),
+    safetyState: 'complete',
+  });
+  const discoveryAudit = `Apollo organization search pages: ${discovered.apolloCalls}; search variants tried: ${discovered.searchVariantsTried || 0}; raw unique candidates: ${discovered.candidatesFound}; qualified: ${discovered.qualified}.`;
+  const body = compiled.enrichmentRequested
+    ? `Source: Apollo\nCompanies selected: ${selected.length}\nCompanies written: ${projection.rowsWritten}\nPOC-1 filled: ${p1}\nPOC-2 filled: ${p2}\nCompanies replaced due to poor contactability: ${replacements}\nIndian-number POCs: ${india}\nForeign-number fallback POCs: ${foreign}\nApollo contact reveals: ${state.phoneReveals}\n${discoveryAudit}`
+    : `Source: Apollo\nCompanies discovered: ${selected.length}\nCompanies written: ${projection.rowsWritten}\nPOC enrichment: not requested\nApollo contact reveals: 0\n${discoveryAudit}\n${formatCompanyLines(selected)}`;
   return response(true, body, { mission: final, records: selected, projection });
 }
 
