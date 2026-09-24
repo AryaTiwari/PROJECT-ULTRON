@@ -62,6 +62,7 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   assert.equal(intent.isApolloLeadControlRequest('Apollo lead progress'), true);
   assert.equal(control.claim('Apollo lead progress').domain, 'apollo-lead');
   assert.equal(control.claim('Apollo lead status').controller, 'apollo-lead-domain-controller');
+  assert.equal(intent.isApolloLeadControlRequest('Apollo lead doctor'), true);
   assert.deepEqual(
     {
       min:simple.employeeRange.min,
@@ -130,8 +131,8 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   assert.equal(mentionedSheet.sheetName, 'Arya');
 
   const unresolvedMention = intent.compile(
-    'Find me 25 tech product companies. Fill this Google Sheet: @24-sept, worksheet "Arya". Discovery only.',
-    { attachments: [{ id:'local-only', name:'24-sept.xlsx', source:'local', metadata:null }] },
+    'Find me 25 tech product companies. Fill this Google Sheet: @__apollo_selftest_unbound_20260924__, worksheet "Arya". Discovery only.',
+    { attachments: [{ id:'local-only', name:'selftest.xlsx', source:'local', metadata:null }] },
   ).sheet;
   assert.equal(unresolvedMention.requested, true);
   assert.equal(unresolvedMention.url, '');
