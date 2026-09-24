@@ -64,11 +64,16 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   // Negated contact clauses do not steal discovery-only Sheet prompts from Apollo lead discovery.
   const detailedQuery = 'Find 25 technology product startup companies in India. Fill https://docs.google.com/spreadsheets/d/example/edit?gid=123 worksheet Arya-24 sept. Discovery only - do not find POCs, emails, or phone numbers.';
   assert.equal(intent.existingSheetEnrichment(detailedQuery), false); assert.equal(control.claim(detailedQuery).domain, 'apollo-lead');
+  // Markdown-rendered Sheet links must use the destination URL, not an escaped visible label.
+  const markdownSheetQuery = 'Find me 25 tech product companies. Fill this Google Sheet: [https://docs.google.com/spreadsheets/d/14A6ElzTqKG4Gxc\\_dqpI8Iz3NLrZ2MpcpfvBBym8hsww/edit?gid=1566066221#gid=1566066221](https://docs.google.com/spreadsheets/d/14A6ElzTqKG4Gxc_dqpI8Iz3NLrZ2MpcpfvBBym8hsww/edit?gid=1566066221#gid=1566066221), worksheet "Arya". Discovery only.';
+  const markdownSheet = intent.compile(markdownSheetQuery).sheet;
+  assert.equal(markdownSheet.url, 'https://docs.google.com/spreadsheets/d/14A6ElzTqKG4Gxc_dqpI8Iz3NLrZ2MpcpfvBBym8hsww/edit?gid=1566066221#gid=1566066221');
+  assert.equal(markdownSheet.sheetName, 'Arya');
   // A positive request to enrich POCs in an existing Sheet remains owned by universal enrichment.
   const enrichmentQuery = 'Use https://docs.google.com/spreadsheets/d/example/edit?gid=123 and enrich both POCs with Apollo.';
   assert.equal(intent.existingSheetEnrichment(enrichmentQuery), true); assert.equal(control.claim(enrichmentQuery).domain, 'spreadsheet-enrichment');
   // Multiple size bands preserve the wider hard allowance and narrower preference.
   const ranged = intent.parseEmployeeRange('Prefer 0-300 employees and allow 0-500 employees.');
   assert.deepEqual({ min:ranged.min, max:ranged.max, preferredMin:ranged.preferredMin, preferredMax:ranged.preferredMax }, { min:0, max:500, preferredMin:0, preferredMax:300 });
-  console.log('Apollo Lead Intelligence self-test passed: company discovery and enrichment contracts, simple and detailed input routing, hard 0-1,000 employee default, source ownership, SMB bias, reserve replacement, verified two-POC selection, contactability policy, safe projection and zero-reveal discovery validated.');
+  console.log('Apollo Lead Intelligence self-test passed: company discovery and enrichment contracts, simple, detailed and Markdown-link input routing, hard 0-1,000 employee default, source ownership, SMB bias, reserve replacement, verified two-POC selection, contactability policy, safe projection and zero-reveal discovery validated.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

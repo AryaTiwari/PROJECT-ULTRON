@@ -150,6 +150,8 @@ function artifactResponse(kind, result) {
   return `Done, Sir. I generated the ${noun} and attached it here.`;
 }
 
+const runtimeBuild = require('./core/runtime-build');
+
 const server = http.createServer(async (req,res) => {
   try {
     if (req.method === 'OPTIONS') return send(res,204,'');
@@ -161,7 +163,7 @@ const server = http.createServer(async (req,res) => {
     if (req.method === 'GET' && req.url === '/api/health') {
       const [router, brain, multimodalStatus] = await Promise.all([integrations.health(), codingBrain.health(), multimodal.status()]);
       return send(res, router.ok ? 200 : 503, {
-        ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.22', interfaceMode:'native-audio-multimodal-flow',
+        ok:Boolean(router.ok), service:'ULTRON Mark 3', version:'3.0.0-beta.22', buildId:runtimeBuild.id, revision:runtimeBuild.revision, sourceFingerprint:runtimeBuild.fingerprint, interfaceMode:'native-audio-multimodal-flow',
         behavior:{ ...(integrations.founderBehaviorStatus ? integrations.founderBehaviorStatus() : founderBehavior.status()), replyWindowMs:REPLY_WINDOW_MS, memorySeed:founderMemorySeed },
         operatingMode:operatingModes.status(), github:gitPublisher.status(config.projectRoot),
         inference:router, modelLeague:{enabled:leagueEnabled,arenaAutoEnabled,...modelArena.status()}, codingBrain:brain,

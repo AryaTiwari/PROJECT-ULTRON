@@ -81,7 +81,12 @@ function keywordExpansion(keywords) {
 
 function parseSheet(input) {
   const value = text(input);
-  const url = value.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+[^\s)]*/i)?.[0]?.replace(/[),.;!?]+$/, '') || '';
+  // Chat renderers commonly turn pasted URLs into Markdown and escape
+  // underscores in the visible label. Prefer the real Markdown destination;
+  // otherwise canonicalize a plain/escaped URL without consuming `](`.
+  const markdownUrl = value.match(/\[[^\]]*\]\((https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+[^\s)]*)\)/i)?.[1] || '';
+  const plainUrl = value.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_\\-]+[^\s)\],]*/i)?.[0] || '';
+  const url = (markdownUrl || plainUrl).replace(/\\([_-])/g, '$1').replace(/[),.;!?]+$/, '');
   const name = value.match(/\b(?:worksheet|tab|sheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})["'`“”]?/i)?.[1]?.trim() || '';
   return { url, sheetName: /^(?:at|below|link)$/i.test(name) ? '' : name };
 }
