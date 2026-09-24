@@ -7,6 +7,7 @@ const selector = require('../core/apollo-poc-selector');
 const discovery = require('../core/apollo-company-discovery');
 const projector = require('../core/apollo-lead-sheet-projector');
 const control = require('../core/command-control-plane');
+const apolloLeadController = require('../core/apollo-lead-domain-controller');
 
 function person(id, title, phone, email = '', extra = {}) { return { id, apolloPersonId: id, name: `Person ${id}`, title, phone, email, apolloSearchEmployerVerified: true, identityVerified: true, ...extra }; }
 function company(id, name, employees, description = 'AI software product startup', extra = {}) { return { id, name, estimated_num_employees: employees, short_description: description, linkedin_url: `https://www.linkedin.com/company/${id}`, website_url: `https://${id}.example`, country: 'India', ...extra }; }
@@ -134,6 +135,10 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   ).sheet;
   assert.equal(unresolvedMention.requested, true);
   assert.equal(unresolvedMention.url, '');
+  await assert.rejects(
+    () => apolloLeadController.preflightDestination({ ...simple, sheet: unresolvedMention }),
+    (error) => error?.code === 'APOLLO_LEAD_SHEET_SOURCE_UNRESOLVED'
+  );
   // A positive request to enrich POCs in an existing Sheet remains owned by universal enrichment.
   const enrichmentQuery = 'Use https://docs.google.com/spreadsheets/d/example/edit?gid=123 and enrich both POCs with Apollo.';
   assert.equal(intent.existingSheetEnrichment(enrichmentQuery), true); assert.equal(control.claim(enrichmentQuery).domain, 'spreadsheet-enrichment');
