@@ -1973,9 +1973,15 @@ function previousCheckedJobIds(request = {}) {
   for (const mission of loadState().missions || []) {
     if (mission?.status !== 'completed') continue;
     if (criteriaSignature(mission.request || {}) !== signature) continue;
+    const retryableIds = new Set((mission.rejectedRecords || [])
+      .filter((record) => Array.isArray(record?.rejectionReasons)
+        && record.rejectionReasons.includes('employee_count')
+        && !record.employeeCount)
+      .map((record) => String(record.jobId || '').trim())
+      .filter(Boolean));
     for (const id of mission?.toolCalls?.checkedJobIds || []) {
       const value = String(id || '').trim();
-      if (value) ids.add(value);
+      if (value && !retryableIds.has(value)) ids.add(value);
     }
   }
   return ids;
@@ -2080,7 +2086,7 @@ async function companyMission(request) {
     // Even with zero fresh-call budget, enter one search step. missionRunner.call
     // will replay saved discovery at zero cost; if no cache exists, budgetedCall
     // raises the real safety gate and the mission parks instead of completing 0/target.
-    const liveSearchAllowance = budget.maximum < 1 ? 1 : adaptiveSearchAllowance;
+    const liveSearchAllowance = budget.maximum < 1 ? 0 : adaptiveSearchAllowance;
     const maxSearchSteps = acceptedCompanies.size >= request.count ? 0 : plan.length;
     let liveSearches = 0;
     let freshSearchDeferredForVerification = 0;
@@ -2105,6 +2111,7 @@ async function companyMission(request) {
         sort_by: 'relevance',
       };
       const cachedSearch = Boolean(missionRunner.cachedExact?.('search_jobs', searchArgs, { recordHit: false })?.hit);
+      const savedReplayPending = Boolean(request.resumeExistingPool && !missionRunner.active()?.discoveryReplayed);
       if (!cachedSearch) {
         const ready = verificationReadyJobIds(jobMeta, request, previouslyChecked, destinationJobIds);
         const remaining = Math.max(1, request.count - acceptedCompanies.size);
@@ -2114,7 +2121,7 @@ async function companyMission(request) {
           break;
         }
       }
-      if (!cachedSearch && liveSearches >= liveSearchAllowance) break;
+      if (!cachedSearch && liveSearches >= liveSearchAllowance && !savedReplayPending) break;
       const budgetBeforeSearch = Number(budget.used || 0);
       let result;
       try {
@@ -2300,7 +2307,10 @@ async function companyMission(request) {
         break;
       }
       jobDetails++;
-      checkedJobIds.push(String(jobId));
+      const markJobChecked = () => {
+        const value = String(jobId);
+        if (!checkedJobIds.includes(value)) checkedJobIds.push(value);
+      };
       missionRunner.updateProgress({
         phase: 'verifying_jobs',
         uniqueJobIds: jobMeta.size,
@@ -2336,10 +2346,10 @@ async function companyMission(request) {
             || companyRefs[0];
         }
       }
-      if (!preferred) continue;
+      if (!preferred) { markJobChecked(); continue; }
 
       const record = referenceRecord(preferred, request);
-      if (!record) continue;
+      if (!record) { markJobChecked(); continue; }
 
       const meta = jobMeta.get(jobId) || {};
       record.jobId = String(jobId);
@@ -2401,6 +2411,7 @@ async function companyMission(request) {
       if (jobFailures.length) {
         record.preProfileFailures = jobFailures;
         records.push(record);
+        markJobChecked();
         continue;
       }
 
@@ -2415,6 +2426,7 @@ async function companyMission(request) {
         || (destinationKey && destinationCompanyKeys.has(destinationKey))
       )) {
         record.globalSeen = true;
+        markJobChecked();
         continue;
       }
 
@@ -2422,6 +2434,7 @@ async function companyMission(request) {
       const companyKey = normalizedCompany?.slug || String(record.company || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
       if (!companyKey) {
         records.push(record);
+        markJobChecked();
         continue;
       }
 
@@ -2432,6 +2445,7 @@ async function companyMission(request) {
         if (Number(record.relevanceScore || 0) > Number(existingCompany.relevanceScore || 0)) {
           mergeDuplicateRecord(existingCompany, record);
         }
+        markJobChecked();
         continue;
       }
 
@@ -2445,13 +2459,11 @@ async function companyMission(request) {
           if (fetched.cacheHit) cachedCompanyProfileHits++;
           else {
             cachedCompanyProfileMisses++;
-            records.push(record);
             continue;
           }
         }
         const deep = fetched.value;
         if (!deep) {
-          records.push(record);
           if (budget.used >= budget.maximum) continue;
           break;
         }
@@ -2517,6 +2529,7 @@ async function companyMission(request) {
 
       profileCheckedCompanies.set(companyKey, record);
       records.push(record);
+      markJobChecked();
 
       if (companyFilterFailures(record, request).length === 0) {
         const globallySeen = !request.allowPreviouslySeenCompanies && finalMaster.seen(record);
@@ -4344,9 +4357,14 @@ function formatMission(mission) {
     : mission.destinationMode === 'recovery-sheet'
       ? ` The requested master Sheet could not be written (${mission.destinationWriteError?.code || 'GOOGLE_SHEETS_API_ERROR'}: ${mission.destinationWriteError?.message || 'unknown Sheets error'}). I preserved the verified results in this recovery Sheet instead; your remembered master Sheet was not changed.`
       : '';
-  const label = mission.found < mission.requested || mission.budgetStopped
-    ? 'Partial result — safe search exhausted'
-    : 'LinkedIn lead discovery complete';
+  const continuing = (mission.found < mission.requested || mission.budgetStopped)
+    && mission.request?.persistentUntilTarget
+    && !mission.searchStrategiesExhausted;
+  const label = continuing
+    ? 'LinkedIn lead discovery checkpoint — continuing automatically'
+    : mission.found < mission.requested || mission.budgetStopped
+      ? 'Partial result — safe search exhausted'
+      : 'LinkedIn lead discovery complete';
   const expansion = mission.locationExpansion
     ? ` Location expansion: ${mission.locationExpansion.requested || mission.request?.location || 'requested area'} → approximately ${mission.locationExpansion.currentRadiusKm} km (${mission.locationExpansion.searchedLocations.join(', ')}).`
     : '';

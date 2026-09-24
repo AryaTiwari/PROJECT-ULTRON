@@ -1,0 +1,4 @@
+'use strict';
+const paid = require('./paid-tool-approval'); const controller = require('./apollo-lead-domain-controller');
+async function execute(decision) { if (!decision || decision.operation !== controller.OPERATION || decision.tool !== 'apollo') return null; if (decision.status === 'denied') return controller.response(true, 'Apollo was not used. The Apollo lead mission was cancelled.', { paidToolApproval: decision, apolloCalled: false }); if (decision.status !== 'approved') return null; try { return await paid.withPermit(decision, () => controller.executeApproved(decision.payload.compiled, decision.payload.missionId)); } catch (error) { return controller.response(false, `Apollo lead mission stopped safely: ${error.message}`, { error: error.code || 'APOLLO_LEAD_MISSION_FAILED', paidToolApproval: decision }); } }
+module.exports = { execute };

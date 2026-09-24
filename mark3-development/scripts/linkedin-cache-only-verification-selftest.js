@@ -147,7 +147,7 @@ async function waitFor(fn) {
   });
 
   const queued = runner.enqueue({ request });
-  await waitFor(() => ['completed', 'partial', 'failed', 'waiting_safety'].includes(runner.get(queued.id).status));
+  await waitFor(() => captured && ['completed', 'partial', 'failed', 'waiting_safety'].includes(runner.get(queued.id).status));
 
   const finished = runner.get(queued.id);
 

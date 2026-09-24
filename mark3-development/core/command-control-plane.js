@@ -2,6 +2,7 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 const scope = new AsyncLocalStorage();
 const linkedinIntent = require('./linkedin-lead-intent');
+const apolloLeadIntent = require('./apollo-lead-intent-compiler');
 
 // Ownership precedes interpretation. No model/bootstrap import belongs here.
 // HTTP dispatch owns exclusive domain routing and paid-tool approval re-entry.
@@ -75,6 +76,13 @@ function claim(message, options = {}) {
       artifactAllowed: false, allowWebFallback: false, yieldTo: null,
     });
   }
+  if (apolloLeadIntent.isApolloLeadRequest(text)) {
+    return Object.freeze({
+      domain: 'apollo-lead', claimed: true, exclusive: true,
+      controller: 'apollo-lead-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+    });
+  }
   if (isUniversalSpreadsheetEnrichmentRequest(text, options)) {
     return Object.freeze({
       domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
@@ -111,6 +119,7 @@ function invariantCodeForDomain(domain) {
   if (domain === 'linkedin') return 'LINKEDIN_ROUTE_INVARIANT_VIOLATION';
   if (domain === 'three-poc-spreadsheet') return 'THREE_POC_ROUTE_INVARIANT_VIOLATION';
   if (domain === 'spreadsheet-enrichment') return 'SPREADSHEET_ENRICHMENT_ROUTE_INVARIANT_VIOLATION';
+  if (domain === 'apollo-lead') return 'APOLLO_LEAD_ROUTE_INVARIANT_VIOLATION';
   return 'DOMAIN_ROUTE_INVARIANT_VIOLATION';
 }
 
@@ -118,7 +127,7 @@ function assertAllowed(kind, { model = '', messages = [] } = {}) {
   const current = scope.getStore();
   if (kind === 'general-model' && current?.internalInferenceDomain && current?.route?.domain === current.internalInferenceDomain) return;
   if (kind === 'direct-model'
-      && ['spreadsheet-enrichment', 'linkedin'].includes(current?.internalInferenceDomain)
+      && ['spreadsheet-enrichment', 'linkedin', 'apollo-lead'].includes(current?.internalInferenceDomain)
       && current?.route?.domain === current.internalInferenceDomain) return;
   const lastUser = (Array.isArray(messages) ? messages : []).filter(item => item.role === 'user').at(-1)?.content;
   const inferred = !current && !isInternalModelPayload(lastUser) ? claim(typeof lastUser === 'string' ? lastUser : '') : null;
@@ -159,14 +168,17 @@ async function resolveUniversalPaidApproval(message) {
   const paidTools = require('./paid-tool-approval');
   const handler = require('./universal-paid-approval-handler');
   const pending = paidTools.pending('apollo');
-  if (!pending || pending.operation !== handler.OPERATION) return null;
+  if (!pending) return null;
 
   const decision = paidTools.resolveMessage(String(message || ''));
   if (!decision) return null;
 
   let result;
   try {
-    result = await handler.execute(decision);
+    if (decision.operation === handler.OPERATION) result = await handler.execute(decision);
+    else if (decision.operation === require('./apollo-lead-domain-controller').OPERATION) {
+      result = await require('./apollo-lead-approval-handler').execute(decision);
+    } else result = null;
   } catch (error) {
     const typedErrors = require('./spreadsheet-enrichment-errors');
     const typed = typedErrors.normalize(error, {
@@ -194,9 +206,10 @@ async function resolveUniversalPaidApproval(message) {
   }
   if (!result) return null;
 
+  const apolloLead = decision.operation === require('./apollo-lead-domain-controller').OPERATION;
   const route = Object.freeze({
-    domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
-    controller: 'universal-spreadsheet-domain-controller', generalModelAllowed: false,
+    domain: apolloLead ? 'apollo-lead' : 'spreadsheet-enrichment', claimed: true, exclusive: true,
+    controller: apolloLead ? 'apollo-lead-domain-controller' : 'universal-spreadsheet-domain-controller', generalModelAllowed: false,
     artifactAllowed: false, allowWebFallback: false, yieldTo: null,
     approvalReentry: true,
   });
@@ -229,7 +242,9 @@ async function dispatch(message, options = {}) {
       ? require('./universal-spreadsheet-domain-controller')
       : route.controller === 'three-poc-domain-controller'
         ? require('./three-poc-domain-controller')
-        : require('./linkedin-domain-controller');
+        : route.controller === 'apollo-lead-domain-controller'
+          ? require('./apollo-lead-domain-controller')
+          : require('./linkedin-domain-controller');
     try {
       const result = await controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage });
       if (scope.getStore().violation) throw scope.getStore().violation;
