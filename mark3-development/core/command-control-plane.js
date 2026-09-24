@@ -62,6 +62,14 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
 
 function claim(message, options = {}) {
   const text = normalize(message);
+  if (apolloLeadIntent.isApolloLeadControlRequest?.(text)) {
+    return Object.freeze({
+      domain: 'apollo-lead', claimed: true, exclusive: true,
+      controller: 'apollo-lead-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+      controlCommand: true,
+    });
+  }
   if (linkedinIntent.isLeadDiscoveryRequest(text)) {
     return Object.freeze({
       domain: 'linkedin', claimed: true, exclusive: true,
@@ -274,6 +282,19 @@ async function dispatch(message, options = {}) {
           provider: 'local-spreadsheet-control',
           taskType: 'universal-sheet-enrichment',
           route: route.domain,
+          routing: route,
+        };
+      }
+      if (route.domain === 'apollo-lead') {
+        return {
+          ok: false,
+          text: error.message,
+          response: error.message,
+          error: error.code || 'APOLLO_LEAD_CONTROLLER_FAILED',
+          model: 'apollo-lead-intelligence',
+          provider: 'apollo',
+          taskType: 'apollo-lead-intelligence',
+          route: 'apollo-lead',
           routing: route,
         };
       }

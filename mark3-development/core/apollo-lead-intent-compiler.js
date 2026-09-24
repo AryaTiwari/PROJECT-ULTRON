@@ -82,16 +82,85 @@ function keywordExpansion(keywords) {
   return unique(out).slice(0, 12);
 }
 
-function parseSheet(input) {
+function googleSheetUrlFromValue(value) {
+  const raw = text(value);
+  if (!raw) return '';
+  const direct = raw.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_\\-]+[^\s)\],]*/i)?.[0] || '';
+  if (direct) return direct.replace(/\\([_-])/g, '$1').replace(/[),.;!?]+$/, '');
+  return '';
+}
+
+function attachmentSheetUrl(context = {}) {
+  for (const candidate of [
+    context.sheetUrl,
+    context.spreadsheetUrl,
+    context.googleSheetUrl,
+    context.sourceUrl,
+    context.url,
+  ]) {
+    const url = googleSheetUrlFromValue(candidate);
+    if (url) return url;
+  }
+
+  const attachments = Array.isArray(context.attachments) ? context.attachments : [];
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== 'object') continue;
+    const meta = attachment.metadata && typeof attachment.metadata === 'object' ? attachment.metadata : {};
+    const candidates = [
+      attachment.sheetUrl,
+      attachment.spreadsheetUrl,
+      attachment.googleSheetUrl,
+      attachment.webViewLink,
+      attachment.sourceUrl,
+      attachment.url,
+      meta.sheetUrl,
+      meta.spreadsheetUrl,
+      meta.googleSheetUrl,
+      meta.webViewLink,
+      meta.sourceUrl,
+      meta.url,
+    ];
+    for (const candidate of candidates) {
+      const url = googleSheetUrlFromValue(candidate);
+      if (url) return url;
+    }
+
+    const provider = text(attachment.provider || attachment.source || meta.provider || meta.source).toLowerCase();
+    const spreadsheetId = text(
+      attachment.spreadsheetId
+      || attachment.googleSheetId
+      || meta.spreadsheetId
+      || meta.googleSheetId
+    );
+    if (spreadsheetId && /^(?:google|google[_ -]?drive|google[_ -]?sheets?)$/.test(provider)) {
+      return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+    }
+  }
+  return '';
+}
+
+function parseSheet(input, context = {}) {
   const value = text(input);
   // Chat renderers commonly turn pasted URLs into Markdown and escape
   // underscores in the visible label. Prefer the real Markdown destination;
-  // otherwise canonicalize a plain/escaped URL without consuming `](`.
+  // otherwise canonicalize a plain/escaped URL without consuming ](.
   const markdownUrl = value.match(/\[[^\]]*\]\((https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+[^\s)]*)\)/i)?.[1] || '';
   const plainUrl = value.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_\\-]+[^\s)\],]*/i)?.[0] || '';
-  const url = (markdownUrl || plainUrl).replace(/\\([_-])/g, '$1').replace(/[),.;!?]+$/, '');
+  const url = (markdownUrl || plainUrl || attachmentSheetUrl(context))
+    .replace(/\\([_-])/g, '$1')
+    .replace(/[),.;!?]+$/, '');
   const name = value.match(/\b(?:worksheet|tab|sheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})["'`“”]?/i)?.[1]?.trim() || '';
-  return { url, sheetName: /^(?:at|below|link)$/i.test(name) ? '' : name };
+  const requested = Boolean(
+    url
+    || /@[\w .()\-]{2,}/.test(value)
+    || /\b(?:fill|write|append|add|save|put)\b[\s\S]{0,120}\b(?:google\s+sheet|spreadsheet|worksheet|sheet|tab)\b/i.test(value)
+  );
+  return {
+    url,
+    sheetName: /^(?:at|below|link)$/i.test(name) ? '' : name,
+    requested,
+    attachmentResolved: Boolean(!markdownUrl && !plainUrl && url),
+  };
 }
 
 function enrichmentRequested(input) {
@@ -123,9 +192,9 @@ function titleTerms(input) {
   return [...new Set(groups)];
 }
 
-function compile(input) {
+function compile(input, context = {}) {
   const query = text(input);
-  const sheet = parseSheet(query);
+  const sheet = parseSheet(query, context);
   const existing = existingSheetEnrichment(query);
   const people = !existing && peopleEntity(query);
   const enrich = enrichmentRequested(query);
@@ -152,6 +221,13 @@ function compile(input) {
   });
 }
 
+
+function isApolloLeadControlRequest(input) {
+  const value = text(input);
+  return /\bapollo\s+(?:lead\s+)?(?:mission\s+)?(?:progress|status)\b/i.test(value)
+    || /\bapollo\s+mission\s+apollo-[a-z0-9-]+\b/i.test(value);
+}
+
 function isApolloLeadRequest(input) {
   const value = text(input);
   if (!value || /\blinkedin\b/i.test(value) || /\bgoogle\s+maps?\b/i.test(value)) return false;
@@ -162,4 +238,4 @@ function isApolloLeadRequest(input) {
   return ACTION_WORDS.test(value) && (COMPANY_WORDS.test(value) || PEOPLE_WORDS.test(value)) && (/\bapollo\b/i.test(value) || /\b(?:startups?|saas|ai|cyber|fintech|product|technology|software|founders?|recruiters?)\b/i.test(value));
 }
 
-module.exports = { compile, isApolloLeadRequest, parseCount, parseEmployeeRange, parseGeography, baseKeywords, keywordExpansion, parseSheet, enrichmentRequested, existingSheetEnrichment, titleTerms };
+module.exports = { compile, isApolloLeadRequest, isApolloLeadControlRequest, parseCount, parseEmployeeRange, parseGeography, baseKeywords, keywordExpansion, parseSheet, attachmentSheetUrl, googleSheetUrlFromValue, enrichmentRequested, existingSheetEnrichment, titleTerms };
