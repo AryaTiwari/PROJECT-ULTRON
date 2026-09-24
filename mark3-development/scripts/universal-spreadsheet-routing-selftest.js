@@ -4,6 +4,7 @@ const assert = require('assert/strict');
 const control = require('../core/command-control-plane');
 const targetResolver = require('../core/universal-sheet-target-resolver');
 const spreadsheetController = require('../core/universal-spreadsheet-domain-controller');
+const enrichmentOperator = require('../core/universal-sheet-enrichment-operator');
 
 const url = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit';
 
@@ -137,6 +138,28 @@ assert.equal(whitespaceTarget.target.name, 'Arya ');
 assert.equal(whitespaceTarget.target.sheetId, 1566066221);
 assert.equal(whitespaceTarget.targetSource, 'name+gid');
 
+// Approved execution must not trim a real Google worksheet identifier. Prefer
+// immutable sheetId when available, but still recover a unique human-entered
+// trimmed title while preserving Google's exact title for A1 reads/writes.
+const executionById = enrichmentOperator.selectUniversalSheetTargets(whitespaceMeta, {
+  sheetName: 'Arya',
+  sheetId: 1566066221,
+});
+assert.equal(executionById.targets.length, 1);
+assert.equal(executionById.targets[0].name, 'Arya ');
+assert.equal(executionById.targets[0].sheetId, 1566066221);
+assert.equal(executionById.matchedBy, 'sheetId');
+
+const executionByFoldedName = enrichmentOperator.selectUniversalSheetTargets(whitespaceMeta, {
+  sheetName: 'Arya',
+});
+assert.equal(executionByFoldedName.targets.length, 1);
+assert.equal(executionByFoldedName.targets[0].name, 'Arya ');
+assert.equal(executionByFoldedName.matchedBy, 'folded-name');
+
+assert.equal(enrichmentOperator.exactSheetTitle('Arya '), 'Arya ');
+assert.equal(enrichmentOperator.foldedSheetTitle('Arya '), 'arya');
+
 assert.throws(
   () => targetResolver.resolveTabs(meta, aryaUrl, { sheetName: 'Divya' }),
   (error) => error && error.code === 'UNIVERSAL_SHEET_TARGET_CONFLICT'
@@ -191,4 +214,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, isolated 3-POC compatibility, quoted tab/worksheet parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, exact Google titles with surrounding whitespace, and visible validation/full-sheet mode are protected.');
+console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, isolated 3-POC compatibility, quoted tab/worksheet parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, exact Google titles with surrounding whitespace survive approved execution by sheetId/folded-name without identifier trimming, and visible validation/full-sheet mode are protected.');
