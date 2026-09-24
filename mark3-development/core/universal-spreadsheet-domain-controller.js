@@ -258,7 +258,7 @@ function recoverMentionedSheetName(meta = {}, sourceText = '') {
 
 function metadataFallbackTarget(sheetUrl, requestedSheetName) {
   const requestedGid = targetResolver.parseGid(sheetUrl);
-  const sheetId = Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null;
+  const sheetId = requestedGid !== null && requestedGid !== undefined && Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null;
   return {
     targeted: true,
     targetSource: 'explicit-name-metadata-fallback',
