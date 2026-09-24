@@ -8,9 +8,9 @@ function classify(health, currentBuildId = build.id) {
   return health.buildId === currentBuildId ? 'current' : 'stale';
 }
 
-function probe(timeoutMs = 1500) {
+function probePath(path, timeoutMs) {
   return new Promise((resolve) => {
-    const request = http.get({ host: config.host, port: config.port, path: '/api/health', timeout: timeoutMs }, (response) => {
+    const request = http.get({ host: config.host, port: config.port, path, timeout: timeoutMs }, (response) => {
       let raw = '';
       response.setEncoding('utf8');
       response.on('data', (chunk) => { raw += chunk; });
@@ -22,6 +22,14 @@ function probe(timeoutMs = 1500) {
     request.on('timeout', () => request.destroy());
     request.on('error', () => resolve({ reachable: false, health: null, status: null }));
   });
+}
+
+async function probe() {
+  const runtime = await probePath('/api/runtime', 2000);
+  if (runtime.health?.service === 'ULTRON Mark 3') return runtime;
+  // Builds created before /api/runtime expose identity through the slower health
+  // endpoint. This fallback is needed only once during an upgrade.
+  return probePath('/api/health', 20000);
 }
 
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -52,4 +60,4 @@ async function replaceStale() {
 }
 
 if (require.main === module) replaceStale().catch((error) => { console.error(`[Mark 3] ${error.message}`); process.exitCode = 1; });
-module.exports = { classify, probe, waitUntilStopped, replaceStale };
+module.exports = { classify, probePath, probe, waitUntilStopped, replaceStale };

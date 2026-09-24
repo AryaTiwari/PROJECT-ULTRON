@@ -160,6 +160,7 @@ const server = http.createServer(async (req,res) => {
       try { return send(res, 200, { ok: true, mission: runner.summary(runner.get(req.url.split('/').pop())) }); }
       catch { return send(res, 404, { ok: false, error: 'LINKEDIN_MISSION_NOT_FOUND' }); }
     }
+    if (req.method === 'GET' && req.url === '/api/runtime') return send(res, 200, { ok:true, service:'ULTRON Mark 3', version:'3.0.0-beta.22', buildId:runtimeBuild.id, revision:runtimeBuild.revision, sourceFingerprint:runtimeBuild.fingerprint, pid:process.pid, port:config.port });
     if (req.method === 'GET' && req.url === '/api/health') {
       const [router, brain, multimodalStatus] = await Promise.all([integrations.health(), codingBrain.health(), multimodal.status()]);
       return send(res, router.ok ? 200 : 503, {
