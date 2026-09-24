@@ -156,6 +156,18 @@ async function discover(mission, options = {}) {
         qualifiedAfterMerge: ranked.length,
       });
 
+      if (typeof options.onProgress === 'function') {
+        await options.onProgress({
+          variantId: variant.id || 'default',
+          page,
+          candidatesFound: rawByKey.size,
+          qualified: ranked.length,
+          searchVariantsTried: diagnostics.length,
+          apolloCalls: calls,
+          target,
+        });
+      }
+
       // Empty or short pages mean this query shape is exhausted. Move to the
       // next deterministic variant rather than declaring the whole mission empty.
       if (!items.length || items.length < perPage) break;
