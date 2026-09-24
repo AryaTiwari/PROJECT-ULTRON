@@ -10,6 +10,7 @@ const targetResolver = require('./universal-sheet-target-resolver');
 const inspector = require('./universal-sheet-inspector');
 const approvalHandler = require('./universal-paid-approval-handler');
 const typedErrors = require('./spreadsheet-enrichment-errors');
+const runtimeBuild = require('./runtime-build');
 
 approvalHandler.install();
 
@@ -27,6 +28,7 @@ function parseSheetName(message) {
     /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet|worksheet)\b/im,
     /(?:^|\n)\s*(?:target|use|sheet|tab|worksheet)\s+(?:only\s+)?(?:tab|sheet|worksheet)?\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})/im,
     /(?:^|\n)\s*target\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet|worksheet)\s+["'`“”]?([^\n"'`“”]{1,120})/im,
+    /(?:^|\n)\s*(?:worksheet|sheet|tab)\s+["'`“”]?([^\n,.;"'`“”]{1,120})["'`“”]?\s*[.]?$/im,
     /\b(?:target|use)\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet|worksheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})/i,
     // Common production phrasing: "Enrich ... on the \"Arya 2\" worksheet".
     /\bon\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
@@ -162,15 +164,19 @@ function rowLimitNotice(rowLimit) {
 }
 
 function response(ok, body, extra = {}) {
+  const stamped = `${String(body || '').trim()}\n\n[universal-sheet · build ${String(runtimeBuild.revision || '').slice(0, 8) || 'unknown'} · src ${runtimeBuild.fingerprint}]`;
   return {
     ok,
-    response: body,
-    text: body,
+    response: stamped,
+    text: stamped,
     model: 'mark3-universal-hybrid-enrichment',
     provider: 'deterministic+apollo+google-sheets+bounded-direct-env-ai',
     taskType: 'universal-sheet-enrichment',
     mode: 'operator',
     toolRounds: 0,
+    runtimeBuildId: runtimeBuild.id,
+    runtimeRevision: runtimeBuild.revision,
+    runtimeSourceFingerprint: runtimeBuild.fingerprint,
     ...extra,
   };
 }
@@ -252,7 +258,7 @@ function recoverMentionedSheetName(meta = {}, sourceText = '') {
 
 function metadataFallbackTarget(sheetUrl, requestedSheetName) {
   const requestedGid = targetResolver.parseGid(sheetUrl);
-  const sheetId = Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null;
+  const sheetId = requestedGid !== null && requestedGid !== undefined && Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null;
   return {
     targeted: true,
     targetSource: 'explicit-name-metadata-fallback',

@@ -114,7 +114,7 @@ function foldedSheetTitle(value) {
 
 function selectUniversalSheetTargets(meta = {}, options = {}) {
   const requestedName = exactSheetTitle(options.sheetName);
-  const requestedSheetId = Number.isFinite(Number(options.sheetId)) ? Number(options.sheetId) : null;
+  const requestedSheetId = options.sheetId !== null && options.sheetId !== undefined && String(options.sheetId).trim() !== '' && Number.isFinite(Number(options.sheetId)) ? Number(options.sheetId) : null;
   const tabs = (meta.sheets || [])
     .map((sheet) => ({
       name: exactSheetTitle(sheet?.properties?.title),
