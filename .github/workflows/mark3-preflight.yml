@@ -43,6 +43,9 @@ jobs:
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight
+      - name: Run Apollo lead intelligence regression
+        working-directory: mark3-development
+        run: npm run check:apollo-leads
       - name: Run LinkedIn account subsystem regression
         working-directory: mark3-development
         run: npm run check:linkedin-account
