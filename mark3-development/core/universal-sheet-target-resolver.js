@@ -26,11 +26,14 @@ function parseGid(value) {
 function tabsFromMetadata(meta = {}) {
   return (meta.sheets || [])
     .map((sheet) => ({
-      name: text(sheet?.properties?.title),
+      // Preserve Google's exact title for A1 reads/writes. Matching may ignore
+      // accidental surrounding whitespace, but sending a trimmed title back to
+      // Google targets a different worksheet name and produces TAB_NOT_FOUND.
+      name: String(sheet?.properties?.title ?? ''),
       sheetId: Number(sheet?.properties?.sheetId),
       index: Number(sheet?.properties?.index),
     }))
-    .filter((tab) => tab.name && Number.isFinite(tab.sheetId));
+    .filter((tab) => text(tab.name) && Number.isFinite(tab.sheetId));
 }
 
 function namedTab(tabs, requestedName) {
@@ -38,10 +41,9 @@ function namedTab(tabs, requestedName) {
   if (!wanted) return null;
   const exact = tabs.find((tab) => tab.name === wanted);
   if (exact) return exact;
-  const folded = tabs.filter((tab) => tab.name.toLocaleLowerCase() === wanted.toLocaleLowerCase());
+  const folded = tabs.filter((tab) => text(tab.name).toLocaleLowerCase() === wanted.toLocaleLowerCase());
   return folded.length === 1 ? folded[0] : null;
 }
-
 function targetError(code, message, details = {}) {
   const error = new Error(message);
   error.code = code;

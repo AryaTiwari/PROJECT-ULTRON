@@ -123,6 +123,20 @@ const matchingNameAndGid = targetResolver.resolveTabs(meta, aryaUrl, { sheetName
 assert.equal(matchingNameAndGid.targetSource, 'name+gid');
 assert.equal(matchingNameAndGid.target.name, 'Arya 2');
 
+// Human-entered names may omit invisible surrounding whitespace, but the exact
+// metadata title must be retained when constructing the downstream A1 range.
+const whitespaceMeta = {
+  sheets: [{ properties: { title: 'Arya ', sheetId: 1566066221, index: 0 } }],
+};
+const whitespaceTarget = targetResolver.resolveTabs(
+  whitespaceMeta,
+  'https://docs.google.com/spreadsheets/d/example/edit?gid=1566066221#gid=1566066221',
+  { sheetName: 'Arya', explicitNameAuthoritative: true },
+);
+assert.equal(whitespaceTarget.target.name, 'Arya ');
+assert.equal(whitespaceTarget.target.sheetId, 1566066221);
+assert.equal(whitespaceTarget.targetSource, 'name+gid');
+
 assert.throws(
   () => targetResolver.resolveTabs(meta, aryaUrl, { sheetName: 'Divya' }),
   (error) => error && error.code === 'UNIVERSAL_SHEET_TARGET_CONFLICT'
@@ -177,4 +191,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, isolated 3-POC compatibility, quoted tab/worksheet parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, and visible validation/full-sheet mode are protected.');
+console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, isolated 3-POC compatibility, quoted tab/worksheet parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, exact Google titles with surrounding whitespace, and visible validation/full-sheet mode are protected.');
