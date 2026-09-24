@@ -10,21 +10,27 @@ const apollo = require('./apollo-enrichment');
 const selector = require('./apollo-poc-selector');
 const contact = require('./apollo-contactability-policy');
 const projector = require('./apollo-lead-sheet-projector');
+const contract = require('./apollo-lead-contract');
 
 const OPERATION = 'apollo-lead-intelligence';
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 
 function response(ok, body, extra = {}) {
+  const annotated = contract.annotate(body);
   return {
     ok,
-    response: body,
-    text: body,
+    response: annotated,
+    text: annotated,
     model: 'apollo-lead-intelligence',
     provider: 'apollo',
     taskType: 'apollo-lead-intelligence',
     mode: 'operator',
     toolRounds: 0,
+    apolloLeadContractVersion: contract.VERSION,
+    runtimeBuildId: contract.runtimeBuild.id,
+    runtimeRevision: contract.runtimeBuild.revision,
+    runtimeSourceFingerprint: contract.runtimeBuild.fingerprint,
     ...extra,
   };
 }
@@ -86,6 +92,18 @@ async function preflightDestination(compiled) {
     error.code = 'APOLLO_LEAD_COMPANY_LINK_COLUMN_REQUIRED';
     error.stage = 'apollo-lead-sheet-preflight';
     throw error;
+  }
+
+  if (compiled.sheet?.alias) {
+    compiler.sheetAliases.bind(compiled.sheet.alias, compiled.sheet.url, {
+      sheetName: info.target.name,
+      spreadsheetId: info.id,
+      source: compiled.sheet.attachmentResolved
+        ? 'verified-attachment'
+        : compiled.sheet.aliasResolved
+          ? 'verified-alias'
+          : 'verified-explicit-url',
+    });
   }
 
   return Object.freeze({
@@ -320,6 +338,22 @@ async function executeApproved(compiled, missionId) {
 
 async function handle(message, options = {}) {
   if (compiler.isApolloLeadControlRequest(message)) {
+    if (/\b(?:doctor|diagnostic|benchmark\s+status)\b/i.test(message)) {
+      const latest = runner.progress(missionIdFromProgressMessage(message));
+      const aliases = compiler.sheetAliases.list();
+      return response(true, [
+        'Apollo Lead doctor',
+        `Contract: ${contract.VERSION}`,
+        `Runtime build: ${contract.runtimeBuild.id}`,
+        `Progress route owner: apollo-lead-domain-controller`,
+        `Known live Sheet aliases: ${aliases.length}`,
+        latest ? `Latest mission: ${latest.missionId} · ${latest.phase}` : 'Latest mission: none',
+      ].join('\n'), {
+        mission: latest,
+        sheetAliases: aliases,
+        approvalRequired: false,
+      });
+    }
     const missionId = missionIdFromProgressMessage(message);
     const status = runner.progress(missionId);
     return response(true, progressBody(status), {
@@ -377,4 +411,5 @@ module.exports = {
   hydrateCompanyPocs,
   executeApproved,
   handle,
+  contract,
 };
