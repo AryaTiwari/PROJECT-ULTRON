@@ -22,9 +22,13 @@ function exactSheetTitle(value) { return value == null ? '' : String(value); }
 function syntheticResolution(request, sheetUrl) {
   const name = exactSheetTitle(request.sheetName);
   const requestedGid = targetResolver.parseGid(sheetUrl);
-  const sheetId = Number.isFinite(Number(request.sheetId))
+  const explicitSheetId = request.sheetId !== null && request.sheetId !== undefined && String(request.sheetId).trim() !== '' && Number.isFinite(Number(request.sheetId))
     ? Number(request.sheetId)
-    : (Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null);
+    : null;
+  const gidSheetId = requestedGid !== null && requestedGid !== undefined && Number.isFinite(Number(requestedGid))
+    ? Number(requestedGid)
+    : null;
+  const sheetId = explicitSheetId ?? gidSheetId;
   return {
     targeted: Boolean(name || sheetId != null),
     targetSource: 'explicit-target-metadata-fallback',
