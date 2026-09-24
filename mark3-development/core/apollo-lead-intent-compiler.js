@@ -232,7 +232,7 @@ function compile(input, context = {}) {
 
 function isApolloLeadControlRequest(input) {
   const value = text(input);
-  return /\bapollo\s+(?:lead\s+)?(?:mission\s+)?(?:progress|status)\b/i.test(value)
+  return /\bapollo\s+(?:lead\s+)?(?:mission\s+)?(?:progress|status|doctor|diagnostic|benchmark\s+status)\b/i.test(value)
     || /\bapollo\s+mission\s+apollo-[a-z0-9-]+\b/i.test(value);
 }
 
