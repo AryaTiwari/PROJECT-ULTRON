@@ -11,15 +11,15 @@ function text(value) { return String(value == null ? '' : value).trim(); }
 function normalizeAlias(value) {
   return text(value)
     .replace(/^@+/, '')
-    .replace(/.(?:xlsx?|csv)$/i, '')
+    .replace(/\.(?:xlsx?|csv)$/i, '')
     .toLowerCase()
     .replace(/[^a-z0-9._ -]+/g, ' ')
-    .replace(/s+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
 function aliasFromInput(input) {
-  const match = text(input).match(/@([A-Za-z0-9][A-Za-z0-9._ -]{0,80}?)(?=s*,|s+worksheet|s+sheet|s+tab|[.;!?]|$)/i);
+  const match = text(input).match(/@([A-Za-z0-9][A-Za-z0-9._ -]{0,80}?)(?=\s*,|\s+worksheet\b|\s+sheet\b|\s+tab\b|[.;!?]|$)/i);
   return normalizeAlias(match?.[1] || '');
 }
 
