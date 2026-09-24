@@ -11,6 +11,23 @@ assert.equal(controller.parseIndianPhonePolicy('Require Indian phone numbers (+9
 assert.equal(controller.parseIndianPhonePolicy('Only accept India mobile numbers and remove foreign-only companies.'), true);
 assert.equal(controller.parseIndianPhonePolicy('Enrich phone and email columns.'), false);
 assert.equal(controller.parseExpectedPersonGroups('Use POC-1 and POC-2 only.'), 2);
+assert.equal(controller.parseExpectedPersonGroups('Enrich with 1st and 2nd POC.'), 2);
+const previousExpectedGroups = process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS;
+process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS = '3';
+assert.equal(controller.parseExpectedPersonGroups('Enrich with 1st and 2nd POC.'), 2);
+if (previousExpectedGroups == null) delete process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS;
+else process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS = previousExpectedGroups;
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich with 1st and 2nd POC.'), true);
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich POC-1 and POC-2.'), true);
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich two POCs.'), true);
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich POC-2 only.'), false);
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich POC-1, POC-2 and POC-3.'), false);
+const automaticSummary = controller.approvalSummary({
+  sheetName: 'Leads',
+  schema: { personGroups: [{}, {}], companyGroups: [], headerRowNumber: 1 },
+  analysis: { stats: { openPersonSlots: 2, partialPersonSlots: 0 } },
+}, { requireIndianPhone: true, indianPhonePolicySource: 'automatic-poc1-poc2-default' });
+assert.match(automaticSummary, /Indian-number hard gate \(automatic POC-1\/POC-2 default\)/);
 
 assert.equal(operator.contactabilityTier({ phone: '+1 415 555 0123', email: 'hr@example.com' }), 2);
 assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210' }), 3);
@@ -43,4 +60,4 @@ assert.doesNotMatch(targetedSource, /deleteDimension/);
 const reportSource = fs.readFileSync(require.resolve('../core/universal-run-report'), 'utf8');
 assert.match(reportSource, /i\.rowNumber.*i\.target.*i\.problem/);
 
-console.log('Indian POC phone policy self-test passed: explicit +91 company gating, POC-1\/POC-2 scope, India-first ranking, mature POC-2 rescue preservation, bounded three-person shortlist, pending-callback preservation, duplicate-report collapse and non-shifting rejected-row clearing are protected.');
+console.log('Indian POC phone policy self-test passed: automatic two-POC defaults, explicit +91 company gating, POC-1\/POC-2 scope, India-first ranking, mature POC-2 rescue preservation, bounded three-person shortlist, pending-callback preservation, duplicate-report collapse and non-shifting rejected-row clearing are protected.');

@@ -162,7 +162,7 @@ setImmediate(async () => {
   try {
     const linkedinAccount = require('../linkedin-account-bootstrap').install();
     const safety = linkedinAccount.safety || {};
-    console.log(`[Mark 3] LinkedIn Account Research ready; loopback-only MCP=on, read-only actions=on, hourly cap=${safety.hourlyMax || 12}, daily cap=${safety.dailyMax || 35}.`);
+    console.log(`[Mark 3] LinkedIn Account Research ready; loopback-only MCP=on, read-only actions=on, hourly cap=${safety.hourlyMax || 12}, daily cap=${safety.dailyCapEnabled === false ? 'temporarily disabled today' : (safety.dailyMax || 35)}.`);
   } catch (error) { console.error(`[Mark 3] LinkedIn Account Research bootstrap failed: ${error.message}`); }
 
 

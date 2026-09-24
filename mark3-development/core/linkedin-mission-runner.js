@@ -150,6 +150,8 @@ function summary(m) {
     burstUsed: Number(safetyStatus.burstUsed || 0), burstMax: Number(safetyStatus.burstMax || 0),
     hourlyUsed: Number(safetyStatus.hourlyUsed || 0), hourlyMax: Number(safetyStatus.hourlyMax || 0),
     dailyUsed: Number(safetyStatus.dailyUsed || 0), dailyMax: Number(safetyStatus.dailyMax || 0),
+    dailyCapEnabled: Boolean(safetyStatus.dailyCapEnabled),
+    dailyOverrideUntil: safetyStatus.dailyOverrideUntil || null,
     nextEligibleAt: safetyStatus.nextEligibleAt || null,
   };
   return { id: m.id, status: m.status, updatedAt: m.updatedAt, calls: m.calls || 0,

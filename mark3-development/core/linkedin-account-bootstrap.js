@@ -157,7 +157,7 @@ function missionProgressText(job) {
   if (!waiting && Number.isFinite(Number(job.estimatedActiveMsRemaining)) && job.estimatedActiveMsRemaining >= 0) parts.push(`Estimated active work remaining: ${formatDuration(job.estimatedActiveMsRemaining)}`);
   const safety = job.safety || {};
   if (Number.isFinite(Number(safety.hourlyMax)) && safety.hourlyMax > 0) {
-    parts.push(`Account safety use: ${safety.burstUsed}/${safety.burstMax} short-window, ${safety.hourlyUsed}/${safety.hourlyMax} hourly, ${safety.dailyUsed}/${safety.dailyMax} daily calls`);
+    parts.push(`Account safety use: ${safety.burstUsed}/${safety.burstMax} short-window, ${safety.hourlyUsed}/${safety.hourlyMax} hourly, ${safety.dailyUsed}/${safety.dailyMax} rolling-24-hour calls${safety.dailyCapEnabled === false ? ' (daily cap temporarily disabled today)' : ''}`);
   }
   parts.push(`Mission calls: ${job.calls}; cached responses reused: ${job.cacheHits}`);
   if (Number.isFinite(Number(p.budgetUsed)) && Number.isFinite(Number(p.budgetMaximum))) parts.push(`Current batch call budget: ${p.budgetUsed}/${p.budgetMaximum}`);
@@ -263,7 +263,7 @@ async function handle(message, options = {}) {
       } else if (isUnlockRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-account-unlock', inputMode });
         const safety = policy.clearManualLock('user explicitly confirmed LinkedIn account unlock after manual verification');
-        result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} today. Normal rate limits still apply.`, { linkedinSafety: safety });
+        result = responseShape(true, `LinkedIn account safety lock cleared by your explicit command. Current usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour and ${safety.dailyUsed}/${safety.dailyMax} rolling 24 hours${safety.dailyCapEnabled === false ? ' (daily cap temporarily disabled today)' : ''}. Normal rate limits still apply.`, { linkedinSafety: safety });
       } else if (commandRouter.isApolloEnrichmentRequest(text)) {
         conversation.append('user', text, { taskType: 'linkedin-apollo-enrichment-request', inputMode });
 

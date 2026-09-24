@@ -22,12 +22,13 @@ const progressText = bootstrap.missionProgressText({
   targetRequested: 10, targetTotal: 18, masterCurrent: 11, masterRemaining: 7,
   addedSinceStart: 3, elapsedMs: 2700000, activeWorkMs: 240000, safetyWaitMsRemaining: 300000,
   contract: { target: { mode: 'additional' } },
-  safety: { burstUsed: 12, burstMax: 12, hourlyUsed: 30, hourlyMax: 30, dailyUsed: 69, dailyMax: 100 },
+  safety: { burstUsed: 12, burstMax: 12, hourlyUsed: 30, hourlyMax: 30, dailyUsed: 120, dailyMax: 120, dailyCapEnabled: false, dailyOverrideUntil: '2026-09-25T00:00:00+05:30' },
   progress: { phase: 'waiting_safety', uniqueJobIds: 190, jobDetailsChecked: 8, companyProfilesChecked: 1,
     verificationCandidatesRemaining: 12, budgetUsed: 12, budgetMaximum: 12,
     nextEligibleAt: '2026-09-23T10:45:31.953Z', safetyReason: 'Hourly safety cap' },
 });
 assert.match(progressText, /Progress: 3\/10 requested companies added; 7 remain/);
+assert.match(progressText, /daily cap temporarily disabled today/);
 assert.match(progressText, /Safety wait remaining: 5m 0s/);
 assert.match(progressText, /30\/30 hourly/);
 assert.doesNotMatch(progressText, /Estimated active work remaining/);
@@ -555,32 +556,56 @@ assert.equal(policy.eventCountsTowardSafety({ errorKind: 'transient' }), false);
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'auth' }), false);
 assert.equal(policy.eventCountsTowardSafety({ errorKind: 'rate-limit' }), true);
 
-const schedulerNow = Date.now();
+const schedulerNow = Date.parse('2026-09-24T12:00:00+05:30');
 const schedulerRuntimeBypass = process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
 const schedulerTestBypass = process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 // This assertion validates NORMAL safety scheduling, so isolate it from an
 // emergency runtime override inherited from the shell running this self-test.
 delete process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
 delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
-const schedulerLimit = policy.settings().dailyMax;
-const schedulerEvents = Array.from({ length: schedulerLimit + 2 }, (_, index) => ({
+assert.equal(policy.temporaryDailyOverrideActive(Date.parse('2026-09-24T12:00:00+05:30')), true);
+assert.equal(policy.temporaryDailyOverrideActive(Date.parse('2026-09-25T00:00:01+05:30')), false);
+assert.equal(policy.settings(schedulerNow).dailyCapEnabled, false, 'The authorized one-day India override must be active on 2026-09-24.');
+assert.equal(policy.settings(Date.parse('2026-09-25T00:00:01+05:30')).dailyCapEnabled, true, 'The normal daily cap must restore after the India date boundary.');
+
+const dailyTelemetryEvents = Array.from({ length: policy.settings(schedulerNow).dailyMax + 2 }, (_, index) => ({
   at: schedulerNow - (20 * 60 * 60 * 1000) + (index * 1000),
   tool: 'get_job_details',
   ok: true,
   countsTowardSafety: true,
 }));
-const schedulerState = {
-  events: schedulerEvents,
+const dailyTelemetryState = {
+  events: dailyTelemetryEvents,
   cooldownUntil: null,
   manualLock: null,
   lastCallAt: null,
   lastSafetyCallAt: null,
 };
-const expectedReady = schedulerEvents[2].at + (24 * 60 * 60 * 1000) + 1000;
 assert.equal(
-  Date.parse(policy.nextEligibleAt(schedulerState, schedulerNow)),
-  expectedReady,
-  'When usage is above the daily cap, nextEligibleAt must jump until enough events expire to get below the cap.'
+  Date.parse(policy.nextEligibleAt(dailyTelemetryState, schedulerNow)),
+  schedulerNow,
+  'Daily usage remains visible but cannot delay calls during the authorized one-day override.'
+);
+
+const hourlyLimit = policy.settings(schedulerNow).hourlyMax;
+const hourlyEvents = Array.from({ length: hourlyLimit + 2 }, (_, index) => ({
+  at: schedulerNow - (50 * 60 * 1000) + (index * 1000),
+  tool: 'search_jobs',
+  ok: true,
+  countsTowardSafety: true,
+}));
+const hourlyState = {
+  events: hourlyEvents,
+  cooldownUntil: null,
+  manualLock: null,
+  lastCallAt: null,
+  lastSafetyCallAt: null,
+};
+const expectedHourlyReady = hourlyEvents[2].at + (60 * 60 * 1000) + 1000;
+assert.equal(
+  Date.parse(policy.nextEligibleAt(hourlyState, schedulerNow)),
+  expectedHourlyReady,
+  'Hourly cap scheduling must remain authoritative during the one-day daily-cap override.'
 );
 if (schedulerRuntimeBypass == null) delete process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
 else process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS = schedulerRuntimeBypass;

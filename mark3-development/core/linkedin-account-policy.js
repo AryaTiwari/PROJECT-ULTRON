@@ -33,13 +33,33 @@ function booleanSetting(name, fallback = false) {
   return /^(?:1|true|yes|on)$/i.test(String(raw).trim());
 }
 
+const TEMPORARY_DAILY_OVERRIDE_DATE = '2026-09-24';
+
+function indiaDateKey(now = Date.now()) {
+  return new Date(Number(now) + (5.5 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+}
+
+function temporaryDailyOverrideActive(now = Date.now(), configured = null) {
+  const configuredDate = String(
+    configured || process.env.ULTRON_M3_LINKEDIN_DAILY_OVERRIDE_DATE || TEMPORARY_DAILY_OVERRIDE_DATE
+  ).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(configuredDate) && indiaDateKey(now) === configuredDate;
+}
+
+function indiaNextDateStart(dateKey) {
+  const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const next = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 1));
+  return `${next.toISOString().slice(0, 10)}T00:00:00+05:30`;
+}
+
 function runtimeAllowsTestBypass(scriptPath = process.argv?.[1], nodeEnv = process.env.NODE_ENV) {
   const script = String(scriptPath || '').toLowerCase();
   return /(?:selftest|live-test|diagnostic|doctor)\.(?:js|mjs|cjs)$/.test(script)
     || String(nodeEnv || '').toLowerCase() === 'test';
 }
 
-function settings() {
+function settings(now = Date.now()) {
   const speedProfile = String(process.env.ULTRON_M3_LINKEDIN_SPEED_PROFILE || 'fast-safe').trim().toLowerCase();
   const migrateLegacy = speedProfile !== 'custom';
   const profiledNumber = (name, fallback, legacyDefaults, min, max) => {
@@ -50,6 +70,11 @@ function settings() {
     const value = shouldMigrate ? fallback : (Number.isFinite(parsed) ? parsed : fallback);
     return Math.max(min, Math.min(max, value));
   };
+
+  const dailyOverrideDate = String(
+    process.env.ULTRON_M3_LINKEDIN_DAILY_OVERRIDE_DATE || TEMPORARY_DAILY_OVERRIDE_DATE
+  ).trim();
+  const dailyCapEnabled = !temporaryDailyOverrideActive(now, dailyOverrideDate);
 
   return {
     speedProfile,
@@ -69,6 +94,11 @@ function settings() {
     burstMax: profiledNumber('ULTRON_M3_LINKEDIN_BURST_MAX', 12, [10, 12], 2, 12),
     burstWindowMs: profiledNumber('ULTRON_M3_LINKEDIN_BURST_WINDOW_MS', 5 * 60 * 1000, [10 * 60 * 1000, 8 * 60 * 1000], 5 * 60 * 1000, 30 * 60 * 1000),
     hourlyMax: profiledNumber('ULTRON_M3_LINKEDIN_HOURLY_MAX', 30, [24, 28], 2, 30),
+    // One-day operator-authorized exception. It expires automatically at the
+    // India date boundary; hourly/burst/provider/checkpoint safety stays active.
+    dailyCapEnabled,
+    dailyOverrideDate,
+    dailyOverrideUntil: dailyCapEnabled ? null : indiaNextDateStart(dailyOverrideDate),
     dailyMax: profiledNumber('ULTRON_M3_LINKEDIN_DAILY_MAX', 120, [75, 90, 100], 5, 120),
     missionToolMax: profiledNumber('ULTRON_M3_LINKEDIN_MISSION_TOOL_MAX', 16, [12], 3, 20),
     rateLimitCooldownMs: profiledNumber('ULTRON_M3_LINKEDIN_RATE_LIMIT_COOLDOWN_MS', 10 * 60 * 1000, [30 * 60 * 1000], 5 * 60 * 1000, 6 * 60 * 60 * 1000),
@@ -233,7 +263,7 @@ function preflight(tool) {
       error.code = 'LINKEDIN_HOURLY_CAP';
       throw error;
     }
-    if (counts.daily >= limits.dailyMax) {
+    if (limits.dailyCapEnabled && counts.daily >= limits.dailyMax) {
       const error = new Error(`LinkedIn daily safety cap reached (${counts.daily}/${limits.dailyMax}). Resume tomorrow rather than pushing the account harder.`);
       error.code = 'LINKEDIN_DAILY_CAP';
       throw error;
@@ -324,7 +354,7 @@ function nextEligibleAt(state = loadState(), now = Date.now()) {
     return current.cooldownUntil;
   }
 
-  const limits = settings();
+  const limits = settings(now);
   if (limits.localBudgetBypass) return new Date(now).toISOString();
   const events = (current.events || []).filter(eventCountsTowardSafety).map((event) => Number(event.at || 0)).filter(Number.isFinite).sort((a, b) => a - b);
   const candidates = [now];
@@ -350,9 +380,11 @@ function nextEligibleAt(state = loadState(), now = Date.now()) {
   const hourReady = thresholdExpiry(hourEvents, limits.hourlyMax, 60 * 60 * 1000);
   if (hourReady) candidates.push(hourReady);
 
-  const dayEvents = events.filter((at) => at >= now - 24 * 60 * 60 * 1000);
-  const dayReady = thresholdExpiry(dayEvents, limits.dailyMax, 24 * 60 * 60 * 1000);
-  if (dayReady) candidates.push(dayReady);
+  if (limits.dailyCapEnabled) {
+    const dayEvents = events.filter((at) => at >= now - 24 * 60 * 60 * 1000);
+    const dayReady = thresholdExpiry(dayEvents, limits.dailyMax, 24 * 60 * 60 * 1000);
+    if (dayReady) candidates.push(dayReady);
+  }
 
   return new Date(Math.max(...candidates)).toISOString();
 }
@@ -373,12 +405,17 @@ function status() {
     burstUsed: counts.burst,
     hourlyUsed: counts.hourly,
     dailyUsed: counts.daily,
+    dailyCapEnabled: Boolean(settings().dailyCapEnabled),
+    dailyOverrideDate: settings().dailyOverrideDate,
+    dailyOverrideUntil: settings().dailyOverrideUntil,
     eventBreakdown,
     nextEligibleAt: nextEligibleAt(state),
     overCapBy: {
       burst: Math.max(0, Number(counts.burst || 0) - Number(settings().burstMax || 0) + 1),
       hourly: Math.max(0, Number(counts.hourly || 0) - Number(settings().hourlyMax || 0) + 1),
-      daily: Math.max(0, Number(counts.daily || 0) - Number(settings().dailyMax || 0) + 1),
+      daily: settings().dailyCapEnabled
+        ? Math.max(0, Number(counts.daily || 0) - Number(settings().dailyMax || 0) + 1)
+        : 0,
     },
     rateLimitStrikes24h: recentRateLimitStrikes(state),
     localBudgetBypass: Boolean(settings().localBudgetBypass),
@@ -395,6 +432,9 @@ module.exports = {
   settings,
   booleanSetting,
   runtimeAllowsTestBypass,
+  indiaDateKey,
+  temporaryDailyOverrideActive,
+  indiaNextDateStart,
   loadState,
   saveState,
   classifyError,

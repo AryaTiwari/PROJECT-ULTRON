@@ -1436,7 +1436,7 @@ function safetyBudgetBlock(safety = policy.status()) {
   if (Number(safety.hourlyUsed || 0) >= Number(safety.hourlyMax || Infinity)) {
     return { code: 'LINKEDIN_HOURLY_CAP', message: 'LinkedIn hourly safety cap is still active.' };
   }
-  if (Number(safety.dailyUsed || 0) >= Number(safety.dailyMax || Infinity)) {
+  if (safety.dailyCapEnabled !== false && Number(safety.dailyUsed || 0) >= Number(safety.dailyMax || Infinity)) {
     return { code: 'LINKEDIN_DAILY_CAP', message: 'LinkedIn daily safety cap is still active.' };
   }
   return null;
@@ -1444,14 +1444,15 @@ function safetyBudgetBlock(safety = policy.status()) {
 
 function missionCallBudget() {
   const safety = policy.status();
+  const activeBudgets = [
+    safety.missionToolMax,
+    safety.burstMax - safety.burstUsed,
+    safety.hourlyMax - safety.hourlyUsed,
+  ];
+  if (safety.dailyCapEnabled !== false) activeBudgets.push(safety.dailyMax - safety.dailyUsed);
   const maximum = safety.localBudgetBypass
     ? Number.MAX_SAFE_INTEGER
-    : Math.max(0, Math.min(
-      safety.missionToolMax,
-      safety.burstMax - safety.burstUsed,
-      safety.hourlyMax - safety.hourlyUsed,
-      safety.dailyMax - safety.dailyUsed,
-    ));
+    : Math.max(0, Math.min(...activeBudgets));
   return {
     maximum,
     used: 0,
@@ -4303,7 +4304,7 @@ function statusText() {
   const apolloReady = apollo.status().apiKeyReady && apollo.status().webhookReady;
   const testMode = safety.localBudgetBypass ? ' TEMP TEST MODE: local burst/hourly/daily budgets are bypassed; real LinkedIn cooldowns, checkpoints and write-action blocks remain enforced.' : '';
   const mcpStatus = mcp.status();
-  return `LinkedIn Account Research: dedicated LinkedIn-only routing is ready. Primary backend: ${mcpStatus.provider} ${mcpStatus.package} through ${mcpStatus.transport} MCP using ${mcpStatus.sdk}; connected=${mcpStatus.sessionInitialized ? 'yes' : 'no'}, required tools discovered=${mcpStatus.discoveredTools?.length || 0}. Apollo company-head selection/contact enrichment ${apolloReady ? 'ready' : 'needs API key + webhook setup'}. Optional joeyism fallback ${s.joeyism.enabled ? (s.joeyism.sessionReady ? 'enabled and session-ready' : 'enabled but needs manual session setup') : 'disabled'}. Usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour, ${safety.dailyUsed}/${safety.dailyMax} today. Minimum call gap ${Math.round(safety.minGapMs / 1000)}s, deep-profile cap ${safety.deepProfilesPerMission}/mission. LinkedIn write actions are disabled.${testMode}${lock}`;
+  return `LinkedIn Account Research: dedicated LinkedIn-only routing is ready. Primary backend: ${mcpStatus.provider} ${mcpStatus.package} through ${mcpStatus.transport} MCP using ${mcpStatus.sdk}; connected=${mcpStatus.sessionInitialized ? 'yes' : 'no'}, required tools discovered=${mcpStatus.discoveredTools?.length || 0}. Apollo company-head selection/contact enrichment ${apolloReady ? 'ready' : 'needs API key + webhook setup'}. Optional joeyism fallback ${s.joeyism.enabled ? (s.joeyism.sessionReady ? 'enabled and session-ready' : 'enabled but needs manual session setup') : 'disabled'}. Usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour, ${safety.dailyUsed}/${safety.dailyMax} rolling 24 hours${safety.dailyCapEnabled === false ? ' (daily cap temporarily disabled today)' : ''}. Minimum call gap ${Math.round(safety.minGapMs / 1000)}s, deep-profile cap ${safety.deepProfilesPerMission}/mission. LinkedIn write actions are disabled.${testMode}${lock}`;
 }
 
 function formatMission(mission) {

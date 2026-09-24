@@ -62,12 +62,22 @@ function parseExpectedPersonGroups(message) {
   for (const match of value.matchAll(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:poc|contact|person)\b/gi)) {
     found.push(wordOrdinals[String(match[1]).toLowerCase()] || 0);
   }
+  for (const match of value.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)\s+(?:poc|contact|person)\b/gi)) {
+    found.push(Number(match[1]));
+  }
 
+  // Natural coordinated phrasing often puts the entity label only after the
+  // second ordinal: "enrich the 1st and 2nd POC". Recover both ordinals.
+  const sharedPair = value.match(/\b(first|1st)\s*(?:,|and|&)\s*(second|2nd)\s+(?:pocs?|contacts?|persons?)\b/i);
+  if (sharedPair) found.push(1, 2);
+
+  const explicit = found.filter((value) => Number.isInteger(value) && value >= 1 && value <= 20);
+  if (explicit.length) return Math.max(...explicit);
+
+  // The environment value is only a fallback. An explicit two-POC command must
+  // remain two-POC even on installations whose legacy default is three.
   const env = Number(process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS || 0);
-  if (Number.isFinite(env) && env > 0) found.push(env);
-
-  const valid = found.filter((value) => Number.isInteger(value) && value >= 1 && value <= 20);
-  return valid.length ? Math.max(...valid) : 0;
+  return Number.isInteger(env) && env >= 1 && env <= 20 ? env : 0;
 }
 
 function parseIndianPhonePolicy(message) {
@@ -75,6 +85,19 @@ function parseIndianPhonePolicy(message) {
   const indianNumber = /(?:\+\s*91|indian|india)[ -]?(?:mobile|phone|number)s?|(?:mobile|phone|number)s?\s+(?:from|in)\s+india/i.test(value);
   const hardGate = /\b(?:require|required|must|only|hard|reject|remove|exclude|without)\b/i.test(value);
   return indianNumber && hardGate;
+}
+
+function parseAutomaticTwoPocIndianPolicy(message) {
+  const value = String(message || '');
+  const sharedPair = /\b(?:first|1st)\s*(?:,|and|&)\s*(?:second|2nd)\s+(?:pocs?|contacts?|persons?)\b/i.test(value);
+  const explicitCount = /\b(?:two|2)\s+(?:pocs?|person\s+groups?|contact\s+groups?)\b/i.test(value);
+  const hasPoc1 = /\b(?:poc|contact|person)(?:\s*[-#:]?\s*)1\b|\b(?:first|1st)\s+(?:poc|contact|person)\b/i.test(value);
+  const hasPoc2 = /\b(?:poc|contact|person)(?:\s*[-#:]?\s*)2\b|\b(?:second|2nd)\s+(?:poc|contact|person)\b/i.test(value);
+  const hasPoc3 = /\b(?:poc|contact|person)(?:\s*[-#:]?\s*)3\b|\b(?:third|3rd)\s+(?:poc|contact|person)\b|\b(?:three|3)\s+(?:pocs?|person\s+groups?|contact\s+groups?)\b/i.test(value);
+
+  // POC-2-only diagnostic requests must not silently acquire a company-wide
+  // deletion gate. The automatic policy belongs only to coordinated POC-1/2 runs.
+  return !hasPoc3 && (sharedPair || explicitCount || (hasPoc1 && hasPoc2));
 }
 
 function parseContactPhaseOrdinal(message) {
@@ -201,7 +224,7 @@ function approvalSummary(inspection, policy = {}) {
       : 'Priority contract: ordinary production enrichment is coordinated across POC-1, POC-2 and POC-3 in one sheet run with shared discovery/cache state. POC-1 exact-anchor contact completion runs first within each row; existing POC-2/POC-3 identities remain contact-completion jobs; blank secondary POC identities may be discovered from the verified hiring-company context. Explicit requests such as POC-1 only, POC-2 only or POC-3 only switch to isolated deterministic diagnostic phases. Exact person evidence may fill missing phone/email even when row employer context is stale; employer verification remains mandatory whenever ULTRON selects a new person.',
     'After deterministic employer resolution, POC-2 discovery runs a results-first waterfall: targeted Apollo -> bounded broad Apollo -> brand/domain variants -> authenticated read-only LinkedIn company/people discovery when Apollo is sparse. Deterministic selection tries the preferred Founder/Director/Owner > HR/Talent/Recruiting Head/Manager > Recruiter ladder first, then a pragmatic same-company HR/talent/staffing/placement/people/leadership fallback. Every final person still requires exact identity and employer verification before a write.',
     policy.requireIndianPhone
-      ? 'Indian-number hard gate: only POC-1 and POC-2 are eligible; India-located hiring decision-makers rank first. The proven enrichment pipeline remains active, including deterministic POC-2 rechecks and bounded AI rescue over verified candidates. Phone reveals stay limited to the final top decision-maker shortlist: two primary candidates plus at most one fallback when POC-2 remains unresolved. A company qualifies only when POC-1 or POC-2 has a verified +91 mobile number. Foreign-only or no-phone companies are rejected after bounded checks, while pending exact Apollo callbacks remain staged.'
+      ? `Indian-number hard gate${policy.indianPhonePolicySource === 'automatic-poc1-poc2-default' ? ' (automatic POC-1/POC-2 default)' : ''}: only POC-1 and POC-2 are eligible; India-located hiring decision-makers rank first. The proven enrichment pipeline remains active, including deterministic POC-2 rechecks and bounded AI rescue over verified candidates. Phone reveals stay limited to the final top decision-maker shortlist: two primary candidates plus at most one fallback when POC-2 remains unresolved. A company qualifies only when POC-1 or POC-2 has a verified +91 mobile number. Foreign-only or no-phone companies are rejected after bounded checks, while pending exact Apollo callbacks remain staged.`
       : 'For a FINAL verified POC whose phone is still blank, ULTRON uses Apollo native phone reveal with webhook settlement as the production default. It never buys phone enrichment for discovery-only candidates and never enables personal-email reveal. The custom poll_only phone waterfall is experimental/legacy-only; already-paid legacy request IDs remain resumable by exact sheet row/cell, while new phone work uses the native reveal path. Email waterfall remains bounded to final verified POCs.',
     'In coordinated production mode, bounded AI receives only still-open secondary POC slots after deterministic/manual verification and only supplied employer-verified candidates. Gemini is preferred for unresolved row/company context, Groq for candidate assignment, and NVIDIA for optional independent review; each logical role can fall through the other direct providers on failure. Maximum 3 direct env-backed AI attempts apply to the entire run, not per row. Explicit POC-only diagnostic runs stay deterministic-only. OmniRoute is not used by the direct batch path.',
     'The AI may choose only supplied Apollo candidate keys and employer wording supported by the row evidence. It cannot invent candidates, choose worksheets/columns, bypass Apollo identity/employer verification or write cells directly.',
@@ -331,7 +354,12 @@ async function handle(message, context = {}) {
   }
 
   const requestedSheetName = parseSheetName(original);
-  const requireIndianPhone = parseIndianPhonePolicy(original);
+  const explicitIndianPhonePolicy = parseIndianPhonePolicy(original);
+  const automaticTwoPocIndianPolicy = parseAutomaticTwoPocIndianPolicy(original);
+  const requireIndianPhone = explicitIndianPhonePolicy || automaticTwoPocIndianPolicy;
+  const indianPhonePolicySource = explicitIndianPhonePolicy
+    ? 'explicit'
+    : (automaticTwoPocIndianPolicy ? 'automatic-poc1-poc2-default' : null);
   const expectedPersonGroups = parseExpectedPersonGroups(original) || (requireIndianPhone ? 2 : 0);
   const contactPhaseOrdinal = parseContactPhaseOrdinal(original);
   const explicitNameAuthoritative = Boolean(requestedSheetName);
@@ -386,6 +414,7 @@ async function handle(message, context = {}) {
     contactPhaseOrdinal: contactPhaseOrdinal || null,
     schemaFingerprint: summary.fingerprint || null,
     requireIndianPhone,
+    indianPhonePolicySource,
     requestedAt: new Date().toISOString(),
   };
 
@@ -429,6 +458,7 @@ module.exports = {
   parseSheetName,
   parseExpectedPersonGroups,
   parseIndianPhonePolicy,
+  parseAutomaticTwoPocIndianPolicy,
   parseContactPhaseOrdinal,
   parseFullSheetRequested,
   configuredRowLimit,

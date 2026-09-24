@@ -44,7 +44,7 @@ for (const event of counted) {
 }
 
 const threshold = status.dailyMax;
-const needToExpire = Math.max(0, counted.length - threshold + 1);
+const needToExpire = status.dailyCapEnabled === false ? 0 : Math.max(0, counted.length - threshold + 1);
 const expiryEvent = needToExpire > 0 ? counted[needToExpire - 1] : null;
 
 console.log('LinkedIn Safety Audit');
@@ -55,6 +55,8 @@ console.log('Configured caps:', {
   burstMax: status.burstMax,
   hourlyMax: status.hourlyMax,
   dailyMax: status.dailyMax,
+  dailyCapEnabled: status.dailyCapEnabled,
+  dailyOverrideUntil: status.dailyOverrideUntil,
   minGapMs: status.minGapMs,
 });
 console.log('Current counted usage:', {
@@ -94,7 +96,9 @@ for (const [hour, count] of Object.entries(hourlyBuckets)) {
 }
 console.log('');
 console.log('Interpretation:');
-if (status.dailyUsed >= status.dailyMax) {
+if (status.dailyCapEnabled === false) {
+  console.log(`Daily cap is temporarily disabled for ${status.dailyOverrideDate}; it restores automatically at ${status.dailyOverrideUntil}. Burst, hourly, cooldown and checkpoint protections remain active.`);
+} else if (status.dailyUsed >= status.dailyMax) {
   console.log(
     `Local daily safety cap is active. ULTRON must wait until enough counted calls expire from the rolling 24-hour window. Correct next-safe time: ${status.nextEligibleAt}.`
   );
