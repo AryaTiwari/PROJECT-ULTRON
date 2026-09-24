@@ -91,6 +91,17 @@ function googleSheetUrlFromValue(value) {
 }
 
 function attachmentSheetUrl(context = {}) {
+  for (const candidate of [
+    context.sheetUrl,
+    context.spreadsheetUrl,
+    context.googleSheetUrl,
+    context.sourceUrl,
+    context.url,
+  ]) {
+    const url = googleSheetUrlFromValue(candidate);
+    if (url) return url;
+  }
+
   const attachments = Array.isArray(context.attachments) ? context.attachments : [];
   for (const attachment of attachments) {
     if (!attachment || typeof attachment !== 'object') continue;
