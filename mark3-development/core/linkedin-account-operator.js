@@ -1001,8 +1001,12 @@ function companyProfileRequired(record, request = {}) {
 }
 
 function indirectEmployerPosting(text) {
-  return /\b(?:listed|posted)\s+on\s+behalf\s+of\s+(?:a|an|the|our)\s+(?:partner|client)(?:\s+company)?\b/i.test(String(text || ''))
-    || /\bour\s+(?:partner|client)\s+(?:company\s+)?is\s+(?:currently\s+)?(?:looking|hiring|seeking)\b/i.test(String(text || ''));
+  const value = String(text || '');
+  return /\b(?:listed|posted)\s+on\s+behalf\s+of\s+(?:a|an|the|our)\s+(?:partner|client)(?:\s+company)?\b/i.test(value)
+    || /\bour\s+(?:partner|client)\s+(?:company\s+)?is\s+(?:currently\s+)?(?:looking|hiring|seeking)\b/i.test(value)
+    || /\b(?:one|any)\s+of\s+our\s+(?:clients?|customers?|partners?)(?:\s+(?:is|are))?\s+(?:currently\s+)?(?:looking|hiring|seeking)\b/i.test(value)
+    || /\b(?:we(?:'re|\s+are)|currently)\s+hiring\s+(?:for|on\s+behalf\s+of)\s+(?:one\s+of\s+)?(?:our|a|an|the)?\s*(?:clients?|customers?|partners?|top\s+(?:it|technology)\s+(?:services?\s+)?compan(?:y|ies))\b/i.test(value)
+    || /\bclient\s*(?:\/|and|&)\s*implementation\s+partner\s+(?:is|:)\b/i.test(value);
 }
 
 function passesEmployeeFilter(record, filters = {}) {
@@ -1600,8 +1604,8 @@ function sapRoleKeywordVariants(topic) {
   const base = String(topic || '').trim();
   if (!/^sap$/i.test(base)) return leadIntent.roleVariants(base);
   return [
-    'SAP',
     'SAP Consultant',
+    'SAP',
     'SAP Developer',
     'SAP Functional Consultant',
     'SAP Technical Consultant',

@@ -36,6 +36,12 @@ const waitFor = async predicate => {
   await waitFor(() => runner.get(b.id).status === 'completed');
   assert.equal(maximum, 1); assert.equal(live, 2);
   assert.equal(runner.get(a.id).cacheHits, 1);
+
+  runner.start(async () => new Promise(resolve => setTimeout(() => resolve({ text: 'active done' }), 30)));
+  const activeResume = runner.enqueue({ request: { entityMode: 'company', topic: 'Active Resume', count: 1, filters: {} } });
+  const activeResumeResult = runner.control(activeResume.id, 'resume');
+  assert.equal(activeResumeResult.alreadyActive, true);
+  await waitFor(() => runner.get(activeResume.id).status === 'completed');
   assert.equal(runner.get(a.id).research.records[0].company, 'Acme');
   runner.start(async () => {
     const e = new Error('LinkedIn safety window exhausted');

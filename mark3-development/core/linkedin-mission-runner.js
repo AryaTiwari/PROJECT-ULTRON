@@ -881,8 +881,14 @@ function currentUsage() {
 function control(id, action) {
   const m = get(id);
   if (action === 'resume') {
-    const cacheOnlySafetyResume = ['waiting_safety', 'waiting_retry'].includes(m.status) && Boolean(m.prepared?.request?.resumeExistingPool);
-    if (!cacheOnlySafetyResume && !['paused', 'paused_restart', 'paused_checkpoint', 'paused_rate_limit', 'failed', 'partial'].includes(m.status)) {
+    if (['created', 'searching', 'writing_sheet'].includes(m.status)) {
+      return { ...summary(m), alreadyActive: true };
+    }
+    if (m.status === 'waiting_safety') {
+      return { ...summary(m), alreadyActive: true };
+    }
+    const retryWait = m.status === 'waiting_retry';
+    if (!retryWait && !['paused', 'paused_restart', 'paused_checkpoint', 'paused_rate_limit', 'failed', 'partial'].includes(m.status)) {
       throw new Error('Mission is not resumable');
     }
     if (m.research) throw new Error('Research is preserved; inspect the existing Sheet before retrying output to avoid duplicate writes.');
@@ -893,8 +899,7 @@ function control(id, action) {
     m.status = 'created';
     m.progress = {
       ...(m.progress || {}),
-      phase: cacheOnlySafetyResume ? 'cache_recheck' : 'resuming',
-      cacheOnlySafetyResume,
+      phase: retryWait ? 'retrying_now' : 'resuming',
       nextEligibleAt: null,
     };
     save(m, false);

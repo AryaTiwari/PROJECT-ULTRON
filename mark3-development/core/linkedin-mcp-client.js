@@ -1,3 +1,4 @@
+const { execFileSync } = require('child_process');
 const policy = require('./linkedin-account-policy');
 
 const HOST = '127.0.0.1';
@@ -27,6 +28,31 @@ let connectPromise = null;
 let lastTransportError = '';
 let toolNames = [];
 let connectionGeneration = 0;
+let orphanCleanupDone = false;
+
+function cleanupOrphanedLinkedInServers(force = false) {
+  if ((orphanCleanupDone && !force) || process.platform !== 'win32') return 0;
+  orphanCleanupDone = true;
+  const script = [
+    '$all=@(Get-CimInstance Win32_Process)',
+    '$live=@{}; foreach($p in $all){$live[[int]$p.ProcessId]=$true}',
+    '$roots=@($all | Where-Object { $_.Name -ieq "mcp-server-linkedin.exe" -and -not $live.ContainsKey([int]$_.ParentProcessId) })',
+    '$kill=New-Object System.Collections.Generic.HashSet[int]',
+    'function Add-Tree([int]$id){ if($kill.Add($id)){ foreach($c in @($all | Where-Object { [int]$_.ParentProcessId -eq $id })){ Add-Tree ([int]$c.ProcessId) } } }',
+    'foreach($r in $roots){Add-Tree ([int]$r.ProcessId)}',
+    '$ids=@($kill) | Sort-Object -Descending',
+    'foreach($id in $ids){Stop-Process -Id $id -Force -ErrorAction SilentlyContinue}',
+    'Write-Output $ids.Count',
+  ].join('; ');
+  try {
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', timeout: 8000, windowsHide: true,
+    });
+    return Math.max(0, Number(String(output || '').trim()) || 0);
+  } catch {
+    return 0;
+  }
+}
 
 function uvxCommand() {
   return process.platform === 'win32' ? 'uvx.exe' : 'uvx';
@@ -190,6 +216,7 @@ async function closeTransport() {
 
 async function connectStdio() {
   if (client && transport) return client;
+  cleanupOrphanedLinkedInServers();
   if (connectPromise) return connectPromise;
 
   connectPromise = (async () => {
@@ -347,6 +374,9 @@ async function callTool(tool, args = {}) {
     policy.recordCall(tool, true);
     return result;
   } catch (error) {
+    if (/another linkedin mcp client is currently using the browser/i.test(String(error?.message || ''))) {
+      cleanupOrphanedLinkedInServers(true);
+    }
     const classification = policy.recordError(tool, error);
     error.linkedinSafety = classification;
 
@@ -425,6 +455,7 @@ module.exports = {
   toolTimeoutMs,
   isTransientTransportError,
   shouldRetryTransient,
+  cleanupOrphanedLinkedInServers,
   initializeSession,
   ensureServer,
   listTools,

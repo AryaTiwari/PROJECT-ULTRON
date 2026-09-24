@@ -56,7 +56,7 @@ assert.equal(reportedPrompt.targetRequested, 10);
 assert.equal(reportedPrompt.autoContinue, true);
 assert.equal(reportedPrompt.destinationSheetUrl, 'https://docs.google.com/spreadsheets/d/1KZKJAe-QqZcreG3mr32JNbdiwBYDFWndynaXqid8wKY/edit?gid=306985105#gid=306985105');
 assert.ok(operator.jobSearchPlan(reportedPrompt).length > 1);
-assert.equal(operator.jobSearchPlan(reportedPrompt)[0].keyword, 'SAP');
+assert.equal(operator.jobSearchPlan(reportedPrompt)[0].keyword, 'SAP Consultant');
 
 const filtered = operator.parseRequest('Find me 20 companies on LinkedIn with SAP roles under 1000 employees, remote, located in Maharashtra');
 const agenticSapRequest = operator.parseRequest('LinkedIn only: Find enough NEW unique companies with active SAP job openings to make my Final Master reach exactly 30 verified companies total. Allowed locations: Maharashtra and Bengaluru/Bangalore. Prioritize Maharashtra first, then use Bengaluru. Remote roles preferred. Maximum 1000 employees. Companies only.');
@@ -225,10 +225,11 @@ assert.equal(operator.searchTopicConfidence({ title: 'Business Analyst with veri
 assert.equal(operator.searchTopicConfidence({ title: 'SAP S/4HANA Consultant with verification' }, reportedPrompt), 2);
 const sapVariants = operator.sapRoleKeywordVariants('SAP');
 assert.ok(sapVariants.includes('SAP'));
+assert.equal(sapVariants[0], 'SAP Consultant');
 assert.ok(sapVariants.some((value) => /FICO/.test(value)));
 const sapPlan = operator.jobSearchPlan(filtered);
 assert.equal(sapPlan.length, 20);
-assert.equal(sapPlan[0].keyword, 'SAP');
+assert.equal(sapPlan[0].keyword, 'SAP Consultant');
 assert.equal(sapPlan[0].location, 'Maharashtra');
 assert.equal(sapPlan[1].location, 'Pune');
 assert.equal(sapPlan[2].location, 'Mumbai');
@@ -275,6 +276,9 @@ const embeddedCompanyRecord = { employeeCount: operator.employeeCountFromText(em
 assert.equal(operator.companyProfileRequired(embeddedCompanyRecord, filtered), false);
 assert.equal(operator.companyProfileRequired({ employeeCount: null }, filtered), true);
 assert.equal(operator.indirectEmployerPosting('This position is listed on behalf of a partner company, who manages applications.'), true);
+assert.equal(operator.indirectEmployerPosting("We're hiring for one of the top IT services companies."), true);
+assert.equal(operator.indirectEmployerPosting('One of our clients is looking for an SAP consultant.'), true);
+assert.equal(operator.indirectEmployerPosting('Client/Implementation Partner is a global consultancy.'), true);
 
 const strictPass = {
   company: 'Acme Maharashtra',

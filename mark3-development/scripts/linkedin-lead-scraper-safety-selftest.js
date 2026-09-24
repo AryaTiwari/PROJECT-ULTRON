@@ -178,7 +178,9 @@ assert.equal(typeof runner.syncAuthoritativeSheet, 'function');
 assert.equal(typeof runner.isRetryableMissionError, 'function');
 const busyError = Object.assign(new Error('Another LinkedIn MCP client is currently using the browser.'), { code: 'LINKEDIN_MCP_TOOL_ERROR' });
 assert.equal(policy.classifyError(busyError).kind, 'transient');
-assert.equal(require('../core/linkedin-mcp-client').isTransientTransportError(busyError), true);
+const mcpClient = require('../core/linkedin-mcp-client');
+assert.equal(mcpClient.isTransientTransportError(busyError), true);
+assert.equal(typeof mcpClient.cleanupOrphanedLinkedInServers, 'function');
 assert.equal(runner.isRetryableMissionError(busyError), true);
 
 console.log('LinkedIn lead-scraper safety self-test passed: Sheet-authoritative completion, persistent retries/restarts, Apollo separation, cache-first verification, SAP prioritization, and explicit-only deletion are enforced.');
