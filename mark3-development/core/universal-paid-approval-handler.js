@@ -8,21 +8,27 @@ const paidTools = require('./paid-tool-approval');
 const deterministicBootstrap = require('./universal-deterministic-bootstrap');
 const universal = require('./universal-sheet-enrichment-targeted');
 const typedErrors = require('./spreadsheet-enrichment-errors');
+const sheets = require('./google-sheets-operator');
+const runtimeBuild = require('./runtime-build');
 
 const OPERATION = 'universal-spreadsheet-enrichment';
 const EXECUTION_CONTRACT = 'universal-coordinated-multi-poc-v4';
 
 function response(ok, body, extra = {}) {
+  const stamped = `${String(body || '').trim()}\n\n[universal-sheet · build ${String(runtimeBuild.revision || '').slice(0, 8) || 'unknown'} · src ${runtimeBuild.fingerprint}]`;
   return {
     ok,
-    response: body,
-    text: body,
+    response: stamped,
+    text: stamped,
     model: 'mark3-universal-bounded-ai-enrichment',
     provider: 'deterministic+apollo+google-sheets+bounded-ai-rescue',
     taskType: 'universal-sheet-enrichment',
     mode: 'operator',
     toolRounds: 0,
     executionContract: EXECUTION_CONTRACT,
+    runtimeBuildId: runtimeBuild.id,
+    runtimeRevision: runtimeBuild.revision,
+    runtimeSourceFingerprint: runtimeBuild.fingerprint,
     ...extra,
   };
 }
@@ -33,6 +39,41 @@ function modePrefix(rowLimit) {
     return `VALIDATION MODE: capped to the first ${Math.floor(limit)} non-empty data rows. This was not a full-sheet run.`;
   }
   return 'FULL-SHEET MODE: no row cap was active.';
+}
+
+async function canonicalApprovedTarget(payload = {}) {
+  const url = String(payload.url || '').trim();
+  if (!url) return { sheetName: payload.sheetName || '', sheetId: payload.sheetId ?? null, matchedBy: 'payload-only' };
+  const spreadsheetId = sheets.spreadsheetId(url);
+  const meta = await sheets.metadata(spreadsheetId);
+  const tabs = (meta.sheets || [])
+    .map((sheet) => ({
+      name: String(sheet?.properties?.title ?? ''),
+      sheetId: Number(sheet?.properties?.sheetId),
+    }))
+    .filter((tab) => tab.name && Number.isFinite(tab.sheetId));
+
+  const requestedSheetId = Number.isFinite(Number(payload.sheetId)) ? Number(payload.sheetId) : null;
+  if (requestedSheetId != null) {
+    const byId = tabs.find((tab) => tab.sheetId === requestedSheetId);
+    if (byId) return { ...byId, matchedBy: 'sheetId' };
+  }
+
+  const rawName = payload.sheetName == null ? '' : String(payload.sheetName);
+  if (rawName) {
+    const exact = tabs.find((tab) => tab.name === rawName);
+    if (exact) return { ...exact, matchedBy: 'exact-name' };
+    const folded = tabs.filter((tab) => tab.name.trim().toLowerCase() === rawName.trim().toLowerCase());
+    if (folded.length === 1) return { ...folded[0], matchedBy: 'folded-name' };
+  }
+
+  const error = new Error(`Approved worksheet target could not be re-resolved. Requested name="${rawName}" sheetId=${requestedSheetId ?? 'none'}.`);
+  error.code = 'UNIVERSAL_SHEET_TAB_NOT_FOUND';
+  error.subsystem = 'TARGETING';
+  error.errorType = 'NOT_FOUND';
+  error.stage = 'approved-target-canonicalization';
+  error.availableTabs = tabs;
+  throw error;
 }
 
 async function execute(decision) {
@@ -78,11 +119,12 @@ async function execute(decision) {
     const executionMode = payload.contactPhaseOrdinal
       ? `POC-${Number(payload.contactPhaseOrdinal)} diagnostic`
       : 'coordinated multi-POC production';
+    const canonicalTarget = await canonicalApprovedTarget(payload);
     const result = await paidTools.withPermit(decision, async () => universal.run({
       sheetUrl: payload.url,
-      sheetName: payload.sheetName,
-      sheetId: payload.sheetId ?? null,
-      explicitNameAuthoritative: payload.explicitNameAuthoritative !== false,
+      sheetName: canonicalTarget.sheetName,
+      sheetId: canonicalTarget.sheetId,
+      explicitNameAuthoritative: true,
     }, {
       apolloApproved: true,
       expectedSchemaFingerprint: payload.schemaFingerprint || undefined,
@@ -142,7 +184,8 @@ async function execute(decision) {
       universalEnrichment: enriched,
       spreadsheetProvider: 'google',
       spreadsheetUrl: payload.url,
-      sheetName: result.sheetName || payload.sheetName,
+      sheetName: result.sheetName || canonicalTarget.sheetName || payload.sheetName,
+      approvedTargetMatchedBy: canonicalTarget.matchedBy,
       paidToolApproval: decision,
       deterministicPrimary: true,
       deterministic: !fallbackUsed,
@@ -203,4 +246,4 @@ function install() {
   return Object.freeze({ installed: true, operation: OPERATION, owner: 'command-control-plane' });
 }
 
-module.exports = { OPERATION, EXECUTION_CONTRACT, install, execute, modePrefix };
+module.exports = { OPERATION, EXECUTION_CONTRACT, install, execute, modePrefix, canonicalApprovedTarget };
