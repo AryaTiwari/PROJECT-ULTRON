@@ -156,6 +156,11 @@ async function tokenRequest(params) {
     error.status = response.status;
     error.googleOAuthError = data.error || null;
     error.code = oauthErrorCode(data, response.status);
+    error.authReason = String(data.error || '').toLowerCase() === 'invalid_grant'
+      ? 'refresh_token_rejected_by_google'
+      : error.code === 'GOOGLE_SHEETS_AUTH_REQUIRED'
+        ? 'google_rejected_authorization'
+        : null;
     error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
   }
@@ -166,6 +171,7 @@ async function refresh(token) {
   if (!token?.refresh_token) {
     const error = new Error('Google Sheets authorization has expired and no refresh token is available. Re-authorize once.');
     error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+    error.authReason = 'refresh_token_missing';
     error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
   }
