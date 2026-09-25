@@ -127,8 +127,8 @@ $Capability = (Resolve-Path (Join-Path $Root "services\capability-host\src\serve
 $ProjectPath = (Resolve-Path $Root).Path.Replace("\","/")
 $Config = @"
 model:
-  provider: "gemini"
-  default: "gemini-3.8-flash"
+  provider: "opencode-free"
+  default: "big-pickle"
 
 providers:
   omniroute:
@@ -142,13 +142,9 @@ providers:
 agent:
   api_max_retries: 1
 
-fallback_providers:
-  - provider: "gemini"
-    model: "gemini-3.7-flash"
-  - provider: "gemini"
-    model: "gemini-3.6-flash"
-  - provider: "omniroute"
-    model: "auto"
+# npm run dev replaces this safe bootstrap floor with the env-backed
+# conversation pool and keeps Big Pickle as the final fallback.
+fallback_providers: []
 
 terminal:
   backend: local

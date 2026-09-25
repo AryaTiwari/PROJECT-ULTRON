@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"../../..");
 test("launcher gates UI on deep readiness and explicit project cwd",()=>{
   const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
-  assert.match(dev,/\/api\/ready/);assert.match(dev,/TERMINAL_CWD = root/);assert.match(dev,/gemini-3\.8-flash/);
+  const policy=fs.readFileSync(path.join(root,"scripts","conversation-model-policy.mjs"),"utf8");
+  assert.match(dev,/\/api\/ready/);
+  assert.match(dev,/TERMINAL_CWD = root/);
+  assert.match(policy,/gemini-3\.7-flash/);
 });
 test("gateway deep readiness validates session lifecycle",()=>{
   const server=fs.readFileSync(path.join(root,"services","gateway","src","server.mjs"),"utf8");

@@ -82,7 +82,7 @@ Roles:
 - verifier;
 - creative.
 
-Routes are scored using configured priority plus observed success and latency. Paid use is disabled by default. The free-LLM catalog is a discovery source only and never automatically promotes a model into the trusted pool.
+Routes are scored using configured priority plus observed success and latency. Normal conversation builds one ordered env-backed policy: Gemini credential pool, Grok xAI keys, NVIDIA NIM, existing Groq compatibility keys, then keyless OpenCode Big Pickle. Exact aliases from the local environment are normalized in memory and never committed. OmniRoute is an explicit isolated diagnostic route, not part of normal conversation fallback. Paid use is disabled by default. The free-LLM catalog is a discovery source only and never automatically promotes another model into the trusted pool.
 
 ## Resource budget
 

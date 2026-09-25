@@ -24,9 +24,10 @@ test("Mark4 OmniRoute ensure uses the canonical standalone wrapper and never sta
 
 test("OmniRoute test mode masks direct providers including Grok xAI and forces every Mark4 role",()=>{
   const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
-  assert.match(dev,/XAI_API_KEY/);
-  assert.match(dev,/GEMINI_API_KEY/);
-  assert.match(dev,/NVIDIA_API_KEY/);
+  const policy=fs.readFileSync(path.join(root,"scripts","conversation-model-policy.mjs"),"utf8");
+  assert.match(policy,/XAI_API_KEY/);
+  assert.match(policy,/GEMINI_API_KEY/);
+  assert.match(policy,/NVIDIA_API_KEY/);
   assert.match(dev,/delete process\.env\[key\]/);
   assert.match(dev,/\["COGNITION","WORKER","VERIFIER","CREATIVE"\]/);
   assert.match(dev,/ULTRON_M4_\$\{role\}_PROVIDER/);

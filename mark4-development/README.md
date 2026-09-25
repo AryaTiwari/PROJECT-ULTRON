@@ -8,7 +8,8 @@ ULTRON Mark 4 is a Hermes-powered cognitive operating layer, not a renamed Mark 
 - Native Mark 4 gateway with persistent SQLite mission/evidence state.
 - Real Hermes sessions, session forking and streaming tool progress.
 - MCP capability host for ULTRON mission state, evidence, Elevate context and native business capabilities.
-- Role-aware model fabric with observed success/latency scoring and Hermes default fallback.
+- Role-aware model fabric with observed success/latency scoring.
+- Conversation routing prefers the configured Gemini, Grok xAI and NVIDIA credentials first, followed by existing Groq compatibility credentials, with keyless OpenCode Big Pickle as the final fallback.
 - Mark 3 quarantine. Legacy execution is denied unless explicitly enabled.
 - React/Vite cockpit in restrained black, navy, blue and white.
 - Command, Mission, Branches and Operations views.
@@ -38,7 +39,7 @@ Bootstrap:
 8. generates local API keys in ignored runtime state;
 9. installs the small Mark 4 npm workspace.
 
-Provider credentials remain outside Git. Hermes can use supported provider credentials inherited from your environment or its own setup flow.
+Provider credentials remain outside Git. For normal conversation, Mark 4 accepts `GEMINI_APY_KEY` (intentional compatibility alias), `GEMINI_API_KEY`, `GEMINI_API_KEY2`, `GROK_API_KEY`, `GROK_API_KEY2`, `GROQ_API_KEY`, `GROQ_API_KEY2` and `NVIDIA_API_KEY`. Gemini keys are promoted into Hermes' native credential pool. Grok routes to xAI, while Groq remains a separate compatibility provider. Direct routes are tried before keyless `opencode-free/big-pickle`. OmniRoute is retained only for its explicit isolated test command.
 
 ## Verify
 

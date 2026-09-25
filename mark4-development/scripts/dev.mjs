@@ -1,7 +1,10 @@
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { buildConversationModelPolicy, directCredentialEnvNames } from "./conversation-model-policy.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -21,6 +24,12 @@ function loadEnv(file) {
 loadEnv(path.resolve(root, "..", ".env"));
 loadEnv(path.join(root, ".env"));
 loadEnv(path.join(root, ".runtime", "secrets.env"));
+loadEnv(path.join(root, ".runtime", "hermes-home", ".env"));
+
+const sharedHermesKey = String(process.env.ULTRON_M4_HERMES_API_KEY || process.env.API_SERVER_KEY || ("u4-" + randomUUID().replaceAll("-", "")));
+process.env.ULTRON_M4_HERMES_API_KEY = sharedHermesKey;
+process.env.API_SERVER_KEY = sharedHermesKey;
+process.env.ULTRON_M4_INTERNAL_KEY ||= "u4-internal-" + randomUUID().replaceAll("-", "");
 
 const vendor = path.join(root, ".runtime", "vendor", "hermes-agent");
 const hermesHome = path.join(root, ".runtime", "hermes-home");
@@ -65,12 +74,7 @@ const omniRoute = omniRouteSettings();
 
 function configureModelRoutes() {
   if (omniRoute.testMode) {
-    const directInferenceKeys = [
-      "GOOGLE_API_KEY",
-      "GEMINI_API_KEY",
-      "NVIDIA_API_KEY",
-      "XAI_API_KEY",
-      "GROQ_API_KEY",
+    const directInferenceKeys = [...directCredentialEnvNames,
       "OPENAI_API_KEY",
       "ANTHROPIC_API_KEY",
       "DEEPSEEK_API_KEY",
@@ -93,32 +97,20 @@ function configureModelRoutes() {
       maskedDirectKeys: masked
     };
   }
-  const explicitProvider = String(process.env.ULTRON_M4_COGNITION_PROVIDER || "").trim();
-  const explicitModel = String(process.env.ULTRON_M4_COGNITION_MODEL || "").trim();
-  if (explicitProvider && explicitModel) return { provider: explicitProvider, model: explicitModel, source: "explicit" };
-
-  let provider = "", model = "", source = "";
-  if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
-    provider = "gemini";
-    model = String(process.env.ULTRON_M4_GEMINI_MODEL || "gemini-3.8-flash");
-    source = "Google AI Studio";
-  } else if (process.env.NVIDIA_API_KEY) {
-    provider = "nvidia";
-    model = String(process.env.ULTRON_M4_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b");
-    source = "NVIDIA NIM";
+  const policy = buildConversationModelPolicy(process.env);
+  const primary = policy.primary;
+  for (const role of ["COGNITION","WORKER","VERIFIER","CREATIVE"]) {
+    process.env[`ULTRON_M4_${role}_PROVIDER`] ||= primary.provider;
+    process.env[`ULTRON_M4_${role}_MODEL`] ||= primary.model;
   }
-
-  if (provider && model) {
-    process.env.ULTRON_M4_COGNITION_PROVIDER = provider;
-    process.env.ULTRON_M4_COGNITION_MODEL = model;
-    process.env.ULTRON_M4_WORKER_PROVIDER ||= provider;
-    process.env.ULTRON_M4_WORKER_MODEL ||= model;
-    process.env.ULTRON_M4_VERIFIER_PROVIDER ||= provider;
-    process.env.ULTRON_M4_VERIFIER_MODEL ||= model;
-    process.env.ULTRON_M4_CREATIVE_PROVIDER ||= provider;
-    process.env.ULTRON_M4_CREATIVE_MODEL ||= model;
-  }
-  return { provider, model, source };
+  return {
+    ...primary,
+    provider: primary.provider,
+    model: primary.model,
+    source: primary.source,
+    fallbacks: policy.fallbacks,
+    directCredentialCount: policy.directCredentialCount
+  };
 }
 
 const selectedModelRoute = configureModelRoutes();
@@ -140,7 +132,7 @@ function syncHermesRuntimeConfig() {
     model = String(model || "").trim();
     if (!provider || !model) return;
     if (provider === primaryProvider && model === primaryModel && !extra.baseUrl) return;
-    if (fallbacks.some(x => x.provider === provider && x.model === model && (x.baseUrl || "") === (extra.baseUrl || ""))) return;
+    if (fallbacks.some(x => x.provider === provider && x.model === model && (x.baseUrl || "") === (extra.baseUrl || "") && (x.keyEnv || "") === (extra.keyEnv || "") && (x.transport || "") === (extra.transport || ""))) return;
     fallbacks.push({ provider, model, ...extra });
   };
 
@@ -149,14 +141,13 @@ function syncHermesRuntimeConfig() {
     // Keep OmniRoute itself as the router and reserve one alternate alias as the rescue route.
     addFallback("custom", "auto/best-reasoning", { baseUrl: omniRoute.baseUrl, keyEnv: "OMNIROUTE_API_KEY" });
   } else {
-    if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
-      addFallback("gemini", "gemini-3.7-flash");
-      addFallback("gemini", "gemini-3.6-flash");
+    for (const candidate of selectedModelRoute.fallbacks || []) {
+      addFallback(candidate.provider, candidate.model, {
+        baseUrl: candidate.baseUrl,
+        keyEnv: candidate.keyEnv,
+        transport: candidate.transport
+      });
     }
-    if (process.env.NVIDIA_API_KEY) {
-      addFallback("nvidia", String(process.env.ULTRON_M4_NVIDIA_MODEL || "nvidia/nemotron-3-super-120b-a12b"));
-    }
-    addFallback("custom", omniRoute.model, { baseUrl: omniRoute.baseUrl, keyEnv: "OMNIROUTE_API_KEY" });
   }
 
   const fallbackYaml = fallbacks.length
@@ -164,6 +155,7 @@ function syncHermesRuntimeConfig() {
         const lines = [`  - provider: ${yamlQuote(x.provider)}`, `    model: ${yamlQuote(x.model)}`];
         if (x.baseUrl) lines.push(`    base_url: ${yamlQuote(x.baseUrl)}`);
         if (x.keyEnv) lines.push(`    key_env: ${yamlQuote(x.keyEnv)}`);
+        if (x.transport) lines.push(`    transport: ${yamlQuote(x.transport)}`);
         return lines.join("\n");
       }).join("\n")
     : "fallback_providers: []";
@@ -179,15 +171,14 @@ function syncHermesRuntimeConfig() {
     base_url: ${yamlQuote(omniRoute.baseUrl)}
     key_env: "OMNIROUTE_API_KEY"
     default_model: ${yamlQuote(omniRoute.model)}
-    transport: "chat_completions"
-    enabled: true`;
+    transport: "chat_completions"`;
 
   const configText = `${modelYaml}
 
 ${omniRouteProviderYaml}
 
 agent:
-  api_max_retries: 1
+  api_max_retries: ${Math.max(2, fallbacks.length + 1)}
 
 ${fallbackYaml}
 
@@ -297,40 +288,50 @@ function runVite() {
   return run(process.execPath,[viteCli,"--host","127.0.0.1","--port","5174"],path.join(root,"apps","ui"));
 }
 
+function probeHttp(url, timeoutMs = 1800) {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const request = http.get(url, { headers: { Connection:"close" } }, response => {
+      response.resume();
+      finish({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode || 0 });
+    });
+    const timer = setTimeout(() => {
+      request.destroy(new Error("request timeout"));
+      finish({ ok:false, error:"request timeout" });
+    }, timeoutMs);
+    request.on("error", error => finish({ ok:false, error:error?.message || String(error) }));
+  });
+}
+
 async function isHealthy(url, timeoutMs = 1200) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { cache: "no-store", signal: controller.signal });
-    return response.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
+  return (await probeHttp(url, timeoutMs)).ok;
 }
 
 async function waitFor(url, label, timeoutMs = 60000) {
   const started = Date.now();
   let lastError = "";
+  let nextProgressAt = 15000;
   while (Date.now() - started < timeoutMs) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1800);
-    try {
-      const response = await fetch(url, { cache: "no-store", signal: controller.signal });
-      if (response.ok) {
-        console.log(label + " ready");
-        return;
-      }
-      lastError = "HTTP " + response.status;
-    } catch (error) {
-      lastError = error?.name === "AbortError" ? "request timeout" : (error?.message || String(error));
-    } finally {
-      clearTimeout(timer);
+    const result = await probeHttp(url, 1800);
+    if (result.ok) {
+      console.log(label + " ready");
+      return;
+    }
+    lastError = result.status ? "HTTP " + result.status : (result.error || "not ready");
+    const elapsed = Date.now() - started;
+    if (elapsed >= nextProgressAt) {
+      console.log(label + " still starting (" + Math.round(elapsed / 1000) + "s; " + lastError + ")");
+      nextProgressAt += 15000;
     }
     await new Promise(resolve => setTimeout(resolve, 300));
   }
-  throw new Error(label + " did not become ready: " + lastError);
+  throw new Error(label + " did not become ready within " + Math.round(timeoutMs / 1000) + "s: " + lastError);
 }
 
 function browserCandidates(){
@@ -380,15 +381,16 @@ async function main() {
   }
   console.log("Starting Hermes with a fresh Mark 4 runtime...");
   run(hermesPython, ["-m", "hermes_cli.main", "gateway", "run", "--replace"], root);
-  await waitFor(hermesHealth, "Hermes");
+  await waitFor(hermesHealth, "Hermes", Math.max(60000, Number(process.env.ULTRON_M4_HERMES_START_TIMEOUT_MS || 300000)));
 
   if (selectedModelRoute.provider) {
     console.log("Model route:", selectedModelRoute.provider + " / " + selectedModelRoute.model + " (" + selectedModelRoute.source + ")");
+    if (!omniRoute.testMode) console.log("Direct conversation credentials:", selectedModelRoute.directCredentialCount || 0);
     if (runtimeModelPolicy.fallbacks.length) {
       console.log("Fallback chain:", runtimeModelPolicy.fallbacks.map(x => x.provider + "/" + x.model).join(" -> "));
     }
   } else {
-    console.warn("No primary model credential detected. Add Gemini/NVIDIA credentials, explicit ULTRON_M4 cognition routing, or start OmniRoute.");
+    console.warn("No conversation route is available.");
   }
 
   console.log("Starting ULTRON gateway...");
@@ -415,9 +417,19 @@ function stop() {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const child of children) {
-    try { child.kill("SIGTERM"); } catch {}
+    try {
+      if (process.platform === "win32" && child.pid) {
+        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+          stdio:["ignore","ignore","ignore"],
+          shell:false,
+          windowsHide:true
+        });
+      } else {
+        child.kill("SIGTERM");
+      }
+    } catch {}
   }
-  setTimeout(() => process.exit(0), 400).unref();
+  setTimeout(() => process.exit(0), 800).unref();
 }
 
 process.on("SIGINT", stop);

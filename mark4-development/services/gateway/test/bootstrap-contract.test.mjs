@@ -20,3 +20,11 @@ test("dev launcher uses Hermes browser prefix without shell=true", () => {
   assert.match(script, /process\.env\.PATH = hermesNode/);
   assert.doesNotMatch(script, /shell:\s*process\.platform/);
 });
+
+test("dev repairs missing runtime key aliases before any child starts",()=>{
+  const script=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
+  assert.match(script,/hermes-home", "\.env"/);
+  assert.match(script,/ULTRON_M4_HERMES_API_KEY \|\| process\.env\.API_SERVER_KEY/);
+  assert.match(script,/process\.env\.API_SERVER_KEY = sharedHermesKey/);
+  assert.match(script,/ULTRON_M4_INTERNAL_KEY \|\|=/);
+});
