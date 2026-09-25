@@ -1,94 +1,23 @@
 import { useMemo, useState } from "react";
-import type { SessionLike } from "../types";
+import type { ChatMessage, SessionLike } from "../types";
+import { Icon } from "./Icon";
 
-const idOf = (session: SessionLike) => String(session.id || session.session_id || "");
-const parentOf = (session: SessionLike) => String(
-  session.parent_session_id ||
-  session.parent_id ||
-  (session as any).parent_session?.id ||
-  ""
-);
+const idOf=(session:SessionLike)=>String(session.id||session.session_id||"");
+const parentOf=(session:SessionLike)=>String(session.parent_session_id||session.parent_id||session.branch_metadata?.parentSessionId||"");
+const titleOf=(session:SessionLike)=>String(session.branch_metadata?.title||session.title||"Untitled session");
+const textOf=(content:any):string=>typeof content==="string"?content:Array.isArray(content)?content.map(item=>typeof item==="string"?item:item?.text||item?.content||"").join(""):String(content?.text||content?.content||"");
+const normalize=(value:any):ChatMessage[]=>{const rows=Array.isArray(value)?value:Array.isArray(value?.messages)?value.messages:Array.isArray(value?.data)?value.data:[];return rows.map((m:any,i:number)=>({id:String(m.id||m.message_id||i),role:m.role||"assistant",content:textOf(m.content??m.text)})).filter((m:any)=>m.content);};
 
-export function BranchView({
-  sessions,
-  activeId,
-  onSelect,
-  onFork
-}: {
-  sessions: SessionLike[];
-  activeId: string;
-  onSelect: (id: string) => void;
-  onFork: (id: string, title: string) => Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-
-  const rows = useMemo(
-    () => sessions
-      .map(session => ({ ...session, _id: idOf(session), _parent: parentOf(session) }))
-      .filter(session => session._id),
-    [sessions]
-  );
-
-  const roots = rows.filter(session =>
-    !session._parent || !rows.some(other => other._id === session._parent)
-  );
-
-  const children = (id: string) => rows.filter(session => session._parent === id);
-
-  async function fork(id: string) {
-    setBusy(true);
-    try {
-      await onFork(id, "Exploration branch");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function Node({ session, depth = 0 }: { session: any; depth?: number }) {
-    const kids = children(session._id);
-    return (
-      <div className="branch-group">
-        <button
-          className={"branch-card " + (activeId === session._id ? "active" : "")}
-          onClick={() => onSelect(session._id)}
-          style={{ marginLeft: depth * 28 }}
-        >
-          <span className="branch-knot" />
-          <span>
-            <b>{session.title || "Untitled session"}</b>
-            <small>{session._id.slice(0, 12)}</small>
-          </span>
-        </button>
-        {kids.map(child => (
-          <Node key={child._id} session={child} depth={depth + 1} />
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <section className="branches-view">
-      <div className="view-heading">
-        <div>
-          <span className="eyebrow">CONVERSATION MAP</span>
-          <h2>Branches</h2>
-        </div>
-        <button
-          disabled={!activeId || busy}
-          className="secondary-button"
-          onClick={() => void fork(activeId)}
-        >
-          + Fork selected
-        </button>
-      </div>
-
-      <p className="view-note">
-        Branches are real Hermes child sessions. Side exploration stays isolated until you intentionally act on it.
-      </p>
-
-      <div className="branch-canvas">
-        {roots.map(root => <Node key={root._id} session={root} />)}
-      </div>
-    </section>
-  );
+export function BranchView({sessions,activeId,onInspect,onOpen,onFork,onRename,onCompare}:{sessions:SessionLike[];activeId:string;onInspect:(id:string)=>void;onOpen:(id:string)=>void;onFork:(id:string,title:string)=>Promise<void>;onRename:(id:string,title:string)=>Promise<void>;onCompare:(id:string)=>Promise<any>}){
+  const[busy,setBusy]=useState(false),[renaming,setRenaming]=useState(false),[title,setTitle]=useState(""),[comparison,setComparison]=useState<any|null>(null);
+  const rows=useMemo(()=>sessions.map(s=>({...s,_id:idOf(s),_parent:parentOf(s)})).filter(s=>s._id),[sessions]);
+  const roots=rows.filter(s=>!s._parent||!rows.some(other=>other._id===s._parent));
+  const selected=rows.find(s=>s._id===activeId)||rows[0];
+  const children=(id:string)=>rows.filter(s=>s._parent===id);
+  async function perform(action:()=>Promise<void>){setBusy(true);try{await action();}finally{setBusy(false);}}
+  async function compare(){if(!selected?._parent)return;setBusy(true);try{setComparison(await onCompare(selected._id));}finally{setBusy(false);}}
+  function Node({session,depth=0}:{session:any;depth?:number}){const kids=children(session._id);return <div className="tree-node"><button className={selected?._id===session._id?"tree-card active":"tree-card"} onClick={()=>{onInspect(session._id);setComparison(null);}} style={{marginLeft:depth*32}}><span className="tree-line"/><span className="tree-knot">{depth?"↳":"◇"}</span><span><b>{titleOf(session)}</b><small>{depth?"Branch":"Main thread"} · {session._id.slice(0,10)}</small></span>{kids.length>0&&<em>{kids.length}</em>}</button>{kids.map(child=><Node key={child._id} session={child} depth={depth+1}/>)}</div>}
+  const parent=selected?rows.find(row=>row._id===selected._parent):null;
+  const parentMessages=normalize(comparison?.parentMessages),childMessages=normalize(comparison?.childMessages);
+  return <section className="branches-view"><header className="view-header"><div><span className="kicker">CONVERSATION TOPOLOGY</span><h1>Branches</h1><p>Explore from any message without stopping or rewriting the parent mission.</p></div><button className="secondary-action" disabled={!selected||busy} onClick={()=>selected&&void perform(()=>onFork(selected._id,"Exploration branch"))}><Icon name="plus"/>Branch selected</button></header><div className="branches-layout"><div className="branch-map"><div className="map-label"><span>Conversation tree</span><small>{rows.length} sessions · {rows.filter(r=>r._parent).length} branches</small></div>{roots.map(root=><Node key={root._id} session={root}/>)}{!rows.length&&<div className="empty-list">No sessions available.</div>}</div><aside className="branch-inspector">{selected?<><span className="kicker">SELECTED {selected._parent?"BRANCH":"SESSION"}</span>{renaming?<div className="rename-box"><input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&title.trim())void perform(async()=>{await onRename(selected._id,title.trim());setRenaming(false);});if(e.key==="Escape")setRenaming(false);}}/><button onClick={()=>void perform(async()=>{await onRename(selected._id,title.trim());setRenaming(false);})}>Save</button></div>:<h2>{titleOf(selected)}</h2>}<code>{selected._id}</code><dl><div><dt>Parent</dt><dd>{parent?titleOf(parent):"Main root"}</dd></div><div><dt>Anchor</dt><dd>{selected.branch_metadata?.anchorMessageId?.slice(0,14)||"Session origin"}</dd></div><div><dt>Children</dt><dd>{children(selected._id).length}</dd></div></dl><div className="inspector-actions"><button onClick={()=>onOpen(selected._id)}>Open conversation<Icon name="arrow"/></button>{parent&&<button onClick={()=>onOpen(parent._id)}>Return to parent<Icon name="arrow"/></button>}{parent&&<button onClick={()=>{setTitle(titleOf(selected));setRenaming(true);}}>Rename branch</button>}{parent&&<button disabled={busy} onClick={()=>void compare()}>Compare with parent</button>}</div>{selected.branch_metadata?.anchorMessageId&&<section className="anchor-card"><span>Anchored follow-up</span><p>{comparison?.anchorMessage?textOf(comparison.anchorMessage.content??comparison.anchorMessage.text):"Open comparison to inspect the exact anchor message."}</p></section>}</>:<p className="muted-copy">Select a branch to inspect it.</p>}</aside></div>{comparison&&<div className="compare-overlay"><header><div><span className="kicker">BRANCH COMPARISON</span><h2>{parent?titleOf(parent):"Parent"} <span>↔</span> {selected?titleOf(selected):"Branch"}</h2></div><button className="icon-button" onClick={()=>setComparison(null)}><Icon name="close"/></button></header><div className="compare-columns"><section><h3>Parent context</h3>{parentMessages.slice(-10).map(m=><article key={m.id}><b>{m.role}</b><p>{m.content}</p></article>)}</section><section><h3>Branch context</h3>{childMessages.slice(-10).map(m=><article key={m.id}><b>{m.role}</b><p>{m.content}</p></article>)}</section></div></div>}</section>;
 }

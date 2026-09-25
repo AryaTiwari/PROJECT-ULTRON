@@ -19,6 +19,9 @@ test("launcher readiness has hard HTTP deadlines and tears down Windows child tr
   assert.match(dev,/function probeHttp/);
   assert.match(dev,/request\.destroy/);
   assert.match(dev,/ULTRON_M4_HERMES_START_TIMEOUT_MS/);
-  assert.match(dev,/spawn\("taskkill"/);
+  assert.match(dev,/spawnSync\("taskkill"/);
   assert.match(dev,/\["\/PID", String\(child\.pid\), "\/T", "\/F"\]/);
+  assert.match(dev,/clear-dev-ports\.ps1/);
+  assert.match(dev,/--strictPort/);
+  assert.match(dev,/fatalChildError/);
 });

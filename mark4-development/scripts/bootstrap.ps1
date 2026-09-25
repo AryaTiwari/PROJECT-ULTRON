@@ -60,6 +60,7 @@ npm install
 
 Copy-Item (Join-Path $Root "hermes\SOUL.md") (Join-Path $HermesHome "SOUL.md") -Force
 Copy-Item (Join-Path $Root "hermes\USER.md") (Join-Path $Memories "USER.md") -Force
+Copy-Item (Join-Path $Root "hermes\MEMORY.md") (Join-Path $Memories "MEMORY.md") -Force
 
 Get-ChildItem (Join-Path $Root "hermes\skills") -Directory | ForEach-Object {
   $Destination = Join-Path $Skills $_.Name

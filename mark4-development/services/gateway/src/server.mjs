@@ -1,9 +1,9 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { config, uiDist } from "./config.mjs";
+import { config, uiDist, runtimeRoot } from "./config.mjs";
 import { hermes } from "./hermes.mjs";
-import { createMission,getMission,listMissions,updateMission,addEvidence,listEvidence,addEvent,listEvents,recordModelMetric,upsertLead,getLead,listLeads,leadStats,upsertCreator,getCreator,listCreators,creatorStats } from "./db.mjs";
+import { createMission,getMission,listMissions,updateMission,addEvidence,listEvidence,addEvent,listEvents,recordModelMetric,recordBranch,getBranch,renameBranch,listBranches,upsertLead,getLead,listLeads,leadStats,upsertCreator,getCreator,listCreators,creatorStats } from "./db.mjs";
 import { rankModels,fabricStatus,classifyModelError } from "./model-fabric.mjs";
 import { subscribe,publish } from "./event-hub.mjs";
 import { unwrapList, unwrapSession } from "./hermes-contract.mjs";
@@ -11,9 +11,30 @@ import { createNestedBranch } from "./branching.mjs";
 import { normalizeRunEvent, isTerminalRunEvent } from "./run-events.mjs";
 
 const json=(res,status,value)=>{res.writeHead(status,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});res.end(JSON.stringify(value));};
-const body=req=>new Promise((resolve,reject)=>{let raw="";req.setEncoding("utf8");req.on("data",c=>{raw+=c;if(raw.length>2_000_000)reject(new Error("REQUEST_TOO_LARGE"));});req.on("end",()=>{try{resolve(raw?JSON.parse(raw):{});}catch(e){reject(e);}});req.on("error",reject);});
+const body=(req,maxBytes=2_000_000)=>new Promise((resolve,reject)=>{let raw="",settled=false;req.setEncoding("utf8");req.on("data",c=>{if(settled)return;raw+=c;if(Buffer.byteLength(raw,"utf8")>maxBytes){settled=true;const error=new Error("REQUEST_TOO_LARGE");error.status=413;reject(error);req.destroy();}});req.on("end",()=>{if(settled)return;try{resolve(raw?JSON.parse(raw):{});}catch(e){reject(e);}});req.on("error",reject);});
 const parts=pathname=>pathname.split("/").filter(Boolean);
 const internal=req=>Boolean(config.internalKey)&&req.headers["x-ultron-internal-key"]===config.internalKey;
+const sessionIdOf=session=>String(session?.id||session?.session_id||"");
+function decorateSessions(sessions){
+  const metadata=new Map(listBranches().map(item=>[item.sessionId,item]));
+  return unwrapList(sessions).map(session=>{
+    const id=sessionIdOf(session),branch=metadata.get(id);
+    return branch?{...session,title:branch.title||session.title,parent_session_id:branch.parentSessionId,branch_metadata:branch}:session;
+  });
+}
+function saveAttachment(input={}){
+  const name=String(input.name||"attachment").replace(/[^a-zA-Z0-9._ -]+/g,"_").slice(0,120)||"attachment";
+  const type=String(input.type||"application/octet-stream").slice(0,120);
+  const encoded=String(input.data||"").replace(/^data:[^;]+;base64,/,"");
+  const bytes=Buffer.from(encoded,"base64");
+  if(!bytes.length)throw Object.assign(new Error("ATTACHMENT_EMPTY"),{status:400});
+  if(bytes.length>10*1024*1024)throw Object.assign(new Error("ATTACHMENT_TOO_LARGE"),{status:413});
+  const dir=path.join(runtimeRoot,"uploads");fs.mkdirSync(dir,{recursive:true});
+  const id=`attachment-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
+  const target=path.join(dir,`${id}-${name}`);fs.writeFileSync(target,bytes);
+  return{id,name,type,size:bytes.length,path:target,createdAt:new Date().toISOString()};
+}
+
 
 function cors(req,res){const origin=req.headers.origin;if(origin&&/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(origin)){res.setHeader("Access-Control-Allow-Origin",origin);res.setHeader("Vary","Origin");}res.setHeader("Access-Control-Allow-Headers","Content-Type, X-Ultron-Internal-Key");res.setHeader("Access-Control-Allow-Methods","GET,POST,PATCH,OPTIONS");}
 function serveStatic(pathname,res){
@@ -143,18 +164,30 @@ const server=http.createServer(async(req,res)=>{
       await hermes.messages(sessionId);
       return json(res,200,{ok:true,health,sessionId,modelFabric:fabricStatus()});
     }
-    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=40&include_children=true")]);return json(res,200,{health,sessions:unwrapList(sessions),missions:listMissions(),leadStats:leadStats(),creatorStats:creatorStats(),modelFabric:fabricStatus()});}
-    if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,unwrapList(await hermes.sessions(url.searchParams.toString())));
+    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=80&include_children=true")]);return json(res,200,{health,sessions:decorateSessions(sessions),missions:listMissions(),leadStats:leadStats(),creatorStats:creatorStats(),modelFabric:fabricStatus()});}
+    if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,decorateSessions(await hermes.sessions(url.searchParams.toString())));
     if(req.method==="POST"&&url.pathname==="/api/sessions")return json(res,201,unwrapSession(await hermes.createSession(await body(req))));
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="messages")return json(res,200,unwrapList(await hermes.messages(p[2])));
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="branch"){
-      const input=await body(req);return json(res,201,await createNestedBranch({sourceSessionId:p[2],anchorMessageId:input.anchorMessageId||null,title:input.title||"Follow-up branch"}));
+      const input=await body(req);const result=await createNestedBranch({sourceSessionId:p[2],anchorMessageId:input.anchorMessageId||null,title:input.title||"Follow-up branch"});
+      const childId=sessionIdOf(result.session);recordBranch({sessionId:childId,parentSessionId:p[2],anchorMessageId:input.anchorMessageId||null,title:input.title||"Follow-up branch"});
+      return json(res,201,{...result,session:{...result.session,branch_metadata:getBranch(childId)}});
+    }
+    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="PATCH"&&p.length===3){const input=await body(req);const branch=renameBranch(p[2],input.title);return branch?json(res,200,branch):json(res,404,{error:"BRANCH_NOT_FOUND"});}
+    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="branch-context"){
+      const branch=getBranch(p[2]);if(!branch)return json(res,404,{error:"BRANCH_NOT_FOUND"});
+      const [parentMessages,childMessages]=await Promise.all([hermes.messages(branch.parentSessionId),hermes.messages(p[2])]);
+      const parent=unwrapList(parentMessages),child=unwrapList(childMessages),anchor=branch.anchorMessageId?parent.find(message=>String(message.id||message.message_id||"")===branch.anchorMessageId)||null:null;
+      return json(res,200,{branch,parentMessages:parent,childMessages:child,anchorMessage:anchor});
     }
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="chat")return await proxyChat(req,res,p[2],await body(req));
     if(req.method==="GET"&&url.pathname==="/api/missions")return json(res,200,listMissions());
+    if(req.method==="POST"&&url.pathname==="/api/missions")return json(res,201,createMission(await body(req)));
+    if(req.method==="POST"&&url.pathname==="/api/attachments")return json(res,201,saveAttachment(await body(req,15_000_000)));
     if(req.method==="GET"&&url.pathname==="/api/leads")return json(res,200,{items:listLeads({status:url.searchParams.get("status"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:leadStats(url.searchParams.get("target"))});
     if(req.method==="GET"&&url.pathname==="/api/creators")return json(res,200,{items:listCreators({status:url.searchParams.get("status"),niche:url.searchParams.get("niche"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:creatorStats(url.searchParams.get("target"))});
-    if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="GET"){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2])}):json(res,404,{error:"MISSION_NOT_FOUND"});}
+    if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="GET"){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2]),events:listEvents({missionId:p[2],limit:300})}):json(res,404,{error:"MISSION_NOT_FOUND"});}
+    if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="PATCH"){const m=updateMission(p[2],await body(req));return m?json(res,200,m):json(res,404,{error:"MISSION_NOT_FOUND"});}
     if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="approval"&&req.method==="POST")return json(res,200,await hermes.approval(p[2],await body(req)));
     if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="stop"&&req.method==="POST")return json(res,200,await hermes.stopRun(p[2]));
     if(p[0]==="internal"){
@@ -169,7 +202,7 @@ const server=http.createServer(async(req,res)=>{
         const lead=getLead(decodeURIComponent(p[2]));return lead?json(res,200,lead):json(res,404,{error:"LEAD_NOT_FOUND"});
       }
       if(req.method==="POST"&&url.pathname==="/internal/missions")return json(res,201,createMission(await body(req)));
-      if(p[1]==="missions"&&p[2]&&req.method==="GET"&&p.length===3){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2])}):json(res,404,{error:"MISSION_NOT_FOUND"});}
+      if(p[1]==="missions"&&p[2]&&req.method==="GET"&&p.length===3){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2]),events:listEvents({missionId:p[2],limit:300})}):json(res,404,{error:"MISSION_NOT_FOUND"});}
       if(p[1]==="missions"&&p[2]&&req.method==="PATCH"&&p.length===3){const m=updateMission(p[2],await body(req));return m?json(res,200,m):json(res,404,{error:"MISSION_NOT_FOUND"});}
       if(p[1]==="missions"&&p[2]&&p[3]==="evidence"&&req.method==="POST")return json(res,201,addEvidence({missionId:p[2],...(await body(req))}));
       if(req.method==="GET"&&url.pathname==="/internal/events")return json(res,200,listEvents({after:url.searchParams.get("after")||0}));

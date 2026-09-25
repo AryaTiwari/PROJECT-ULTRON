@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS events (
   payload_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS branch_metadata (
+  session_id TEXT PRIMARY KEY,
+  parent_session_id TEXT NOT NULL,
+  anchor_message_id TEXT,
+  title TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_branch_metadata_parent ON branch_metadata(parent_session_id);
 CREATE TABLE IF NOT EXISTS model_metrics (
   route_id TEXT PRIMARY KEY,
   calls INTEGER NOT NULL DEFAULT 0,
@@ -122,6 +131,14 @@ function ensureColumn(table, column, type) {
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 for (const [column,type] of [
+  ["original_request","TEXT"],
+  ["artifacts_json","TEXT NOT NULL DEFAULT '{}'"],
+  ["blockers_json","TEXT NOT NULL DEFAULT '[]'"],
+  ["approvals_json","TEXT NOT NULL DEFAULT '[]'"],
+  ["related_sessions_json","TEXT NOT NULL DEFAULT '[]'"],
+  ["child_branches_json","TEXT NOT NULL DEFAULT '[]'"]
+]) ensureColumn("missions",column,type);
+for (const [column,type] of [
   ["contact_company","TEXT"],
   ["secondary_contact_name","TEXT"],
   ["secondary_contact_role","TEXT"],
@@ -141,10 +158,13 @@ const now = () => new Date().toISOString();
 function mapMission(row) {
   if (!row) return null;
   return {
-    id: row.id, objective: row.objective, status: row.status,
+    id: row.id, objective: row.objective, originalRequest: row.original_request || null, status: row.status,
     state: parse(row.state_json), constraints: parse(row.constraints_json),
     completionCriteria: parse(row.completion_json), strategy: parse(row.strategy_json),
-    nextAction: row.next_action || null, createdAt: row.created_at, updatedAt: row.updated_at,
+    artifacts: parse(row.artifacts_json, []), blockers: parse(row.blockers_json, []),
+    approvals: parse(row.approvals_json, []), relatedSessions: parse(row.related_sessions_json, []),
+    childBranches: parse(row.child_branches_json, []), nextAction: row.next_action || null,
+    createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
 
@@ -154,11 +174,14 @@ export function createMission(input = {}) {
   const id = input.id || `mission-${crypto.randomUUID()}`;
   const at = now();
   db.prepare(`INSERT INTO missions
-    (id, objective, status, state_json, constraints_json, completion_json, strategy_json, next_action, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, objective, input.status || "active", JSON.stringify(input.state || {}),
-      JSON.stringify(input.constraints || {}), JSON.stringify(input.completionCriteria || {}),
-      JSON.stringify(input.strategy || {}), input.nextAction || null, at, at);
+    (id, objective, original_request, status, state_json, constraints_json, completion_json, strategy_json,
+     artifacts_json, blockers_json, approvals_json, related_sessions_json, child_branches_json, next_action, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, objective, input.originalRequest || input.original_request || null, input.status || "active", JSON.stringify(input.state || {}),
+      JSON.stringify(input.constraints || {}), JSON.stringify(input.completionCriteria || {}), JSON.stringify(input.strategy || {}),
+      JSON.stringify(input.artifacts || []), JSON.stringify(input.blockers || []), JSON.stringify(input.approvals || []),
+      JSON.stringify(input.relatedSessions || input.related_sessions || []), JSON.stringify(input.childBranches || input.child_branches || []),
+      input.nextAction || null, at, at);
   addEvent({ missionId: id, type: "mission.created", payload: { objective } });
   return getMission(id);
 }
@@ -180,17 +203,46 @@ export function updateMission(id, patch = {}) {
     constraints: patch.constraints ? { ...current.constraints, ...patch.constraints } : current.constraints,
     completionCriteria: patch.completionCriteria ? { ...current.completionCriteria, ...patch.completionCriteria } : current.completionCriteria,
     strategy: patch.strategy ? { ...current.strategy, ...patch.strategy } : current.strategy,
+    originalRequest: patch.originalRequest === undefined ? current.originalRequest : patch.originalRequest,
+    artifacts: patch.artifacts === undefined ? current.artifacts : patch.artifacts,
+    blockers: patch.blockers === undefined ? current.blockers : patch.blockers,
+    approvals: patch.approvals === undefined ? current.approvals : patch.approvals,
+    relatedSessions: patch.relatedSessions === undefined ? current.relatedSessions : patch.relatedSessions,
+    childBranches: patch.childBranches === undefined ? current.childBranches : patch.childBranches,
     nextAction: patch.nextAction === undefined ? current.nextAction : patch.nextAction,
     updatedAt: now(),
   };
-  db.prepare(`UPDATE missions SET status=?, state_json=?, constraints_json=?, completion_json=?,
-    strategy_json=?, next_action=?, updated_at=? WHERE id=?`)
-    .run(next.status, JSON.stringify(next.state), JSON.stringify(next.constraints),
-      JSON.stringify(next.completionCriteria), JSON.stringify(next.strategy),
-      next.nextAction, next.updatedAt, id);
+  db.prepare(`UPDATE missions SET original_request=?, status=?, state_json=?, constraints_json=?, completion_json=?,
+    strategy_json=?, artifacts_json=?, blockers_json=?, approvals_json=?, related_sessions_json=?, child_branches_json=?,
+    next_action=?, updated_at=? WHERE id=?`)
+    .run(next.originalRequest, next.status, JSON.stringify(next.state), JSON.stringify(next.constraints),
+      JSON.stringify(next.completionCriteria), JSON.stringify(next.strategy), JSON.stringify(next.artifacts),
+      JSON.stringify(next.blockers), JSON.stringify(next.approvals), JSON.stringify(next.relatedSessions),
+      JSON.stringify(next.childBranches), next.nextAction, next.updatedAt, id);
   addEvent({ missionId: id, type: "mission.updated", payload: patch });
   return getMission(id);
 }
+export function recordBranch({ sessionId, parentSessionId, anchorMessageId = null, title = null }) {
+  const at = now();
+  db.prepare(`INSERT INTO branch_metadata(session_id,parent_session_id,anchor_message_id,title,created_at,updated_at)
+    VALUES(?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET parent_session_id=excluded.parent_session_id,
+    anchor_message_id=excluded.anchor_message_id,title=COALESCE(excluded.title,branch_metadata.title),updated_at=excluded.updated_at`)
+    .run(String(sessionId),String(parentSessionId),anchorMessageId?String(anchorMessageId):null,title?String(title):null,at,at);
+  return getBranch(sessionId);
+}
+export function getBranch(sessionId) {
+  const row=db.prepare("SELECT * FROM branch_metadata WHERE session_id=?").get(String(sessionId));
+  return row?{sessionId:row.session_id,parentSessionId:row.parent_session_id,anchorMessageId:row.anchor_message_id||null,title:row.title||null,createdAt:row.created_at,updatedAt:row.updated_at}:null;
+}
+export function renameBranch(sessionId,title) {
+  const clean=String(title||"").trim();if(!clean)throw new Error("BRANCH_TITLE_REQUIRED");
+  db.prepare("UPDATE branch_metadata SET title=?,updated_at=? WHERE session_id=?").run(clean,now(),String(sessionId));
+  return getBranch(sessionId);
+}
+export function listBranches() {
+  return db.prepare("SELECT * FROM branch_metadata ORDER BY created_at ASC").all().map(row=>({sessionId:row.session_id,parentSessionId:row.parent_session_id,anchorMessageId:row.anchor_message_id||null,title:row.title||null,createdAt:row.created_at,updatedAt:row.updated_at}));
+}
+
 export function addEvidence({ missionId, kind = "fact", source = "tool", ref = null, payload = {}, verified = false }) {
   if (!getMission(missionId)) throw new Error("MISSION_NOT_FOUND");
   const row = { id:`evidence-${crypto.randomUUID()}`, missionId, kind, source, ref, payload, verified:Boolean(verified), createdAt:now() };

@@ -15,6 +15,11 @@ ULTRON Mark 4 is a Hermes-powered cognitive operating layer, not a renamed Mark 
 - Command, Mission, Branches and Operations views.
 - Operations view is event-driven and lightweight: Canvas 2D around 30 FPS, no game engine, no local LLM.
 - Browser voice input uses the browser speech-recognition surface when available.
+- Local attachment upload with preview and a 10 MB safety bound.
+- Durable mission detail covering objective, strategy, constraints, blockers, next action, approvals, evidence, timeline, related sessions and child branches.
+- Persistent branches with rename, parent return, anchored context and parent/child comparison.
+- Searchable session drawer and a real `Ctrl+K` command palette.
+- Native ports of the proven Mark 3 research, lead, Apollo, Sheets, creator, media, artifact, outreach, memory, recovery and coding contracts.
 - Free-model catalog snapshot command for `open-free-llm-api/awesome-freellm-apis`.
 
 ## Install on Windows
@@ -60,7 +65,7 @@ npm run dev
 
 ## Mark 3 migration rule
 
-Mark 4 intentionally does not auto-import the old LinkedIn scraper or Reel engine.
+Mark 4 intentionally does not auto-import the old LinkedIn scraper or Reel engine. The complete audited mapping is in [`docs/MARK3-CAPABILITY-MIGRATION.md`](docs/MARK3-CAPABILITY-MIGRATION.md).
 
 Mark 3 contributes:
 - domain rules;

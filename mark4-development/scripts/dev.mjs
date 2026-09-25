@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { buildConversationModelPolicy, directCredentialEnvNames } from "./conversation-model-policy.mjs";
@@ -37,6 +37,21 @@ const hermesNode = path.join(hermesHome, "node");
 const hermesPython = process.platform === "win32"
   ? path.join(vendor, ".venv", "Scripts", "python.exe")
   : path.join(vendor, ".venv", "bin", "python");
+
+function syncHermesWorkspace() {
+  const memories = path.join(hermesHome, "memories");
+  const skills = path.join(hermesHome, "skills");
+  fs.mkdirSync(memories, { recursive:true });
+  fs.mkdirSync(skills, { recursive:true });
+  fs.copyFileSync(path.join(root,"hermes","SOUL.md"),path.join(hermesHome,"SOUL.md"));
+  fs.copyFileSync(path.join(root,"hermes","USER.md"),path.join(memories,"USER.md"));
+  fs.copyFileSync(path.join(root,"hermes","MEMORY.md"),path.join(memories,"MEMORY.md"));
+  for (const entry of fs.readdirSync(path.join(root,"hermes","skills"),{withFileTypes:true})) {
+    if (!entry.isDirectory()) continue;
+    fs.cpSync(path.join(root,"hermes","skills",entry.name),path.join(skills,entry.name),{recursive:true,force:true});
+  }
+}
+syncHermesWorkspace();
 
 if (!fs.existsSync(vendor) || !fs.existsSync(hermesPython)) {
   console.error("Mark 4 is not bootstrapped correctly. Run: npm run bootstrap");
@@ -256,6 +271,7 @@ async function probeOmniRoute() {
 
 const children = [];
 let shuttingDown = false;
+let fatalChildError = null;
 
 function run(command, args, cwd = root) {
   const child = spawn(command, args, {
@@ -268,7 +284,8 @@ function run(command, args, cwd = root) {
   children.push(child);
   child.on("exit", code => {
     if (!shuttingDown && code && code !== 0) {
-      console.error(command + " exited with code " + code);
+      fatalChildError = new Error(command + " exited with code " + code);
+      console.error(fatalChildError.message);
     }
   });
   return child;
@@ -285,7 +302,7 @@ function resolveViteCli() {
 function runVite() {
   const viteCli=resolveViteCli();
   if(!viteCli)throw new Error("Vite CLI not found. Run npm install.");
-  return run(process.execPath,[viteCli,"--host","127.0.0.1","--port","5174"],path.join(root,"apps","ui"));
+  return run(process.execPath,[viteCli,"--host","127.0.0.1","--port","5174","--strictPort"],path.join(root,"apps","ui"));
 }
 
 function probeHttp(url, timeoutMs = 1800) {
@@ -318,6 +335,7 @@ async function waitFor(url, label, timeoutMs = 60000) {
   let lastError = "";
   let nextProgressAt = 15000;
   while (Date.now() - started < timeoutMs) {
+    if (fatalChildError) throw fatalChildError;
     const result = await probeHttp(url, 1800);
     if (result.ok) {
       console.log(label + " ready");
@@ -369,6 +387,10 @@ async function verifyBrowserMount(){
 }
 
 async function main() {
+  const cleanup = spawnSync("powershell", ["-NoProfile","-ExecutionPolicy","Bypass","-File",path.join(root,"scripts","clear-dev-ports.ps1"),"-ProjectRoot",root], {
+    cwd:root, encoding:"utf8", windowsHide:true
+  });
+  if (cleanup.status !== 0) throw new Error(String(cleanup.stderr || cleanup.stdout || "Unable to clear managed ports.").trim());
   const hermesHealth = "http://127.0.0.1:8642/health";
   if (omniRoute.testMode) {
     console.log("OMNIROUTE TEST MODE ACTIVE: all direct model routes are disabled for this ULTRON run.");
@@ -419,8 +441,8 @@ function stop() {
   for (const child of children) {
     try {
       if (process.platform === "win32" && child.pid) {
-        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-          stdio:["ignore","ignore","ignore"],
+        spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+          stdio:"ignore",
           shell:false,
           windowsHide:true
         });

@@ -1,150 +1,63 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, liveEvents, streamChat } from "./api";
-import type { ChatMessage, LiveEvent, Mission, SessionLike, ViewMode } from "./types";
+import type { AttachmentRef, ChatMessage, LiveEvent, Mission, ModelRoute, SessionLike, ViewMode } from "./types";
 import { CommandView } from "./components/CommandView";
-import { MissionPanel } from "./components/MissionPanel";
+import { MissionView } from "./components/MissionView";
 import { BranchView } from "./components/BranchView";
 import { OperationsView } from "./components/OperationsView";
+import { SessionDrawer } from "./components/SessionDrawer";
+import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
+import { Icon, type IconName } from "./components/Icon";
 
 const sessionId=(session:SessionLike)=>String(session.id||session.session_id||"");
 const listFrom=(value:any):SessionLike[]=>Array.isArray(value)?value:Array.isArray(value?.data)?value.data:Array.isArray(value?.sessions)?value.sessions:Array.isArray(value?.items)?value.items:[];
 const textOf=(content:any):string=>typeof content==="string"?content:Array.isArray(content)?content.map(item=>typeof item==="string"?item:item?.text||item?.content||"").join(""):String(content?.text||content?.content||"");
-function normalizeMessages(value:any):ChatMessage[]{
-  const rows=Array.isArray(value)?value:Array.isArray(value?.messages)?value.messages:Array.isArray(value?.data)?value.data:Array.isArray(value?.items)?value.items:[];
-  return rows.map((m:any,i:number)=>({id:String(m.id||m.message_id||i),role:(m.role||m.type?.split?.("/")[0]||"assistant") as ChatMessage["role"],content:textOf(m.content??m.message?.content??m.text)}))
-    .filter((m:ChatMessage)=>Boolean(m.content)&&["user","assistant","system","tool"].includes(m.role));
-}
+function normalizeMessages(value:any):ChatMessage[]{const rows=Array.isArray(value)?value:Array.isArray(value?.messages)?value.messages:Array.isArray(value?.data)?value.data:Array.isArray(value?.items)?value.items:[];return rows.map((m:any,i:number)=>({id:String(m.id||m.message_id||i),role:(m.role||m.type?.split?.("/")[0]||"assistant") as ChatMessage["role"],content:textOf(m.content??m.message?.content??m.text),createdAt:m.created_at||m.timestamp})).filter((m:ChatMessage)=>Boolean(m.content)&&["user","assistant","system","tool"].includes(m.role));}
 const deltaOf=(data:any)=>String(data?.delta??data?.text??data?.content??data?.output_text?.delta??data?.data?.delta??"");
-const failureOf=(data:any)=>{
-  const err=data?.error;
-  if(typeof err==="string"&&err.trim())return err;
-  if(err&&typeof err==="object"){
-    const nested=err.message||err.detail||err.error||err.code;
-    if(nested)return String(nested);
-    try{return JSON.stringify(err);}catch{}
-  }
-  return String(data?.message||data?.detail||data?.reason||"The active model route failed.");
-};
+const failureOf=(data:any)=>{const err=data?.error;if(typeof err==="string"&&err.trim())return err;if(err&&typeof err==="object")return String(err.message||err.detail||err.error||err.code||JSON.stringify(err));return String(data?.message||data?.detail||data?.reason||"The active model route failed.");};
+const wait=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 
-function Glyph({name}:{name:"chat"|"mission"|"branches"|"ops"|"history"|"plus"}){
-  const p={width:19,height:19,viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:1.6,strokeLinecap:"round" as const,strokeLinejoin:"round" as const};
-  if(name==="chat")return <svg {...p}><path d="M4 5h16v11H9l-5 4V5Z"/><path d="M8 9h8M8 13h5"/></svg>;
-  if(name==="mission")return <svg {...p}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3"/></svg>;
-  if(name==="branches")return <svg {...p}><circle cx="6" cy="5" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 5h2c5 0 2 13 8 13M12 10c0-2 2-3 4-3"/></svg>;
-  if(name==="ops")return <svg {...p}><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></svg>;
-  if(name==="history")return <svg {...p}><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6M12 8v5l3 2"/></svg>;
-  return <svg {...p}><path d="M12 5v14M5 12h14"/></svg>;
-}
+const paletteActions:PaletteAction[]=[
+  {id:"new-session",title:"New conversation",detail:"Start a clean Hermes session",group:"Session",shortcut:"Ctrl N"},
+  {id:"new-mission",title:"New mission",detail:"Create a durable objective with evidence",group:"Mission"},
+  {id:"open-missions",title:"Open missions",detail:"Inspect progress, evidence and blockers",group:"Mission"},
+  {id:"search-sessions",title:"Search sessions",detail:"Open session and branch history",group:"Session"},
+  {id:"lead-master",title:"Open Lead Master",detail:"Inspect canonical verified companies",group:"Data"},
+  {id:"creator-registry",title:"Open Creator Registry",detail:"Inspect saved creator intelligence",group:"Data"},
+  {id:"create-reel",title:"Create reel",detail:"Start a native Mark 4 media mission",group:"Create"},
+  {id:"model-status",title:"Model status",detail:"Inspect direct routes and fallback health",group:"Runtime"},
+  {id:"browser-status",title:"Browser status",detail:"Check browser capability readiness",group:"Runtime"},
+  {id:"google-status",title:"Google status",detail:"Check Workspace OAuth and Sheets",group:"Runtime"},
+  {id:"apollo-status",title:"Apollo status",detail:"Check paid enrichment availability",group:"Runtime"},
+  {id:"restart-runtime",title:"Restart runtime",detail:"Diagnose lifecycle and prepare a safe restart",group:"Runtime"},
+  {id:"open-operations",title:"Open operations",detail:"Watch live execution events",group:"View"}
+];
 
 export function App(){
-  useEffect(()=>{
-    document.documentElement.dataset.ultronMounted="true";
-    return()=>{delete document.documentElement.dataset.ultronMounted;};
-  },[]);
+  useEffect(()=>{document.documentElement.dataset.ultronMounted="true";return()=>{delete document.documentElement.dataset.ultronMounted;};},[]);
   const[view,setView]=useState<ViewMode>("command"),[sessions,setSessions]=useState<SessionLike[]>([]),[active,setActive]=useState(""),[messages,setMessages]=useState<ChatMessage[]>([]);
-  const[missions,setMissions]=useState<Mission[]>([]),[events,setEvents]=useState<LiveEvent[]>([]),[busy,setBusy]=useState(false),[streaming,setStreaming]=useState(""),[health,setHealth]=useState(false),[error,setError]=useState("");
-  const[activeRunId,setActiveRunId]=useState(""),[pendingApproval,setPendingApproval]=useState<any|null>(null),[sessionsOpen,setSessionsOpen]=useState(false),[missionOpen,setMissionOpen]=useState(false),[filter,setFilter]=useState("");
-  const mission=missions[0]||null;
+  const[missions,setMissions]=useState<Mission[]>([]),[activeMissionId,setActiveMissionId]=useState(""),[missionDetail,setMissionDetail]=useState<Mission|null>(null),[events,setEvents]=useState<LiveEvent[]>([]);
+  const[modelFabric,setModelFabric]=useState<ModelRoute[]>([]),[busy,setBusy]=useState(false),[streaming,setStreaming]=useState(""),[health,setHealth]=useState(false),[error,setError]=useState("");
+  const[activeRunId,setActiveRunId]=useState(""),[pendingApproval,setPendingApproval]=useState<any|null>(null),[sessionsOpen,setSessionsOpen]=useState(false),[paletteOpen,setPaletteOpen]=useState(false),[filter,setFilter]=useState(""),[draftRequest,setDraftRequest]=useState<{id:number;text:string}|null>(null);
+  const mission=missionDetail||missions.find(m=>m.id===activeMissionId)||missions[0]||null;
   const activeSession=useMemo(()=>sessions.find(s=>sessionId(s)===active),[sessions,active]);
-  const filtered=useMemo(()=>{const q=filter.trim().toLowerCase();return sessions.filter(s=>!q||String(s.title||"Untitled").toLowerCase().includes(q));},[sessions,filter]);
+  const modelRoute=useMemo(()=>modelFabric.find(route=>route.id==="cognition-primary")||modelFabric.find(route=>route.configured)||null,[modelFabric]);
 
-  async function refresh(){
-    try{
-      const data=await api.bootstrap();setHealth(Boolean(data.health?.ok));const rows=listFrom(data.sessions);setSessions(rows);setMissions(data.missions||[]);
-      let next=active||sessionId(rows[0]||{});
-      if(!next){const created=await api.createSession("ULTRON "+new Date().toLocaleTimeString());const s=created.session||created;next=String(s.id||s.session_id||"");setSessions(listFrom(await api.sessions()));}
-      if(next){setActive(next);setMessages(normalizeMessages(await api.messages(next)));}
-      setError("");
-    }catch(cause:any){setHealth(false);setError(cause.message||"ULTRON runtime unavailable.");}
+  async function refresh(preferredSession=active){
+    try{const data=await api.bootstrap();setHealth(Boolean(data.health?.ok));const rows=listFrom(data.sessions);setSessions(rows);setMissions(data.missions||[]);setModelFabric(data.modelFabric||[]);let next=preferredSession||sessionId(rows[0]||{});if(!next){const created=await api.createSession("ULTRON "+new Date().toLocaleTimeString());next=String(created.id||created.session_id||created.session?.id||"");setSessions(listFrom(await api.sessions()));}if(next){setActive(next);setMessages(normalizeMessages(await api.messages(next)));}const nextMission=activeMissionId||data.missions?.[0]?.id||"";if(nextMission){setActiveMissionId(nextMission);setMissionDetail(await api.mission(nextMission).catch(()=>null));}setError("");}catch(cause:any){setHealth(false);setError(cause.message||"ULTRON runtime unavailable.");}
   }
-  useEffect(()=>{
-    void refresh();
-    const close=liveEvents((type,data)=>setEvents(prev=>[...prev.slice(-119),{type,data,at:data?.at||new Date().toISOString()}]));
-    return()=>{
-      if(typeof close==="function") close();
-    };
-  },[]);
+  useEffect(()=>{void refresh();const close=liveEvents((type,data)=>setEvents(prev=>[...prev.slice(-199),{type,data,at:data?.at||new Date().toISOString()}]));return()=>{if(typeof close==="function") close();};},[]);
   useEffect(()=>{if(active)api.messages(active).then(v=>setMessages(normalizeMessages(v))).catch((e:any)=>setError(e.message));},[active]);
-  useEffect(()=>{const e=events.length?events[events.length-1]:undefined;if(e&&["mission.updated","evidence.recorded","run.settled"].includes(e.type))api.bootstrap().then(v=>setMissions(v.missions||[])).catch(()=>{});},[events.length]);
+  useEffect(()=>{if(activeMissionId)api.mission(activeMissionId).then(setMissionDetail).catch(()=>setMissionDetail(null));},[activeMissionId]);
+  useEffect(()=>{const latest=events.at(-1);if(latest&&["mission.updated","evidence.recorded","run.settled"].includes(latest.type))void refresh(active);},[events.length]);
+  useEffect(()=>{const key=(event:KeyboardEvent)=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();setPaletteOpen(open=>!open);}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="n"){event.preventDefault();void newSession();}if(event.key==="Escape"){setPaletteOpen(false);setSessionsOpen(false);}};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key);},[active]);
 
-  async function send(text:string){
-    if(!active||busy)return;setBusy(true);setStreaming("");setError("");setActiveRunId("");setPendingApproval(null);
-    setMessages(prev=>[...prev,{id:"local-"+Date.now(),role:"user",content:text}]);let collected="";
-    try{
-      let runFailure="";
-      await streamChat(active,{input:text,missionId:mission?.id||null,role:"cognition"},(type,data)=>{
-        if(type==="run.started")setActiveRunId(String(data?.run_id||data?.runId||""));
-        if(type==="approval.request")setPendingApproval(data);
-        if(type==="assistant.delta"){const d=deltaOf(data);if(d){collected+=d;setStreaming(collected);}}
-        if(type==="run.failed"){
-          runFailure=failureOf(data);
-          setError("MODEL ROUTE FAILED · "+runFailure);
-        }
-        if(["run.completed","run.failed","run.cancelled","run.interrupted"].includes(type))setPendingApproval(null);
-      });
-      setStreaming("");setMessages(normalizeMessages(await api.messages(active)));const data=await api.bootstrap();setMissions(data.missions||[]);
-      if(runFailure&&!collected)setMessages(prev=>[...prev,{id:"route-failure-"+Date.now(),role:"assistant",content:"Runtime route failed: "+runFailure}]);
-    }catch(cause:any){setError(cause.message);if(collected)setMessages(prev=>[...prev,{id:"partial-"+Date.now(),role:"assistant",content:collected}]);setStreaming("");}
-    finally{setBusy(false);setActiveRunId("");setPendingApproval(null);}
-  }
-  async function newSession(){const created=await api.createSession("Session "+new Date().toLocaleString());const s=created.session||created,id=String(s.id||s.session_id||"");setSessions(listFrom(await api.sessions()));if(id){setActive(id);setView("command");setSessionsOpen(false);}}
-  async function branch(id:string,title:string,anchorMessageId?:string){const created=await api.branch(id,title,anchorMessageId),s=created.session||created,newId=String(s.id||s.session_id||"");setSessions(listFrom(await api.sessions()));if(newId){setActive(newId);setView("command");}}
+  async function send(text:string,attachments:AttachmentRef[]){if(!active||busy)return;setBusy(true);setStreaming("");setError("");setActiveRunId("");setPendingApproval(null);const attachmentNote=attachments.length?"\n\nAttached local files:\n"+attachments.map(item=>`- ${item.name} (${item.type}, ${item.size} bytes): ${item.path}`).join("\n")+"\nUse the files as evidence and do not invent unread contents.":"";const input=text+attachmentNote;setMessages(prev=>[...prev,{id:"local-"+Date.now(),role:"user",content:text,createdAt:new Date().toISOString()}]);let collected="",completedOutput="",runFailure="";
+    try{await streamChat(active,{input,missionId:mission?.id||null,role:"cognition"},(type,data)=>{if(type==="run.started")setActiveRunId(String(data?.run_id||data?.runId||""));if(type==="approval.request")setPendingApproval(data);if(type==="assistant.delta"){const d=deltaOf(data);if(d){collected+=d;setStreaming(collected);}}if(type==="run.completed")completedOutput=String(data?.output||data?.text||"");if(type==="run.failed"||type==="error"){runFailure=failureOf(data);setError("MODEL ROUTE FAILED · "+runFailure);}if(["run.completed","run.failed","run.cancelled","run.interrupted"].includes(type))setPendingApproval(null);});const answer=(collected||completedOutput).trim();if(/No reply: every provider|fallback chain kept failing/i.test(answer))throw new Error(answer);setStreaming("");if(answer)setMessages(prev=>[...prev,{id:"answer-"+Date.now(),role:"assistant",content:answer,createdAt:new Date().toISOString()}]);await wait(350);const remote=normalizeMessages(await api.messages(active));if(remote.length&&(!answer||remote.some(row=>row.role==="assistant"&&row.content.trim()===answer)))setMessages(remote);const data=await api.bootstrap();setMissions(data.missions||[]);setModelFabric(data.modelFabric||[]);if(mission?.id)setMissionDetail(await api.mission(mission.id).catch(()=>mission));if(runFailure&&!answer)throw new Error(runFailure);}catch(cause:any){setError("Runtime route failed: "+(cause.message||"Conversation failed."));if(collected)setMessages(prev=>[...prev,{id:"partial-"+Date.now(),role:"assistant",content:collected,createdAt:new Date().toISOString()}]);setStreaming("");}finally{setBusy(false);setActiveRunId("");setPendingApproval(null);}}
+  async function newSession(){const created=await api.createSession("Session "+new Date().toLocaleString());const id=String(created.id||created.session_id||created.session?.id||"");setSessions(listFrom(await api.sessions()));if(id){setActive(id);setView("command");setSessionsOpen(false);}}
+  async function createBranch(id:string,title:string,anchorMessageId?:string){const result=await api.branch(id,title,anchorMessageId),newId=String(result.session?.id||result.id||"");setSessions(listFrom(await api.sessions()));if(newId){setActive(newId);setView("command");}}
   async function resolveApproval(choice:string){if(!activeRunId||!pendingApproval)return;const requestId=String(pendingApproval.request_id||pendingApproval.requestId||"");if(!requestId)throw new Error("Approval request id missing.");await api.approve(activeRunId,requestId,choice);setPendingApproval(null);}
-  async function stopRun(){if(activeRunId)await api.stopRun(activeRunId);}
-
-  const labels:Record<ViewMode,string>={command:"Command",mission:"Mission",branches:"Branches",operations:"Operations"};
-  return <div className="u4-shell">
-    <aside className="u4-rail">
-      <button className="u4-logo" onClick={()=>setView("command")}><span>U</span><b>04</b></button>
-      <nav>
-        <button className={view==="command"?"active":""} onClick={()=>setView("command")} title="Command"><Glyph name="chat"/></button>
-        <button className={view==="branches"?"active":""} onClick={()=>setView("branches")} title="Branches"><Glyph name="branches"/></button>
-        <button className={view==="operations"?"active":""} onClick={()=>setView("operations")} title="Operations"><Glyph name="ops"/></button>
-      </nav>
-      <div className="u4-rail-bottom">
-        <button onClick={()=>setSessionsOpen(true)} title="Sessions"><Glyph name="history"/></button>
-        <button onClick={()=>void newSession()} title="New session"><Glyph name="plus"/></button>
-        <i className={health?"online":"offline"}/>
-      </div>
-    </aside>
-
-    <section className="u4-stage">
-      <header className="u4-topbar">
-        <button className="u4-session-trigger" onClick={()=>setSessionsOpen(true)}><span>SESSION</span><strong>{activeSession?.title||"Untitled"}</strong></button>
-        <div className="u4-top-center"><span className={health?"u4-status online":"u4-status offline"}><i/>{health?"ONLINE":"OFFLINE"}</span>{busy&&<span className="u4-working"><i/>EXECUTING</span>}</div>
-        <div className="u4-top-actions">
-          {mission&&<button className="u4-mission-pill" onClick={()=>setMissionOpen(true)}><span>MISSION</span><strong>{mission.status}</strong></button>}
-          <span className="u4-build">MARK 4 / COGNITIVE OS</span>
-        </div>
-      </header>
-
-      <main className="u4-workspace">
-        <div className="u4-watermark">04</div>
-        {view==="command"&&<CommandView messages={messages} events={events} streaming={streaming} busy={busy} mission={mission} onSend={send}
-          onBranch={messageId=>branch(active,"Follow-up branch",messageId)} runId={activeRunId} approval={pendingApproval} onApproval={resolveApproval} onStop={stopRun}/>}
-        {view==="mission"&&<div className="mission-full"><MissionPanel mission={mission}/></div>}
-        {view==="branches"&&<BranchView sessions={sessions} activeId={active} onSelect={id=>{setActive(id);setView("command");}} onFork={(id,title)=>branch(id,title)}/>}
-        {view==="operations"&&<OperationsView events={events} mission={mission}/>}
-      </main>
-      {error&&<div className="u4-error"><div><b>RUNTIME</b><span>{error}</span></div><button onClick={()=>void refresh()}>RETRY</button></div>}
-    </section>
-
-    {sessionsOpen&&<div className="u4-overlay" onMouseDown={()=>setSessionsOpen(false)}>
-      <aside className="u4-drawer left" onMouseDown={e=>e.stopPropagation()}>
-        <div className="u4-drawer-head"><div><span>ULTRON</span><h2>Sessions</h2></div><button onClick={()=>setSessionsOpen(false)}>×</button></div>
-        <div className="u4-search"><span>⌕</span><input autoFocus value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Search conversations"/></div>
-        <button className="u4-new-session" onClick={()=>void newSession()}><Glyph name="plus"/>New session</button>
-        <div className="u4-session-list">{filtered.map(s=><button key={sessionId(s)} className={active===sessionId(s)?"active":""} onClick={()=>{setActive(sessionId(s));setView("command");setSessionsOpen(false);}}>
-          <span>{s.title||"Untitled session"}</span><small>{sessionId(s).slice(0,10)}</small>
-        </button>)}</div>
-      </aside>
-    </div>}
-
-    {missionOpen&&<div className="u4-overlay" onMouseDown={()=>setMissionOpen(false)}>
-      <aside className="u4-drawer right" onMouseDown={e=>e.stopPropagation()}>
-        <div className="u4-drawer-head"><div><span>OBJECTIVE</span><h2>Mission control</h2></div><button onClick={()=>setMissionOpen(false)}>×</button></div>
-        <MissionPanel mission={mission}/>
-      </aside>
-    </div>}
-  </div>;
+  async function choosePalette(id:string){setPaletteOpen(false);const prompts:Record<string,string>={"new-mission":"Create a persistent mission for: ","lead-master":"Show me the current Lead Master status and highest-priority unfinished work.","creator-registry":"Show me the current Creator Registry status and highest-priority unfinished work.","create-reel":"Create a Mark 4 native reel mission for: ","model-status":"Inspect the current model routes, fallback health and recent failures.","browser-status":"Inspect authenticated browser capability status.","google-status":"Check Google Workspace and Sheets connection status.","apollo-status":"Check Apollo availability and credit-safe approval status.","restart-runtime":"Diagnose the runtime lifecycle and explain whether a restart is needed."};if(id==="new-session")return void newSession();if(id==="open-missions"){setView("mission");return;}if(id==="search-sessions"){setSessionsOpen(true);return;}if(id==="open-operations"){setView("operations");return;}setView("command");setDraftRequest({id:Date.now(),text:prompts[id]||""});}
+  const nav:Array<{id:ViewMode;label:string;icon:IconName}>=[{id:"command",label:"Command",icon:"command"},{id:"mission",label:"Missions",icon:"mission"},{id:"branches",label:"Branches",icon:"branches"},{id:"operations",label:"Operations",icon:"operations"}];
+  return <div className="u4-shell"><aside className="nav-rail"><button className="brand-mark" onClick={()=>setView("command")}><span>U</span><b>4</b></button><nav>{nav.map(item=><button key={item.id} className={view===item.id?"active":""} onClick={()=>setView(item.id)} data-label={item.label}><Icon name={item.icon}/></button>)}</nav><div className="rail-bottom"><button onClick={()=>setPaletteOpen(true)} data-label="Commands"><Icon name="palette"/></button><button onClick={()=>setSessionsOpen(true)} data-label="Sessions"><Icon name="sessions"/></button><button onClick={()=>void newSession()} data-label="New conversation"><Icon name="plus"/></button><span className={health?"runtime-light online":"runtime-light offline"}/></div></aside><section className="stage"><header className="topbar"><button className="session-trigger" onClick={()=>setSessionsOpen(true)}><span className="kicker">SESSION</span><b>{activeSession?.title||"Untitled"}</b><Icon name="chevron"/></button><div className="runtime-center"><span className={health?"runtime-state online":"runtime-state offline"}><i/>{health?"Runtime online":"Runtime offline"}</span><span className="top-route">{modelRoute?.provider||"Hermes"}<b>{modelRoute?.model||"Auto route"}</b></span>{busy&&<span className="execution-state"><i/>Executing</span>}</div><div className="top-identity"><span>PROJECT ULTRON</span><b>MARK 4</b></div></header><main className="workspace">{view==="command"&&<CommandView messages={messages} events={events} streaming={streaming} busy={busy} mission={mission} modelRoute={modelRoute} draftRequest={draftRequest} onSend={send} onBranch={messageId=>createBranch(active,"Follow-up branch",messageId)} runId={activeRunId} approval={pendingApproval} onApproval={resolveApproval} onStop={()=>api.stopRun(activeRunId)} onOpenPalette={()=>setPaletteOpen(true)}/>} {view==="mission"&&<MissionView missions={missions} activeId={activeMissionId} detail={missionDetail} onSelect={setActiveMissionId} onNew={()=>void choosePalette("new-mission")} onOpenSession={id=>{setActive(id);setView("command");}}/>}{view==="branches"&&<BranchView sessions={sessions} activeId={active} onInspect={setActive} onOpen={id=>{setActive(id);setView("command");}} onFork={createBranch} onRename={async(id,title)=>{await api.renameSession(id,title);setSessions(listFrom(await api.sessions()));}} onCompare={api.branchContext}/>} {view==="operations"&&<OperationsView events={events} mission={mission}/>}</main>{error&&<div className="runtime-error"><Icon name="warning"/><div><b>Runtime needs attention</b><span>{error}</span></div><button onClick={()=>void refresh(active)}>Retry</button><button className="icon-button" onClick={()=>setError("")}><Icon name="close"/></button></div>}</section><SessionDrawer open={sessionsOpen} sessions={sessions} missions={missions} activeId={active} busy={busy} query={filter} onQuery={setFilter} onClose={()=>setSessionsOpen(false)} onNew={()=>void newSession()} onSelect={id=>{setActive(id);setView("command");setSessionsOpen(false);}}/><CommandPalette open={paletteOpen} actions={paletteActions} onClose={()=>setPaletteOpen(false)} onChoose={id=>void choosePalette(id)}/></div>;
 }
