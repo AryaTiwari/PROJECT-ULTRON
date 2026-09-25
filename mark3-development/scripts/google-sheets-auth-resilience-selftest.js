@@ -86,6 +86,14 @@ const auth = require('../core/google-sheets-auth');
     assert.doesNotMatch(source, /if \(!sessionValidated \|\| forceRefresh\)/, 'restart alone must not force OAuth refresh');
     assert.match(source, /token-recovered-from-backup/);
 
+    const apolloControllerSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'apollo-lead-domain-controller.js'), 'utf8');
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    assert.match(apolloControllerSource, /errorCode:\s*code/);
+    assert.match(apolloControllerSource, /reauthorizeCommand/);
+    assert.match(apolloControllerSource, /authReason/);
+    assert.match(serverSource, /Authorization is not durable/);
+    assert.match(serverSource, /google-sheets:doctor/);
+
     console.log('Google Sheets auth resilience self-test passed: valid tokens survive restarts without unnecessary refresh, refresh tokens are preserved across reauthorization, token writes are recoverable, and short-lived-only authorization is detected before it becomes a surprise.');
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
