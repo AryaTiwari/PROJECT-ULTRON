@@ -372,8 +372,17 @@ async function handle(message, options = {}) {
   try {
     compiled = await preflightDestination(initial);
   } catch (error) {
-    return response(false, `Apollo lead discovery did not start: ${error.message}`, {
-      error: error.code || 'APOLLO_LEAD_PREFLIGHT_FAILED',
+    const code = error.code || 'APOLLO_LEAD_PREFLIGHT_FAILED';
+    const repair = error.reauthorizeCommand
+      ? ` Repair: ${error.reauthorizeCommand}`
+      : '';
+    const message = `Apollo lead discovery did not start: ${error.message}${repair}`;
+    return response(false, message, {
+      error: message,
+      errorCode: code,
+      authReason: error.authReason || null,
+      googleOAuthError: error.googleOAuthError || null,
+      reauthorizeCommand: error.reauthorizeCommand || null,
       errorStage: error.stage || 'apollo-lead-sheet-preflight',
       apolloCalled: false,
       approvalRequired: false,

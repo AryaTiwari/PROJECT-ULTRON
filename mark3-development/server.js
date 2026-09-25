@@ -152,6 +152,7 @@ function artifactResponse(kind, result) {
 
 const runtimeBuild = require('./core/runtime-build');
 const apolloLeadContract = require('./core/apollo-lead-contract');
+const googleSheetsAuth = require('./core/google-sheets-auth');
 
 const server = http.createServer(async (req,res) => {
   try {
@@ -451,6 +452,12 @@ server.listen(config.port,config.host,()=>{
   console.log(`ULTRON Mark 3 listening at http://${config.host}:${config.port} [PID ${process.pid}]`);
   console.log(`[Mark 3] Runtime build: ${runtimeBuild.id}`);
   console.log(`[Apollo Lead] Contract: ${apolloLeadContract.VERSION} · build ${apolloLeadContract.shortRevision()} · src ${runtimeBuild.fingerprint}`);
+  const googleAuthStatus = googleSheetsAuth.status();
+  if (googleAuthStatus.durableAuthorization) {
+    console.log('[Google Sheets] Durable OAuth ready: refresh token present.');
+  } else {
+    console.error(`[Google Sheets] Authorization is not durable: ${googleAuthStatus.healthReason}. Run npm run google-sheets:doctor before a Sheets mission.`);
+  }
   console.log('[Mark 3] Native-audio conversation flow active: browser speech is wake/timing support; server transcription is authoritative when available.');
   console.log(`[Mark 3] Conversational reply window: ${Math.round(REPLY_WINDOW_MS / 1000)} seconds minimum; voice sessions extend this automatically.`);
   console.log('[Mark 3] Multimodal runtime active: attachments + file reading + OmniRoute image/video + OmniRoute-composed local PDF/DOCX artifacts.');
