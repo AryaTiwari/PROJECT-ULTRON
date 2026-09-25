@@ -35,8 +35,13 @@ function fail(error, stage = 'unknown') {
   console.log('[Google Sheets Health] credentialsReady:', status.credentialsReady);
   console.log('[Google Sheets Health] authorized:', status.authorized);
   console.log('[Google Sheets Health] hasRefreshToken:', status.hasRefreshToken);
+  console.log('[Google Sheets Health] durableAuthorization:', status.durableAuthorization);
+  console.log('[Google Sheets Health] healthReason:', status.healthReason);
   console.log('[Google Sheets Health] tokenExpired:', status.tokenExpired);
+  console.log('[Google Sheets Health] tokenExpiresAt:', status.tokenExpiresAt ? new Date(status.tokenExpiresAt).toISOString() : '(unknown)');
   console.log('[Google Sheets Health] tokenScope:', status.tokenScope || '(unknown)');
+  console.log('[Google Sheets Health] tokenPath:', status.tokenPath);
+  console.log('[Google Sheets Health] tokenBackupPath:', status.tokenBackupPath);
 
   try {
     await auth.accessToken();
