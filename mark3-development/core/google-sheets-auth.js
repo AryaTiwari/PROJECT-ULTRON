@@ -7,6 +7,7 @@ const config = require('./config');
 
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 let sessionValidated = false;
+let lastAuthEvent = null;
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -62,16 +63,63 @@ function oauthClient() {
   };
 }
 
-function loadToken() {
-  const file = tokenPath();
-  if (!fs.existsSync(file)) return null;
-  try { return readJson(file); } catch { return null; }
+function tokenBackupPath() {
+  return tokenPath() + '.bak';
 }
 
-function saveToken(token) {
+function validTokenObject(value) {
+  return Boolean(value && typeof value === 'object' && (value.access_token || value.refresh_token));
+}
+
+function loadToken() {
   const file = tokenPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(token, null, 2), { mode: 0o600 });
+  const backup = tokenBackupPath();
+
+  if (fs.existsSync(file)) {
+    try {
+      const token = readJson(file);
+      if (validTokenObject(token)) return token;
+    } catch {}
+  }
+
+  if (fs.existsSync(backup)) {
+    try {
+      const token = readJson(backup);
+      if (validTokenObject(token)) {
+        // Recover the primary file atomically from the last known-good backup.
+        saveToken(token, { skipBackup: true });
+        lastAuthEvent = { type: 'token-recovered-from-backup', at: new Date().toISOString() };
+        return token;
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+function saveToken(token, options = {}) {
+  if (!validTokenObject(token)) {
+    const error = new Error('Refusing to persist an invalid Google Sheets token object.');
+    error.code = 'GOOGLE_SHEETS_TOKEN_INVALID';
+    throw error;
+  }
+
+  const file = tokenPath();
+  const backup = tokenBackupPath();
+  const dir = path.dirname(file);
+  const temp = path.join(dir, `.google-sheets-token.${process.pid}.${Date.now()}.tmp`);
+  fs.mkdirSync(dir, { recursive: true });
+
+  if (!options.skipBackup && fs.existsSync(file)) {
+    try {
+      const current = readJson(file);
+      if (validTokenObject(current)) fs.copyFileSync(file, backup);
+    } catch {}
+  }
+
+  fs.writeFileSync(temp, JSON.stringify(token, null, 2), { mode: 0o600 });
+  fs.renameSync(temp, file);
+  try { fs.chmodSync(file, 0o600); } catch {}
   return file;
 }
 
@@ -141,38 +189,59 @@ async function refresh(token) {
 async function accessToken(options = {}) {
   let token = loadToken();
   if (!token) {
-    const error = new Error('Google Sheets needs its one-time authorization. Run the Google Sheets auth script first.');
+    const error = new Error(`Google Sheets token file is missing or unreadable at ${tokenPath()}. Run the one-time Google Sheets authorization.`);
     error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+    error.authReason = 'token_missing_or_unreadable';
     error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
   }
 
   const forceRefresh = Boolean(options.forceRefresh);
-  // Validate the local credential once per ULTRON process even when expires_at says
-  // the cached access token is still alive. Google can revoke/rotate an access token
-  // before our local timestamp expires; previously that surfaced downstream as the
-  // misleading GOOGLE_SHEETS_API_ERROR. A single session-start refresh avoids that
-  // without refreshing before every Sheets request.
-  if (!sessionValidated || forceRefresh) {
-    if (token.refresh_token) {
-      token = await refresh(token);
-      sessionValidated = true;
-    } else if (token.access_token && Number(token.expires_at || 0) > Date.now() + 60_000) {
-      sessionValidated = true;
-    } else {
-      const error = new Error('Google Sheets authorization cannot be refreshed. Re-authorize Google Sheets once.');
-      error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
-      error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
-      throw error;
-    }
+  const accessStillValid = Boolean(
+    token.access_token
+    && Number(token.expires_at || 0) > Date.now() + 60_000
+  );
+
+  // Do not refresh merely because ULTRON restarted. A valid access token is safe
+  // to use until Google rejects it or it approaches expiry. The Sheets HTTP layer
+  // already force-refreshes once on an actual 401, which is the authoritative
+  // validation signal and avoids creating a new failure point on every process start.
+  if (!forceRefresh && accessStillValid) {
+    sessionValidated = true;
+    lastAuthEvent = { type: 'cached-access-token-used', at: new Date().toISOString() };
+    return token.access_token;
   }
 
-  if (token.access_token && Number(token.expires_at || 0) > Date.now() + 60_000) return token.access_token;
-  token = await refresh(token);
-  sessionValidated = true;
+  if (!token.refresh_token) {
+    const error = new Error('Google Sheets access token expired, but no durable refresh token is stored. Re-authorize once to create a durable offline authorization.');
+    error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+    error.authReason = 'refresh_token_missing';
+    error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
+    throw error;
+  }
+
+  try {
+    token = await refresh(token);
+    sessionValidated = true;
+    lastAuthEvent = { type: forceRefresh ? 'forced-refresh-success' : 'expiry-refresh-success', at: new Date().toISOString() };
+  } catch (error) {
+    error.authReason ||= error.googleOAuthError === 'invalid_grant'
+      ? 'refresh_token_rejected_by_google'
+      : 'refresh_failed';
+    lastAuthEvent = {
+      type: 'refresh-failed',
+      at: new Date().toISOString(),
+      code: error.code || null,
+      oauthError: error.googleOAuthError || null,
+      reason: error.authReason,
+    };
+    throw error;
+  }
+
   if (!token?.access_token) {
     const error = new Error('Google OAuth refresh completed without an access token. Re-authorize Google Sheets.');
     error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+    error.authReason = 'refresh_returned_no_access_token';
     error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
   }
@@ -258,27 +327,66 @@ async function authorizeInteractive() {
     redirect_uri: redirectUri,
     grant_type: 'authorization_code',
   });
+  const previous = loadToken();
   const stored = {
+    ...(previous || {}),
     ...token,
+    // Google may omit refresh_token on a subsequent consent exchange. Never
+    // destroy a working offline credential merely because this response omitted it.
+    refresh_token: token.refresh_token || previous?.refresh_token || '',
     expires_at: Date.now() + Math.max(60, Number(token.expires_in || 3600)) * 1000,
-    scope: token.scope || SCOPE,
+    scope: token.scope || previous?.scope || SCOPE,
+    authorized_at: new Date().toISOString(),
   };
+
+  if (!stored.refresh_token) {
+    const error = new Error('Google authorization returned only a short-lived access token and no refresh token. ULTRON will not save a connection that is guaranteed to expire. Revoke the old ULTRON Google grant if needed, then authorize again.');
+    error.code = 'GOOGLE_SHEETS_REFRESH_TOKEN_REQUIRED';
+    error.authReason = 'authorization_returned_no_refresh_token';
+    error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
+    throw error;
+  }
+
   const file = saveToken(stored);
   sessionValidated = true;
-  return { ok: true, tokenPath: file, scope: stored.scope };
+  lastAuthEvent = { type: 'interactive-authorization-success', at: new Date().toISOString() };
+  return {
+    ok: true,
+    tokenPath: file,
+    scope: stored.scope,
+    durable: true,
+    hasRefreshToken: true,
+  };
 }
 
 function status() {
   const token = loadToken();
+  const expiresAt = Number(token?.expires_at || 0);
+  const expiresInMs = token ? expiresAt - Date.now() : null;
+  const hasRefreshToken = Boolean(token?.refresh_token);
+  const tokenExpired = token ? expiresAt <= Date.now() + 60_000 : null;
   return {
     credentialsReady: fs.existsSync(credentialsPath()),
     authorized: Boolean(token?.refresh_token || token?.access_token),
-    hasRefreshToken: Boolean(token?.refresh_token),
-    tokenExpired: token ? Number(token.expires_at || 0) <= Date.now() + 60_000 : null,
+    durableAuthorization: Boolean(token?.access_token && hasRefreshToken),
+    hasRefreshToken,
+    tokenExpired,
+    tokenExpiresAt: expiresAt || null,
+    tokenExpiresInMs: Number.isFinite(expiresInMs) ? expiresInMs : null,
     tokenScope: String(token?.scope || ''),
+    tokenAuthorizedAt: token?.authorized_at || null,
     sessionValidated,
+    lastAuthEvent,
     credentialsPath: credentialsPath(),
     tokenPath: tokenPath(),
+    tokenBackupPath: tokenBackupPath(),
+    healthReason: !token
+      ? 'token_missing_or_unreadable'
+      : !hasRefreshToken
+        ? 'refresh_token_missing'
+        : tokenExpired
+          ? 'access_expired_refresh_available'
+          : 'durable_authorization_ready',
   };
 }
 
@@ -286,6 +394,9 @@ module.exports = {
   SCOPE,
   credentialsPath,
   tokenPath,
+  tokenBackupPath,
+  loadToken,
+  saveToken,
   status,
   accessToken,
   authorizeInteractive,
