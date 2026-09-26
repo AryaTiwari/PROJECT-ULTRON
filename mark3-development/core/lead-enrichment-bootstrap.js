@@ -16,6 +16,17 @@ function cleanUrl(value) {
   return String(value || '').trim().replace(/[),.;!?]+$/, '');
 }
 
+function requestedSheetName(text) {
+  const value = String(text || '').trim();
+  const quoted = value.match(/\b(?:sheet|tab|worksheet)\s*(?:named\s*)?(?:[:=\-]\s*)?[`"'“”]([^`"'“”\n]{1,120})[`"'“”]/i);
+  if (quoted?.[1]) return quoted[1].trim();
+
+  const explicit = value.match(/\b(?:sheet|tab|worksheet)\s*(?:named\s*)?[:=\-]\s*(.{1,120}?)(?=\s+\b(?:enrich|fill|populate|complete|update|with|using|for|and)\b|[,;\n]|$)/i);
+  const loose = explicit || value.match(/\b(?:sheet|tab|worksheet)\s+(?!this\b|the\b)(.{1,120}?)(?=\s+\b(?:enrich|fill|populate|complete|update|with|using|for|and)\b|[,;\n]|$)/i);
+  const candidate = String(loose?.[1] || '').trim().replace(/^[`"'“”]+|[`"'“”]+$/g, '').replace(/[.]+$/, '').trim();
+  return /^(?:this|the|sheet|tab|worksheet)$/i.test(candidate) ? '' : candidate;
+}
+
 function localAttachmentSource(text, options = {}) {
   const current = Array.isArray(options.attachments) ? options.attachments.filter((item) => item?.id) : [];
   const explicitMention = /@[\w .()\-]{2,}/.test(String(text || ''));
@@ -72,6 +83,7 @@ function isEnrichmentRequest(text, options = {}) {
     invalidUrl: false,
     unsupportedProvider: source.supported ? null : source.provider,
     ensureContactColumns: wantsContactColumns(value),
+    sheetName: requestedSheetName(value),
     attachment: source.attachment || null,
   };
 }
@@ -91,8 +103,8 @@ function isThreePocRequest(text, options = {}) {
   const action = /\b(?:perform|run|process|enrich|fill|populate|complete|build|find|update|add|get|do)\b/i.test(value);
   if (!(threeSlots && responsibility && action)) return null;
   const source = spreadsheetSource(value, options);
-  if (!source) return { invalidUrl: true, provider: null, url: null };
-  return { invalidUrl: false, provider: source.provider, url: source.url, attachment: source.attachment || null };
+  if (!source) return { invalidUrl: true, provider: null, url: null, sheetName: requestedSheetName(value) };
+  return { invalidUrl: false, provider: source.provider, url: source.url, sheetName: requestedSheetName(value), attachment: source.attachment || null };
 }
 
 function isStatusRequest(text) {
@@ -151,7 +163,7 @@ function threePocApprovalSummary(provider, detectedBySchema = false) {
 async function inspectThreePocTarget(request) {
   if (!request || !['google', 'local-excel'].includes(request.provider) || !request.url) return null;
   try {
-    return await threePoc.inspectSource(request.url);
+    return await threePoc.inspectSource(request.url, { sheetName: request.sheetName || '' });
   } catch (error) {
     // Authentication/access errors are real blockers and must not be hidden by
     // falling through to a different enrichment engine.
@@ -283,8 +295,8 @@ async function handleThreePocCommand(message, options = {}) {
   if (!request) {
     const source = spreadsheetSource(text, options);
     request = source
-      ? { invalidUrl: false, provider: source.provider, url: source.url, attachment: source.attachment || null }
-      : { invalidUrl: true, provider: null, url: null };
+      ? { invalidUrl: false, provider: source.provider, url: source.url, sheetName: requestedSheetName(text), attachment: source.attachment || null }
+      : { invalidUrl: true, provider: null, url: null, sheetName: requestedSheetName(text) };
   }
 
   if (request.invalidUrl || !request.url) {
@@ -321,7 +333,7 @@ async function handleThreePocCommand(message, options = {}) {
   const approval = paidTools.request(
     'apollo',
     'agentic-three-poc-enrichment',
-    { url: request.url, provider: request.provider },
+    { url: request.url, provider: request.provider, sheetName: request.sheetName || null },
     threePocApprovalSummary(request.provider, true)
   );
 
@@ -345,7 +357,10 @@ async function handlePaidToolDecision(decision) {
   if (decision.tool === 'apollo' && decision.operation === 'agentic-three-poc-enrichment') {
     return paidTools.withPermit(decision, async () => {
       try {
-        const stats = await threePoc.enrichWorkbook(decision.payload.url, { rowLimit: decision.payload.rowLimit || undefined });
+        const stats = await threePoc.enrichWorkbook(decision.payload.url, {
+          rowLimit: decision.payload.rowLimit || undefined,
+          sheetName: decision.payload.sheetName || '',
+        });
         const extra = { threePocEnrichment: stats, spreadsheetProvider: stats.provider || decision.payload.provider || null, spreadsheetUrl: stats.spreadsheetUrl || null };
         if (stats.artifact) extra.artifacts = [stats.artifact];
         return responseShape(true, threePoc.formatResult(stats), {
@@ -530,7 +545,7 @@ function install() {
             const approval = paidTools.request(
               'apollo',
               'agentic-three-poc-enrichment',
-              { url: threePocRequest.url, provider: threePocRequest.provider },
+              { url: threePocRequest.url, provider: threePocRequest.provider, sheetName: threePocRequest.sheetName || null },
               threePocApprovalSummary(threePocRequest.provider, false)
             );
             result = approvalResponse(approval, { threePocEnrichmentRequest: threePocRequest });
@@ -563,7 +578,7 @@ function install() {
                 const approval = paidTools.request(
                   'apollo',
                   'agentic-three-poc-enrichment',
-                  { url: request.url, provider: request.provider },
+                  { url: request.url, provider: request.provider, sheetName: request.sheetName || null },
                   threePocApprovalSummary(request.provider, true)
                 );
                 result = approvalResponse(approval, {
@@ -630,6 +645,7 @@ module.exports = {
   status,
   statusText,
   spreadsheetSource,
+  requestedSheetName,
   localAttachmentSource,
   requestedContactFields,
   wantsContactColumns,
