@@ -115,6 +115,10 @@ function isResumeRequest(text) {
   return /\b(?:resume|continue|sync|check)\b[\s\S]{0,50}\b(?:apollo|lead|phone)\s+enrichment\b|\bresume\s+(?:today'?s\s+)?apollo\b/i.test(String(text || ''));
 }
 
+function isThreePocResumeRequest(text) {
+  return /\b(?:resume|continue)\b[\s\S]{0,50}\b(?:poc|2\s*[- ]?poc|3\s*[- ]?poc|three\s+poc)\s+enrichment\b|\b(?:resume|continue)\s+poc\b/i.test(String(text || ''));
+}
+
 function statusText() {
   const state = leadEnrichment.status();
   const googleReady = Boolean(state.providers?.google);
@@ -351,6 +355,29 @@ async function handlePaidToolDecision(decision) {
   if (decision.status === 'denied') {
     return responseShape(true, `${decision.label} was not used, Sir. The pending Apollo action was cancelled.`, {
       model: 'apollo-approval-gate', taskType: 'paid-tool-approval', provider: 'local-approval-gate', paidToolApproval: decision,
+    });
+  }
+
+  if (decision.tool === 'apollo' && decision.operation === 'three-poc-enrichment-resume') {
+    return paidTools.withPermit(decision, async () => {
+      try {
+        const stats = await threePoc.resumeCappedJob({ jobId: decision.payload?.jobId || null });
+        const extra = { threePocEnrichment: stats, spreadsheetProvider: stats.provider || null, spreadsheetUrl: stats.spreadsheetUrl || null };
+        if (stats.artifact) extra.artifacts = [stats.artifact];
+        return responseShape(true, threePoc.formatResult(stats), {
+          ...extra,
+          model: 'mark3-agentic-three-poc',
+          provider: stats.provider === 'google' ? 'ai-agents+apollo+google-sheets' : 'ai-agents+apollo+local-excel',
+          taskType: 'three-poc-enrichment-resume',
+        });
+      } catch (error) {
+        return responseShape(false, `POC enrichment resume stopped safely: ${error.message}`, {
+          error: error.code || error.message,
+          model: 'mark3-agentic-three-poc',
+          provider: 'local-safety-gate',
+          taskType: 'three-poc-enrichment-resume',
+        });
+      }
     });
   }
 
@@ -599,6 +626,31 @@ function install() {
                 result = approvalResponse(approval, { leadEnrichmentRequest: request });
               }
             }
+          } else if (isThreePocResumeRequest(text)) {
+            conversation.append('user', text, { taskType: 'three-poc-enrichment-resume', inputMode });
+            const capped = threePoc.latestCappedJob();
+            if (!capped) {
+              result = responseShape(false, 'No checkpointed POC enrichment chunk is waiting to resume. Nothing was executed and Apollo was not called.', {
+                error: 'THREE_POC_RESUME_NOT_FOUND',
+                apolloCalled: false,
+                taskType: 'three-poc-enrichment-resume',
+              });
+            } else {
+              const approval = paidTools.request(
+                'apollo',
+                'three-poc-enrichment-resume',
+                { jobId: capped.id, sheetName: capped.requestedSheetName, nextRowNumber: capped.nextRowNumber },
+                `Resume POC enrichment for worksheet ${capped.requestedSheetName} from checkpoint row ${capped.nextRowNumber}. Earlier rows will not be replayed; a fresh Apollo approval is required for this chunk.`
+              );
+              result = approvalResponse(approval, {
+                threePocResumeCheckpoint: {
+                  jobId: capped.id,
+                  sheetName: capped.requestedSheetName,
+                  nextRowNumber: capped.nextRowNumber,
+                  remainingEligibleRows: capped.remainingEligibleRows || 0,
+                },
+              });
+            }
           } else if (isResumeRequest(text)) {
             conversation.append('user', text, { taskType: 'lead-enrichment-resume', inputMode });
             const approval = paidTools.request(
@@ -655,6 +707,7 @@ module.exports = {
   isThreePocRequest,
   isStatusRequest,
   isResumeRequest,
+  isThreePocResumeRequest,
   microsoftSetupResponse,
   unsupportedSpreadsheetResponse,
   inspectThreePocTarget,
