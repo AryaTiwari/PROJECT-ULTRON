@@ -7,7 +7,10 @@
     "scripts/google-sheets-auth.js",
     "scripts/google-sheets-auth-doctor.js",
     "scripts/google-sheets-live-health.js",
-    "scripts/google-auth-integrity-guard.js"
+    "scripts/google-auth-integrity-guard.js",
+    "server.js",
+    "interface/app.js",
+    "interface/style.css"
   ],
   "guarantees": [
     "stable project-root credential paths",
@@ -15,6 +18,9 @@
     "atomic token writes and backup recovery",
     "single forced refresh on HTTP 401",
     "single-flight loopback PKCE reauthorization when durable auth is unrecoverable",
-    "no tracked OAuth secrets"
+    "no tracked OAuth secrets",
+    "browser-launch fallback keeps the loopback PKCE flow alive and surfaces a safe authorization URL in Live Activity",
+    "semantic Google auth events cross SSE without access tokens, refresh tokens, or OAuth client secrets",
+    "developer CLI prints the safe authorization URL when automatic browser launch fails"
   ]
 }
