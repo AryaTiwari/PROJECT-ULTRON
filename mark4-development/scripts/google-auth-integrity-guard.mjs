@@ -19,6 +19,9 @@ const critical=[
   "services/capability-host/src/workspace.mjs",
   "services/capability-host/src/server.mjs",
   "services/gateway/src/apollo-company-mission.mjs",
+  "services/gateway/src/server.mjs",
+  "apps/ui/src/App.tsx",
+  "apps/ui/src/activity.ts",
   "scripts/google-auth-integrity-guard.mjs",
   "scripts/google-auth-startup-check.mjs",
   "scripts/google-auth-doctor.mjs",
@@ -43,6 +46,9 @@ const recovery=fs.readFileSync(path.join(root,"services/capability-host/src/goog
 const workspace=fs.readFileSync(path.join(root,"services/capability-host/src/workspace.mjs"),"utf8");
 const server=fs.readFileSync(path.join(root,"services/capability-host/src/server.mjs"),"utf8");
 const mission=fs.readFileSync(path.join(root,"services/gateway/src/apollo-company-mission.mjs"),"utf8");
+const gateway=fs.readFileSync(path.join(root,"services/gateway/src/server.mjs"),"utf8");
+const uiApp=fs.readFileSync(path.join(root,"apps/ui/src/App.tsx"),"utf8");
+const uiActivity=fs.readFileSync(path.join(root,"apps/ui/src/activity.ts"),"utf8");
 const checks=[
   ["source-root",recovery,/import\.meta\.url/],
   ["durable-refresh",recovery,/refresh_token/],
@@ -54,6 +60,9 @@ const checks=[
   ["loopback",recovery,/127\.0\.0\.1/],
   ["safe-ephemeral-port",recovery,/server\.listen\(0,"127\.0\.0\.1"/],
   ["pkce",recovery,/code_challenge_method:"S256"/],
+  ["browser-launch-detection",recovery,/child\.once\("error",\(\)=>finish\(false\)\)/],
+  ["manual-auth-url-event",recovery,/google\.auth\.manual_url/],
+  ["auth-event-sink",recovery,/setEventSink/],
   ["workspace-self-heal",workspace,/ensureGoogleWorkspace/],
   ["workspace-retry",workspace,/authRetried/],
   ["workspace-connect-export",workspace,/export async function googleWorkspaceConnect/],
@@ -62,7 +71,11 @@ const checks=[
   ["mission-google-preflight",mission,/googleSheetPreflight/],
   ["mission-apollo-discovery-checkpoint",mission,/discoveryComplete:true/],
   ["mission-apollo-discovery-reuse",mission,/reusesApolloDiscovery/],
-  ["mission-selection-recovery",mission,/\["SELECTION","SHEET_WRITE","READBACK_VERIFY"\]/]
+  ["mission-selection-recovery",mission,/\["SELECTION","SHEET_WRITE","READBACK_VERIFY"\]/],
+  ["gateway-google-auth-events",gateway,/setGoogleWorkspaceAuthEventSink\(\(type,data\)=>publish\(type,data\)\)/],
+  ["ui-manual-auth-event",uiApp,/google\.auth\.manual_url/],
+  ["ui-clickable-auth-link",uiApp,/notice\.url&&<a href=\{notice\.url\}/],
+  ["ui-google-activity",uiActivity,/category="GOOGLE"/]
 ];
 for(const [name,source,pattern] of checks)if(!pattern.test(source))fail(`${name} contract missing`);
 const googlePreflightCall=mission.indexOf("const preflight=await workspace.googleSheetPreflight");
@@ -70,6 +83,7 @@ const paidApolloCall=mission.indexOf("const result=await apollo.searchApolloOrga
 if(googlePreflightCall<0||paidApolloCall<0||googlePreflightCall>paidApolloCall)fail("Apollo paid search can run before Google Sheet preflight");
 if(/process\.cwd\(\)/.test(recovery+workspace))fail("credential resolution depends on process.cwd()");
 if(/localhost:1/.test(recovery+workspace))fail("unsafe localhost:1 callback reintroduced");
+if(/if\(!browserOpened\)[\s\S]{0,160}server\.close\(/.test(recovery))fail("browser-launch fallback closes the pending OAuth loopback flow");
 
 const frontend=tracked.filter(file=>/^mark4-development\/apps\/ui\/src\//.test(file));
 for(const rel of frontend){
