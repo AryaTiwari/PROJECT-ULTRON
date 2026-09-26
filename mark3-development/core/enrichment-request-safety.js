@@ -79,6 +79,7 @@ function fingerprint({ message = '', inputMode = '', routeDomain = '', attachmen
 }
 
 function protects(route = {}, options = {}) {
+  if (route?.readOnlyStatus === true) return false;
   const domain = text(route?.domain);
   if (['spreadsheet-enrichment', 'three-poc-spreadsheet', 'apollo-lead'].includes(domain)) return true;
   return Boolean(options.pendingApolloApproval);
