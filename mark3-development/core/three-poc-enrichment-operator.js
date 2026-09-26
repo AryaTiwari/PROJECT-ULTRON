@@ -1475,6 +1475,11 @@ async function resumeCappedJob(options = {}) {
     error.code = 'THREE_POC_RESUME_NOT_FOUND';
     throw error;
   }
+  if (options.jobId && String(options.jobId) !== String(previous.id)) {
+    const error = new Error('The approved POC resume checkpoint no longer matches the latest resumable job. Nothing was executed.');
+    error.code = 'THREE_POC_RESUME_CHECKPOINT_MISMATCH';
+    throw error;
+  }
   return enrichWorkbook(previous.source, {
     sheetName: previous.requestedSheetName,
     startRowNumber: Number(previous.nextRowNumber),
@@ -1502,7 +1507,7 @@ function formatResult(result) {
     ? ` Actual anchored writes: POC-1 F/G = ${result.poc1PhonesWritten || 0} phone, ${result.poc1EmailsWritten || 0} email; POC-2 H/I/J = ${result.poc2NamesWritten || 0} name/designation, ${result.poc2PhonesWritten || 0} phone, ${result.poc2EmailsWritten || 0} email; POC-3 K/L/M = ${result.poc3NamesWritten || 0} name/designation, ${result.poc3PhonesWritten || 0} phone, ${result.poc3EmailsWritten || 0} email. Existing POC slots repaired/upgraded: ${result.existingPocSlotsRepaired || 0}.`
     : '';
   const cap = result.rowLimitReached
-    ? ` Safety cap reached after ${result.scannedRows} rows; ${result.remainingEligibleRows || 0} eligible row${Number(result.remainingEligibleRows || 0) === 1 ? '' : 's'} remain, checkpointed at row ${result.nextRowNumber}. A newly approved resume continues from that checkpoint and will not replay earlier rows.`
+    ? ` Safety cap reached after ${result.scannedRows} rows; ${result.remainingEligibleRows || 0} eligible row${Number(result.remainingEligibleRows || 0) === 1 ? '' : 's'} remain, checkpointed at row ${result.nextRowNumber}. Use “resume POC enrichment” and approve the new Apollo run to continue from that checkpoint; earlier rows will not be replayed.`
     : '';
   return `Agentic ${result.maxPocSlots || 3}-POC enrichment ${result.rowLimitReached ? 'chunk finished' : 'finished'}. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${pending}${unresolved}${cap}`;
 }
