@@ -113,6 +113,8 @@ async function tokenRequest(client,params){
 function normalizedStoredToken(previous,fresh,client,{preservePreviousRefresh=true}={}){
   const access=String(fresh.access_token||fresh.token||accessOf(previous)||"");
   const refresh=String(fresh.refresh_token||(preservePreviousRefresh?refreshOf(previous):"")||"");
+  const freshScopes=scopesOf(fresh),previousScopes=scopesOf(previous);
+  const resolvedScopes=freshScopes.length?freshScopes:(previousScopes.length?previousScopes:GOOGLE_WORKSPACE_SCOPES);
   const seconds=Math.max(60,Number(fresh.expires_in||3600)),expiresAt=Date.now()+seconds*1000;
   return{
     ...(previous||{}),
@@ -123,8 +125,8 @@ function normalizedStoredToken(previous,fresh,client,{preservePreviousRefresh=tr
     token_uri:client.tokenUri,
     client_id:client.clientId,
     client_secret:client.clientSecret,
-    scopes:scopesOf(fresh).length?scopesOf(fresh):GOOGLE_WORKSPACE_SCOPES,
-    scope:String(fresh.scope||GOOGLE_WORKSPACE_SCOPES.join(" ")),
+    scopes:resolvedScopes,
+    scope:String(fresh.scope||resolvedScopes.join(" ")),
     expiry:new Date(expiresAt).toISOString(),
     expires_at:expiresAt,
     authorized_at:new Date().toISOString()
@@ -180,7 +182,8 @@ async function authorizeInteractive({preservePreviousRefresh=true}={}){
     code_challenge_method:"S256"
   }).toString();
   lastAuthEvent={type:"interactive-reauthorization-started",at:new Date().toISOString(),authUrl:authUrl.toString()};
-  openBrowser(authUrl.toString());
+  const browserOpened=openBrowser(authUrl.toString());
+  if(!browserOpened){server.close();const error=new Error("Google authorization URL could not be opened in the default browser.");error.code="AUTH_BROWSER_OPEN_FAILED";error.authUrl=authUrl.toString();throw error;}
   const timeout=setTimeout(()=>rejectCallback(Object.assign(new Error("Google authorization timed out."),{code:"AUTH_TIMEOUT"})),180000);
   let code;
   try{code=await callback;}finally{clearTimeout(timeout);server.close();}
