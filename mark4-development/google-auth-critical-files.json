@@ -9,7 +9,10 @@
     "scripts/google-auth-integrity-guard.mjs",
     "scripts/google-auth-startup-check.mjs",
     "scripts/google-auth-doctor.mjs",
-    "scripts/google-auth-connect.mjs"
+    "scripts/google-auth-connect.mjs",
+    "services/gateway/src/server.mjs",
+    "apps/ui/src/App.tsx",
+    "apps/ui/src/activity.ts"
   ],
   "guarantees": [
     "stable Hermes-home token path",
@@ -18,6 +21,9 @@
     "silent refresh and bounded transient retries",
     "single-flight loopback PKCE browser reauthorization",
     "auth-aware Google operation retry",
-    "no tracked OAuth secrets"
+    "no tracked OAuth secrets",
+    "browser-launch fallback keeps the loopback flow alive and surfaces a safe authorization URL in the UI",
+    "semantic Google auth activity excludes OAuth token contents",
+    "Apollo Google preflight precedes paid discovery and completed Apollo discovery is reused after auth interruptions"
   ]
 }
