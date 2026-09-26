@@ -23,4 +23,6 @@ jobs:
         with:
           node-version: "22.19.0"
       - run: npm install
+      - name: Google auth integrity
+        run: npm run check:google-auth-integrity
       - run: npm run check
