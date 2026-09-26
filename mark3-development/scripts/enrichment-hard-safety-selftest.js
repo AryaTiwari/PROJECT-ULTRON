@@ -25,6 +25,7 @@ fs.writeFileSync(journal, JSON.stringify({
 const safety = require('../core/enrichment-request-safety');
 const threePoc = require('../core/three-poc-enrichment-operator');
 const localExcel = require('../core/local-excel-operator');
+const bootstrap = require('../core/lead-enrichment-bootstrap');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -52,6 +53,20 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     assert.equal(layout.second.phoneIndex, 6);
     assert.equal(layout.second.emailIndex, 7);
     assert.equal(layout.third, null);
+
+    const exactCommand = '@New_Sheet_14-09-25 sheet - Arya-24 sept enrich this sheet with 1st poc and 2nd poc details and dont delete any lead';
+    assert.equal(bootstrap.requestedSheetName(exactCommand), 'Arya-24 sept');
+    const selectedTarget = threePoc.selectCompatibleSheets([
+      { sheetName: 'Divya', schema: 'explicit_two_poc' },
+      { sheetName: 'Arya-24 sept', schema: 'explicit_two_poc' },
+      { sheetName: 'Gaurav 2', schema: 'explicit_three_poc' },
+    ], bootstrap.requestedSheetName(exactCommand));
+    assert.deepEqual(selectedTarget.map((sheet) => sheet.sheetName), ['Arya-24 sept']);
+    assert.throws(
+      () => threePoc.selectCompatibleSheets([{ sheetName: 'Divya' }], 'Arya-24 sept'),
+      (error) => error?.code === 'THREE_POC_TARGET_SHEET_NOT_FOUND',
+      'an explicit worksheet target must never fall through to another compatible tab'
+    );
 
     // Existing lead/contact cells are immutable in the compatibility path.
     const existingRow = [
@@ -154,6 +169,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
     const coreDir = path.join(__dirname, '..', 'core');
     const threePocSource = fs.readFileSync(path.join(coreDir, 'three-poc-enrichment-operator.js'), 'utf8');
+    const bootstrapSource = fs.readFileSync(path.join(coreDir, 'lead-enrichment-bootstrap.js'), 'utf8');
     const localExcelSource = fs.readFileSync(path.join(coreDir, 'local-excel-operator.js'), 'utf8');
     const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
     const transportSource = fs.readFileSync(path.join(__dirname, '..', 'interface', 'chat-transport.js'), 'utf8');
@@ -161,13 +177,16 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     assert.doesNotMatch(threePocSource, /\b(?:clearRows|deleteRows|deleteDimension|spliceRows)\s*\(/, 'POC enrichment must contain no row-deletion primitive');
     assert.match(localExcelSource, /THREE_POC_NON_DESTRUCTIVE_CONFLICT/);
     assert.match(localExcelSource, /change\.nonDestructive === true/);
+    assert.match(bootstrapSource, /requestedSheetName/);
+    assert.match(bootstrapSource, /sheetName:\s*decision\.payload\.sheetName/);
+    assert.match(threePocSource, /selectCompatibleSheets\(compatible, options\.sheetName/);
     assert.match(serverSource, /enrichmentRequestSafety\.execute/);
     assert.match(serverSource, /x-ultron-request-id/);
     assert.match(transportSource, /X-Ultron-Request-Id/);
     assert.match(transportSource, /ENRICHMENT_RECONNECT_DELAYS_MS/);
     assert.match(transportSource, /duplicate Apollo calls and spreadsheet writes were blocked/);
 
-    console.log('Enrichment hard-safety self-test passed: exact Arya-24 sept two-POC schema is supported, populated leads cannot be erased, reconnects are idempotent, and runtime interruption cannot silently replay paid/writing work.');
+    console.log('Enrichment hard-safety self-test passed: exact Arya-24 sept two-POC schema and worksheet targeting are supported, other tabs are fenced off, populated leads cannot be erased, reconnects are idempotent, and runtime interruption cannot silently replay paid/writing work.');
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
