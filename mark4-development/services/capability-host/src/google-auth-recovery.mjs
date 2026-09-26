@@ -156,11 +156,12 @@ function openBrowser(url){
     ?["rundll32.exe",["url.dll,FileProtocolHandler",url]]
     :process.platform==="darwin"?["open",[url]]:["xdg-open",[url]];
   return new Promise(resolve=>{
-    let settled=false;
-    const finish=value=>{if(settled)return;settled=true;resolve(value);};
+    let settled=false,timer=null;
+    const finish=value=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);resolve(value);};
     try{
       const child=spawn(command[0],command[1],{detached:true,stdio:"ignore",windowsHide:true});
-      child.once("spawn",()=>{try{child.unref();}catch{}finish(true);});
+      child.once("spawn",()=>{try{child.unref();}catch{}timer=setTimeout(()=>finish(true),750);});
+      child.once("exit",(code,signal)=>finish(!signal&&Number(code||0)===0));
       child.once("error",()=>finish(false));
     }catch{finish(false);}
   });
