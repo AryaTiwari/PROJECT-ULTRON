@@ -1425,6 +1425,9 @@ function formatResult(result) {
 module.exports = {
   STATE_FILE,
   detectThreePocLayout,
+  writeSourceCells,
+  rowChanges,
+  anchoredRowChanges,
   rowContext,
   linkedInProfileKind,
   personNameKey,
