@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const config = require('./config');
 const events = require('./events');
 
-const JOURNAL_FILE = path.join(config.projectRoot, '.ultron', 'runtime', 'enrichment-request-journal.json');
+const JOURNAL_FILE = path.resolve(String(process.env.ULTRON_M3_ENRICHMENT_REQUEST_JOURNAL || path.join(config.projectRoot, '.ultron', 'runtime', 'enrichment-request-journal.json')));
 const RUNTIME_ID = `${process.pid}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
 const MAX_RECORDS = 120;
 const active = new Map();
