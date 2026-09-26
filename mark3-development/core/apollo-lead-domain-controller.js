@@ -6,9 +6,6 @@ const missionStore = require('./apollo-lead-mission-store');
 const runner = require('./apollo-lead-mission-runner');
 const companies = require('./apollo-company-discovery');
 const people = require('./apollo-people-discovery');
-const apollo = require('./apollo-enrichment');
-const selector = require('./apollo-poc-selector');
-const contact = require('./apollo-contactability-policy');
 const projector = require('./apollo-lead-sheet-projector');
 const contract = require('./apollo-lead-contract');
 
@@ -49,7 +46,8 @@ function progressBody(status) {
   const lines = [
     `Apollo lead mission ${status.missionId}: ${status.phase}.`,
     `Target: ${status.targetCount}. Raw unique candidates: ${status.companyCandidatesFound}. Qualified companies: ${status.companiesQualified}. Selected: ${status.companiesSelected}.`,
-    `Apollo calls: ${status.apolloCalls}. Search variants tried: ${status.searchVariantsTried}. Sheet rows written: ${status.rowsWritten}. Remaining: ${status.remainingTarget == null ? 'unknown' : status.remainingTarget}.`,
+    `Organization searches: ${status.organizationSearchCalls}. People searches: ${status.peopleSearchCalls}. Contact reveals: ${status.contactRevealCalls}. Cache hits: ${status.cacheHits}.`,
+    `Search variants tried: ${status.searchVariantsTried}. Sheet rows written: ${status.rowsWritten}. Duplicates skipped: ${status.companiesAlreadyExisting}. Remaining: ${status.remainingTarget == null ? 'unknown' : status.remainingTarget}.`,
   ];
   if (status.sheetName) lines.push(`Worksheet: ${status.sheetName}.`);
   if (status.completionReason) lines.push(`Completion: ${status.completionReason}.`);
@@ -112,41 +110,12 @@ async function preflightDestination(compiled) {
       ...compiled.sheet,
       url: compiled.sheet.url,
       sheetName: info.target.name,
+      spreadsheetId: info.id,
       sheetId: info.target.sheetId ?? null,
+      exactTitle: info.target.name,
       preflighted: true,
     },
   });
-}
-
-async function hydrateCompanyPocs(company, compiled, state) {
-  const candidates = await people.forCompany(company, { location: compiled.geography, limit: 12 });
-  state.peopleDiscovered += candidates.length;
-  state.apolloCalls += 1;
-
-  const ranked = [...candidates]
-    .filter((person) => selector.acceptable(person, company))
-    .sort(selector.compare(1))
-    .slice(0, 3);
-
-  const hydrated = [];
-  for (const candidate of ranked) {
-    try {
-      const item = await apollo.resolveDecisionMaker(candidate, company.name, company.domain, {
-        needEmail: true,
-        needPhone: true,
-      });
-      state.apolloCalls++;
-      state.paidCalls++;
-      state.peopleVerified++;
-      state.phoneAvailabilityChecked++;
-      if (item.phone) state.phoneReveals++;
-      if (item.email) state.emailReveals++;
-      hydrated.push(item);
-    } catch (error) {
-      if (!['APOLLO_IDENTITY_MISMATCH', 'APOLLO_COMPANY_MISMATCH_AFTER_HYDRATION'].includes(error.code)) throw error;
-    }
-  }
-  return selector.selectPocs(hydrated, company, compiled.requestedPocs);
 }
 
 async function executeApproved(compiled, missionId) {
@@ -223,59 +192,26 @@ async function executeApproved(compiled, missionId) {
 
   state.apolloCalls += discovered.apolloCalls;
   state.paidCalls += discovered.paidCalls;
-  let selected = discovered.organizations.slice(0, compiled.targetCount);
-  let replacements = 0;
+  const selected = discovered.organizations.slice(0, compiled.targetCount);
 
   missionStore.update(mission.missionId, {
-    currentPhase: compiled.enrichmentRequested ? 'qualifying_contacts' : (compiled.sheet?.requested ? 'writing' : 'finalizing'),
+    currentPhase: compiled.sheet?.requested ? 'writing' : 'finalizing',
     companyCandidatesFound: discovered.candidatesFound,
+    candidatePoolTarget: discovered.candidatePoolTarget,
     companiesQualified: discovered.qualified,
-    companiesRejected: discovered.rejected,
     companiesSelected: selected.length,
+    candidateCompanies: discovered.organizations,
     searchVariantsTried: discovered.searchVariantsTried || 0,
     searchDiagnostics: discovered.searchDiagnostics || [],
     apolloCalls: state.apolloCalls,
+    organizationSearchCalls: discovered.apolloCalls,
+    contactRevealCalls: 0,
     paidCalls: state.paidCalls,
     remainingTarget: Math.max(0, compiled.targetCount - selected.length),
   });
 
-  if (compiled.enrichmentRequested) {
-    selected = [];
-    const foreignFallback = [];
-    for (const company of discovered.organizations) {
-      if (selected.length >= compiled.targetCount) break;
-      const pocs = await hydrateCompanyPocs(company, compiled, state);
-      const row = { ...company, ...pocs };
-      const qualities = pocs.selected.map(contact.quality);
-      if (qualities.some((quality) => quality >= 3)) selected.push(row);
-      else if (qualities.some((quality) => quality >= 1)) foreignFallback.push(row);
-      else replacements++;
-      missionStore.update(mission.missionId, {
-        currentPhase: 'qualifying_contacts',
-        companiesSelected: selected.length,
-        companiesReplacedForContactability: replacements,
-        peopleDiscovered: state.peopleDiscovered,
-        peopleVerified: state.peopleVerified,
-        phoneAvailabilityChecked: state.phoneAvailabilityChecked,
-        phoneReveals: state.phoneReveals,
-        emailReveals: state.emailReveals,
-        apolloCalls: state.apolloCalls,
-        paidCalls: state.paidCalls,
-      });
-    }
-    for (const row of foreignFallback) {
-      if (selected.length >= compiled.targetCount) break;
-      selected.push(row);
-    }
-  }
-
-  missionStore.update(mission.missionId, {
-    currentPhase: compiled.sheet?.requested ? 'writing' : 'finalizing',
-    companiesSelected: selected.length,
-  });
-
   const projection = await projector.project(compiled, selected, {
-    includePeople: compiled.enrichmentRequested,
+    includePeople: false,
   });
 
   if (compiled.sheet?.requested && selected.length > 0 && projection.rowsWritten === 0 && projection.skippedDuplicates === 0) {
@@ -285,32 +221,26 @@ async function executeApproved(compiled, missionId) {
     throw error;
   }
 
-  const p1 = selected.filter((row) => row.poc1).length;
-  const p2 = selected.filter((row) => row.poc2).length;
-  const india = selected
-    .flatMap((row) => [row.poc1, row.poc2])
-    .filter((person) => person && contact.indianPhone(person.phone, person.country || person.location)).length;
-  const foreign = selected
-    .flatMap((row) => [row.poc1, row.poc2])
-    .filter((person) => person && contact.validPhone(person.phone) && !contact.indianPhone(person.phone, person.country || person.location)).length;
-
   const final = missionStore.update(mission.missionId, {
     currentPhase: 'completed',
-    completionReason: selected.length >= compiled.targetCount ? 'target_reached' : 'bounded_reserve_exhausted',
+    completionReason: selected.length >= compiled.targetCount ? 'target_reached' : 'candidate_universe_exhausted',
     companyCandidatesFound: discovered.candidatesFound,
+    candidatePoolTarget: discovered.candidatePoolTarget,
     companiesQualified: discovered.qualified,
-    companiesRejected: discovered.rejected,
     companiesSelected: selected.length,
+    qualifiedCompanies: selected,
+    companiesWritten: projection.rowsWritten,
+    companiesAlreadyExisting: projection.skippedDuplicates || 0,
+    companyFieldsWritten: projection.companyFieldsWritten || projection.cellsWritten || 0,
+    organizationSearchCalls: discovered.apolloCalls,
+    peopleSearchCalls: 0,
+    contactRevealCalls: 0,
+    phoneReveals: 0,
+    emailReveals: 0,
+    searchVariants: discovered.searchDiagnostics || [],
     searchVariantsTried: discovered.searchVariantsTried || 0,
     searchDiagnostics: discovered.searchDiagnostics || [],
-    peopleDiscovered: state.peopleDiscovered,
-    peopleVerified: state.peopleVerified,
-    phoneAvailabilityChecked: state.phoneAvailabilityChecked,
-    phoneReveals: state.phoneReveals,
-    emailReveals: state.emailReveals,
-    POC1Selected: p1,
-    POC2Selected: p2,
-    companiesReplacedForContactability: replacements,
+    apolloOrganizationIds: selected.map((row) => row.id).filter(Boolean),
     apolloCalls: state.apolloCalls,
     paidCalls: state.paidCalls,
     rowsWritten: projection.rowsWritten,
@@ -320,14 +250,22 @@ async function executeApproved(compiled, missionId) {
     completedAt: new Date().toISOString(),
   });
 
-  const discoveryAudit = `Apollo organization search pages: ${discovered.apolloCalls}; search variants tried: ${discovered.searchVariantsTried || 0}; raw unique candidates: ${discovered.candidatesFound}; qualified: ${discovered.qualified}.`;
-  const projectionAudit = compiled.sheet?.requested
-    ? `Sheet rows written: ${projection.rowsWritten}; duplicates skipped: ${projection.skippedDuplicates || 0}; live reread verified: ${projection.liveVerified ? 'yes' : 'no'}.`
-    : 'No Sheet destination requested.';
-
-  const body = compiled.enrichmentRequested
-    ? `Source: Apollo\nCompanies selected: ${selected.length}\nCompanies written: ${projection.rowsWritten}\nPOC-1 filled: ${p1}\nPOC-2 filled: ${p2}\nCompanies replaced due to poor contactability: ${replacements}\nIndian-number POCs: ${india}\nForeign-number fallback POCs: ${foreign}\nApollo contact reveals: ${state.phoneReveals}\n${discoveryAudit}\n${projectionAudit}`
-    : `Source: Apollo\nCompanies discovered: ${selected.length}\nCompanies written: ${projection.rowsWritten}\nPOC enrichment: not requested\nApollo contact reveals: 0\n${discoveryAudit}\n${projectionAudit}\n${formatCompanyLines(selected)}`;
+  const body = [
+    'Source: Apollo',
+    `Requested companies: ${compiled.targetCount}`,
+    `Candidates inspected: ${discovered.candidatesFound}`,
+    `Qualified unique companies: ${discovered.qualified}`,
+    `Companies written: ${projection.rowsWritten}`,
+    `Duplicates skipped: ${projection.skippedDuplicates || 0}`,
+    `Organization search calls: ${discovered.apolloCalls}`,
+    `Search variants: ${discovered.searchVariantsTried || 0}`,
+    `Cache reuse: ${final.cacheHits || 0}`,
+    `Company fields written: ${projection.companyFieldsWritten || projection.cellsWritten || 0}`,
+    'People searches: 0',
+    'Contact reveals: 0',
+    projection.liveVerified ? 'Live Sheet reread verified: yes' : 'Live Sheet reread verified: no',
+    formatCompanyLines(selected),
+  ].filter(Boolean).join('\n');
 
   return response(true, body, {
     mission: final,
@@ -417,7 +355,6 @@ module.exports = {
   summary,
   progressBody,
   preflightDestination,
-  hydrateCompanyPocs,
   executeApproved,
   handle,
   contract,

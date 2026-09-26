@@ -7,7 +7,7 @@ const sheetAliases = require('./sheet-source-alias-store');
 
 const EXPANSIONS = Object.freeze({
   ai: ['artificial intelligence', 'machine learning', 'generative ai', 'ai saas', 'ai platform', 'ai product'],
-  saas: ['software as a service', 'cloud software', 'b2b software'],
+  saas: ['software as a service', 'software product', 'b2b software', 'enterprise software', 'cloud software', 'software platform', 'product software'],
   cybersecurity: ['cyber security', 'information security', 'network security'],
   'hr tech': ['hrtech', 'human resources technology', 'talent technology'],
   fintech: ['financial technology', 'payments technology'],
@@ -211,10 +211,11 @@ function compile(input, context = {}) {
   const targetCount = parseCount(query);
   const size = parseEmployeeRange(query);
   const keywords = baseKeywords(query);
-  const reserveCount = enrich ? Math.min(15, Math.max(5, Math.ceil(targetCount * 0.5))) : 0;
+  const discoveryWithContactRequest = !existing && !people && enrich;
+  const reserveCount = 0;
   return Object.freeze({
     query,
-    missionType: existing ? 'apollo_existing_sheet_enrichment' : people ? 'apollo_people_discovery' : enrich ? 'apollo_company_discovery_and_enrichment' : 'apollo_company_discovery',
+    missionType: existing ? 'apollo_existing_sheet_enrichment' : people ? 'apollo_people_discovery' : 'apollo_company_discovery',
     entityType: existing ? 'sheet' : people ? 'person' : 'organization',
     targetCount,
     reserveCount,
@@ -225,7 +226,8 @@ function compile(input, context = {}) {
     titles: titleTerms(query),
     startupPreference: /\bstartups?|founder[- ]led|growing\b/i.test(query),
     productPreference: /\bproduct\b/i.test(query),
-    enrichmentRequested: enrich,
+    enrichmentRequested: existing,
+    contactEnrichmentDeferred: discoveryWithContactRequest,
     requestedPocs: /\b(?:both|first\s+and\s+second|1st\s+and\s+2nd|poc[- ]?1\s+and\s+poc[- ]?2|two)\s+pocs?\b/i.test(query) ? 2 : /\b(?:poc[- ]?2|second\s+poc|2nd\s+poc)\b/i.test(query) ? 2 : 1,
     sheet,
   });

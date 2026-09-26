@@ -5,6 +5,7 @@ function unique(values = []) { return [...new Set(values.map(text).filter(Boolea
 class ApolloCompanyQueryProvider {
   constructor(options = {}) { this.strategy = options.strategy || 'deterministic-filter-compiler'; }
   officialApolloAiAvailable() { return false; }
+  integrationDecision() { return { available:false, strategy:this.strategy, reason:'Apollo official developer documentation exposes structured Organization Search and People Search endpoints, but no supported natural-language company-search API endpoint.', checkedAt:'2026-09-25', organizationSearch:'https://docs.apollo.io/reference/organization-search', peopleSearch:'https://docs.apollo.io/reference/people-api-search' }; }
   compile(mission = {}) {
     const base = unique(mission.keywords || []).slice(0, 5);
     const expanded = unique(mission.expandedKeywords || []).filter((keyword) => !base.includes(keyword));
