@@ -142,6 +142,17 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       (error) => error?.code === 'ENRICHMENT_REQUEST_INTERRUPTED_NO_REPLAY',
     );
 
+    assert.equal(
+      safety.protects({ domain: 'apollo-lead', readOnlyStatus: true }, { pendingApolloApproval: true }),
+      false,
+      'read-only Apollo progress/status must never require a mutation identity'
+    );
+    assert.equal(
+      safety.protects({ domain: 'apollo-lead' }, { pendingApolloApproval: false }),
+      true,
+      'Apollo lead mutations must remain protected'
+    );
+
     let missingIdExecutions = 0;
     await assert.rejects(
       () => safety.execute({
