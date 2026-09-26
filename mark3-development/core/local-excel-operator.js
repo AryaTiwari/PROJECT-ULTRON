@@ -264,14 +264,41 @@ async function writeCells(source, changes) {
   const writes = (changes || []).filter((item) => item?.range);
   if (!writes.length) return { updatedCells: 0 };
   const loaded = await loadWorkbook(source);
+  let updatedCells = 0;
   for (const change of writes) {
     const target = parseRange(change.range);
     const worksheet = loaded.workbook.getWorksheet(target.sheetName);
     if (!worksheet) throw new Error(`Worksheet ${target.sheetName} was not found while writing.`);
-    worksheet.getCell(target.address).value = change.value;
+    const cell = worksheet.getCell(target.address);
+    const current = String(cellValue(cell) ?? '').trim();
+    const incoming = String(change.value ?? '').trim();
+
+    if (change.nonDestructive === true) {
+      // Enrichment must never erase a populated lead/contact cell just because a
+      // candidate is missing or a transport retry replays stale state.
+      if (!incoming) continue;
+      if (current === incoming) continue;
+      if (current) {
+        const deliberateReplacement = change.allowReplace === true
+          && String(change.replaces ?? '').trim() === current
+          && change.replacementReason === 'same-identity-designation-upgrade';
+        if (!deliberateReplacement) {
+          const error = new Error(`Protected enrichment refused to overwrite populated cell ${change.range}.`);
+          error.code = 'THREE_POC_NON_DESTRUCTIVE_CONFLICT';
+          error.subsystem = 'IDENTITY';
+          error.errorType = 'CONFLICT';
+          error.stage = 'local-excel-live-write-validation';
+          error.range = change.range;
+          throw error;
+        }
+      }
+    }
+
+    cell.value = change.value;
+    updatedCells++;
   }
-  await saveWorkbook(loaded);
-  return { updatedCells: writes.length };
+  if (updatedCells) await saveWorkbook(loaded);
+  return { updatedCells };
 }
 
 async function readCell(source, range) {
