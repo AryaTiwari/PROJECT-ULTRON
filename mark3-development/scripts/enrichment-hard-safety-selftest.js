@@ -204,6 +204,9 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     assert.match(transportSource, /duplicate Apollo calls and spreadsheet writes were blocked/);
     assert.match(threePocSource, /partial_safe_cap/);
     assert.match(threePocSource, /resumeCappedJob/);
+    assert.match(threePocSource, /resume_in_progress/);
+    assert.match(threePocSource, /resume_interrupted_needs_inspection/);
+    assert.match(threePocSource, /resumedByJobId/);
     assert.match(bootstrapSource, /three-poc-enrichment-resume/);
     assert.match(bootstrapSource, /fresh Apollo approval is required/);
 
