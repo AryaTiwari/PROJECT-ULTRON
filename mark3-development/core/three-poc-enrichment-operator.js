@@ -874,7 +874,26 @@ function startPhoneWatcher() {
   watcherTimer.unref?.();
 }
 
-async function inspectSource(source) {
+function normalizedSheetName(value) {
+  return String(value || '').trim().replace(/^[`"'“”]+|[`"'“”]+$/g, '').toLowerCase();
+}
+
+function selectCompatibleSheets(sheets = [], requestedSheetName = '') {
+  const requested = normalizedSheetName(requestedSheetName);
+  if (!requested) return sheets;
+  const exact = (sheets || []).find((sheet) => normalizedSheetName(sheet?.sheetName) === requested);
+  if (exact) return [exact];
+  const error = new Error(`Requested worksheet "${String(requestedSheetName || '').trim()}" was not found with a safely writable two/three-POC layout. No other worksheet will be edited.`);
+  error.code = 'THREE_POC_TARGET_SHEET_NOT_FOUND';
+  error.subsystem = 'TARGETING';
+  error.errorType = 'CONFIG';
+  error.stage = 'three-poc-target-selection';
+  error.requestedSheetName = String(requestedSheetName || '').trim();
+  error.availableCompatibleSheets = (sheets || []).map((sheet) => sheet?.sheetName).filter(Boolean);
+  throw error;
+}
+
+async function inspectSource(source, options = {}) {
   const provider = sourceProvider(source);
   if (!provider) {
     return { compatible: false, provider: null, compatibleCount: 0, sheets: [] };
@@ -915,11 +934,13 @@ async function inspectSource(source) {
     });
   }
 
+  const selectedSheets = selectCompatibleSheets(sheets, options.sheetName || '');
   return {
-    compatible: sheets.length > 0,
+    compatible: selectedSheets.length > 0,
     provider,
-    compatibleCount: sheets.length,
-    sheets,
+    compatibleCount: selectedSheets.length,
+    requestedSheetName: String(options.sheetName || '').trim() || null,
+    sheets: selectedSheets,
   };
 }
 
@@ -945,11 +966,12 @@ async function enrichWorkbook(source, options = {}) {
   }
   const backupPath = provider === 'local-excel' ? backupWorkbook(source) : null;
   const workbookSheets = await readSourceSheets(source);
-  const compatible = [];
+  let compatible = [];
   for (const sheet of workbookSheets) {
     try { compatible.push({ ...sheet, layout: sheet.layout || detectThreePocLayout(sheet.rows) }); }
     catch (error) { if (error.code !== 'THREE_POC_LAYOUT_NOT_FOUND') throw error; }
   }
+  compatible = selectCompatibleSheets(compatible, options.sheetName || '');
   if (!compatible.length) {
     const error = new Error('No worksheet has at least two safely writable POC blocks (name + phone + email).');
     error.code = 'THREE_POC_LAYOUT_NOT_FOUND';
@@ -980,6 +1002,7 @@ async function enrichWorkbook(source, options = {}) {
     provider,
     spreadsheetUrl: provider === 'google' ? source : null,
     compatibleSheets: compatible.map((sheet) => sheet.sheetName),
+    requestedSheetName: String(options.sheetName || '').trim() || null,
     maxPocSlots: Math.max(...compatible.map((sheet) => Number(sheet.layout?.slotCount || (sheet.layout?.third ? 3 : 2)))),
     scannedRows: 0,
     completedRows: 0,
@@ -1425,6 +1448,7 @@ function formatResult(result) {
 module.exports = {
   STATE_FILE,
   detectThreePocLayout,
+  selectCompatibleSheets,
   writeSourceCells,
   rowChanges,
   anchoredRowChanges,
