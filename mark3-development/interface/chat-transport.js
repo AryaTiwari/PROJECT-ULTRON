@@ -8,6 +8,7 @@
   const FLOW_REPLY_WINDOW_MS = 10000;
   const REPLY_OPEN_GRACE_MS = 18000;
   const PLAYBACK_SETTLE_MS = 700;
+  const ENRICHMENT_RECONNECT_DELAYS_MS = [700, 1400, 2400];
   let pendingReplyWindowMs = 0;
   let replyOpenDeadline = 0;
   let replyTimer = null;
@@ -134,6 +135,54 @@
     }
   }
 
+  function protectedEnrichmentMessage(message = '') {
+    const value = String(message || '');
+    const source = /@[\w .()\-]{2,}|docs\.google\.com\/spreadsheets\/d\//i.test(value);
+    const operation = /\b(?:enrich|enrichment|fill|populate|complete|repair|update|poc|apollo)\b/i.test(value);
+    return source && operation;
+  }
+
+  function requestId() {
+    try { if (globalThis.crypto?.randomUUID) return `enrich:${globalThis.crypto.randomUUID()}`; } catch {}
+    return `enrich:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}`;
+  }
+
+  function protectEnrichmentRequest(init = {}) {
+    if (!init.body) return { init, protectedRequest: false, requestId: '' };
+    try {
+      const parsed = typeof init.body === 'string' ? JSON.parse(init.body) : { ...(init.body || {}) };
+      if (!parsed || typeof parsed !== 'object' || !protectedEnrichmentMessage(parsed.message)) {
+        return { init, protectedRequest: false, requestId: '' };
+      }
+      const id = String(parsed.requestId || '').trim() || requestId();
+      const headers = new Headers(init.headers || {});
+      headers.set('X-Ultron-Request-Id', id);
+      return {
+        protectedRequest: true,
+        requestId: id,
+        init: { ...init, headers, body: JSON.stringify({ ...parsed, requestId: id }) },
+      };
+    } catch {
+      return { init, protectedRequest: false, requestId: '' };
+    }
+  }
+
+  async function backendHealthy() {
+    try {
+      const response = await nativeFetch('/api/health', { cache: 'no-store' });
+      if (!response.ok) return false;
+      const data = await response.json();
+      return data?.service === 'ULTRON Mark 3';
+    } catch {
+      return false;
+    }
+  }
+
+  function networkFailure(error) {
+    const message = String(error?.message || error || '');
+    return error?.name === 'TypeError' || /failed to fetch|networkerror|load failed|connection/i.test(message);
+  }
+
   function chatTimeoutFor(init = {}) {
     const message = requestMessage(init);
     const linkedinResearch = /\blinkedin\b/i.test(message)
@@ -163,19 +212,44 @@
     if (!/(?:^|\/)api\/chat(?:$|[?#])/.test(url)) return nativeFetch(input, init);
 
     const normalizedInit = normalizeArtifactRequest(init);
-    lastChatInputMode = requestInputMode(normalizedInit);
+    const protectedRequest = protectEnrichmentRequest(normalizedInit);
+    const transportInit = protectedRequest.init;
+    lastChatInputMode = requestInputMode(transportInit);
     voiceSynthesisComplete = false;
     lastSpeakingSeenAt = 0;
 
     const controller = new AbortController();
-    const next = { ...normalizedInit, signal: controller.signal };
-    const timeoutMs = chatTimeoutFor(normalizedInit);
+    const next = { ...transportInit, signal: controller.signal };
+    const timeoutMs = chatTimeoutFor(transportInit);
     const timeoutMinutes = Math.round(timeoutMs / 60000);
     const timer = setTimeout(() => {
       controller.abort(new Error(`ULTRON chat transport exceeded ${timeoutMinutes} minutes.`));
     }, timeoutMs);
 
-    return nativeFetch(input, next).then(async (response) => {
+    const runAttempt = () => nativeFetch(input, next);
+    const runProtected = async () => {
+      try {
+        return await runAttempt();
+      } catch (error) {
+        if (!protectedRequest.protectedRequest || !networkFailure(error) || controller.signal.aborted) throw error;
+        for (const delay of ENRICHMENT_RECONNECT_DELAYS_MS) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          if (controller.signal.aborted) throw error;
+          if (!(await backendHealthy())) continue;
+          try {
+            return await runAttempt();
+          } catch (retryError) {
+            if (!networkFailure(retryError)) throw retryError;
+          }
+        }
+        const safe = new Error('ULTRON backend disconnected during protected enrichment. The request was not restarted with a new identity, so duplicate Apollo calls and spreadsheet writes were blocked. Restart Mark 3, inspect the saved enrichment request/mission state, then continue only the still-missing cells.');
+        safe.code = 'ENRICHMENT_TRANSPORT_DISCONNECTED';
+        safe.requestId = protectedRequest.requestId;
+        throw safe;
+      }
+    };
+
+    return runProtected().then(async (response) => {
       try {
         const data = await response.clone().json();
         const explicitWindow = Math.max(0, Number(data?.listenAfterResponseMs || 0));
@@ -238,4 +312,6 @@
   window.__ULTRON_FLOW_REPLY_WINDOW_MS = FLOW_REPLY_WINDOW_MS;
   window.__ULTRON_PLAYBACK_SETTLE_MS = PLAYBACK_SETTLE_MS;
   window.__ULTRON_NORMALIZE_ARTIFACT_MESSAGE = normalizeArtifactMessage;
+  window.__ULTRON_PROTECTED_ENRICHMENT_MESSAGE = protectedEnrichmentMessage;
+  window.__ULTRON_ENRICHMENT_RECONNECT_DELAYS_MS = ENRICHMENT_RECONNECT_DELAYS_MS;
 })();
