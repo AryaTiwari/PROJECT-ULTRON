@@ -17,7 +17,14 @@ const critical=[
   'core/google-sheets-operator.js',
   'scripts/google-sheets-auth.js',
   'scripts/google-sheets-auth-doctor.js',
-  'scripts/google-sheets-live-health.js'
+  'scripts/google-sheets-live-health.js',
+  'scripts/google-sheets-auth-resilience-selftest.js',
+  'server.js',
+  'interface/app.js',
+  'interface/style.css',
+  'core/apollo-lead-domain-controller.js',
+  'core/apollo-lead-mission-store.js',
+  'core/apollo-lead-mission-runner.js'
 ];
 for(const file of critical)if(!fs.existsSync(path.join(root,file)))fail(`missing critical file ${file}`);
 
@@ -35,6 +42,12 @@ for(const target of [
 
 const auth=fs.readFileSync(path.join(root,'core/google-sheets-auth.js'),'utf8');
 const operator=fs.readFileSync(path.join(root,'core/google-sheets-operator.js'),'utf8');
+const server=fs.readFileSync(path.join(root,'server.js'),'utf8');
+const ui=fs.readFileSync(path.join(root,'interface/app.js'),'utf8');
+const authCli=fs.readFileSync(path.join(root,'scripts/google-sheets-auth.js'),'utf8');
+const apolloDomain=fs.readFileSync(path.join(root,'core/apollo-lead-domain-controller.js'),'utf8');
+const apolloMissionStore=fs.readFileSync(path.join(root,'core/apollo-lead-mission-store.js'),'utf8');
+const apolloRunner=fs.readFileSync(path.join(root,'core/apollo-lead-mission-runner.js'),'utf8');
 const checks=[
   ['stable-project-root',auth,/config\.projectRoot/],
   ['refresh-token-preservation',auth,/fresh\.refresh_token\s*\|\|\s*token\.refresh_token/],
@@ -44,11 +57,38 @@ const checks=[
   ['interactive-reauth',auth,/ensureAccessToken/],
   ['loopback-only',auth,/127\.0\.0\.1/],
   ['pkce',auth,/code_challenge_method:\s*'S256'/],
+  ['browser-launch-detection',auth,/child\.once\('error',\s*\(\)\s*=>\s*finish\(false\)\)/],
+  ['manual-auth-url-event',auth,/google_auth_manual_url/],
+  ['auth-event-sink',auth,/setEventSink/],
+  ['oauth-client-compatibility',auth,/tokenClientCompatible/],
+  ['scope-compatibility',auth,/tokenScopeCompatible/],
+  ['client-mismatch-reauth',auth,/oauth_client_mismatch/],
+  ['scope-mismatch-reauth',auth,/scope_incompatible/],
+  ['stored-client-metadata',auth,/client_id:\s*client\.clientId/],
+  ['server-auth-event-bridge',server,/setEventSink\(\(type, event\) => emit\(type, event\)\)/],
+  ['ui-manual-auth-event',ui,/google_auth_manual_url/],
+  ['ui-clickable-auth-link',ui,/class="event-action" href="\$\{escapeHtml\(e\.authUrl\)\}"/],
+  ['cli-manual-auth-url',authCli,/Open Google authorization/],
   ['one-401-retry',operator,/__authRetried/],
-  ['operator-auto-reauth',operator,/ensureAccessToken/]
+  ['operator-auto-reauth',operator,/ensureAccessToken/],
+  ['apollo-preflight',apolloDomain,/preflightDestination\(initial\)/],
+  ['apollo-preflight-zero-paid',apolloDomain,/apolloCalled:\s*false/],
+  ['apollo-candidate-checkpoint',apolloDomain,/candidateCompanies:\s*discovered\.organizations/],
+  ['mission-compiled-intent',apolloMissionStore,/compiledRequirements:\s*compiled/],
+  ['mission-sheet-target',apolloMissionStore,/worksheetUrl:\s*sheet\.url/],
+  ['mission-candidate-state',apolloMissionStore,/candidateCompanies:\s*\[\]/],
+  ['restart-no-silent-paid-replay',apolloRunner,/never\s*\n\s*\/\/ silently replay a paid operation|silently replay a paid operation/]
 ];
 for(const [name,source,pattern] of checks)if(!pattern.test(source))fail(`${name} contract missing`);
+
+const preflightCall=apolloDomain.indexOf('compiled = await preflightDestination(initial)');
+const paidApproval=apolloDomain.indexOf("paid.request(");
+if(preflightCall<0||paidApproval<0||preflightCall>paidApproval)fail('Apollo paid approval can be reached before Google Sheet preflight');
+const candidateCheckpoint=apolloDomain.indexOf('candidateCompanies: discovered.organizations');
+const companyProjection=apolloDomain.indexOf('const projection = await projector.project(compiled, selected');
+if(candidateCheckpoint<0||companyProjection<0||candidateCheckpoint>companyProjection)fail('Apollo company results are not checkpointed before Google Sheet projection');
 if(/process\.cwd\(\)/.test(auth))fail('credential resolution depends on process.cwd()');
+if(/if\s*\(!browserOpened\)[\s\S]{0,220}server\.close\(/.test(auth))fail('browser-launch fallback closes the pending OAuth loopback flow');
 
 const uiFiles=tracked.filter(file=>/^mark3-development\/(?:interface|ui|frontend)\//.test(file));
 for(const rel of uiFiles){

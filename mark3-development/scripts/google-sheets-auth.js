@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 const auth = require('../core/google-sheets-auth');
+auth.setEventSink((type, event) => {
+  if (type === 'google_auth_manual_url' && event?.authUrl) {
+    console.error(`Open Google authorization: ${event.authUrl}`);
+  }
+});
 
 (async () => {
   try {

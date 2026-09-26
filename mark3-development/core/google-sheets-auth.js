@@ -9,6 +9,18 @@ const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 let sessionValidated = false;
 let lastAuthEvent = null;
 let interactiveAuthorizationInFlight = null;
+let authEventSink = null;
+
+function emitAuthEvent(type, payload = {}) {
+  const event = { type, at: new Date().toISOString(), ...payload };
+  lastAuthEvent = event;
+  try { authEventSink?.(type, event); } catch {}
+  return event;
+}
+
+function setEventSink(sink) {
+  authEventSink = typeof sink === 'function' ? sink : null;
+}
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -70,6 +82,28 @@ function tokenBackupPath() {
 
 function validTokenObject(value) {
   return Boolean(value && typeof value === 'object' && (value.access_token || value.refresh_token));
+}
+
+function tokenScopes(token) {
+  return String(token?.scope || '').split(/[\s,]+/).filter(Boolean);
+}
+
+function tokenScopeCompatible(token) {
+  const scopes = tokenScopes(token);
+  return scopes.length === 0 || scopes.includes(SCOPE);
+}
+
+function tokenClientCompatible(token, client) {
+  const storedClientId = String(token?.client_id || '').trim();
+  return !storedClientId || storedClientId === client.clientId;
+}
+
+function authCompatibilityError(reason, message) {
+  const error = new Error(message);
+  error.code = 'GOOGLE_SHEETS_AUTH_REQUIRED';
+  error.authReason = reason;
+  error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
+  return error;
 }
 
 function loadToken() {
@@ -177,6 +211,7 @@ async function refresh(token) {
     throw error;
   }
   const client = oauthClient();
+  emitAuthEvent('google_auth_refreshing', { message: 'Refreshing Google Sheets session' });
   const fresh = await tokenRequest({
     client_id: client.clientId,
     client_secret: client.clientSecret,
@@ -187,9 +222,12 @@ async function refresh(token) {
     ...token,
     ...fresh,
     refresh_token: fresh.refresh_token || token.refresh_token,
+    client_id: client.clientId,
+    scope: fresh.scope || token.scope || SCOPE,
     expires_at: Date.now() + Math.max(60, Number(fresh.expires_in || 3600)) * 1000,
   };
   saveToken(merged);
+  emitAuthEvent('google_auth_restored', { message: 'Google Sheets session restored' });
   return merged;
 }
 
@@ -201,6 +239,14 @@ async function accessToken(options = {}) {
     error.authReason = 'token_missing_or_unreadable';
     error.reauthorizeCommand = 'node --env-file=../.env scripts\\google-sheets-auth.js';
     throw error;
+  }
+
+  const client = oauthClient();
+  if (!tokenClientCompatible(token, client)) {
+    throw authCompatibilityError('oauth_client_mismatch', 'Stored Google Sheets authorization belongs to a different OAuth client. Re-authorize once with the configured client.');
+  }
+  if (!tokenScopeCompatible(token)) {
+    throw authCompatibilityError('scope_incompatible', 'Stored Google Sheets authorization does not include the required Sheets scope. Re-authorize once to upgrade consent.');
   }
 
   const forceRefresh = Boolean(options.forceRefresh);
@@ -268,6 +314,8 @@ function requiresInteractiveReauth(error) {
     'google_rejected_authorization',
     'refresh_returned_no_access_token',
     'authorization_returned_no_refresh_token',
+    'oauth_client_mismatch',
+    'scope_incompatible',
   ].includes(reason) || code === 'GOOGLE_SHEETS_REFRESH_TOKEN_REQUIRED';
 }
 
@@ -286,14 +334,13 @@ async function ensureAccessToken(options = {}) {
     return await accessToken({ forceRefresh: Boolean(options.forceRefresh) });
   } catch (error) {
     if (!interactive || !requiresInteractiveReauth(error)) throw error;
-    lastAuthEvent = {
-      type: 'interactive-reauthorization-started',
-      at: new Date().toISOString(),
+    emitAuthEvent('google_auth_expired', {
+      message: 'Google authorization expired',
       reason: error.authReason || error.code || 'authorization_required',
-    };
+    });
     await authorizeInteractiveOnce();
     const token = await accessToken({ forceRefresh: false });
-    lastAuthEvent = { type: 'interactive-reauthorization-complete', at: new Date().toISOString() };
+    emitAuthEvent('google_auth_connected', { message: 'Google Sheets connected' });
     return token;
   }
 }
@@ -308,8 +355,27 @@ function openBrowser(url) {
     : process.platform === 'darwin'
       ? ['open', [url]]
       : ['xdg-open', [url]];
-  const child = spawn(command[0], command[1], { detached: true, stdio: 'ignore', windowsHide: true });
-  child.unref();
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+    try {
+      const child = spawn(command[0], command[1], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.once('spawn', () => {
+        try { child.unref(); } catch {}
+        timer = setTimeout(() => finish(true), 750);
+      });
+      child.once('exit', (code, signal) => finish(!signal && Number(code || 0) === 0));
+      child.once('error', () => finish(false));
+    } catch {
+      finish(false);
+    }
+  });
 }
 
 async function authorizeInteractive() {
@@ -361,8 +427,15 @@ async function authorizeInteractive() {
     code_challenge_method: 'S256',
   }).toString();
 
+  emitAuthEvent('google_auth_reconnect_opening', { message: 'Opening secure Google reconnection' });
   console.log('Opening Google authorization in your browser...');
-  openBrowser(authUrl.toString());
+  const browserOpened = await openBrowser(authUrl.toString());
+  if (!browserOpened) {
+    emitAuthEvent('google_auth_manual_url', {
+      message: 'Google authorization could not open automatically. Open the secure authorization link to continue.',
+      authUrl: authUrl.toString(),
+    });
+  }
 
   let code;
   const timeout = setTimeout(() => rejectCallback(new Error('Google authorization timed out.')), 180_000);
@@ -384,8 +457,9 @@ async function authorizeInteractive() {
     // Google may omit refresh_token on a subsequent consent exchange. Never
     // destroy a working offline credential merely because this response omitted it.
     refresh_token: token.refresh_token || previous?.refresh_token || '',
+    client_id: client.clientId,
     expires_at: Date.now() + Math.max(60, Number(token.expires_in || 3600)) * 1000,
-    scope: token.scope || previous?.scope || SCOPE,
+    scope: token.scope || SCOPE,
     authorized_at: new Date().toISOString(),
   };
 
@@ -399,7 +473,7 @@ async function authorizeInteractive() {
 
   const file = saveToken(stored);
   sessionValidated = true;
-  lastAuthEvent = { type: 'interactive-authorization-success', at: new Date().toISOString() };
+  emitAuthEvent('google_auth_connected', { message: 'Google Sheets connected' });
   return {
     ok: true,
     tokenPath: file,
@@ -411,32 +485,46 @@ async function authorizeInteractive() {
 
 function status() {
   const token = loadToken();
+  let client = null;
+  try { client = oauthClient(); } catch {}
+  const credentialsReady = Boolean(client);
+  const clientCompatible = Boolean(!token || (client && tokenClientCompatible(token, client)));
+  const scopeCompatible = Boolean(!token || tokenScopeCompatible(token));
   const expiresAt = Number(token?.expires_at || 0);
   const expiresInMs = token ? expiresAt - Date.now() : null;
   const hasRefreshToken = Boolean(token?.refresh_token);
   const tokenExpired = token ? expiresAt <= Date.now() + 60_000 : null;
   return {
-    credentialsReady: fs.existsSync(credentialsPath()),
+    credentialsReady,
     authorized: Boolean(token?.refresh_token || token?.access_token),
-    durableAuthorization: Boolean(token?.access_token && hasRefreshToken),
+    durableAuthorization: Boolean(token?.access_token && hasRefreshToken && credentialsReady && clientCompatible && scopeCompatible),
     hasRefreshToken,
     tokenExpired,
     tokenExpiresAt: expiresAt || null,
     tokenExpiresInMs: Number.isFinite(expiresInMs) ? expiresInMs : null,
     tokenScope: String(token?.scope || ''),
+    tokenClientId: String(token?.client_id || ''),
+    clientCompatible,
+    scopeCompatible,
     tokenAuthorizedAt: token?.authorized_at || null,
     sessionValidated,
     lastAuthEvent,
     credentialsPath: credentialsPath(),
     tokenPath: tokenPath(),
     tokenBackupPath: tokenBackupPath(),
-    healthReason: !token
-      ? 'token_missing_or_unreadable'
-      : !hasRefreshToken
-        ? 'refresh_token_missing'
-        : tokenExpired
-          ? 'access_expired_refresh_available'
-          : 'durable_authorization_ready',
+    healthReason: !credentialsReady
+      ? 'credentials_missing_or_invalid'
+      : !token
+        ? 'token_missing_or_unreadable'
+        : !clientCompatible
+          ? 'oauth_client_mismatch'
+          : !scopeCompatible
+            ? 'scope_incompatible'
+            : !hasRefreshToken
+              ? 'refresh_token_missing'
+              : tokenExpired
+                ? 'access_expired_refresh_available'
+                : 'durable_authorization_ready',
   };
 }
 
@@ -451,6 +539,7 @@ module.exports = {
   accessToken,
   ensureAccessToken,
   authorizeInteractive,
+  setEventSink,
   oauthErrorCode,
   tokenRequest,
 };

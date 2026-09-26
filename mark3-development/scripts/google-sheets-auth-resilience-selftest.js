@@ -55,6 +55,37 @@ const auth = require('../core/google-sheets-auth');
     assert.equal(recovered.refresh_token, 'refresh-1');
     assert.equal(auth.status().lastAuthEvent?.type, 'token-recovered-from-backup');
 
+    // A token minted for another OAuth client must never be silently reused.
+    auth.saveToken({
+      ...durable,
+      client_id: 'different-client',
+    });
+    await assert.rejects(
+      () => auth.accessToken(),
+      (error) => error?.code === 'GOOGLE_SHEETS_AUTH_REQUIRED'
+        && error?.authReason === 'oauth_client_mismatch'
+    );
+    status = auth.status();
+    assert.equal(status.clientCompatible, false);
+    assert.equal(status.durableAuthorization, false);
+    assert.equal(status.healthReason, 'oauth_client_mismatch');
+
+    // Likewise, an explicitly incompatible granted scope must require new consent.
+    auth.saveToken({
+      ...durable,
+      client_id: 'test-client',
+      scope: 'https://www.googleapis.com/auth/drive.readonly',
+    });
+    await assert.rejects(
+      () => auth.accessToken(),
+      (error) => error?.code === 'GOOGLE_SHEETS_AUTH_REQUIRED'
+        && error?.authReason === 'scope_incompatible'
+    );
+    status = auth.status();
+    assert.equal(status.scopeCompatible, false);
+    assert.equal(status.durableAuthorization, false);
+    assert.equal(status.healthReason, 'scope_incompatible');
+
     // Short-lived-only credentials are allowed while still alive but are clearly
     // diagnosed as non-durable.
     auth.saveToken({
