@@ -487,16 +487,17 @@ function status() {
   const token = loadToken();
   let client = null;
   try { client = oauthClient(); } catch {}
-  const clientCompatible = Boolean(!token || !client || tokenClientCompatible(token, client));
+  const credentialsReady = Boolean(client);
+  const clientCompatible = Boolean(!token || (client && tokenClientCompatible(token, client)));
   const scopeCompatible = Boolean(!token || tokenScopeCompatible(token));
   const expiresAt = Number(token?.expires_at || 0);
   const expiresInMs = token ? expiresAt - Date.now() : null;
   const hasRefreshToken = Boolean(token?.refresh_token);
   const tokenExpired = token ? expiresAt <= Date.now() + 60_000 : null;
   return {
-    credentialsReady: fs.existsSync(credentialsPath()),
+    credentialsReady,
     authorized: Boolean(token?.refresh_token || token?.access_token),
-    durableAuthorization: Boolean(token?.access_token && hasRefreshToken),
+    durableAuthorization: Boolean(token?.access_token && hasRefreshToken && credentialsReady && clientCompatible && scopeCompatible),
     hasRefreshToken,
     tokenExpired,
     tokenExpiresAt: expiresAt || null,
@@ -511,17 +512,19 @@ function status() {
     credentialsPath: credentialsPath(),
     tokenPath: tokenPath(),
     tokenBackupPath: tokenBackupPath(),
-    healthReason: !token
-      ? 'token_missing_or_unreadable'
-      : !clientCompatible
-        ? 'oauth_client_mismatch'
-        : !scopeCompatible
-          ? 'scope_incompatible'
-          : !hasRefreshToken
-            ? 'refresh_token_missing'
-            : tokenExpired
-              ? 'access_expired_refresh_available'
-              : 'durable_authorization_ready',
+    healthReason: !credentialsReady
+      ? 'credentials_missing_or_invalid'
+      : !token
+        ? 'token_missing_or_unreadable'
+        : !clientCompatible
+          ? 'oauth_client_mismatch'
+          : !scopeCompatible
+            ? 'scope_incompatible'
+            : !hasRefreshToken
+              ? 'refresh_token_missing'
+              : tokenExpired
+                ? 'access_expired_refresh_available'
+                : 'durable_authorization_ready',
   };
 }
 
