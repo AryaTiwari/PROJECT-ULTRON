@@ -442,13 +442,14 @@ async function handlePaidToolDecision(decision) {
     const genericRequest = {
       url: decision.payload?.url || null,
       provider: decision.payload?.provider || null,
+      sheetName: decision.payload?.sheetName || '',
     };
     const schemaProbe = await inspectThreePocTarget(genericRequest);
     if (schemaProbe?.compatible) {
       const replacement = paidTools.request(
         'apollo',
         'agentic-three-poc-enrichment',
-        { url: genericRequest.url, provider: genericRequest.provider },
+        { url: genericRequest.url, provider: genericRequest.provider, sheetName: genericRequest.sheetName || null },
         threePocApprovalSummary(genericRequest.provider, true)
       );
       return approvalResponse(replacement, {
@@ -592,7 +593,7 @@ function install() {
                 const approval = paidTools.request(
                   'apollo',
                   'lead-enrichment',
-                  { url: request.url, provider: request.provider, ensureContactColumns: request.ensureContactColumns },
+                  { url: request.url, provider: request.provider, sheetName: request.sheetName || null, ensureContactColumns: request.ensureContactColumns },
                   `I will use local spreadsheet/post details and the Apollo cache first, then make live Apollo calls only for fields that are still missing in this ${providerDescription(request.provider)}.`
                 );
                 result = approvalResponse(approval, { leadEnrichmentRequest: request });
