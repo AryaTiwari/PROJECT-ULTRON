@@ -153,6 +153,7 @@ function artifactResponse(kind, result) {
 const runtimeBuild = require('./core/runtime-build');
 const apolloLeadContract = require('./core/apollo-lead-contract');
 const googleSheetsAuth = require('./core/google-sheets-auth');
+googleSheetsAuth.setEventSink((type, event) => emit(type, event));
 
 const server = http.createServer(async (req,res) => {
   try {
