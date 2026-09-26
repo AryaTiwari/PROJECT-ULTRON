@@ -14,7 +14,7 @@ Treat requests like “find SAP roles, get founder/recruiter contacts, and send 
 5. Save accepted companies to `ultron_lead_master_upsert`. One company remains one canonical lead.
 6. Treat the existing LinkedIn profile URL as POC 1. Do not create a redundant POC 1 name column in the sheet. Store POC 1's phone/email and its CURRENT company from the profile.
 7. Search POC 2 and POC 3 inside POC 1's CURRENT company, even when that differs from the job company. Exclude POC 1 from those results. Prefer Founder/CEO/Director/Owner, then Co-Founder/Recruiting Head/Manager/HR Manager/Recruiter. Never invent missing phone/email.
-8. If Apollo is used, call `ultron_apollo_find_company_contacts` with company=POC 1 current company plus excludeLinkedin/excludeName/excludeEmail for POC 1. Apollo is enrichment, not discovery.
+8. Apollo Organization Search is the preferred native source when the user explicitly requests Apollo company discovery. Use `ultron_apollo_search_organizations` for company candidates. Apollo People Search remains the POC/contact-discovery layer after companies are known; call `ultron_apollo_find_company_contacts` only for requested contact enrichment.
 9. Before Google Sheet export call `ultron_google_workspace_status`.
 10. If Google auth is unavailable, preserve the mission and lead master, set the next action to Workspace connection, and return a concise auth requirement. Do not claim completion.
 11. When connected, call `ultron_google_sheet_from_leads`. Final completion requires a real spreadsheet URL/readback, not merely loading the Google Workspace skill.

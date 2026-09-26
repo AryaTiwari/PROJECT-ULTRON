@@ -9,6 +9,8 @@ import { subscribe,publish } from "./event-hub.mjs";
 import { unwrapList, unwrapSession } from "./hermes-contract.mjs";
 import { createNestedBranch } from "./branching.mjs";
 import { normalizeRunEvent, isTerminalRunEvent } from "./run-events.mjs";
+import { compileCommand } from "./command-control-plane.mjs";
+import { createApolloCompanyMissionRunner } from "./apollo-company-mission.mjs";
 
 const json=(res,status,value)=>{res.writeHead(status,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});res.end(JSON.stringify(value));};
 const body=(req,maxBytes=2_000_000)=>new Promise((resolve,reject)=>{let raw="",settled=false;req.setEncoding("utf8");req.on("data",c=>{if(settled)return;raw+=c;if(Buffer.byteLength(raw,"utf8")>maxBytes){settled=true;const error=new Error("REQUEST_TOO_LARGE");error.status=413;reject(error);req.destroy();}});req.on("end",()=>{if(settled)return;try{resolve(raw?JSON.parse(raw):{});}catch(e){reject(e);}});req.on("error",reject);});
@@ -58,6 +60,26 @@ const UI_TELEMETRY=new Set(["voice.listening","voice.transcribing","voice.transc
 function createMissionObserved(input){const mission=createMission(input);publish("mission.started",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state});return mission;}
 function updateMissionObserved(id,patch){const mission=updateMission(id,patch);if(mission)publish(mission.status==="completed"?"mission.completed":"mission.updated",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state,nextAction:mission.nextAction});return mission;}
 function addEvidenceObserved(input){const evidence=addEvidence(input);publish("evidence.recorded",{missionId:input.missionId,kind:evidence.kind,source:evidence.source,verified:evidence.verified});return evidence;}
+const nativeMissions=createApolloCompanyMissionRunner({db:{createMission,getMission,updateMission,addEvent},publish});
+function nativeChatResponse(res,result){
+  res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache, no-transform","Connection":"keep-alive","X-Accel-Buffering":"no"});
+  res.write(`event: run.started\ndata: ${JSON.stringify({run_id:result.runId,native:true,operation:"apollo-company-discovery"})}\n\n`);
+  if(result.ok){res.write(`event: approval.request\ndata: ${JSON.stringify({run_id:result.runId,request_id:result.requestId,kind:"Apollo Organization Search",description:result.message,choices:["once","deny"],native:true})}\n\n`);}
+  else{res.write(`event: run.failed\ndata: ${JSON.stringify({run_id:result.runId,error:result.error||result.mission?.state?.error||"Native mission preflight failed",native:true})}\n\n`);}
+  res.end();
+}
+async function routeChat(req,res,sessionId,input){
+  const intent=compileCommand(String(input?.input||""));
+  if(intent.domain==="apollo-company-discovery"&&intent.operation==="resume"){
+    publish("request.received",{sessionId,characters:String(input?.input||"").length,native:true});
+    const result=await nativeMissions.resume(intent.missionId);res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache, no-transform","Connection":"keep-alive"});res.write(`event: run.started\ndata: ${JSON.stringify({run_id:intent.missionId,native:true,operation:"apollo-company-discovery-resume"})}\n\n`);res.write(`event: assistant.delta\ndata: ${JSON.stringify({delta:`Resumed ${intent.missionId} from its saved checkpoint.`,native:true})}\n\n`);return res.end();
+  }
+  if(intent.domain==="apollo-company-discovery"&&intent.operation==="apollo-company-discovery"){
+    publish("request.received",{sessionId,characters:String(input?.input||"").length,native:true});
+    const result=await nativeMissions.start({sessionId,intent});return nativeChatResponse(res,result);
+  }
+  return proxyChat(req,res,sessionId,input);
+}
 function skillForTool(data={}){
   const raw=String(data.tool_name||data.tool||data.name||data.display_name||"").toLowerCase();
   if(/apollo|lead|contact|enrich/.test(raw))return"Apollo Lead Intelligence";
@@ -200,15 +222,16 @@ const server=http.createServer(async(req,res)=>{
       const parent=unwrapList(parentMessages),child=unwrapList(childMessages),anchor=branch.anchorMessageId?parent.find(message=>String(message.id||message.message_id||"")===branch.anchorMessageId)||null:null;
       return json(res,200,{branch,parentMessages:parent,childMessages:child,anchorMessage:anchor});
     }
-    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="chat")return await proxyChat(req,res,p[2],await body(req));
+    if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="chat")return await routeChat(req,res,p[2],await body(req));
     if(req.method==="GET"&&url.pathname==="/api/missions")return json(res,200,listMissions());
     if(req.method==="POST"&&url.pathname==="/api/missions")return json(res,201,createMissionObserved(await body(req)));
     if(req.method==="POST"&&url.pathname==="/api/attachments")return json(res,201,saveAttachment(await body(req,15_000_000)));
     if(req.method==="GET"&&url.pathname==="/api/leads")return json(res,200,{items:listLeads({status:url.searchParams.get("status"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:leadStats(url.searchParams.get("target"))});
     if(req.method==="GET"&&url.pathname==="/api/creators")return json(res,200,{items:listCreators({status:url.searchParams.get("status"),niche:url.searchParams.get("niche"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:creatorStats(url.searchParams.get("target"))});
     if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="GET"){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2]),events:listEvents({missionId:p[2],limit:300})}):json(res,404,{error:"MISSION_NOT_FOUND"});}
+    if(p[0]==="api"&&p[1]==="missions"&&p[2]&&p[3]==="resume"&&req.method==="POST")return json(res,202,await nativeMissions.resume(p[2]));
     if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="PATCH"){const m=updateMissionObserved(p[2],await body(req));return m?json(res,200,m):json(res,404,{error:"MISSION_NOT_FOUND"});}
-    if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="approval"&&req.method==="POST"){const input=await body(req),result=await hermes.approval(p[2],input);publish("approval.granted",{run_id:p[2],request_id:input.request_id,choice:input.choice});return json(res,200,result);}
+    if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="approval"&&req.method==="POST"){const input=await body(req);if(nativeMissions.isNativeRun(p[2]))return json(res,200,await nativeMissions.approve(p[2],input));const result=await hermes.approval(p[2],input);publish("approval.granted",{run_id:p[2],request_id:input.request_id,choice:input.choice});return json(res,200,result);}
     if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="stop"&&req.method==="POST")return json(res,200,await hermes.stopRun(p[2]));
     if(p[0]==="internal"){
       if(!internal(req))return json(res,401,{error:"UNAUTHORIZED"});

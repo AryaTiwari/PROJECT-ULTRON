@@ -8,4 +8,4 @@ Map known headings semantically and preserve their visible spelling and order. I
 When an unfamiliar heading can be inferred safely from supplied evidence, fill it; otherwise ask one concise mapping question and persist the answer for the mission.
 Write in bounded batches, preserve existing non-empty cells, and checkpoint row ranges. Read back every committed batch.
 A Sheet task is complete only with the real spreadsheet URL, worksheet, written range and readback count.
-Use `ultron_google_workspace_status` before export and `ultron_google_sheet_from_leads` for canonical lead delivery.
+Use `ultron_google_workspace_status` before paid discovery. For an existing Sheet, resolve with `ultron_google_sheet_resolve_target`, inspect with `ultron_google_sheet_read`, batch append or update only owned cells, and verify through `ultron_google_sheet_readback`. Use `ultron_google_sheet_from_leads` only when the user requests a new canonical lead export.
