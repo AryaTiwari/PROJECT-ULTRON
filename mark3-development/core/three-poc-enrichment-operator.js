@@ -1480,11 +1480,36 @@ async function resumeCappedJob(options = {}) {
     error.code = 'THREE_POC_RESUME_CHECKPOINT_MISMATCH';
     throw error;
   }
-  return enrichWorkbook(previous.source, {
-    sheetName: previous.requestedSheetName,
-    startRowNumber: Number(previous.nextRowNumber),
-    rowLimit: options.rowLimit || previous.rowLimit || undefined,
-  });
+
+  const markCheckpoint = (status, patch = {}) => {
+    const state = loadState();
+    const job = (state.jobs || []).find((item) => String(item?.id) === String(previous.id));
+    if (!job) {
+      const error = new Error('The approved POC resume checkpoint disappeared before execution. Nothing was executed.');
+      error.code = 'THREE_POC_RESUME_CHECKPOINT_MISSING';
+      throw error;
+    }
+    Object.assign(job, patch, { status, updatedAt: new Date().toISOString() });
+    saveState(state);
+  };
+
+  markCheckpoint('resume_in_progress', { resumeStartedAt: new Date().toISOString() });
+  try {
+    const result = await enrichWorkbook(previous.source, {
+      sheetName: previous.requestedSheetName,
+      startRowNumber: Number(previous.nextRowNumber),
+      rowLimit: options.rowLimit || previous.rowLimit || undefined,
+    });
+    markCheckpoint('resumed', { resumedByJobId: result.jobId, resumedAt: new Date().toISOString() });
+    return result;
+  } catch (error) {
+    // Never make an ambiguous interrupted paid run automatically resumable.
+    markCheckpoint('resume_interrupted_needs_inspection', {
+      resumeInterruptedAt: new Date().toISOString(),
+      resumeErrorCode: String(error?.code || 'THREE_POC_RESUME_FAILED'),
+    });
+    throw error;
+  }
 }
 
 function pendingCount() {
