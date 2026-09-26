@@ -79,6 +79,8 @@ if (!/ENRICHMENT_REQUEST_INTERRUPTED_NO_REPLAY/.test(enrichmentSafetySource) || 
 const threePocSource = fs.readFileSync(path.join(root,'core','three-poc-enrichment-operator.js'),'utf8');
 const leadBootstrapSource = fs.readFileSync(path.join(root,'core','lead-enrichment-bootstrap.js'),'utf8');
 if (!/explicit_two_poc/.test(threePocSource) || !/nonDestructive:\s*true/.test(threePocSource)) throw new Error('Two-POC compatibility or non-destructive write protection is missing.');
+const localExcelSource = fs.readFileSync(path.join(root,'core','local-excel-operator.js'),'utf8');
+if (!/withWorkbookWriteLock/.test(localExcelSource) || !/workbookWriteQueues/.test(localExcelSource)) throw new Error('Attached Excel writes are not serialized per workbook.');
 if (!/selectCompatibleSheets\(compatible, options\.sheetName/.test(threePocSource) || !/requestedSheetName/.test(leadBootstrapSource)) throw new Error('Explicit worksheet targeting is not enforced end-to-end.');
 if (!/partial_safe_cap/.test(threePocSource) || !/resumeCappedJob/.test(threePocSource) || !/resume_in_progress/.test(threePocSource) || !/resume_interrupted_needs_inspection/.test(threePocSource) || !/three-poc-enrichment-resume/.test(leadBootstrapSource)) throw new Error('Large-run POC checkpoint/resume safety is incomplete.');
 if (/\b(?:clearRows|deleteRows|deleteDimension|spliceRows)\s*\(/.test(threePocSource)) throw new Error('Destructive row operation detected in protected POC enrichment.');
