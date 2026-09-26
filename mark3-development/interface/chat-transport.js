@@ -141,11 +141,15 @@
     return /^(?:yes|y|approve|approved|proceed|continue|confirm|confirmed|do it|go ahead|okay|ok)\s*[.!]*$/i.test(String(message || '').trim());
   }
 
-  function protectedEnrichmentMessage(message = '') {
+  function protectedEnrichmentMessage(message = '', attachments = []) {
     const value = String(message || '');
     const source = /@[\w .()\-]{2,}|docs\.google\.com\/spreadsheets\/d\//i.test(value);
-    const operation = /\b(?:enrich|enrichment|fill|populate|complete|repair|update|poc|apollo)\b/i.test(value);
-    return (source && operation) || (pendingProtectedApproval && approvalReply(value));
+    const strongMutation = /\b(?:enrich|enrichment|poc|apollo)\b/i.test(value);
+    const spreadsheetMutation = /\b(?:fill|populate|complete|repair|update)\b/i.test(value)
+      && /\b(?:sheet|spreadsheet|excel|workbook|contacts?|leads?)\b/i.test(value);
+    const hasAttachment = Array.isArray(attachments) && attachments.length > 0;
+    return ((source || hasAttachment) && (strongMutation || spreadsheetMutation))
+      || (pendingProtectedApproval && approvalReply(value));
   }
 
   function setPendingProtectedApproval(value) {
@@ -165,7 +169,7 @@
     if (!init.body) return { init, protectedRequest: false, requestId: '' };
     try {
       const parsed = typeof init.body === 'string' ? JSON.parse(init.body) : { ...(init.body || {}) };
-      if (!parsed || typeof parsed !== 'object' || !protectedEnrichmentMessage(parsed.message)) {
+      if (!parsed || typeof parsed !== 'object' || !protectedEnrichmentMessage(parsed.message, parsed.attachments)) {
         return { init, protectedRequest: false, requestId: '' };
       }
       const id = String(parsed.requestId || '').trim() || requestId();
