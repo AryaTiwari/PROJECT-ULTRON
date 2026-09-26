@@ -1,0 +1,23 @@
+{
+  "contractVersion": "google-auth-contract-v1",
+  "runtime": "mark4",
+  "criticalFiles": [
+    "services/capability-host/src/google-auth-recovery.mjs",
+    "services/capability-host/src/workspace.mjs",
+    "services/capability-host/src/server.mjs",
+    "services/gateway/src/apollo-company-mission.mjs",
+    "scripts/google-auth-integrity-guard.mjs",
+    "scripts/google-auth-startup-check.mjs",
+    "scripts/google-auth-doctor.mjs",
+    "scripts/google-auth-connect.mjs"
+  ],
+  "guarantees": [
+    "stable Hermes-home token path",
+    "Mark 4 isolated Workspace token",
+    "compatible OAuth client recovery without raw token sharing",
+    "silent refresh and bounded transient retries",
+    "single-flight loopback PKCE browser reauthorization",
+    "auth-aware Google operation retry",
+    "no tracked OAuth secrets"
+  ]
+}

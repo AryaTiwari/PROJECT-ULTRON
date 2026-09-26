@@ -2,10 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { mark4GoogleAuth, GOOGLE_AUTH_CONTRACT } from "./google-auth-recovery.mjs";
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const mark4Root=path.resolve(here,"../../..");
-const hermesHome=String(process.env.HERMES_HOME||path.join(mark4Root,".runtime","hermes-home"));
+const hermesHome=mark4GoogleAuth.hermesHome;
 const profileScripts=path.join(hermesHome,"skills","productivity","google-workspace","scripts");
 const bundledScripts=path.join(mark4Root,".runtime","vendor","hermes-agent","skills","productivity","google-workspace","scripts");
 const scripts=fs.existsSync(path.join(profileScripts,"google_api.py"))?profileScripts:bundledScripts;
@@ -31,11 +32,15 @@ function run(script,args=[],timeoutMs=120000){
 }
 function parse(value){try{return JSON.parse(value);}catch{return null;}}
 export async function googleWorkspaceStatus(){
-  if(!fs.existsSync(setupScript))return{status:"skill_missing",authenticated:false};
+  if(!fs.existsSync(setupScript))return{status:"skill_missing",authenticated:false,contractVersion:GOOGLE_AUTH_CONTRACT};
+  let auth;
+  try{auth=await mark4GoogleAuth.ensureReady({interactive:false});}
+  catch(error){return{status:error.code==="TEMPORARY_NETWORK_FAILURE"?"temporary_failure":"auth_required",authenticated:false,contractVersion:GOOGLE_AUTH_CONTRACT,authState:error.code||"AUTH_REQUIRED",detail:error.message,clientSecretPresent:fs.existsSync(mark4GoogleAuth.canonicalClientPath),tokenPresent:fs.existsSync(mark4GoogleAuth.canonicalTokenPath)};}
+  if(!auth.ok)return{status:"auth_required",authenticated:false,contractVersion:GOOGLE_AUTH_CONTRACT,authState:auth.state,durable:Boolean(auth.durable),detail:"Google Workspace requires authorization.",clientSecretPresent:fs.existsSync(mark4GoogleAuth.canonicalClientPath),tokenPresent:fs.existsSync(mark4GoogleAuth.canonicalTokenPath)};
   const result=await run(setupScript,["--check"]);
   const combined=(result.stdout+"\n"+result.stderr).trim();
-  if(/AUTHENTICATED/i.test(combined)&&result.code===0)return{status:"authenticated",authenticated:true,detail:combined};
-  return{status:"auth_required",authenticated:false,detail:combined||"Google OAuth is not connected.",clientSecretPresent:fs.existsSync(path.join(hermesHome,"google_client_secret.json")),tokenPresent:fs.existsSync(path.join(hermesHome,"google_token.json"))};
+  if(/AUTHENTICATED/i.test(combined)&&result.code===0)return{status:"authenticated",authenticated:true,contractVersion:GOOGLE_AUTH_CONTRACT,authState:auth.state,durable:Boolean(auth.durable),detail:combined};
+  return{status:"auth_required",authenticated:false,contractVersion:GOOGLE_AUTH_CONTRACT,authState:"HERMES_TOKEN_REJECTED",durable:Boolean(auth.durable),detail:combined||"Hermes Google Workspace did not accept the saved token.",clientSecretPresent:fs.existsSync(mark4GoogleAuth.canonicalClientPath),tokenPresent:fs.existsSync(mark4GoogleAuth.canonicalTokenPath)};
 }
 export async function googleSetClientSecret(filePath){
   const target=String(filePath||"").trim();if(!target)throw new Error("GOOGLE_CLIENT_SECRET_PATH_REQUIRED");
@@ -52,18 +57,34 @@ export async function googleAuthCode(codeOrUrl){
   const data=parse(result.stdout);return data||{ok:false,code:result.code,stdout:result.stdout,stderr:result.stderr};
 }
 function colName(n){let s="";for(let x=n;x>0;x=Math.floor((x-1)/26))s=String.fromCharCode(65+(x-1)%26)+s;return s;}
-async function gapi(args){
-  const result=await run(apiScript,args);
-  const data=parse(result.stdout);
-  if(result.code!==0)throw new Error(data?.error||result.stderr||result.stdout||"GOOGLE_API_FAILED");
+function looksAuthFailure(value){return /auth|oauth|credential|refresh token|invalid_grant|unauthenticated|login required|token.*expired|token.*revoked/i.test(String(value||""));}
+async function ensureGoogleWorkspace(options={}){
+  const auth=await mark4GoogleAuth.ensureReady({interactive:options.interactive!==false,forceRefresh:Boolean(options.forceRefresh),forceReauth:Boolean(options.forceReauth)});
+  if(!auth.ok){const error=new Error("Google Workspace authorization is required. Preserve the research mission and retry after connection; do not discard gathered work.");error.code="GOOGLE_AUTH_REQUIRED";error.authState=auth.state;error.workspace=auth;throw error;}
+  return auth;
+}
+export async function googleWorkspaceConnect(){return ensureGoogleWorkspace({interactive:true,forceReauth:true});}
+async function gapi(args,options={}){
+  await ensureGoogleWorkspace({interactive:true,forceRefresh:Boolean(options.forceRefresh)});
+  let result=await run(apiScript,args),data=parse(result.stdout);
+  if(result.code!==0&&looksAuthFailure(data?.error||result.stderr||result.stdout)&&!options.authRetried){
+    await ensureGoogleWorkspace({interactive:true,forceRefresh:true});
+    result=await run(apiScript,args);data=parse(result.stdout);
+  }
+  if(result.code!==0){const error=new Error(data?.error||result.stderr||result.stdout||"GOOGLE_API_FAILED");if(looksAuthFailure(error.message))error.code="GOOGLE_AUTH_REQUIRED";throw error;}
   return data??{stdout:result.stdout};
 }
 const normalized=value=>String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
 const quoteSheet=value=>`'${String(value||"").replace(/'/g,"''")}'`;
-export async function googleSheetMetadata(spreadsheetId){
+export async function googleSheetMetadata(spreadsheetId,options={}){
   const id=String(spreadsheetId||"").trim();if(!id)throw new Error("GOOGLE_SPREADSHEET_ID_REQUIRED");
-  const result=await run(metadataScript,[id]);const data=parse(result.stdout);
-  if(result.code!==0||data?.error)throw new Error(data?.error||result.stderr||result.stdout||"GOOGLE_SHEET_METADATA_FAILED");
+  await ensureGoogleWorkspace({interactive:true,forceRefresh:Boolean(options.forceRefresh)});
+  let result=await run(metadataScript,[id]),data=parse(result.stdout);
+  if((result.code!==0||data?.error)&&looksAuthFailure(data?.error||result.stderr||result.stdout)&&!options.authRetried){
+    await ensureGoogleWorkspace({interactive:true,forceRefresh:true});
+    result=await run(metadataScript,[id]);data=parse(result.stdout);
+  }
+  if(result.code!==0||data?.error){const error=new Error(data?.error||result.stderr||result.stdout||"GOOGLE_SHEET_METADATA_FAILED");if(looksAuthFailure(error.message))error.code="GOOGLE_AUTH_REQUIRED";throw error;}
   return data;
 }
 export function selectGoogleSheet(sheets,{sheetId=null,sheetName=null}={}){
@@ -75,8 +96,7 @@ export function selectGoogleSheet(sheets,{sheetId=null,sheetName=null}={}){
   return{selected,method};
 }
 export async function resolveGoogleSheetTarget({spreadsheetId,sheetId=null,sheetName=null}={}){
-  const status=await googleWorkspaceStatus();
-  if(!status.authenticated){const error=new Error("GOOGLE_AUTH_REQUIRED");error.code="GOOGLE_AUTH_REQUIRED";error.workspace=status;throw error;}
+  await ensureGoogleWorkspace({interactive:true});
   const metadata=await googleSheetMetadata(spreadsheetId),resolved=selectGoogleSheet(metadata.sheets,{sheetId,sheetName}),selected=resolved.selected;
   return{spreadsheetId:String(spreadsheetId),spreadsheetTitle:metadata.properties?.title||null,sheetId:Number(selected.sheetId),sheetName:selected.title,resolutionMethod:resolved.method,metadata};
 }
@@ -104,8 +124,7 @@ export async function googleSheetPreflight({spreadsheetId,sheetId=null,sheetName
   return{ok:true,target,headers,values,rowCount:Math.max(0,values.length-1)};
 }
 export async function createGoogleSheet({title="ULTRON Lead Export",sheetName="Leads",rows=[]}={}){
-  const status=await googleWorkspaceStatus();
-  if(!status.authenticated)return{ok:false,status:"auth_required",workspace:status,message:"Google Sheets needs one-time OAuth. Preserve the research mission and request Google Workspace connection; do not discard gathered leads."};
+  await ensureGoogleWorkspace({interactive:true});
   if(!Array.isArray(rows)||rows.length<1)throw new Error("GOOGLE_SHEET_ROWS_REQUIRED");
   const created=await gapi(["sheets","create","--title",String(title),"--sheet-name",String(sheetName)]);
   const spreadsheetId=created.spreadsheetId||created.spreadsheet_id||created.id;
