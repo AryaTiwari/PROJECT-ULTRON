@@ -205,6 +205,8 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     assert.doesNotMatch(threePocSource, /\b(?:clearRows|deleteRows|deleteDimension|spliceRows)\s*\(/, 'POC enrichment must contain no row-deletion primitive');
     assert.match(localExcelSource, /THREE_POC_NON_DESTRUCTIVE_CONFLICT/);
     assert.match(localExcelSource, /change\.nonDestructive === true/);
+    assert.match(localExcelSource, /withWorkbookWriteLock/);
+    assert.match(localExcelSource, /workbookWriteQueues/);
     assert.match(bootstrapSource, /requestedSheetName/);
     assert.match(bootstrapSource, /sheetName:\s*decision\.payload\.sheetName/);
     assert.match(threePocSource, /selectCompatibleSheets\(compatible, options\.sheetName/);
