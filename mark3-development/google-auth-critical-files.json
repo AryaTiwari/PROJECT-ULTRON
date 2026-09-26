@@ -10,7 +10,8 @@
     "scripts/google-auth-integrity-guard.js",
     "server.js",
     "interface/app.js",
-    "interface/style.css"
+    "interface/style.css",
+    "scripts/google-sheets-auth-resilience-selftest.js"
   ],
   "guarantees": [
     "stable project-root credential paths",
@@ -21,6 +22,8 @@
     "no tracked OAuth secrets",
     "browser-launch fallback keeps the loopback PKCE flow alive and surfaces a safe authorization URL in Live Activity",
     "semantic Google auth events cross SSE without access tokens, refresh tokens, or OAuth client secrets",
-    "developer CLI prints the safe authorization URL when automatic browser launch fails"
+    "developer CLI prints the safe authorization URL when automatic browser launch fails",
+    "stored OAuth client identity is validated before token reuse",
+    "explicitly incompatible Google Sheets scopes require renewed consent"
   ]
 }
