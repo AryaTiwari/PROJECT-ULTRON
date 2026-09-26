@@ -1,6 +1,6 @@
 import type { LiveEvent, Mission, ModelRoute } from "./types";
 export type CoreState="idle"|"listening"|"transcribing"|"understanding"|"model"|"skill"|"tool"|"mission"|"approval"|"writing"|"speaking"|"completed"|"fallback"|"offline"|"error";
-export type ActivityCategory="REQUEST"|"ROUTING"|"MODEL"|"SKILL"|"TOOL"|"SEARCH"|"MEMORY"|"WRITE"|"APPROVAL"|"MISSION"|"RESULT"|"WARNING"|"ERROR"|"VOICE"|"SYSTEM";
+export type ActivityCategory="REQUEST"|"ROUTING"|"MODEL"|"SKILL"|"TOOL"|"SEARCH"|"MEMORY"|"WRITE"|"APPROVAL"|"MISSION"|"RESULT"|"WARNING"|"ERROR"|"VOICE"|"GOOGLE"|"SYSTEM";
 export interface ActivityItem{event:LiveEvent;category:ActivityCategory;title:string;detail:string;state:CoreState;tone:"neutral"|"active"|"success"|"warning"|"danger"}
 const words=(v:unknown)=>String(v??"").replace(/^ultron[_/.:-]?/i,"").replace(/[_.:/-]+/g," ").replace(/\s+/g," ").trim();
 const pick=(d:any,...keys:string[])=>keys.map(k=>d?.[k]).find(v=>v!==undefined&&v!==null&&String(v).trim())??"";
@@ -16,6 +16,12 @@ if(t==="connection.offline")return{event,category:"ERROR",title:"Gateway connect
 if(t==="request.received"){category="REQUEST";title="Command received";detail=s||"Accepted by the Mark 4 gateway";state="understanding";tone="active"}
 else if(t==="model.selected"){category="MODEL";title=modelLabel(d,route);detail="Selected for this run";state="model";tone="active"}
 else if(t==="model.route.failed"){category="WARNING";title=titleCase(pick(d,"provider","route")||"Provider fallback");detail=titleCase(pick(d,"errorClass")||s);state="fallback";tone="warning"}
+else if(t==="google.auth.refreshing"){category="GOOGLE";title="Refreshing session";detail=s||"Refreshing Google Workspace access";state="tool";tone="active"}
+else if(t==="google.auth.restored"){category="GOOGLE";title="Session restored";detail=s||"Google Workspace access refreshed";state="completed";tone="success"}
+else if(t==="google.auth.expired"){category="GOOGLE";title="Authorization expired";detail=s||"Google requires secure reconnection";state="approval";tone="warning"}
+else if(t==="google.auth.reconnect.opening"){category="GOOGLE";title="Opening secure reconnection";detail=s||"Waiting for Google consent";state="approval";tone="active"}
+else if(t==="google.auth.manual.url"){category="GOOGLE";title="Google authorization needed";detail=s||"Open the secure authorization link";state="approval";tone="warning"}
+else if(t==="google.auth.connected"){category="GOOGLE";title="Workspace connected";detail=s||"Google Workspace is ready";state="completed";tone="success"}
 else if(t==="skill.selected"){category="SKILL";title=titleCase(pick(d,"skill","name")||capabilityFor(event));detail=s||"Capability activated from an observed tool call";state="skill";tone="active"}
 else if(t.startsWith("tool.")){const name=tool(d);if(/^(read file|search file|terminal|execute command|list directory|filesystem stat|file system stat)$/i.test(name))return null;const failed=t.endsWith("failed"),done=t.endsWith("completed");category=/search|apollo|linkedin|browser/.test(name)?"SEARCH":/sheet|write|upsert|save/.test(name)?"WRITE":done?"RESULT":"TOOL";title=titleCase(name);detail=prog(d)||s||(done?"Operation completed":failed?String(pick(d,"error")||"Operation failed"):"Execution started");state=failed?"error":done?"completed":category==="WRITE"?"writing":"tool";tone=failed?"danger":done?"success":"active"}
 else if(t.startsWith("memory.")){category="MEMORY";title="Context loaded";detail=prog(d)||s||titleCase(pick(d,"source")||"Relevant memory recovered");state="understanding"}

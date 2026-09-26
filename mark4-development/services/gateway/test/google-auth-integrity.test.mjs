@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"../../..");
 const recovery=fs.readFileSync(path.join(root,"services/capability-host/src/google-auth-recovery.mjs"),"utf8");
 const workspace=fs.readFileSync(path.join(root,"services/capability-host/src/workspace.mjs"),"utf8");
+const gateway=fs.readFileSync(path.join(root,"services/gateway/src/server.mjs"),"utf8");
+const uiApp=fs.readFileSync(path.join(root,"apps/ui/src/App.tsx"),"utf8");
 
 test("Google auth contract preserves durable refresh and single-flight reauth",()=>{
   assert.match(recovery,/GOOGLE_AUTH_CONTRACT="google-auth-contract-v1"/);
@@ -28,4 +30,15 @@ test("Workspace operations self-heal and retry auth exactly once",()=>{
   assert.match(workspace,/authRetried/);
   assert.match(workspace,/forceRefresh:true/);
   assert.match(workspace,/googleWorkspaceConnect/);
+});
+
+
+test("Google browser-launch fallback stays alive and reaches the UI safely",()=>{
+  assert.match(recovery,/google\.auth\.manual_url/);
+  assert.match(recovery,/child\.once\("error",\(\)=>finish\(false\)\)/);
+  assert.doesNotMatch(recovery,/if\(!browserOpened\)[\s\S]{0,160}server\.close\(/);
+  assert.match(workspace,/setGoogleWorkspaceAuthEventSink/);
+  assert.match(gateway,/setGoogleWorkspaceAuthEventSink\(\(type,data\)=>publish\(type,data\)\)/);
+  assert.match(uiApp,/google\.auth\.manual_url/);
+  assert.match(uiApp,/notice\.url&&<a href=\{notice\.url\}/);
 });

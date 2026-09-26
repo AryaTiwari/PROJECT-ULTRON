@@ -11,6 +11,9 @@ import { createNestedBranch } from "./branching.mjs";
 import { normalizeRunEvent, isTerminalRunEvent } from "./run-events.mjs";
 import { compileCommand } from "./command-control-plane.mjs";
 import { createApolloCompanyMissionRunner } from "./apollo-company-mission.mjs";
+import { setGoogleWorkspaceAuthEventSink } from "../../capability-host/src/workspace.mjs";
+
+setGoogleWorkspaceAuthEventSink((type,data)=>publish(type,data));
 
 const json=(res,status,value)=>{res.writeHead(status,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});res.end(JSON.stringify(value));};
 const body=(req,maxBytes=2_000_000)=>new Promise((resolve,reject)=>{let raw="",settled=false;req.setEncoding("utf8");req.on("data",c=>{if(settled)return;raw+=c;if(Buffer.byteLength(raw,"utf8")>maxBytes){settled=true;const error=new Error("REQUEST_TOO_LARGE");error.status=413;reject(error);req.destroy();}});req.on("end",()=>{if(settled)return;try{resolve(raw?JSON.parse(raw):{});}catch(e){reject(e);}});req.on("error",reject);});

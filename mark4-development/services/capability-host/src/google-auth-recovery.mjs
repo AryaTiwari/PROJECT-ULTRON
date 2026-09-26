@@ -24,6 +24,15 @@ const approvedClientCandidates=[
 ];
 let interactiveAuthorizationInFlight=null;
 let lastAuthEvent=null;
+let authEventSink=null;
+
+function emitAuthEvent(type,payload={}){
+  const event={type,at:new Date().toISOString(),...payload};
+  lastAuthEvent=event;
+  try{authEventSink?.(type,event);}catch{}
+  return event;
+}
+function setEventSink(sink){authEventSink=typeof sink==="function"?sink:null;}
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function readJson(file){return JSON.parse(fs.readFileSync(file,"utf8"));}
@@ -134,10 +143,11 @@ function normalizedStoredToken(previous,fresh,client,{preservePreviousRefresh=tr
 }
 async function refreshToken(token,client){
   if(!refreshOf(token))throw Object.assign(new Error("No durable Google refresh token is stored."),{code:"REFRESH_TOKEN_MISSING"});
+  emitAuthEvent("google.auth.refreshing",{message:"Refreshing session"});
   const fresh=await tokenRequest(client,{client_id:client.clientId,client_secret:client.clientSecret,refresh_token:refreshOf(token),grant_type:"refresh_token"});
   const stored=normalizedStoredToken(token,fresh,client,{preservePreviousRefresh:true});
   atomicJson(canonicalTokenPath,stored);
-  lastAuthEvent={type:"refresh-succeeded",at:new Date().toISOString()};
+  emitAuthEvent("google.auth.restored",{message:"Session restored"});
   return stored;
 }
 function base64url(value){return Buffer.from(value).toString("base64url");}
@@ -145,7 +155,16 @@ function openBrowser(url){
   const command=process.platform==="win32"
     ?["rundll32.exe",["url.dll,FileProtocolHandler",url]]
     :process.platform==="darwin"?["open",[url]]:["xdg-open",[url]];
-  try{const child=spawn(command[0],command[1],{detached:true,stdio:"ignore",windowsHide:true});child.unref();return true;}catch{return false;}
+  return new Promise(resolve=>{
+    let settled=false,timer=null;
+    const finish=value=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);resolve(value);};
+    try{
+      const child=spawn(command[0],command[1],{detached:true,stdio:"ignore",windowsHide:true});
+      child.once("spawn",()=>{try{child.unref();}catch{}timer=setTimeout(()=>finish(true),750);});
+      child.once("exit",(code,signal)=>finish(!signal&&Number(code||0)===0));
+      child.once("error",()=>finish(false));
+    }catch{finish(false);}
+  });
 }
 async function authorizeInteractive({preservePreviousRefresh=true}={}){
   const resolved=recoverClient();
@@ -181,9 +200,14 @@ async function authorizeInteractive({preservePreviousRefresh=true}={}){
     code_challenge:challenge,
     code_challenge_method:"S256"
   }).toString();
-  lastAuthEvent={type:"interactive-reauthorization-started",at:new Date().toISOString(),authUrl:authUrl.toString()};
-  const browserOpened=openBrowser(authUrl.toString());
-  if(!browserOpened){server.close();const error=new Error("Google authorization URL could not be opened in the default browser.");error.code="AUTH_BROWSER_OPEN_FAILED";error.authUrl=authUrl.toString();throw error;}
+  emitAuthEvent("google.auth.reconnect_opening",{message:"Opening secure reconnection"});
+  const browserOpened=await openBrowser(authUrl.toString());
+  if(!browserOpened){
+    emitAuthEvent("google.auth.manual_url",{
+      message:"Google authorization could not open automatically. Open the secure authorization link to continue.",
+      authUrl:authUrl.toString()
+    });
+  }
   const timeout=setTimeout(()=>rejectCallback(Object.assign(new Error("Google authorization timed out."),{code:"AUTH_TIMEOUT"})),180000);
   let code;
   try{code=await callback;}finally{clearTimeout(timeout);server.close();}
@@ -192,7 +216,7 @@ async function authorizeInteractive({preservePreviousRefresh=true}={}){
   if(!refreshOf(stored))throw Object.assign(new Error("Google returned no durable refresh token. Revoke the old ULTRON grant and authorize again."),{code:"REFRESH_TOKEN_MISSING"});
   if(missingScopes(stored).length)throw Object.assign(new Error("Google authorization did not grant all required Workspace scopes."),{code:"SCOPE_UPGRADE_REQUIRED",missingScopes:missingScopes(stored)});
   atomicJson(canonicalTokenPath,stored);
-  lastAuthEvent={type:"interactive-reauthorization-complete",at:new Date().toISOString()};
+  emitAuthEvent("google.auth.connected",{message:"Workspace connected"});
   return stored;
 }
 async function authorizeInteractiveOnce(options={}){
@@ -239,7 +263,7 @@ async function ensureReady(options={}){
     }catch(error){
       if(error.code==="TEMPORARY_NETWORK_FAILURE")return Promise.reject(error);
       if(!["REFRESH_TOKEN_REJECTED","CREDENTIALS_INVALID","AUTH_DENIED"].includes(String(error.code)))throw error;
-      lastAuthEvent={type:"refresh-rejected",code:error.code,at:new Date().toISOString()};
+      emitAuthEvent("google.auth.expired",{message:"Authorization expired",code:error.code});
       if(!interactive)return{ok:false,state:error.code==="REFRESH_TOKEN_REJECTED"?"REFRESH_TOKEN_REJECTED":"AUTH_REQUIRED",durable:false,reauthRequired:true};
       token=await authorizeInteractiveOnce({preservePreviousRefresh:false});
       return{ok:true,state:"READY",durable:true,reauthorized:true,tokenExpiresAt:expiryMs(token)};
@@ -268,5 +292,5 @@ function status(){
 export const mark4GoogleAuth={
   mark4Root,projectRoot,hermesHome,canonicalClientPath,canonicalTokenPath,backupTokenPath,
   requiredScopes:GOOGLE_WORKSPACE_SCOPES,
-  recoverClient,loadToken,status,ensureReady,authorizeInteractive:authorizeInteractiveOnce
+  recoverClient,loadToken,status,ensureReady,authorizeInteractive:authorizeInteractiveOnce,setEventSink
 };
