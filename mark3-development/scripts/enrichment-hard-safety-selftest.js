@@ -26,6 +26,7 @@ const safety = require('../core/enrichment-request-safety');
 const threePoc = require('../core/three-poc-enrichment-operator');
 const localExcel = require('../core/local-excel-operator');
 const bootstrap = require('../core/lead-enrichment-bootstrap');
+const commandControl = require('../core/command-control-plane');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -55,6 +56,19 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     assert.equal(layout.third, null);
 
     const exactCommand = '@New_Sheet_14-09-25 sheet - Arya-24 sept enrich this sheet with 1st poc and 2nd poc details and dont delete any lead';
+    const attachment = {
+      id: 'file-1',
+      name: 'New_Sheet_14-09-25.xlsx',
+      mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      source: 'local',
+    };
+    const claim = commandControl.claim(exactCommand, { attachments: [attachment] });
+    assert.equal(claim.owned, true);
+    assert.equal(claim.domain, 'three-poc-spreadsheet');
+    const parsedRequest = bootstrap.isThreePocRequest(exactCommand, { attachments: [attachment] });
+    assert.equal(parsedRequest.provider, 'local-excel');
+    assert.equal(parsedRequest.sheetName, 'Arya-24 sept');
+    assert.match(parsedRequest.url, /^vault:file-1$/);
     assert.equal(bootstrap.requestedSheetName(exactCommand), 'Arya-24 sept');
     const selectedTarget = threePoc.selectCompatibleSheets([
       { sheetName: 'Divya', schema: 'explicit_two_poc' },
