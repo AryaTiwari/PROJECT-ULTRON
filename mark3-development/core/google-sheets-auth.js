@@ -9,6 +9,18 @@ const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 let sessionValidated = false;
 let lastAuthEvent = null;
 let interactiveAuthorizationInFlight = null;
+let authEventSink = null;
+
+function emitAuthEvent(type, payload = {}) {
+  const event = { type, at: new Date().toISOString(), ...payload };
+  lastAuthEvent = event;
+  try { authEventSink?.(type, event); } catch {}
+  return event;
+}
+
+function setEventSink(sink) {
+  authEventSink = typeof sink === 'function' ? sink : null;
+}
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -177,6 +189,7 @@ async function refresh(token) {
     throw error;
   }
   const client = oauthClient();
+  emitAuthEvent('google_auth_refreshing', { message: 'Refreshing Google Sheets session' });
   const fresh = await tokenRequest({
     client_id: client.clientId,
     client_secret: client.clientSecret,
@@ -190,6 +203,7 @@ async function refresh(token) {
     expires_at: Date.now() + Math.max(60, Number(fresh.expires_in || 3600)) * 1000,
   };
   saveToken(merged);
+  emitAuthEvent('google_auth_restored', { message: 'Google Sheets session restored' });
   return merged;
 }
 
@@ -286,14 +300,13 @@ async function ensureAccessToken(options = {}) {
     return await accessToken({ forceRefresh: Boolean(options.forceRefresh) });
   } catch (error) {
     if (!interactive || !requiresInteractiveReauth(error)) throw error;
-    lastAuthEvent = {
-      type: 'interactive-reauthorization-started',
-      at: new Date().toISOString(),
+    emitAuthEvent('google_auth_expired', {
+      message: 'Google authorization expired',
       reason: error.authReason || error.code || 'authorization_required',
-    };
+    });
     await authorizeInteractiveOnce();
     const token = await accessToken({ forceRefresh: false });
-    lastAuthEvent = { type: 'interactive-reauthorization-complete', at: new Date().toISOString() };
+    emitAuthEvent('google_auth_connected', { message: 'Google Sheets connected' });
     return token;
   }
 }
@@ -308,8 +321,27 @@ function openBrowser(url) {
     : process.platform === 'darwin'
       ? ['open', [url]]
       : ['xdg-open', [url]];
-  const child = spawn(command[0], command[1], { detached: true, stdio: 'ignore', windowsHide: true });
-  child.unref();
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+    try {
+      const child = spawn(command[0], command[1], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.once('spawn', () => {
+        try { child.unref(); } catch {}
+        timer = setTimeout(() => finish(true), 750);
+      });
+      child.once('exit', (code, signal) => finish(!signal && Number(code || 0) === 0));
+      child.once('error', () => finish(false));
+    } catch {
+      finish(false);
+    }
+  });
 }
 
 async function authorizeInteractive() {
@@ -361,8 +393,15 @@ async function authorizeInteractive() {
     code_challenge_method: 'S256',
   }).toString();
 
+  emitAuthEvent('google_auth_reconnect_opening', { message: 'Opening secure Google reconnection' });
   console.log('Opening Google authorization in your browser...');
-  openBrowser(authUrl.toString());
+  const browserOpened = await openBrowser(authUrl.toString());
+  if (!browserOpened) {
+    emitAuthEvent('google_auth_manual_url', {
+      message: 'Google authorization could not open automatically. Open the secure authorization link to continue.',
+      authUrl: authUrl.toString(),
+    });
+  }
 
   let code;
   const timeout = setTimeout(() => rejectCallback(new Error('Google authorization timed out.')), 180_000);
@@ -399,7 +438,7 @@ async function authorizeInteractive() {
 
   const file = saveToken(stored);
   sessionValidated = true;
-  lastAuthEvent = { type: 'interactive-authorization-success', at: new Date().toISOString() };
+  emitAuthEvent('google_auth_connected', { message: 'Google Sheets connected' });
   return {
     ok: true,
     tokenPath: file,
@@ -451,6 +490,7 @@ module.exports = {
   accessToken,
   ensureAccessToken,
   authorizeInteractive,
+  setEventSink,
   oauthErrorCode,
   tokenRequest,
 };
