@@ -64,6 +64,7 @@ async function ensureGoogleWorkspace(options={}){
   if(!auth.ok){const error=new Error("Google Workspace authorization is required. Preserve the research mission and retry after connection; do not discard gathered work.");error.code="GOOGLE_AUTH_REQUIRED";error.authState=auth.state;error.workspace=auth;throw error;}
   return auth;
 }
+export function setGoogleWorkspaceAuthEventSink(sink){mark4GoogleAuth.setEventSink(sink);}
 export async function googleWorkspaceConnect(){return ensureGoogleWorkspace({interactive:true,forceReauth:true});}
 async function gapi(args,options={}){
   await ensureGoogleWorkspace({interactive:true,forceRefresh:Boolean(options.forceRefresh)});
