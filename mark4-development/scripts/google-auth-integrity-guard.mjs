@@ -41,6 +41,7 @@ for(const target of [
 
 const recovery=fs.readFileSync(path.join(root,"services/capability-host/src/google-auth-recovery.mjs"),"utf8");
 const workspace=fs.readFileSync(path.join(root,"services/capability-host/src/workspace.mjs"),"utf8");
+const server=fs.readFileSync(path.join(root,"services/capability-host/src/server.mjs"),"utf8");
 const mission=fs.readFileSync(path.join(root,"services/gateway/src/apollo-company-mission.mjs"),"utf8");
 const checks=[
   ["source-root",recovery,/import\.meta\.url/],
@@ -55,6 +56,9 @@ const checks=[
   ["pkce",recovery,/code_challenge_method:"S256"/],
   ["workspace-self-heal",workspace,/ensureGoogleWorkspace/],
   ["workspace-retry",workspace,/authRetried/],
+  ["workspace-connect-export",workspace,/export async function googleWorkspaceConnect/],
+  ["capability-connect-import",server,/import \{[^}]*googleWorkspaceConnect[^}]*\} from "\.\/workspace\.mjs";/],
+  ["capability-connect-route",server,/name==="ultron_google_workspace_connect"[^\n]*googleWorkspaceConnect\(\)/],
   ["mission-google-preflight",mission,/googleSheetPreflight/]
 ];
 for(const [name,source,pattern] of checks)if(!pattern.test(source))fail(`${name} contract missing`);
