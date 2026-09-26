@@ -11,7 +11,10 @@
     "server.js",
     "interface/app.js",
     "interface/style.css",
-    "scripts/google-sheets-auth-resilience-selftest.js"
+    "scripts/google-sheets-auth-resilience-selftest.js",
+    "core/apollo-lead-domain-controller.js",
+    "core/apollo-lead-mission-store.js",
+    "core/apollo-lead-mission-runner.js"
   ],
   "guarantees": [
     "stable project-root credential paths",
@@ -24,6 +27,10 @@
     "semantic Google auth events cross SSE without access tokens, refresh tokens, or OAuth client secrets",
     "developer CLI prints the safe authorization URL when automatic browser launch fails",
     "stored OAuth client identity is validated before token reuse",
-    "explicitly incompatible Google Sheets scopes require renewed consent"
+    "explicitly incompatible Google Sheets scopes require renewed consent",
+    "Google Sheet preflight occurs before Apollo paid approval/search can start",
+    "Apollo company candidates are checkpointed before Google Sheet projection",
+    "mission intent and Sheet target remain durable across auth interruption",
+    "runtime restart never silently replays an approval-scoped paid Apollo operation"
   ]
 }
