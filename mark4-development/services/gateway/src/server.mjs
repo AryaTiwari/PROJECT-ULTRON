@@ -54,8 +54,25 @@ function parseSse(block){
   for(const line of block.split(/\r?\n/)){if(line.startsWith("event:"))type=line.slice(6).trim();else if(line.startsWith("data:"))data.push(line.slice(5).trim());}
   if(!data.length)return null;const raw=data.join("\n");try{return{type,data:JSON.parse(raw)};}catch{return{type,data:{raw}};}
 }
+const UI_TELEMETRY=new Set(["voice.listening","voice.transcribing","voice.transcribed","voice.speaking","voice.idle","voice.error"]);
+function createMissionObserved(input){const mission=createMission(input);publish("mission.started",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state});return mission;}
+function updateMissionObserved(id,patch){const mission=updateMission(id,patch);if(mission)publish(mission.status==="completed"?"mission.completed":"mission.updated",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state,nextAction:mission.nextAction});return mission;}
+function addEvidenceObserved(input){const evidence=addEvidence(input);publish("evidence.recorded",{missionId:input.missionId,kind:evidence.kind,source:evidence.source,verified:evidence.verified});return evidence;}
+function skillForTool(data={}){
+  const raw=String(data.tool_name||data.tool||data.name||data.display_name||"").toLowerCase();
+  if(/apollo|lead|contact|enrich/.test(raw))return"Apollo Lead Intelligence";
+  if(/google|sheet|drive|workspace/.test(raw))return"Google Workspace Operations";
+  if(/linkedin/.test(raw))return"LinkedIn Company Research";
+  if(/creator|instagram/.test(raw))return"Elevate Creator Research";
+  if(/github|code|terminal|file|patch|build/.test(raw))return"Coding & Publishing";
+  if(/reel|ffmpeg|video|media|image/.test(raw))return"Media Production";
+  if(/memory|context/.test(raw))return"Memory & Context";
+  if(/web|browser|search|research/.test(raw))return"Adaptive Research";
+  return"Hermes Native Capability";
+}
 async function proxyChat(req,res,sessionId,input){
   const role=String(input.role||"cognition"),missionId=input.missionId||null;
+  publish("request.received",{sessionId,missionId,role,characters:String(input.input||"").length});
   const basePayload={input:String(input.input||""),session_id:sessionId};
   const started=Date.now(),controller=new AbortController();
   res.on("close",()=>{if(!res.writableEnded)controller.abort();});
@@ -75,7 +92,7 @@ async function proxyChat(req,res,sessionId,input){
       lastError=error;
       const classified=classifyModelError(error);
       recordModelMetric(candidate.id,{success:false,latencyMs:Date.now()-attemptStarted,errorClass:classified.errorClass,errorMessage:error.message,cooldownMs:classified.cooldownMs});
-      publish("model.route_failed",{sessionId,missionId,route:candidate.id,errorClass:classified.errorClass,error:error.message});
+      publish("model.route_failed",{sessionId,missionId,route:candidate.id,provider:candidate.provider||"Hermes",model:candidate.model||null,errorClass:classified.errorClass,error:error.message});
     }
   }
   if(!accepted||!selected){
@@ -88,13 +105,14 @@ async function proxyChat(req,res,sessionId,input){
   const runId=String(accepted.run_id||accepted.id||"");
   if(!runId) throw new Error("HERMES_RUN_ID_MISSING");
 
+  publish("model.selected",{sessionId,missionId,run_id:runId,route:selected.id,provider:selected.provider||"Hermes",model:selected.model||null,role});
   publish("run.started",{sessionId,missionId,run_id:runId,route:selected.id,role});
   if(missionId)addEvent({missionId,type:"run.started",payload:{sessionId,run_id:runId,route:selected.id,role}});
 
   res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache, no-transform","Connection":"keep-alive","X-Accel-Buffering":"no"});
   res.write(`event: run.started\ndata: ${JSON.stringify({run_id:runId,session_id:sessionId,route:selected.id,role})}\n\n`);
 
-  let outcomeRecorded=false;
+  let outcomeRecorded=false;const selectedSkills=new Set();
   try{
     const upstream=await hermes.runEvents(runId,controller.signal);
     const decoder=new TextDecoder();let buffer="";
@@ -107,6 +125,7 @@ async function proxyChat(req,res,sessionId,input){
         const evt=normalizeRunEvent(parsed.type,parsed.data,runId);
         res.write(`event: ${evt.type}\ndata: ${JSON.stringify(evt.data)}\n\n`);
         publish(evt.type,{sessionId,missionId,...evt.data});
+        if(evt.type==="tool.started"){const skill=skillForTool(evt.data);if(!selectedSkills.has(skill)){selectedSkills.add(skill);publish("skill.selected",{sessionId,missionId,run_id:runId,skill,tool:evt.data?.tool_name||evt.data?.tool||evt.data?.name||null});}}
         if(missionId&&evt.type!=="assistant.delta")addEvent({missionId,type:evt.type,payload:evt.data});
 
         if(evt.type==="run.completed"){
@@ -150,6 +169,7 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,`http://${req.headers.host||"localhost"}`),p=parts(url.pathname);
   try{
     if(req.method==="GET"&&url.pathname==="/api/live"){res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache","Connection":"keep-alive"});return subscribe(res);}
+    if(req.method==="POST"&&url.pathname==="/api/telemetry"){const input=await body(req,10000),type=String(input.type||"");if(!UI_TELEMETRY.has(type))return json(res,400,{error:"TELEMETRY_TYPE_NOT_ALLOWED"});publish(type,{source:"browser",...(input.data||{})});return json(res,202,{ok:true});}
     if(req.method==="GET"&&url.pathname==="/api/ready"){
       const health=await hermes.health();
       if(!health.ok)return json(res,503,{ok:false,stage:"hermes-health",health});
@@ -182,13 +202,13 @@ const server=http.createServer(async(req,res)=>{
     }
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="POST"&&p[3]==="chat")return await proxyChat(req,res,p[2],await body(req));
     if(req.method==="GET"&&url.pathname==="/api/missions")return json(res,200,listMissions());
-    if(req.method==="POST"&&url.pathname==="/api/missions")return json(res,201,createMission(await body(req)));
+    if(req.method==="POST"&&url.pathname==="/api/missions")return json(res,201,createMissionObserved(await body(req)));
     if(req.method==="POST"&&url.pathname==="/api/attachments")return json(res,201,saveAttachment(await body(req,15_000_000)));
     if(req.method==="GET"&&url.pathname==="/api/leads")return json(res,200,{items:listLeads({status:url.searchParams.get("status"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:leadStats(url.searchParams.get("target"))});
     if(req.method==="GET"&&url.pathname==="/api/creators")return json(res,200,{items:listCreators({status:url.searchParams.get("status"),niche:url.searchParams.get("niche"),query:url.searchParams.get("q"),limit:url.searchParams.get("limit")||100}),stats:creatorStats(url.searchParams.get("target"))});
     if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="GET"){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2]),events:listEvents({missionId:p[2],limit:300})}):json(res,404,{error:"MISSION_NOT_FOUND"});}
-    if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="PATCH"){const m=updateMission(p[2],await body(req));return m?json(res,200,m):json(res,404,{error:"MISSION_NOT_FOUND"});}
-    if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="approval"&&req.method==="POST")return json(res,200,await hermes.approval(p[2],await body(req)));
+    if(p[0]==="api"&&p[1]==="missions"&&p[2]&&req.method==="PATCH"){const m=updateMissionObserved(p[2],await body(req));return m?json(res,200,m):json(res,404,{error:"MISSION_NOT_FOUND"});}
+    if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="approval"&&req.method==="POST"){const input=await body(req),result=await hermes.approval(p[2],input);publish("approval.granted",{run_id:p[2],request_id:input.request_id,choice:input.choice});return json(res,200,result);}
     if(p[0]==="api"&&p[1]==="runs"&&p[2]&&p[3]==="stop"&&req.method==="POST")return json(res,200,await hermes.stopRun(p[2]));
     if(p[0]==="internal"){
       if(!internal(req))return json(res,401,{error:"UNAUTHORIZED"});
@@ -201,10 +221,10 @@ const server=http.createServer(async(req,res)=>{
       if(p[1]==="leads"&&p[2]&&req.method==="GET") {
         const lead=getLead(decodeURIComponent(p[2]));return lead?json(res,200,lead):json(res,404,{error:"LEAD_NOT_FOUND"});
       }
-      if(req.method==="POST"&&url.pathname==="/internal/missions")return json(res,201,createMission(await body(req)));
+      if(req.method==="POST"&&url.pathname==="/internal/missions")return json(res,201,createMissionObserved(await body(req)));
       if(p[1]==="missions"&&p[2]&&req.method==="GET"&&p.length===3){const m=getMission(p[2]);return m?json(res,200,{...m,evidence:listEvidence(p[2]),events:listEvents({missionId:p[2],limit:300})}):json(res,404,{error:"MISSION_NOT_FOUND"});}
-      if(p[1]==="missions"&&p[2]&&req.method==="PATCH"&&p.length===3){const m=updateMission(p[2],await body(req));return m?json(res,200,m):json(res,404,{error:"MISSION_NOT_FOUND"});}
-      if(p[1]==="missions"&&p[2]&&p[3]==="evidence"&&req.method==="POST")return json(res,201,addEvidence({missionId:p[2],...(await body(req))}));
+      if(p[1]==="missions"&&p[2]&&req.method==="PATCH"&&p.length===3){const m=updateMissionObserved(p[2],await body(req));return m?json(res,200,m):json(res,404,{error:"MISSION_NOT_FOUND"});}
+      if(p[1]==="missions"&&p[2]&&p[3]==="evidence"&&req.method==="POST")return json(res,201,addEvidenceObserved({missionId:p[2],...(await body(req))}));
       if(req.method==="GET"&&url.pathname==="/internal/events")return json(res,200,listEvents({after:url.searchParams.get("after")||0}));
     }
     if(url.pathname.startsWith("/api/")||url.pathname.startsWith("/internal/"))return json(res,404,{error:"NOT_FOUND"});

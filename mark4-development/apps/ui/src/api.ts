@@ -33,7 +33,8 @@ export const api = {
   updateMission: (id: string, patch: Record<string, unknown>) => request("/api/missions/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(patch) }),
   uploadAttachment: async (file: File): Promise<AttachmentRef> => request("/api/attachments", { method: "POST", body: JSON.stringify({ name: file.name, type: file.type, data: await fileData(file) }) }),
   approve: (runId: string, requestId: string, choice: string) => request("/api/runs/" + encodeURIComponent(runId) + "/approval", { method: "POST", body: JSON.stringify({ request_id: requestId, choice }) }),
-  stopRun: (runId: string) => request("/api/runs/" + encodeURIComponent(runId) + "/stop", { method: "POST", body: "{}" })
+  stopRun: (runId: string) => request("/api/runs/" + encodeURIComponent(runId) + "/stop", { method: "POST", body: "{}" }),
+  telemetry: (type: string, data: Record<string, unknown> = {}) => request("/api/telemetry", { method: "POST", body: JSON.stringify({ type, data }) })
 };
 
 function parseBlock(block: string) {
@@ -73,10 +74,17 @@ export async function streamChat(sessionId: string, input: Record<string, unknow
   if (trailing) onEvent(trailing.type, trailing.data);
 }
 
-export function liveEvents(onEvent: (type: string, data: any) => void) {
-  const source = new EventSource(BASE + "/api/live");
-  source.onmessage = event => { try { onEvent("message", JSON.parse(event.data)); } catch {} };
-  const known = ["connected","run.started","run.settled","run.failed","tool.started","tool.completed","subagent.start","subagent.complete","assistant.delta","assistant.completed","message.started","run.completed","run.cancelled","run.interrupted","tool.progress","tool.failed","approval.request","model.route_failed","evidence.recorded","mission.updated","done"];
-  for (const type of known) source.addEventListener(type, (event: any) => { try { onEvent(type, JSON.parse(event.data)); } catch {} });
-  return () => source.close();
+export function liveEvents(onEvent: (type: string, data: any) => void, onStatus?: (state: "online"|"recovering"|"offline") => void) {
+  let source: EventSource | null = null, stopped = false, attempt = 0, timer = 0;
+  const known = ["connected","request.received","model.selected","model.route_failed","skill.selected","run.started","run.settled","run.failed","tool.started","tool.completed","subagent.start","subagent.complete","assistant.delta","assistant.completed","message.started","run.completed","run.cancelled","run.interrupted","tool.progress","tool.failed","approval.request","approval.granted","model.route_failed","memory.loaded","evidence.recorded","mission.started","mission.updated","mission.completed","artifact.created","voice.listening","voice.transcribing","voice.transcribed","voice.speaking","voice.idle","error","done"];
+  const connect = () => {
+    if (stopped) return;
+    source = new EventSource(BASE + "/api/live");
+    source.onopen = () => { attempt = 0; onStatus?.("online"); };
+    source.onmessage = event => { try { onEvent("message", JSON.parse(event.data)); } catch {} };
+    for (const type of known) source.addEventListener(type, (event: any) => { try { onEvent(type, JSON.parse(event.data)); } catch {} });
+    source.onerror = () => { source?.close(); source = null; if (stopped) return; attempt += 1; onStatus?.(attempt > 2 ? "offline" : "recovering"); window.clearTimeout(timer); timer = window.setTimeout(connect, Math.min(15000, 750 * 2 ** Math.min(attempt, 5))); };
+  };
+  connect();
+  return () => { stopped = true; window.clearTimeout(timer); source?.close(); };
 }
