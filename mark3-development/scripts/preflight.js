@@ -75,9 +75,12 @@ if (!/CHAT_TRANSPORT_TIMEOUT_MS\s*=\s*45\s*\*\s*60\s*\*\s*1000/.test(chatTranspo
 if (!/X-Ultron-Request-Id/.test(chatTransport) || !/ENRICHMENT_RECONNECT_DELAYS_MS/.test(chatTransport)) throw new Error('Protected enrichment reconnect identity/retry policy is missing.');
 if (!/enrichmentRequestSafety\.execute/.test(serverSource) || !/\/api\/enrichment\/requests\//.test(serverSource)) throw new Error('Server-side enrichment idempotency/status gate is missing.');
 const enrichmentSafetySource = fs.readFileSync(path.join(root,'core','enrichment-request-safety.js'),'utf8');
-if (!/ENRICHMENT_REQUEST_INTERRUPTED_NO_REPLAY/.test(enrichmentSafetySource) || !/requestFingerprint/.test(enrichmentSafetySource)) throw new Error('Crash-safe enrichment request replay protection is incomplete.');
+if (!/ENRICHMENT_REQUEST_INTERRUPTED_NO_REPLAY/.test(enrichmentSafetySource) || !/ENRICHMENT_REQUEST_ID_REQUIRED/.test(enrichmentSafetySource) || !/requestFingerprint/.test(enrichmentSafetySource)) throw new Error('Crash-safe enrichment request replay protection is incomplete.');
 const threePocSource = fs.readFileSync(path.join(root,'core','three-poc-enrichment-operator.js'),'utf8');
+const leadBootstrapSource = fs.readFileSync(path.join(root,'core','lead-enrichment-bootstrap.js'),'utf8');
 if (!/explicit_two_poc/.test(threePocSource) || !/nonDestructive:\s*true/.test(threePocSource)) throw new Error('Two-POC compatibility or non-destructive write protection is missing.');
+if (!/selectCompatibleSheets\(compatible, options\.sheetName/.test(threePocSource) || !/requestedSheetName/.test(leadBootstrapSource)) throw new Error('Explicit worksheet targeting is not enforced end-to-end.');
+if (!/partial_safe_cap/.test(threePocSource) || !/resumeCappedJob/.test(threePocSource) || !/three-poc-enrichment-resume/.test(leadBootstrapSource)) throw new Error('Large-run POC checkpoint/resume safety is incomplete.');
 if (/\b(?:clearRows|deleteRows|deleteDimension|spliceRows)\s*\(/.test(threePocSource)) throw new Error('Destructive row operation detected in protected POC enrichment.');
 
 if (!/startBackgroundPhoneWatcher\(\)/.test(serverSource)) throw new Error('Production startup must resume pending enrichment callbacks.');
