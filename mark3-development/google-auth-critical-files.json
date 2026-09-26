@@ -1,0 +1,20 @@
+{
+  "contractVersion": "google-auth-contract-v1",
+  "runtime": "mark3",
+  "criticalFiles": [
+    "core/google-sheets-auth.js",
+    "core/google-sheets-operator.js",
+    "scripts/google-sheets-auth.js",
+    "scripts/google-sheets-auth-doctor.js",
+    "scripts/google-sheets-live-health.js",
+    "scripts/google-auth-integrity-guard.js"
+  ],
+  "guarantees": [
+    "stable project-root credential paths",
+    "refresh token preservation",
+    "atomic token writes and backup recovery",
+    "single forced refresh on HTTP 401",
+    "single-flight loopback PKCE reauthorization when durable auth is unrecoverable",
+    "no tracked OAuth secrets"
+  ]
+}
