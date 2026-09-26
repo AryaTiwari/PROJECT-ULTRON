@@ -15,6 +15,8 @@
   let lastChatInputMode = 'chat';
   let voiceSynthesisComplete = false;
   let lastSpeakingSeenAt = 0;
+  let pendingProtectedApproval = false;
+  try { pendingProtectedApproval = sessionStorage.getItem('ultron-m3-protected-approval-pending') === '1'; } catch {}
 
   function audioEnabled() {
     const button = document.querySelector('#voiceToggle');
@@ -135,11 +137,23 @@
     }
   }
 
+  function approvalReply(message = '') {
+    return /^(?:yes|y|approve|approved|proceed|continue|confirm|confirmed|do it|go ahead|okay|ok)\s*[.!]*$/i.test(String(message || '').trim());
+  }
+
   function protectedEnrichmentMessage(message = '') {
     const value = String(message || '');
     const source = /@[\w .()\-]{2,}|docs\.google\.com\/spreadsheets\/d\//i.test(value);
     const operation = /\b(?:enrich|enrichment|fill|populate|complete|repair|update|poc|apollo)\b/i.test(value);
-    return source && operation;
+    return (source && operation) || (pendingProtectedApproval && approvalReply(value));
+  }
+
+  function setPendingProtectedApproval(value) {
+    pendingProtectedApproval = Boolean(value);
+    try {
+      if (pendingProtectedApproval) sessionStorage.setItem('ultron-m3-protected-approval-pending', '1');
+      else sessionStorage.removeItem('ultron-m3-protected-approval-pending');
+    } catch {}
   }
 
   function requestId() {
@@ -257,6 +271,12 @@
         pendingReplyWindowMs = Math.max(explicitWindow, flowWindow);
         replyOpenDeadline = pendingReplyWindowMs ? Date.now() + Math.max(REPLY_OPEN_GRACE_MS, pendingReplyWindowMs + 8000) : 0;
         if (data?.operatingMode) setModeChip(data.operatingMode);
+        const operation = String(data?.paidToolApproval?.operation || '');
+        if (data?.paidToolApproval?.tool === 'apollo' && /enrich|poc|lead/i.test(operation)) {
+          setPendingProtectedApproval(true);
+        } else if (approvalReply(requestMessage(transportInit)) && protectedRequest.protectedRequest) {
+          setPendingProtectedApproval(false);
+        }
 
         // If audio is muted there is no TTS lifecycle to wait for. Otherwise the
         // SSE voice_completed/voice_error events below decide when flow can open.
@@ -313,5 +333,6 @@
   window.__ULTRON_PLAYBACK_SETTLE_MS = PLAYBACK_SETTLE_MS;
   window.__ULTRON_NORMALIZE_ARTIFACT_MESSAGE = normalizeArtifactMessage;
   window.__ULTRON_PROTECTED_ENRICHMENT_MESSAGE = protectedEnrichmentMessage;
+  window.__ULTRON_APPROVAL_REPLY = approvalReply;
   window.__ULTRON_ENRICHMENT_RECONNECT_DELAYS_MS = ENRICHMENT_RECONNECT_DELAYS_MS;
 })();
