@@ -987,6 +987,11 @@ async function enrichWorkbook(source, options = {}) {
     id: `three-poc-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
     source,
     provider,
+    requestedSheetName: String(options.sheetName || '').trim() || null,
+    startRowNumber: Number(options.startRowNumber || 0) || null,
+    rowLimit: null,
+    nextRowNumber: null,
+    remainingEligibleRows: 0,
     status: 'running',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -1003,6 +1008,11 @@ async function enrichWorkbook(source, options = {}) {
     spreadsheetUrl: provider === 'google' ? source : null,
     compatibleSheets: compatible.map((sheet) => sheet.sheetName),
     requestedSheetName: String(options.sheetName || '').trim() || null,
+    startRowNumber: Number(options.startRowNumber || 0) || null,
+    rowLimit: 0,
+    rowLimitReached: false,
+    remainingEligibleRows: 0,
+    nextRowNumber: null,
     maxPocSlots: Math.max(...compatible.map((sheet) => Number(sheet.layout?.slotCount || (sheet.layout?.third ? 3 : 2)))),
     scannedRows: 0,
     completedRows: 0,
@@ -1050,6 +1060,9 @@ async function enrichWorkbook(source, options = {}) {
   };
 
   const rowLimit = Math.max(1, Math.min(500, Number(options.rowLimit || process.env.ULTRON_M3_THREE_POC_ROW_LIMIT || 500)));
+  stats.rowLimit = rowLimit;
+  job.rowLimit = rowLimit;
+  saveState(state);
   const candidatePoolCache = new Map();
   const hiringCandidateTitles = [
     'recruiter', 'technical recruiter', 'talent acquisition', 'recruitment',
@@ -1092,12 +1105,17 @@ async function enrichWorkbook(source, options = {}) {
 
   for (const sheet of compatible) {
     const layout = sheet.layout;
-    const sheetStats = { scannedRows: 0, completedRows: 0, unresolvedRows: 0, failedRows: 0 };
+    const requestedStart = Math.max(layout.headerRowIndex + 2, Number(options.startRowNumber || 0) || (layout.headerRowIndex + 2));
+    const startIndex = requestedStart - 1;
+    let lastScannedIndex = startIndex - 1;
+    const sheetStats = { scannedRows: 0, completedRows: 0, unresolvedRows: 0, failedRows: 0, startRowNumber: requestedStart, lastScannedRowNumber: null };
     job.sheets[sheet.sheetName] = sheetStats;
-    for (let index = layout.headerRowIndex + 1; index < sheet.rows.length && stats.scannedRows < rowLimit; index++) {
+    for (let index = startIndex; index < sheet.rows.length && stats.scannedRows < rowLimit; index++) {
       const row = sheet.rows[index] || [];
       if (!row.some((value) => String(value ?? '').trim())) continue;
       const rowNumber = index + 1;
+      lastScannedIndex = index;
+      sheetStats.lastScannedRowNumber = rowNumber;
       stats.scannedRows++;
       sheetStats.scannedRows++;
       const context = rowContext(layout, row, sheet.sheetName, rowNumber);
@@ -1405,10 +1423,27 @@ async function enrichWorkbook(source, options = {}) {
         sheetStats.lastError = error.message;
       }
     }
+
+    if (stats.scannedRows >= rowLimit) {
+      let nextIndex = lastScannedIndex + 1;
+      while (nextIndex < sheet.rows.length && !(sheet.rows[nextIndex] || []).some((value) => String(value ?? '').trim())) nextIndex++;
+      if (nextIndex < sheet.rows.length) {
+        stats.rowLimitReached = true;
+        stats.nextRowNumber ||= nextIndex + 1;
+        const remaining = sheet.rows.slice(nextIndex).filter((row) => (row || []).some((value) => String(value ?? '').trim())).length;
+        stats.remainingEligibleRows += remaining;
+        sheetStats.remainingEligibleRows = remaining;
+        sheetStats.nextRowNumber = nextIndex + 1;
+      }
+    }
   }
 
   stats.agentModels = [...stats.agentModels];
-  job.status = stats.failedRows ? 'completed_with_errors' : (stats.pendingPhones ? 'waiting_for_phone_webhooks' : 'completed');
+  job.status = stats.rowLimitReached
+    ? 'partial_safe_cap'
+    : (stats.failedRows ? 'completed_with_errors' : (stats.pendingPhones ? 'waiting_for_phone_webhooks' : 'completed'));
+  job.nextRowNumber = stats.nextRowNumber;
+  job.remainingEligibleRows = stats.remainingEligibleRows;
   job.stats = stats;
   job.updatedAt = new Date().toISOString();
   saveState(state);
@@ -1421,6 +1456,30 @@ async function enrichWorkbook(source, options = {}) {
     status: job.status,
     backupPath,
   };
+}
+
+function latestCappedJob() {
+  const state = loadState();
+  return [...(state.jobs || [])].reverse().find((job) =>
+    job?.status === 'partial_safe_cap'
+    && job?.requestedSheetName
+    && Number.isInteger(Number(job?.nextRowNumber))
+    && Number(job.nextRowNumber) > 1
+  ) || null;
+}
+
+async function resumeCappedJob(options = {}) {
+  const previous = latestCappedJob();
+  if (!previous) {
+    const error = new Error('No safely checkpointed POC enrichment chunk is waiting to resume.');
+    error.code = 'THREE_POC_RESUME_NOT_FOUND';
+    throw error;
+  }
+  return enrichWorkbook(previous.source, {
+    sheetName: previous.requestedSheetName,
+    startRowNumber: Number(previous.nextRowNumber),
+    rowLimit: options.rowLimit || previous.rowLimit || undefined,
+  });
 }
 
 function pendingCount() {
@@ -1442,7 +1501,10 @@ function formatResult(result) {
   const anchoredWrites = result.anchoredRows
     ? ` Actual anchored writes: POC-1 F/G = ${result.poc1PhonesWritten || 0} phone, ${result.poc1EmailsWritten || 0} email; POC-2 H/I/J = ${result.poc2NamesWritten || 0} name/designation, ${result.poc2PhonesWritten || 0} phone, ${result.poc2EmailsWritten || 0} email; POC-3 K/L/M = ${result.poc3NamesWritten || 0} name/designation, ${result.poc3PhonesWritten || 0} phone, ${result.poc3EmailsWritten || 0} email. Existing POC slots repaired/upgraded: ${result.existingPocSlotsRepaired || 0}.`
     : '';
-  return `Agentic ${result.maxPocSlots || 3}-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${pending}${unresolved}`;
+  const cap = result.rowLimitReached
+    ? ` Safety cap reached after ${result.scannedRows} rows; ${result.remainingEligibleRows || 0} eligible row${Number(result.remainingEligibleRows || 0) === 1 ? '' : 's'} remain, checkpointed at row ${result.nextRowNumber}. A newly approved resume continues from that checkpoint and will not replay earlier rows.`
+    : '';
+  return `Agentic ${result.maxPocSlots || 3}-POC enrichment ${result.rowLimitReached ? 'chunk finished' : 'finished'}. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${pending}${unresolved}${cap}`;
 }
 
 module.exports = {
@@ -1478,6 +1540,8 @@ module.exports = {
   inspectSource,
   enrichWorkbook,
   syncPendingPhones,
+  latestCappedJob,
+  resumeCappedJob,
   startPhoneWatcher,
   pendingCount,
   formatResult,
