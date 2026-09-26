@@ -63,7 +63,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       source: 'local',
     };
     const claim = commandControl.claim(exactCommand, { attachments: [attachment] });
-    assert.equal(claim.owned, true);
+    assert.equal(claim.claimed, true);
     assert.equal(claim.domain, 'three-poc-spreadsheet');
     const parsedRequest = bootstrap.isThreePocRequest(exactCommand, { attachments: [attachment] });
     assert.equal(parsedRequest.provider, 'local-excel');
