@@ -128,6 +128,20 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       (error) => error?.code === 'ENRICHMENT_REQUEST_INTERRUPTED_NO_REPLAY',
     );
 
+    let missingIdExecutions = 0;
+    await assert.rejects(
+      () => safety.execute({
+        requestId: '',
+        requestFingerprint: 'fp-missing-id',
+        routeDomain: 'three-poc-spreadsheet',
+      }, async () => {
+        missingIdExecutions += 1;
+        return { ok: true };
+      }),
+      (error) => error?.code === 'ENRICHMENT_REQUEST_ID_REQUIRED' && Number(error?.status) === 428,
+    );
+    assert.equal(missingIdExecutions, 0, 'protected enrichment must fail closed before execution when request identity is absent');
+
     // Two browser submissions with the same mutation identity must join one
     // backend promise. This is the core protection against fetch reconnects.
     const requestId = 'enrich:concurrent-0001';
@@ -181,10 +195,17 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     assert.match(bootstrapSource, /sheetName:\s*decision\.payload\.sheetName/);
     assert.match(threePocSource, /selectCompatibleSheets\(compatible, options\.sheetName/);
     assert.match(serverSource, /enrichmentRequestSafety\.execute/);
+    assert.match(serverSource, /ENRICHMENT_REQUEST_ID_REQUIRED/);
     assert.match(serverSource, /x-ultron-request-id/);
     assert.match(transportSource, /X-Ultron-Request-Id/);
     assert.match(transportSource, /ENRICHMENT_RECONNECT_DELAYS_MS/);
+    assert.match(transportSource, /protected-approval-pending/);
+    assert.match(transportSource, /approvalReply/);
     assert.match(transportSource, /duplicate Apollo calls and spreadsheet writes were blocked/);
+    assert.match(threePocSource, /partial_safe_cap/);
+    assert.match(threePocSource, /resumeCappedJob/);
+    assert.match(bootstrapSource, /three-poc-enrichment-resume/);
+    assert.match(bootstrapSource, /fresh Apollo approval is required/);
 
     console.log('Enrichment hard-safety self-test passed: exact Arya-24 sept two-POC schema and worksheet targeting are supported, other tabs are fenced off, populated leads cannot be erased, reconnects are idempotent, and runtime interruption cannot silently replay paid/writing work.');
   } finally {
