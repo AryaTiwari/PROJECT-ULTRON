@@ -40,6 +40,9 @@ jobs:
       - name: Install Mark 3 dependencies
         working-directory: mark3-development
         run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Run Google auth integrity contract
+        working-directory: mark3-development
+        run: npm run check:google-auth-integrity
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight
