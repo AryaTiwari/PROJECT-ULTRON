@@ -208,7 +208,7 @@ async function request(url, options = {}) {
   let bodyReadAttempt = 0;
 
   while (true) {
-    const token = await auth.accessToken({ forceRefresh });
+    const token = await auth.ensureAccessToken({ forceRefresh, interactive: options.__interactiveAuth !== false });
     forceRefresh = false;
 
     let response;
