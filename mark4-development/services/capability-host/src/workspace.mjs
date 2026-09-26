@@ -48,7 +48,7 @@ export async function googleSetClientSecret(filePath){
   return{ok:result.code===0,stdout:result.stdout,stderr:result.stderr};
 }
 export async function googleAuthUrl(){
-  // Legacy compatibility alias. Hermes' old setup.py flow generated localhost:1
+  // Legacy compatibility alias. Hermes' old setup.py flow generated a browser-blocked low-numbered callback port
   // and Chromium blocks that callback as ERR_UNSAFE_PORT. Use ULTRON's own
   // ephemeral 127.0.0.1 PKCE flow instead.
   return googleWorkspaceConnect();
