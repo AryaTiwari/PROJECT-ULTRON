@@ -23,6 +23,8 @@ jobs:
         with:
           node-version: "22.19.0"
       - run: npm install
+      - name: Install Linux Sharp runtime
+        run: npm install --no-save @img/sharp-linux-x64@0.34.5 @img/sharp-libvips-linux-x64@1.2.4
       - name: Google auth integrity
         run: npm run check:google-auth-integrity
       - run: npm run check
