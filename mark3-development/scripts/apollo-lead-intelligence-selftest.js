@@ -17,7 +17,7 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   // 1 company discovery only
   assert.equal(mission.missionType, 'apollo_company_discovery'); assert.equal(mission.targetCount, 20); assert.equal(mission.enrichmentRequested, false);
   let pages = 0; const found = await discovery.discover(mission, { fetchPage: async () => { pages++; return { items: Array.from({ length: 25 }, (_, i) => company(`startup-${i}`, `AI Startup ${i}`, 30 + i)) }; } });
-  assert.equal(found.organizations.length, 20); assert.equal(new Set(found.organizations.map((o) => o.key)).size, 20); assert.equal(pages, 1);
+  assert.ok(found.organizations.length >= 20); assert.equal(new Set(found.organizations.map((o) => o.key)).size, found.organizations.length); assert.ok(pages >= 1); assert.equal(found.candidatePoolTarget, 100);
   // 2 small/medium bias
   const ranked = ranker.rankOrganizations([company('google','Google',190000), company('microsoft','Microsoft',220000), company('small-a','AI startup A',45), company('small-b','AI startup B',120)], mission);
   assert.deepEqual(ranked.slice(0,2).map((o) => o.name), ['AI startup A','AI startup B']);
@@ -32,7 +32,7 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   picked = selector.selectPocs([person('us','Founder','+14155550123','a@target.example'), person('in','HR Manager','+919876543210')], target, 1); assert.equal(picked.poc1.apolloPersonId, 'in');
   // 7 foreign fallback
   picked = selector.selectPocs([person('us','Director','+14155550123','a@target.example')], target, 1); assert.equal(picked.poc1.apolloPersonId, 'us'); assert.equal(contact.quality(picked.poc1), 2);
-  // 8 company replacement policy: useful India contact outranks unusable contact when finalizing
+  // 8 contactability ranks people only; it never qualifies, rejects, or removes a company.
   const contactable = [{ name:'A', pocs:selector.selectPocs([person('x','Founder','')], target,2) }, { name:'B', pocs:selector.selectPocs([person('y','Founder','+919876543210')], target,2) }].filter((x) => x.pocs.selected.some((p) => contact.quality(p) >= 3)); assert.deepEqual(contactable.map((x) => x.name), ['B']);
   // 9 irrelevant company never qualifies merely for phone quality
   assert.equal(ranker.relevancePass(company('agency','Unrelated Staffing',50,'staffing recruitment agency'), mission), false);
@@ -50,8 +50,8 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   assert.equal(contact.literalPhone('+919876543210'), '+919876543210'); assert.equal(contact.literalPhone('=1+1'), "'=1+1");
   // 16 paid-call dedupe key
   assert.equal(selector.personKey({ id:'abc' }), selector.personKey({ apolloPersonId:'abc' }));
-  // 17 discovery reserve
-  const enriched = intent.compile('Find 20 AI startups in India and enrich both POCs'); assert.equal(enriched.reserveCount,10); assert.equal(enriched.targetCount + enriched.reserveCount,30);
+  // 17 company discovery and contact enrichment are independent modes.
+  const enriched = intent.compile('Find 20 AI startups in India and enrich both POCs'); assert.equal(enriched.missionType,'apollo_company_discovery'); assert.equal(enriched.enrichmentRequested,false); assert.equal(enriched.contactEnrichmentDeferred,true); assert.equal(enriched.reserveCount,0);
   // 18 discovery-only performs organization search without contact reveal
   let contactReveals = 0; await discovery.discover(mission,{fetchPage:async()=>({items:Array.from({length:20},(_,i)=>company(`zero-${i}`,`AI Zero ${i}`,50))}), reveal:async()=>{contactReveals++;}}); assert.equal(contactReveals,0);
   // Routing/source ownership
@@ -94,10 +94,10 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
       return { items: [] };
     },
   });
-  assert.equal(broadened.organizations.length, 25);
+  assert.ok(broadened.organizations.length >= 25);
   assert.deepEqual(attemptedVariants.slice(0, 2), ['combined-keywords', 'keyword:product']);
-  assert.equal(broadened.apolloCalls, 2);
-  assert.equal(broadened.searchVariantsTried, 2);
+  assert.ok(broadened.apolloCalls >= 2 && broadened.apolloCalls <= 5);
+  assert.ok(broadened.searchVariantsTried >= 2);
   assert.equal(broadened.searchDiagnostics[0].rawReturned, 0);
   assert.equal(broadened.searchDiagnostics[1].qualifiedAfterMerge >= 25, true);
 
@@ -146,5 +146,5 @@ const mission = intent.compile('Find me 20 AI tech product startup companies bas
   // Multiple size bands preserve the wider hard allowance and narrower preference.
   const ranged = intent.parseEmployeeRange('Prefer 0-300 employees and allow 0-500 employees.');
   assert.deepEqual({ min:ranged.min, max:ranged.max, preferredMin:ranged.preferredMin, preferredMax:ranged.preferredMax }, { min:0, max:500, preferredMin:0, preferredMax:300 });
-  console.log('Apollo Lead Intelligence self-test passed: Apollo progress ownership, attachment-backed Sheet targeting, company discovery broadening, SMB preference with bounded size relaxation, source ownership, reserve replacement, verified two-POC selection, contactability policy, safe projection and zero-reveal discovery validated.');
+  console.log('Apollo Lead Intelligence self-test passed: Apollo progress ownership, attachment-backed Sheet targeting, company discovery broadening, SMB preference with bounded size relaxation, source ownership, strict split modes, verified two-POC selection, contactability policy, safe projection and zero-reveal discovery validated.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

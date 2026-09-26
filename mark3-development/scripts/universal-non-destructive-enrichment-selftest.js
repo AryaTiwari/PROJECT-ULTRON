@@ -41,7 +41,12 @@ const sheets = require('../core/google-sheets-operator');
         },
         {
           rowNumber: 3,
-          row: ['Company Without Indian POC', '', '', '+14155552671', '', '', ''],
+          row: ['Company With Foreign POC', '', '', '+14155552671', '', '', ''],
+          plan: { anchor: { type: 'company' } },
+        },
+        {
+          rowNumber: 4,
+          row: ['Company With No Phone', '', '', '', '', '', ''],
           plan: { anchor: { type: 'company' } },
         },
       ],
@@ -60,8 +65,9 @@ const sheets = require('../core/google-sheets-operator');
     assert.deepEqual(gate.acceptedRows, [2]);
     assert.deepEqual(gate.foreignFallbackRows, [3]);
     assert.deepEqual(gate.rejectedRows, []);
-    assert.deepEqual(gate.contactUnresolvedRows, []);
-    assert.deepEqual(gate.preservedCompanyRows, [3]);
+    assert.deepEqual(gate.unresolvedRows, [4]);
+    assert.deepEqual(gate.contactUnresolvedRows, [4]);
+    assert.deepEqual(gate.preservedCompanyRows, [3, 4]);
     assert.equal(gate.clearedRows, 0);
     assert.equal(gate.companyRowDeletionAllowed, false);
     assert.equal(gate.nonDestructive, true);
@@ -79,7 +85,7 @@ const sheets = require('../core/google-sheets-operator');
     assert.doesNotMatch(reportSource, /rejected and .* cleared/);
     assert.match(controllerSource, /existing company row is always preserved/);
 
-    console.log('Non-destructive enrichment self-test passed: Indian-number/contactability failures preserve existing company rows, never call clearRows, and use verified foreign fallback when available, and report no-phone contacts as unresolved only.');
+    console.log('Non-destructive enrichment self-test passed: +91, foreign-only and no-phone cases preserve all existing company rows, never call clearRows, and use verified foreign fallback when available, and report no-phone contacts as unresolved only.');
   } finally {
     base.readUniversalSheet = originals.readUniversalSheet;
     base.pendingPhoneRowsForSource = originals.pendingPhoneRowsForSource;

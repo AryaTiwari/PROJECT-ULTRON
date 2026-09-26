@@ -85,10 +85,11 @@ async function fetchPage(mission, page = 1, perPage = 100, variant = {}) {
 }
 
 async function discover(mission, options = {}) {
-  const target = Math.min(100, mission.targetCount + (mission.reserveCount || 0));
+  const requestedTarget = Math.min(100, Math.max(1, Number(mission.targetCount || 1)));
+  const poolTarget = Math.min(500, Math.max(100, requestedTarget * 4));
   const pageFn = options.fetchPage || fetchPage;
   const maxCalls = Math.max(1, Math.min(10, Number(options.maxSearchCalls || 7)));
-  const perPage = Math.min(100, Math.max(25, Math.min(100, target * 2)));
+  const perPage = 100;
   const variants = options.searchVariants || buildSearchVariants(mission);
 
   const rawByKey = new Map();
@@ -97,9 +98,9 @@ async function discover(mission, options = {}) {
   let ranked = [];
 
   for (const variant of variants) {
-    if (calls >= maxCalls || ranked.length >= target) break;
+    if (calls >= maxCalls || ranked.length >= poolTarget) break;
 
-    for (let page = 1; page <= 2 && calls < maxCalls && ranked.length < target; page++) {
+    for (let page = 1; page <= 2 && calls < maxCalls && ranked.length < poolTarget; page++) {
       const result = await pageFn(mission, page, perPage, variant);
       calls++;
 
@@ -137,7 +138,8 @@ async function discover(mission, options = {}) {
           qualified: ranked.length,
           searchVariantsTried: diagnostics.length,
           apolloCalls: calls,
-          target,
+          target: requestedTarget,
+          candidatePoolTarget: poolTarget,
         });
       }
 
@@ -148,7 +150,7 @@ async function discover(mission, options = {}) {
   }
 
   return {
-    organizations: ranked.slice(0, target),
+    organizations: ranked.slice(0, poolTarget),
     candidatesFound: rawByKey.size,
     qualified: ranked.length,
     rejected: Math.max(0, rawByKey.size - ranked.length),
@@ -156,6 +158,8 @@ async function discover(mission, options = {}) {
     paidCalls: calls,
     searchVariantsTried: diagnostics.length,
     searchDiagnostics: diagnostics,
+    requestedTarget,
+    candidatePoolTarget: poolTarget,
   };
 }
 

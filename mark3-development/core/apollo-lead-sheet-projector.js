@@ -66,9 +66,24 @@ async function project(compiled, records = [], options = {}) {
   }
   const info = await inspect(compiled); const columns = schemaColumns(info);
   if (!Number.isInteger(columns.companyName) && !Number.isInteger(columns.personGroups?.[0]?.fields?.name?.index)) throw Object.assign(new Error('No recognized company or person-name heading exists in the target worksheet.'), { code: 'APOLLO_LEAD_COLUMN_NOT_FOUND' });
-  const existing = new Set(info.rows.slice(info.headerRowIndex + 1).map((row) => companyKey(row[columns.companyName])).filter(Boolean));
+  const existing = new Set();
+  for (const rowValues of info.rows.slice(info.headerRowIndex + 1)) {
+    for (const index of [columns.companyName, columns.companyLink, columns.website]) {
+      if (!Number.isInteger(index)) continue;
+      const key = companyKey(rowValues[index]);
+      if (key) existing.add(key);
+    }
+  }
   const changes = []; let row = Math.max(info.rows.length + 1, info.headerRowNumber + 1); let skippedDuplicates = 0; const written = [];
-  for (const record of records) { const key = companyKey(record.id || record.domain || record.linkedinUrl || record.name); const nameKey = companyKey(record.name); if (!key || existing.has(key) || existing.has(nameKey)) { skippedDuplicates++; continue; } const values = rowValues(record, columns, options.includePeople); if (!values.size) continue; for (const [column, value] of values) changes.push({ range: cell(info.target.name, row, column), value }); existing.add(key); existing.add(nameKey); written.push({ row, record, values }); row++; }
+  for (const record of records) {
+    const keys = [record.name, record.domain, record.linkedinUrl, record.companyLink, record.website].map(companyKey).filter(Boolean);
+    if (!keys.length || keys.some((key) => existing.has(key))) { skippedDuplicates++; continue; }
+    const values = rowValues(record, columns, options.includePeople);
+    if (!values.size) continue;
+    for (const [column, value] of values) changes.push({ range: cell(info.target.name, row, column), value });
+    for (const key of keys) existing.add(key);
+    written.push({ row, record, values }); row++;
+  }
   if (written.length && info.target.sheetId != null) await sheets.ensureGridSize(info.id, info.target.sheetId, { minRows: row + 5, minColumns: Math.max(info.headers.length, 2) });
   const result = await sheets.writeCells(info.id, changes);
   const rereadRanges = written.map((entry) => `${sheets.quoteSheet(info.target.name)}!A${entry.row}:${sheets.columnName(Math.max(0, info.headers.length - 1))}${entry.row}`);
@@ -89,6 +104,7 @@ async function project(compiled, records = [], options = {}) {
     writtenRows: written.map((w) => w.row),
     rereadRows: verified.length,
     liveVerified,
+    companyFieldsWritten: changes.length,
   };
 }
 

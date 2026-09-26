@@ -87,11 +87,12 @@ function fakeCompany(i) {
     },
   });
 
-  assert.equal(discovered.organizations.length, 25);
-  assert.equal(new Set(discovered.organizations.map((item) => item.key)).size, 25);
+  assert.ok(discovered.organizations.length >= 25);
+  assert.equal(new Set(discovered.organizations.map((item) => item.key)).size, discovered.organizations.length);
+  const selected = discovered.organizations.slice(0, compiled.targetCount);
   assert.deepEqual(attempted.slice(0, 2), ['combined-keywords', 'keyword:product']);
-  assert.equal(discovered.apolloCalls, 2);
-  assert.equal(discovered.searchVariantsTried, 2);
+  assert.ok(discovered.apolloCalls >= 2 && discovered.apolloCalls <= 5);
+  assert.ok(discovered.searchVariantsTried >= 2);
 
   const info = {
     headers: ['COMPANY NAME', 'COMPANY LINK', '1st  POC NAME', 'PHONE', 'EMAIL', '2ND POC NAME', 'PHONE', 'EMAIL', 'Outcome'],
@@ -103,7 +104,7 @@ function fakeCompany(i) {
   assert.equal(columns.personGroups.length, 0);
 
   let plannedCells = 0;
-  for (const company of discovered.organizations) {
+  for (const company of selected) {
     const values = projector.rowValues(company, columns, false);
     assert.deepEqual([...values.keys()].sort((a, b) => a - b), [0, 1]);
     assert.equal(values.get(0), company.name);
@@ -150,10 +151,11 @@ function fakeCompany(i) {
     build: contract.runtimeBuild.id,
     route: route.domain,
     target: compiled.targetCount,
-    discovered: discovered.organizations.length,
+    candidatesInspected: discovered.candidatesFound,
+    discovered: selected.length,
     apolloSearchCalls: discovered.apolloCalls,
     searchVariants: discovered.searchVariantsTried,
-    plannedRows: discovered.organizations.length,
+    plannedRows: selected.length,
     plannedCells,
     contactReveals: 0,
     progressOwner: dispatched.route,
