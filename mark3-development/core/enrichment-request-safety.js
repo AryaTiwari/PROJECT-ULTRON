@@ -111,7 +111,12 @@ function safetyError(code, message, hint, status = 409) {
 async function execute({ requestId, requestFingerprint, routeDomain = '' } = {}, fn) {
   if (typeof fn !== 'function') throw new TypeError('Protected enrichment execution requires a function.');
   const id = validateRequestId(requestId);
-  if (!id) return fn();
+  if (!id) throw safetyError(
+    'ENRICHMENT_REQUEST_ID_REQUIRED',
+    'Protected enrichment requires a stable request identity before any paid call or spreadsheet write can start.',
+    'Reload the Mark 3 interface so it can attach the protected request ID, then retry. Nothing was executed.',
+    428,
+  );
   const fp = text(requestFingerprint);
   if (!fp) throw safetyError(
     'ENRICHMENT_REQUEST_FINGERPRINT_MISSING',
