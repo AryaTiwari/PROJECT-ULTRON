@@ -11,6 +11,10 @@ const inspector = require('./universal-sheet-inspector');
 const approvalHandler = require('./universal-paid-approval-handler');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 const runtimeBuild = require('./runtime-build');
+const crypto = require('crypto');
+const enrichmentMissions = require('./universal-enrichment-mission-store');
+const enrichmentWriteScope = require('./universal-enrichment-write-scope');
+const apolloBudget = require('./universal-apollo-budget');
 
 approvalHandler.install();
 
@@ -345,6 +349,8 @@ async function inspect(sheetUrl, sheetName, rowLimit, options = {}) {
 }
 
 async function handle(message, context = {}) {
+  const control = require('./universal-enrichment-control-plane');
+  if (control.isControlRequest(message)) return control.handle(message);
   const original = String(context.originalMessage || message || '');
   const sheetUrl = sheets.extractSheetUrl(original) || sheets.extractSheetUrl(message);
   if (!sheetUrl) {
@@ -422,14 +428,44 @@ async function handle(message, context = {}) {
     requireIndianPhone,
     indianPhonePolicySource,
     requestedAt: new Date().toISOString(),
+    originalMessage: original,
   };
 
-  const approval = paidTools.request(
+  const writeScope = enrichmentWriteScope.compile(original, inspection.analysis?.schema || {});
+  const estimate = apolloBudget.estimate({
+    eligibleRows: inspection.analysis?.stats?.dataRows || 0,
+    completeSlots: Number(inspection.analysis?.stats?.completePersonSlots || 0),
+    repairSlots: inspection.analysis?.stats?.partialPersonSlots || 0,
+    newPersonSlots: inspection.analysis?.stats?.openPersonSlots || 0,
+  });
+  const requestKey = crypto.createHash('sha256').update(JSON.stringify({
+    spreadsheetId: inspection.spreadsheetId, sheetId: inspection.sheetId,
+    schemaFingerprint: summary.fingerprint, fields: writeScope.requestedFields,
+    ordinals: writeScope.requestedOrdinals, rowLimit: rowLimit || null,
+  })).digest('hex');
+  const mission = enrichmentMissions.create({
+    requestKey, provider: 'apollo', spreadsheetId: inspection.spreadsheetId,
+    spreadsheetUrl: sheetUrl, spreadsheetTitle: inspection.spreadsheetTitle,
+    sheetName: exactSheetName, sheetId: inspection.sheetId,
+    schemaFingerprint: summary.fingerprint,
+    requestedPOCs: writeScope.requestedOrdinals.length ? writeScope.requestedOrdinals : (summary.personGroups || []).map(group => group.ordinal),
+    requestedFields: writeScope.requestedFields, ignoredFields: writeScope.ignoredFields,
+    readScope: writeScope.readScope, writeScope, protectedColumns: writeScope.protectedColumns,
+    status: 'AWAITING_APOLLO_APPROVAL', totalEligibleRows: inspection.analysis?.stats?.dataRows || 0,
+    budget: apolloBudget.limits({}), request,
+  });
+  Object.assign(request, { missionId: mission.missionId, writeScope: mission.writeScope, apolloBudget: mission.budget });
+  enrichmentMissions.update(mission.missionId, { request, estimatedApolloUsage: estimate });
+  const pendingApproval = paidTools.pending('apollo');
+  const existingApproval = pendingApproval?.operation === approvalHandler.OPERATION && pendingApproval?.payload?.missionId === mission.missionId ? pendingApproval : null;
+
+  const approval = existingApproval || paidTools.request(
     'apollo',
     approvalHandler.OPERATION,
     request,
     approvalSummary(inspection, request),
   );
+  enrichmentMissions.update(mission.missionId, { approvalId: approval.id, status: 'AWAITING_APOLLO_APPROVAL', completionState: 'AWAITING_APOLLO_APPROVAL' });
 
   return response(true, paidTools.prompt(approval), {
     model: 'apollo-approval-gate',
@@ -437,6 +473,9 @@ async function handle(message, context = {}) {
     taskType: 'paid-tool-approval',
     paidToolApproval: { id: approval.id, tool: approval.tool, operation: approval.operation, expiresAt: approval.expiresAt },
     universalEnrichmentRequest: request,
+    universalEnrichmentMission: enrichmentMissions.get(mission.missionId),
+    writeScope,
+    estimatedApolloUsage: estimate,
     universalSchema: summary,
     universalAnalysis: inspection.analysis?.stats || null,
     spreadsheetUrl: sheetUrl,

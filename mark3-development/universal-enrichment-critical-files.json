@@ -1,0 +1,28 @@
+{
+  "contractVersion": "universal-enrichment-contract-v1",
+  "runtime": "mark3",
+  "files": [
+    "core/command-control-plane.js",
+    "core/universal-spreadsheet-domain-controller.js",
+    "core/universal-paid-approval-handler.js",
+    "core/universal-sheet-enrichment-targeted.js",
+    "core/universal-sheet-enrichment-operator.js",
+    "core/universal-live-write-guard.js",
+    "core/universal-run-context.js",
+    "core/universal-enrichment-mission-store.js",
+    "core/universal-enrichment-control-plane.js",
+    "core/universal-enrichment-write-scope.js",
+    "core/universal-enrichment-recovery.js",
+    "core/universal-provider-circuit-breaker.js",
+    "core/universal-apollo-budget.js",
+    "core/universal-adaptive-concurrency.js",
+    "core/apollo-enrichment.js",
+    "core/google-sheets-auth.js",
+    "core/google-sheets-operator.js",
+    "scripts/universal-enrichment-production-selftest.js",
+    "scripts/universal-enrichment-integrity-guard.js",
+    "scripts/universal-enrichment-performance-benchmark.js",
+    "core/universal-enrichment-cache.js",
+    "scripts/universal-enrichment-failure-matrix-selftest.js"
+  ]
+}

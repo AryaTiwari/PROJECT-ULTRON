@@ -25,6 +25,7 @@ function spreadsheetSourceSignals(text, options = {}) {
 
 function isThreePocSpreadsheetRequest(message, options = {}) {
   const text = normalize(message);
+
   if (!text) return false;
   const source = spreadsheetSourceSignals(text, options);
   if (!source.hasSource) return false;
@@ -44,6 +45,7 @@ function isThreePocSpreadsheetRequest(message, options = {}) {
 
 function isUniversalSpreadsheetEnrichmentRequest(message, options = {}) {
   const text = normalize(message);
+
   if (!text) return false;
   if (linkedinIntent.isLeadDiscoveryRequest(text)) return false;
   const source = spreadsheetSourceSignals(text, options);
@@ -62,6 +64,14 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
 
 function claim(message, options = {}) {
   const text = normalize(message);
+  if (require('./universal-enrichment-control-plane').isControlRequest(text)) {
+    return Object.freeze({
+      domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
+      controller: 'universal-spreadsheet-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+      controlCommand: true, readOnlyStatus: /(?:status|progress|health)/i.test(text),
+    });
+  }
   if (apolloLeadIntent.isApolloLeadControlRequest?.(text)) {
     return Object.freeze({
       domain: 'apollo-lead', claimed: true, exclusive: true,

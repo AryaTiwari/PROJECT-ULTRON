@@ -24,6 +24,7 @@ const contact = require('./universal-contact-normalization');
 const emailStore = require('./universal-pending-emails');
 const runContext = require('./universal-run-context');
 const liveWrites = require('./universal-live-write-guard');
+const durableEnrichmentCache = require('./universal-enrichment-cache');
 
 function text(value) { return String(value ?? '').trim(); }
 function throwSystemic(error) {
@@ -1443,7 +1444,9 @@ function companyPriorityCandidate(candidate = {}) {
 
 async function discoverCompanyPeople(companyContext, cache, stats, options = {}) {
   const key = `${ranker.companyKey(companyContext.company)}|${ranker.hostname(companyContext.domain)}|${ranker.normalize(options.location || '')}`;
-  if (cache.has(key)) { stats.candidateCacheHits++; return cache.get(key); }
+  if (cache.has(key)) { stats.candidateCacheHits++; runContext.cacheHit('discovery'); return cache.get(key); }
+  const persisted = durableEnrichmentCache.get('candidate-discovery', key);
+  if (persisted.hit) { stats.candidateCacheHits++; stats.persistentCandidateCacheHits = Number(stats.persistentCandidateCacheHits || 0) + 1; runContext.cacheHit('discovery'); cache.set(key, persisted.value || []); return persisted.value || []; }
 
   const broadResult = await apollo.searchCompanyPeopleBroad({
     company: companyContext.company,
@@ -1489,6 +1492,7 @@ async function discoverCompanyPeople(companyContext, cache, stats, options = {})
   const people = mergeCandidatePools(broadPeople, targetedPeople);
   stats.candidatesDiscovered += people.length;
   cache.set(key, people);
+  durableEnrichmentCache.set('candidate-discovery', key, people, { negative: people.length === 0 });
   return people;
 }
 
@@ -2160,7 +2164,16 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   const key = `priority-fast-v3|${discoveryMode}|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
   if (cache.has(key)) {
     stats.candidateCacheHits++;
+    runContext.cacheHit('discovery');
     return cache.get(key);
+  }
+  const persisted = durableEnrichmentCache.get('priority-candidate-discovery', key);
+  if (persisted.hit) {
+    stats.candidateCacheHits++;
+    stats.persistentCandidateCacheHits = Number(stats.persistentCandidateCacheHits || 0) + 1;
+    runContext.cacheHit('discovery');
+    cache.set(key, persisted.value || []);
+    return persisted.value || [];
   }
 
   const merged = [];
@@ -2220,6 +2233,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     // An empty result is still useful run-local evidence. Repeating the same
     // company/location search on another row moments later cannot improve it.
     cache.set(key, merged);
+    durableEnrichmentCache.set('priority-candidate-discovery', key, merged, { negative: merged.length === 0 });
     return merged;
   }
 
@@ -2343,6 +2357,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // exact-row rechecks cannot gain new evidence by repeating the same provider
   // waterfall moments later, and repeated calls can consume Apollo credits.
   cache.set(key, merged);
+  durableEnrichmentCache.set('priority-candidate-discovery', key, merged, { negative: merged.length === 0 });
   return merged;
 }
 
@@ -3410,7 +3425,12 @@ async function run(request = {}, options = {}) {
     if (targetRows && !targetRows.has(Number(rowNumber))) continue;
     require('./universal-run-context').processed(source, rowNumber);
     stats.rowsSeen++;
-    if (!plan.anchor) { stats.rowsWithoutAnchor++; continue; }
+    if (!plan.anchor) {
+      stats.rowsWithoutAnchor++;
+      stats.rowsProcessed++;
+      require('./universal-run-context').checkpoint({ source, rowNumber, row, plan, stats, state: 'NO_VERIFIED_PERSON' });
+      continue;
+    }
 
     try {
       const rowEvidenceContext = inferHiringCompanyFromEvidence(plan, row);
@@ -3510,7 +3530,7 @@ async function run(request = {}, options = {}) {
           stats.rowsChanged++;
           stats.cellsChanged += changes.length;
         }
-        stats.rowsProcessed++;
+        stats.rowsProcessed++; runContext.checkpoint({ source, rowNumber, row, plan, stats });
         continue;
       }
 
@@ -3727,7 +3747,7 @@ async function run(request = {}, options = {}) {
         rowHadChanges = true;
       }
       if (rowHadChanges) stats.rowsChanged++;
-      stats.rowsProcessed++;
+      stats.rowsProcessed++; runContext.checkpoint({ source, rowNumber, row, plan, stats });
       stats.consecutiveTransientProviderFailures = 0;
     } catch (error) {
       const typed = typedFailureSummary(error, {
@@ -3742,7 +3762,7 @@ async function run(request = {}, options = {}) {
         markLeftover(stats, rowNumber, 'recoverable-row-failure', {
           detail: typed.code || typed.message || 'row-local failure',
         });
-        stats.rowsProcessed++;
+        stats.rowsProcessed++; runContext.checkpoint({ source, rowNumber, row, plan, stats, state: 'RETRY_REQUIRED' });
         continue;
       }
 
@@ -3756,7 +3776,7 @@ async function run(request = {}, options = {}) {
         stats.consecutiveTransientProviderFailures++;
         if (stats.consecutiveTransientProviderFailures <= maxTransient) {
           stats.transientProviderContinuations++;
-          stats.rowsProcessed++;
+          stats.rowsProcessed++; runContext.checkpoint({ source, rowNumber, row, plan, stats, state: 'PROVIDER_WAIT' });
           continue;
         }
       } else {

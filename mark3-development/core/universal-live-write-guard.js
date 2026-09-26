@@ -54,8 +54,6 @@ async function writeVerifiedRow(source, rowNumber, expectedRow, changes) {
 
     if (!upgrade && !deliberateReplacement) throw conflict('populated-destination');
   }
-  const result = await sheets.writeCells(source.spreadsheetId, changes);
-  require('./universal-run-context').commit(source.spreadsheetId, changes);
-  return result;
+  return sheets.writeCells(source.spreadsheetId, changes);
 }
 module.exports = { writeVerifiedRow };

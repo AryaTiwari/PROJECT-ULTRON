@@ -10,6 +10,9 @@ const universal = require('./universal-sheet-enrichment-targeted');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 const sheets = require('./google-sheets-operator');
 const runtimeBuild = require('./runtime-build');
+const enrichmentMissions = require('./universal-enrichment-mission-store');
+const enrichmentRecovery = require('./universal-enrichment-recovery');
+const providerCircuits = require('./universal-provider-circuit-breaker');
 
 const OPERATION = 'universal-spreadsheet-enrichment';
 const EXECUTION_CONTRACT = 'universal-coordinated-multi-poc-v4';
@@ -79,6 +82,7 @@ async function canonicalApprovedTarget(payload = {}) {
 async function execute(decision) {
   if (!decision || decision.operation !== OPERATION || decision.tool !== 'apollo') return null;
   if (decision.status === 'denied') {
+    if (decision.payload?.missionId) enrichmentMissions.update(decision.payload.missionId, { status:'PAUSED', completionState:'PAUSED', approvalValid:false });
     return response(true, 'Apollo was not used, Sir. The universal spreadsheet enrichment run was cancelled.', {
       model: 'apollo-approval-gate',
       provider: 'local-approval-gate',
@@ -120,6 +124,7 @@ async function execute(decision) {
       ? `POC-${Number(payload.contactPhaseOrdinal)} diagnostic`
       : 'coordinated multi-POC production';
     const canonicalTarget = await canonicalApprovedTarget(payload);
+    if (payload.missionId) enrichmentMissions.update(payload.missionId, { status:'RUNNING', completionState:'RUNNING', approvalId:decision.id, approvalValid:true, startedAt:enrichmentMissions.get(payload.missionId)?.startedAt || new Date().toISOString(), sheetName:canonicalTarget.sheetName, sheetId:canonicalTarget.sheetId, lastError:null });
     const result = await paidTools.withPermit(decision, async () => universal.run({
       sheetUrl: payload.url,
       sheetName: canonicalTarget.sheetName,
@@ -141,6 +146,10 @@ async function execute(decision) {
       // Gemini/Groq/NVIDIA rescue can operate after deterministic enrichment.
       pocPhasePipeline: Boolean(payload.contactPhaseOrdinal),
       contactPhaseOrdinal: payload.contactPhaseOrdinal || undefined,
+      missionId: payload.missionId || undefined,
+      writeScope: payload.writeScope || undefined,
+      apolloBudget: payload.apolloBudget || undefined,
+      targetRows: Array.isArray(payload.targetRows) ? payload.targetRows : undefined,
     }));
 
     const enriched = {
@@ -173,6 +182,10 @@ async function execute(decision) {
 
     const modelCalls = Number(result?.modelCalls || 0);
     const fallbackUsed = modelCalls > 0;
+    if (payload.missionId) {
+      const metrics=result?.metrics||{},pendingCount=Array.isArray(metrics.pending)?metrics.pending.length:0,completion=result?.completionState||(result?.completedFully?'COMPLETE':'PARTIAL'),missionStatus=completion==='COMPLETE'?'COMPLETE':(pendingCount?'WAITING_PHONE_CALLBACKS':'PARTIAL'),saved=enrichmentMissions.get(payload.missionId),checkpointProcessed=Object.values(saved?.rowCheckpoints||{}).filter(row=>row?.processed).length,processed=Math.max(Number(saved?.rowsProcessed||0),checkpointProcessed);
+      enrichmentMissions.update(payload.missionId,{status:missionStatus,completionState:completion,approvalValid:false,completedAt:missionStatus==='COMPLETE'?new Date().toISOString():null,rowsProcessed:processed,rowsRemaining:Math.max(0,Number(enrichmentMissions.get(payload.missionId)?.totalEligibleRows||0)-processed),apolloCalls:Number(metrics.providerCalls?.apollo||0),apolloCacheHits:Number(result?.stats?.candidateCacheHits||metrics.apolloUsageLedger?.discoveryCacheHits||0),apolloDiscoveryCalls:Number(metrics.apolloUsageLedger?.discoveryCalls||0),apolloHydrations:Number(metrics.apolloUsageLedger?.personHydrations||0),apolloPhoneReveals:Number(metrics.apolloUsageLedger?.phoneReveals||0),apolloUsageLedger:{...(metrics.apolloUsageLedger||{}),discoveryCacheHits:Number(result?.stats?.candidateCacheHits||metrics.apolloUsageLedger?.discoveryCacheHits||0)},aiAttempts:modelCalls,providerState:providerCircuits.status()});
+    }
     const partialCompletion = Boolean(
       result?.partialCompletion
       || result?.stats?.haltedEarly
@@ -219,6 +232,11 @@ async function execute(decision) {
       typed.type = typed.type || 'INTERNAL';
     }
     const diagnostic = typedErrors.format(typed);
+    if (payload?.missionId) {
+      const providerState=providerCircuits.status(),nextEligibleAt=error?.nextEligibleAt||providerState.apollo?.nextEligibleAt||null;
+      const budgetStop=typed.code==='APOLLO_BUDGET_EXHAUSTED'||typed.type==='BUDGET',waiting=['RATE_LIMIT','COOLDOWN','NETWORK','TIMEOUT','API'].includes(typed.type);
+      enrichmentMissions.update(payload.missionId,{status:budgetStop?'PARTIAL_BUDGET_EXHAUSTED':(waiting?'WAITING_PROVIDER':'FAILED_SAFE'),completionState:budgetStop?'PARTIAL_BUDGET_EXHAUSTED':(waiting?'WAITING_PROVIDER':'FAILED_SAFE'),approvalValid:false,providerState,nextEligibleAt,nextEligibleAtSource:error?.nextEligibleAtSource||providerState.apollo?.nextEligibleAtSource||null,lastError:enrichmentRecovery.classify(error,{stage:typed.stage})});
+    }
     return response(false, `Universal spreadsheet enrichment stopped safely: ${diagnostic}. ${typed.hint}`, {
       error: typed.code,
       errorCode: typed.code,

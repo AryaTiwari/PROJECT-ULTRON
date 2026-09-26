@@ -168,9 +168,12 @@ async function fetchApolloResponse(input, init, options = {}) {
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     let response;
+    let providerOperation = null;
     try {
+      providerOperation = require('./universal-run-context').beforeProviderCall('apollo', endpoint, init);
       response = await fetch(input, init);
     } catch (cause) {
+      if (providerOperation) require('./universal-run-context').providerResponse('apollo', providerOperation, { ok:false, status:Number(cause?.status||0), error:cause });
       lastError = cause;
       lastFailureKind = 'transport';
       if (!apolloFetchHardening.isTransportFailure(cause)) throw cause;
@@ -184,6 +187,7 @@ async function fetchApolloResponse(input, init, options = {}) {
 
     try {
       const text = await response.text();
+      if (providerOperation) require('./universal-run-context').providerResponse('apollo', providerOperation, { ok:response.ok, status:response.status, headers:response.headers, error:response.ok?null:Object.assign(new Error(`Apollo HTTP ${response.status}`),{status:response.status,errorType:response.status===429?'RATE_LIMIT':'API'}) });
       return { response, text };
     } catch (cause) {
       lastError = cause;
@@ -1131,6 +1135,7 @@ async function enrich(input, options = {}) {
   const cache = readCache();
   const existing = cache.people[linkedinUrl];
   if (!options.force && satisfies(existing, { needEmail, needPhone })) {
+    require('./universal-run-context').cacheHit('hydration');
     return { ok: true, cached: true, linkedinUrl, ...existing };
   }
 
@@ -1207,6 +1212,7 @@ async function resolvePersonProfile(input, options = {}) {
   const cached = cache.people[linkedinUrl];
 
   if (!options.force && cached && isFresh(cached) && (cached.noMatch || cached.ambiguous)) {
+    require('./universal-run-context').cacheHit('hydration');
     return { ok: true, cached: true, linkedinUrl, ...cached };
   }
 
@@ -1218,6 +1224,7 @@ async function resolvePersonProfile(input, options = {}) {
   );
 
   if (!options.force && hasIdentity && satisfies(cached, { needEmail, needPhone })) {
+    require('./universal-run-context').cacheHit('hydration');
     return { ok: true, cached: true, linkedinUrl, ...cached };
   }
 

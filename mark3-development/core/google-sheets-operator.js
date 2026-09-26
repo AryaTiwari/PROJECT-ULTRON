@@ -211,6 +211,8 @@ async function request(url, options = {}) {
     const token = await auth.ensureAccessToken({ forceRefresh, interactive: options.__interactiveAuth !== false });
     forceRefresh = false;
 
+    const providerCircuit = require('./universal-provider-circuit-breaker');
+    providerCircuit.before('googleSheets');
     let response;
     try {
       require('./universal-run-context').provider('googleSheets');
@@ -226,8 +228,16 @@ async function request(url, options = {}) {
     } catch (cause) {
       const error = new Error(`Google Sheets API could not be reached: ${cause?.message || cause}`);
       error.code = 'GOOGLE_SHEETS_NETWORK_ERROR';
+      error.subsystem = 'GOOGLE_SHEETS';
+      error.errorType = 'NETWORK';
       error.cause = cause;
       error.endpoint = String(url || '');
+      providerCircuit.failure('googleSheets', error);
+      if (transientAttempt < 2) {
+        await sleep(350 * (2 ** transientAttempt));
+        transientAttempt++;
+        continue;
+      }
       throw error;
     }
 
@@ -255,7 +265,7 @@ async function request(url, options = {}) {
     }
     let data = {};
     try { data = rawText ? JSON.parse(rawText) : {}; } catch {}
-    if (response.ok) return data;
+    if (response.ok) { providerCircuit.success('googleSheets'); return data; }
 
     const code = classifyApiError(response.status, data);
 
@@ -271,6 +281,7 @@ async function request(url, options = {}) {
     // rejected the request before execution, so retrying POST after a short backoff
     // is also safe. Avoid replaying ambiguous 5xx writes.
     const retryableTransient = code === 'GOOGLE_SHEETS_RATE_LIMITED' || (code === 'GOOGLE_SHEETS_UNAVAILABLE' && method === 'GET');
+    if (retryableTransient) providerCircuit.failure('googleSheets', Object.assign(new Error(data?.error?.message || code), { status: response.status, errorType: code === 'GOOGLE_SHEETS_RATE_LIMITED' ? 'RATE_LIMIT' : 'PROVIDER_API' }), response.headers);
     if (retryableTransient && transientAttempt < 2) {
       await sleep(350 * (2 ** transientAttempt));
       transientAttempt++;
@@ -450,6 +461,7 @@ function cellRange(sheetName, rowNumber, columnIndex) {
 }
 
 async function writeCells(id, changes) {
+  changes = await require('./universal-run-context').guardChanges(id, changes || []);
   const data = (changes || []).filter((item) => item?.range).map((item) => ({ range: item.range, values: [[item.value]] }));
   if (!data.length) return { updatedCells: 0 };
   const result = await request(`${API}/${encodeURIComponent(id)}/values:batchUpdate`, {
