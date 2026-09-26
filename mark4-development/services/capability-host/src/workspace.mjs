@@ -32,29 +32,45 @@ function run(script,args=[],timeoutMs=120000){
 }
 function parse(value){try{return JSON.parse(value);}catch{return null;}}
 export async function googleWorkspaceStatus(){
-  if(!fs.existsSync(setupScript))return{status:"skill_missing",authenticated:false,contractVersion:GOOGLE_AUTH_CONTRACT};
-  let auth;
-  try{auth=await mark4GoogleAuth.ensureReady({interactive:false});}
-  catch(error){return{status:error.code==="TEMPORARY_NETWORK_FAILURE"?"temporary_failure":"auth_required",authenticated:false,contractVersion:GOOGLE_AUTH_CONTRACT,authState:error.code||"AUTH_REQUIRED",detail:error.message,clientSecretPresent:fs.existsSync(mark4GoogleAuth.canonicalClientPath),tokenPresent:fs.existsSync(mark4GoogleAuth.canonicalTokenPath)};}
-  if(!auth.ok)return{status:"auth_required",authenticated:false,contractVersion:GOOGLE_AUTH_CONTRACT,authState:auth.state,durable:Boolean(auth.durable),detail:"Google Workspace requires authorization.",clientSecretPresent:fs.existsSync(mark4GoogleAuth.canonicalClientPath),tokenPresent:fs.existsSync(mark4GoogleAuth.canonicalTokenPath)};
-  const result=await run(setupScript,["--check"]);
-  const combined=(result.stdout+"\n"+result.stderr).trim();
-  if(/AUTHENTICATED/i.test(combined)&&result.code===0)return{status:"authenticated",authenticated:true,contractVersion:GOOGLE_AUTH_CONTRACT,authState:auth.state,durable:Boolean(auth.durable),detail:combined};
-  return{status:"auth_required",authenticated:false,contractVersion:GOOGLE_AUTH_CONTRACT,authState:"HERMES_TOKEN_REJECTED",durable:Boolean(auth.durable),detail:combined||"Hermes Google Workspace did not accept the saved token.",clientSecretPresent:fs.existsSync(mark4GoogleAuth.canonicalClientPath),tokenPresent:fs.existsSync(mark4GoogleAuth.canonicalTokenPath)};
+  let checked;
+  try{checked=await mark4GoogleAuth.ensureReady({interactive:false});}
+  catch(error){
+    return{status:"temporary_failure",authenticated:false,durable:false,state:error.code||"TEMPORARY_NETWORK_FAILURE",contractVersion:GOOGLE_AUTH_CONTRACT,detail:error.message};
+  }
+  const status=mark4GoogleAuth.status();
+  return{
+    status:checked.ok?"authenticated":"auth_required",
+    authenticated:Boolean(checked.ok),
+    durable:Boolean(checked.durable),
+    state:checked.state,
+    contractVersion:GOOGLE_AUTH_CONTRACT,
+    clientSecretPresent:status.clientPresent,
+    tokenPresent:status.tokenPresent,
+    hasRefreshToken:status.hasRefreshToken,
+    tokenExpiresAt:status.tokenExpiresAt,
+    missingScopes:status.missingScopes,
+    hermesHome:status.hermesHome
+  };
+}
+export async function googleWorkspaceConnect(){
+  const checked=await mark4GoogleAuth.ensureReady({interactive:true});
+  return{ok:Boolean(checked.ok),status:checked.ok?"authenticated":"auth_required",state:checked.state,durable:Boolean(checked.durable),reauthorized:Boolean(checked.reauthorized),refreshed:Boolean(checked.refreshed),contractVersion:GOOGLE_AUTH_CONTRACT};
 }
 export async function googleSetClientSecret(filePath){
   const target=String(filePath||"").trim();if(!target)throw new Error("GOOGLE_CLIENT_SECRET_PATH_REQUIRED");
   const result=await run(setupScript,["--client-secret",target]);
+  mark4GoogleAuth.recoverClient();
   return{ok:result.code===0,stdout:result.stdout,stderr:result.stderr};
 }
-export async function googleAuthUrl(services="drive,sheets"){
-  const result=await run(setupScript,["--auth-url","--services",String(services||"drive,sheets"),"--format","json"]);
-  const data=parse(result.stdout);return data||{ok:false,code:result.code,stdout:result.stdout,stderr:result.stderr};
+// Legacy compatibility: the old Hermes flow generated localhost:1, which Chromium
+// blocks as ERR_UNSAFE_PORT. Route callers into ULTRON's safe ephemeral loopback
+// OAuth flow instead of returning that broken URL.
+export async function googleAuthUrl(){
+  return googleWorkspaceConnect();
 }
-export async function googleAuthCode(codeOrUrl){
-  const value=String(codeOrUrl||"").trim();if(!value)throw new Error("GOOGLE_AUTH_CODE_REQUIRED");
-  const result=await run(setupScript,["--auth-code",value,"--format","json"]);
-  const data=parse(result.stdout);return data||{ok:false,code:result.code,stdout:result.stdout,stderr:result.stderr};
+export async function googleAuthCode(){
+  const status=await googleWorkspaceStatus();
+  return{...status,legacyAuthCodeFlowDisabled:true,message:"ULTRON now completes OAuth through a secure ephemeral 127.0.0.1 callback automatically."};
 }
 function colName(n){let s="";for(let x=n;x>0;x=Math.floor((x-1)/26))s=String.fromCharCode(65+(x-1)%26)+s;return s;}
 function looksAuthFailure(value){return /auth|oauth|credential|refresh token|invalid_grant|unauthenticated|login required|token.*expired|token.*revoked/i.test(String(value||""));}
