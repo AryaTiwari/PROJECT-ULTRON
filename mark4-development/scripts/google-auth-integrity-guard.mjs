@@ -51,6 +51,7 @@ const checks=[
   ["bounded-backoff",recovery,/500,1500,4000/],
   ["single-flight-reauth",recovery,/interactiveAuthorizationInFlight/],
   ["loopback",recovery,/127\.0\.0\.1/],
+  ["safe-ephemeral-port",recovery,/server\.listen\(0,"127\.0\.0\.1"/],
   ["pkce",recovery,/code_challenge_method:"S256"/],
   ["workspace-self-heal",workspace,/ensureGoogleWorkspace/],
   ["workspace-retry",workspace,/authRetried/],
@@ -58,6 +59,7 @@ const checks=[
 ];
 for(const [name,source,pattern] of checks)if(!pattern.test(source))fail(`${name} contract missing`);
 if(/process\.cwd\(\)/.test(recovery+workspace))fail("credential resolution depends on process.cwd()");
+if(/localhost:1/.test(recovery+workspace))fail("unsafe localhost:1 callback reintroduced");
 
 const frontend=tracked.filter(file=>/^mark4-development\/apps\/ui\/src\//.test(file));
 for(const rel of frontend){

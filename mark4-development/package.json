@@ -27,6 +27,7 @@
     "check:google-auth-integrity": "node scripts/google-auth-integrity-guard.mjs",
     "google:doctor": "node scripts/google-auth-doctor.mjs",
     "google:health": "node scripts/google-auth-startup-check.mjs",
-    "google:auth": "node scripts/google-auth-connect.mjs"
+    "google:auth": "node scripts/google-auth-connect.mjs",
+    "google:connect": "node scripts/google-auth-connect.mjs"
   }
 }
