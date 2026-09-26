@@ -60,7 +60,7 @@ function colName(n){let s="";for(let x=n;x>0;x=Math.floor((x-1)/26))s=String.fro
 function looksAuthFailure(value){return /auth|oauth|credential|refresh token|invalid_grant|unauthenticated|login required|token.*expired|token.*revoked/i.test(String(value||""));}
 async function ensureGoogleWorkspace(options={}){
   const auth=await mark4GoogleAuth.ensureReady({interactive:options.interactive!==false,forceRefresh:Boolean(options.forceRefresh),forceReauth:Boolean(options.forceReauth)});
-  if(!auth.ok){const error=new Error("GOOGLE_AUTH_REQUIRED");error.code="GOOGLE_AUTH_REQUIRED";error.authState=auth.state;error.workspace=auth;throw error;}
+  if(!auth.ok){const error=new Error("Google Workspace authorization is required. Preserve the research mission and retry after connection; do not discard gathered work.");error.code="GOOGLE_AUTH_REQUIRED";error.authState=auth.state;error.workspace=auth;throw error;}
   return auth;
 }
 export async function googleWorkspaceConnect(){return ensureGoogleWorkspace({interactive:true,forceReauth:true});}
