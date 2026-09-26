@@ -126,6 +126,7 @@ function serveVaultFile(req, res) {
 }
 function errorStatus(error) {
   const code = String(error?.code || '');
+  if (code === 'ENRICHMENT_REQUEST_ID_REQUIRED') return 428;
   if (/ENRICHMENT_REQUEST_(?:INTERRUPTED|ALREADY_COMPLETED|FAILED|ID_COLLISION)/.test(code)) return 409;
   const upstream = Number(error?.status || 0);
   if (upstream === 400) return 400;
