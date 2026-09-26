@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { mark4GoogleAuth } from "../services/capability-host/src/google-auth-recovery.mjs";
+mark4GoogleAuth.setEventSink((type,event)=>{
+  if(type==="google.auth.manual_url"&&event?.authUrl)console.error(`Open Google authorization: ${event.authUrl}`);
+});
 try{
   const result=await mark4GoogleAuth.ensureReady({interactive:true,forceReauth:true});
   console.log(JSON.stringify({ok:Boolean(result.ok),state:result.state,durable:Boolean(result.durable),reauthorized:Boolean(result.reauthorized)},null,2));
