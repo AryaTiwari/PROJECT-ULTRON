@@ -75,7 +75,8 @@
     "check:benchmark": "node --env-file=../.env scripts/three-poc-internal-inference-selftest.js",
     "check:enrichment-benchmark": "npm run check:benchmark",
     "check:apollo-final": "node --env-file=../.env scripts/apollo-final-production-selftest.js && node --env-file=../.env scripts/universal-non-destructive-enrichment-selftest.js && node --env-file=../.env scripts/google-sheets-auth-resilience-selftest.js",
-    "check:google-auth-integrity": "node scripts/google-auth-integrity-guard.js"
+    "check:google-auth-integrity": "node scripts/google-auth-integrity-guard.js",
+    "check:enrichment-safety": "node scripts/enrichment-hard-safety-selftest.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
