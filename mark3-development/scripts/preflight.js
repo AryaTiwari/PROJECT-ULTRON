@@ -8,8 +8,8 @@ const required = [
   'server.js','core/config.js','core/persistence.js','core/memory.js','core/workspace.js','core/model-intelligence.js','core/model-league.js','core/model-arena.js',
   'core/provider-registry.js','core/direct-provider-router.js','core/omniroute-fallback.js','core/omniroute-lazy-hooks.js','core/model-router.js','core/integrations.js','core/founder-behavior.js',
   'core/tools.js','core/web.js','core/research-agent.js','core/coding-brain.js','core/coding-inference.js','core/self-repository.js','core/assistant.js','core/assistant-handoff.js','core/conversation.js',
-  'core/voice-orchestrator.js','core/operating-modes.js','core/git-publisher.js','core/archive.js','core/document-renderer.js','core/file-vault.js','core/multimodal.js','core/native-voice-input.js',
-  'scripts/start-mark3.mjs','scripts/start-transport.mjs','scripts/flow-selftest.js','scripts/research-selftest.js','scripts/routing-selftest.js','scripts/multimodal-selftest.js',
+  'core/voice-orchestrator.js','core/operating-modes.js','core/git-publisher.js','core/archive.js','core/document-renderer.js','core/file-vault.js','core/multimodal.js','core/native-voice-input.js','core/enrichment-request-safety.js',
+  'scripts/start-mark3.mjs','scripts/start-transport.mjs','scripts/flow-selftest.js','scripts/research-selftest.js','scripts/routing-selftest.js','scripts/multimodal-selftest.js','scripts/enrichment-hard-safety-selftest.js',
   'interface/index.html','interface/style.css','interface/multimodal.css','interface/chat-transport.js','interface/wake-boost.js','interface/app.js','interface/native-voice.js','interface/multimodal-ui.js',
 ];
 const sharedTransport = ['core/omniroute.js','core/voice/index.js','core/credentials/local-store.js'];
@@ -72,6 +72,19 @@ if (!/SpeechRecognition|webkitSpeechRecognition/.test(appJs) || !/WAKE_WORD=['\"
 if (!/prematureFastFinalize:\s*false/.test(wakeBoost)) throw new Error('Premature voice finalization must remain disabled.');
 if (!/FLOW_REPLY_WINDOW_MS\s*=\s*10000/.test(chatTransport) || !/PLAYBACK_SETTLE_MS\s*=\s*700/.test(chatTransport)) throw new Error('Playback-safe ten-second flow is missing.');
 if (!/CHAT_TRANSPORT_TIMEOUT_MS\s*=\s*45\s*\*\s*60\s*\*\s*1000/.test(chatTransport)) throw new Error('Long-running full-sheet chat transport timeout is not aligned with the Mark 3 client.');
+if (!/X-Ultron-Request-Id/.test(chatTransport) || !/ENRICHMENT_RECONNECT_DELAYS_MS/.test(chatTransport)) throw new Error('Protected enrichment reconnect identity/retry policy is missing.');
+if (!/enrichmentRequestSafety\.execute/.test(serverSource) || !/api\\\/enrichment\\\/requests/.test(serverSource)) throw new Error('Server-side enrichment idempotency/status gate is missing.');
+const enrichmentSafetySource = fs.readFileSync(path.join(root,'core','enrichment-request-safety.js'),'utf8');
+if (!/ENRICHMENT_REQUEST_INTERRUPTED_NO_REPLAY/.test(enrichmentSafetySource) || !/ENRICHMENT_REQUEST_ID_REQUIRED/.test(enrichmentSafetySource) || !/requestFingerprint/.test(enrichmentSafetySource)) throw new Error('Crash-safe enrichment request replay protection is incomplete.');
+const threePocSource = fs.readFileSync(path.join(root,'core','three-poc-enrichment-operator.js'),'utf8');
+const leadBootstrapSource = fs.readFileSync(path.join(root,'core','lead-enrichment-bootstrap.js'),'utf8');
+if (!/explicit_two_poc/.test(threePocSource) || !/nonDestructive:\s*true/.test(threePocSource)) throw new Error('Two-POC compatibility or non-destructive write protection is missing.');
+const localExcelSource = fs.readFileSync(path.join(root,'core','local-excel-operator.js'),'utf8');
+if (!/withWorkbookWriteLock/.test(localExcelSource) || !/workbookWriteQueues/.test(localExcelSource)) throw new Error('Attached Excel writes are not serialized per workbook.');
+if (!/selectCompatibleSheets\(compatible, options\.sheetName/.test(threePocSource) || !/requestedSheetName/.test(leadBootstrapSource)) throw new Error('Explicit worksheet targeting is not enforced end-to-end.');
+if (!/partial_safe_cap/.test(threePocSource) || !/resumeCappedJob/.test(threePocSource) || !/resume_in_progress/.test(threePocSource) || !/resume_interrupted_needs_inspection/.test(threePocSource) || !/three-poc-enrichment-resume/.test(leadBootstrapSource)) throw new Error('Large-run POC checkpoint/resume safety is incomplete.');
+if (/\b(?:clearRows|deleteRows|deleteDimension|spliceRows)\s*\(/.test(threePocSource)) throw new Error('Destructive row operation detected in protected POC enrichment.');
+
 if (!/startBackgroundPhoneWatcher\(\)/.test(serverSource)) throw new Error('Production startup must resume pending enrichment callbacks.');
 if (!/MediaRecorder/.test(nativeVoiceUi) || !/\/api\/voice\/transcribe/.test(nativeVoiceUi) || !/browserTranscript/.test(nativeVoiceUi)) throw new Error('Native-audio command path is missing.');
 if (!/\/api\/files\/upload/.test(multimodalUi) || !/attachments/.test(multimodalUi) || !/artifacts/.test(multimodalUi)) throw new Error('Attachment/artifact UI is incomplete.');

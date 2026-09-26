@@ -73,8 +73,42 @@ function sourceCellRange(sheetName, rowNumber, columnIndex) {
 
 async function writeSourceCells(source, changes) {
   const provider = sourceProvider(source);
-  if (provider === 'local-excel') return localExcel.writeCells(source, changes);
-  if (provider === 'google') return googleSheets.writeCells(googleSheets.spreadsheetId(source), changes);
+  const protectedChanges = (changes || []).filter((change) => change?.range && String(change.value ?? '').trim()).map((change) => ({
+    ...change,
+    nonDestructive: true,
+  }));
+  if (!protectedChanges.length) return { updatedCells: 0 };
+
+  if (provider === 'local-excel') return localExcel.writeCells(source, protectedChanges);
+
+  if (provider === 'google') {
+    const spreadsheetId = googleSheets.spreadsheetId(source);
+    const live = await googleSheets.batchValues(spreadsheetId, protectedChanges.map((change) => change.range));
+    const safe = [];
+    for (let index = 0; index < protectedChanges.length; index++) {
+      const change = protectedChanges[index];
+      const current = String(live[index]?.[0]?.[0] ?? '').trim();
+      const incoming = String(change.value ?? '').trim();
+      if (!incoming || current === incoming) continue;
+      if (current) {
+        const deliberateReplacement = change.allowReplace === true
+          && String(change.replaces ?? '').trim() === current
+          && change.replacementReason === 'same-identity-designation-upgrade';
+        if (!deliberateReplacement) {
+          const error = new Error(`Protected enrichment refused to overwrite populated cell ${change.range}.`);
+          error.code = 'THREE_POC_NON_DESTRUCTIVE_CONFLICT';
+          error.subsystem = 'IDENTITY';
+          error.errorType = 'CONFLICT';
+          error.stage = 'google-sheet-live-write-validation';
+          error.range = change.range;
+          throw error;
+        }
+      }
+      safe.push(change);
+    }
+    return safe.length ? googleSheets.writeCells(spreadsheetId, safe) : { updatedCells: 0 };
+  }
+
   const error = new Error('Unsupported 3-POC spreadsheet provider.');
   error.code = 'THREE_POC_PROVIDER_UNSUPPORTED';
   throw error;
@@ -167,25 +201,30 @@ function detectThreePocLayout(rows) {
   for (let r = 0; r < Math.min(20, rows.length); r++) {
     const row = rows[r] || [];
     const secondName = findHeader(row, P2);
+    if (secondName < 0) continue;
     const thirdName = findHeader(row, P3);
-    if (secondName < 0 || thirdName < 0 || thirdName <= secondName) continue;
+    if (thirdName >= 0 && thirdName <= secondName) continue;
     const explicitFirst = findHeader(row, P1);
     const first = explicitFirst >= 0 ? contactSlot(row, explicitFirst, secondName, P1_LINKEDIN) : legacyFirstSlot(row, secondName);
-    const second = contactSlot(row, secondName, thirdName, P2_LINKEDIN);
-    const third = contactSlot(row, thirdName, row.length, P3_LINKEDIN);
-    if (!first || !second || !third) continue;
+    const second = contactSlot(row, secondName, thirdName >= 0 ? thirdName : row.length, P2_LINKEDIN);
+    const third = thirdName >= 0 ? contactSlot(row, thirdName, row.length, P3_LINKEDIN) : null;
+    if (!first || !second || (thirdName >= 0 && !third)) continue;
 
     const companyIndex = findHeader(row, COMPANY);
     const postDetailsIndex = findHeader(row, DETAILS);
     const linkedinIndex = findHeader(row, LINKEDIN);
-    const score = 100 + (explicitFirst >= 0 ? 20 : 0) + (companyIndex >= 0 ? 6 : 0) + (postDetailsIndex >= 0 ? 4 : 0) + (linkedinIndex >= 0 ? 2 : 0) - r * 0.1;
+    const slotCount = third ? 3 : 2;
+    const score = 100 + slotCount * 5 + (explicitFirst >= 0 ? 20 : 0) + (companyIndex >= 0 ? 6 : 0) + (postDetailsIndex >= 0 ? 4 : 0) + (linkedinIndex >= 0 ? 2 : 0) - r * 0.1;
     const candidate = {
       headerRowIndex: r,
       headerRowNumber: r + 1,
-      schema: explicitFirst >= 0 ? 'explicit_three_poc' : 'anchored_first_poc',
+      schema: explicitFirst >= 0
+        ? (third ? 'explicit_three_poc' : 'explicit_two_poc')
+        : (third ? 'anchored_first_poc' : 'anchored_first_poc_two'),
       first,
       second,
       third,
+      slotCount,
       companyIndex,
       postDetailsIndex,
       linkedinIndex,
@@ -194,7 +233,7 @@ function detectThreePocLayout(rows) {
     if (!best || candidate.score > best.score) best = candidate;
   }
   if (!best) {
-    const error = new Error('No safe 3-POC column layout was detected in this worksheet.');
+    const error = new Error('No safe two- or three-POC column layout was detected in this worksheet.');
     error.code = 'THREE_POC_LAYOUT_NOT_FOUND';
     throw error;
   }
@@ -203,12 +242,12 @@ function detectThreePocLayout(rows) {
 
 async function ensurePocLinkedInColumns(source, sheet) {
   const layout = sheet.layout;
-  if (layout.schema === 'anchored_first_poc') return [];
+  if (String(layout.schema || '').startsWith('anchored_first_poc')) return [];
   const slots = [
     { slot: layout.first, label: '1st POC LinkedIn' },
     { slot: layout.second, label: '2nd POC LinkedIn' },
-    { slot: layout.third, label: '3rd POC LinkedIn' },
-  ];
+    layout.third ? { slot: layout.third, label: '3rd POC LinkedIn' } : null,
+  ].filter(Boolean);
   let nextIndex = (sheet.rows || []).reduce((max, row) => Math.max(max, (row || []).length), 0);
   const changes = [];
   const created = [];
@@ -281,8 +320,8 @@ function rowContext(layout, row, sheetName, rowNumber) {
     .filter((item) => ![
       layout.first.phoneIndex, layout.first.emailIndex,
       layout.second.phoneIndex, layout.second.emailIndex,
-      layout.third.phoneIndex, layout.third.emailIndex,
-      layout.first.linkedinIndex, layout.second.linkedinIndex, layout.third.linkedinIndex,
+      layout.third?.phoneIndex, layout.third?.emailIndex,
+      layout.first.linkedinIndex, layout.second.linkedinIndex, layout.third?.linkedinIndex,
     ].filter((index) => Number.isInteger(index) && index >= 0).includes(item.index))
     .slice(0, 30);
   const linkedin = layout.linkedinIndex >= 0 ? String(row[layout.linkedinIndex] || '').trim() : '';
@@ -670,18 +709,26 @@ function anchorCompanyContext(anchor, context) {
   };
 }
 
-function rowChanges(sheetName, rowNumber, layout, people) {
-  const slots = [layout.first, layout.second, layout.third];
+function rowChanges(sheetName, rowNumber, layout, people, existingRow = null) {
+  const slots = [layout.first, layout.second, layout.third].filter(Boolean);
   const changes = [];
-  for (let i = 0; i < 3; i++) {
+  const hasExistingRow = Array.isArray(existingRow);
+  const current = (index) => hasExistingRow ? String(existingRow?.[index] ?? '').trim() : '';
+  const pushMissing = (index, value) => {
+    if (!Number.isInteger(index) || index < 0) return;
+    const clean = String(value || '').trim();
+    if (!clean) return;
+    if (hasExistingRow && current(index)) return;
+    changes.push({ range: sourceCellRange(sheetName, rowNumber, index), value: clean });
+  };
+  for (let i = 0; i < slots.length; i++) {
     const slot = slots[i];
     const person = people[i] || null;
-    changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.nameIndex), value: person ? displayName(person) : '' });
-    if (Number.isInteger(slot.linkedinIndex) && slot.linkedinIndex >= 0) {
-      changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.linkedinIndex), value: person?.linkedinUrl || '' });
-    }
-    changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.phoneIndex), value: person?.phone || '' });
-    changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.emailIndex), value: person?.email || '' });
+    if (!person) continue;
+    pushMissing(slot.nameIndex, displayName(person));
+    pushMissing(slot.linkedinIndex, person.linkedinUrl);
+    pushMissing(slot.phoneIndex, person.phone);
+    pushMissing(slot.emailIndex, person.email);
   }
   return changes;
 }
@@ -701,7 +748,7 @@ function anchoredRowChanges(sheetName, rowNumber, layout, anchor, slotPeople = [
   pushMissing(layout.first.phoneIndex, anchor?.phone);
   pushMissing(layout.first.emailIndex, anchor?.email);
 
-  const slots = [layout.second, layout.third];
+  const slots = [layout.second, layout.third].filter(Boolean);
   for (let i = 0; i < slots.length; i++) {
     if (lockedSlots[i]) continue;
     const person = slotPeople[i] || null;
@@ -718,8 +765,15 @@ function anchoredRowChanges(sheetName, rowNumber, layout, anchor, slotPeople = [
         && personNameKey(existingName) === personNameKey(display)
         && existingName !== display
       ) {
-        // Same verified identity: designation completion is safe.
-        changes.push({ range: sourceCellRange(sheetName, rowNumber, slot.nameIndex), value: display });
+        // Same verified identity: designation completion is safe, but mark the
+        // exact expected old value so the live-write guard can reject races.
+        changes.push({
+          range: sourceCellRange(sheetName, rowNumber, slot.nameIndex),
+          value: display,
+          allowReplace: true,
+          replaces: existingName,
+          replacementReason: 'same-identity-designation-upgrade',
+        });
       }
     }
 
@@ -731,7 +785,7 @@ function anchoredRowChanges(sheetName, rowNumber, layout, anchor, slotPeople = [
 
 function anchoredChangeCounts(changes, sheetName, rowNumber, layout) {
   const ranges = new Set((changes || []).map((change) => change.range));
-  const has = (slot, field) => ranges.has(sourceCellRange(sheetName, rowNumber, slot[field]));
+  const has = (slot, field) => Boolean(slot && Number.isInteger(slot[field]) && slot[field] >= 0 && ranges.has(sourceCellRange(sheetName, rowNumber, slot[field])));
   return {
     poc1Phone: has(layout.first, 'phoneIndex') ? 1 : 0,
     poc1Email: has(layout.first, 'emailIndex') ? 1 : 0,
@@ -820,7 +874,26 @@ function startPhoneWatcher() {
   watcherTimer.unref?.();
 }
 
-async function inspectSource(source) {
+function normalizedSheetName(value) {
+  return String(value || '').trim().replace(/^[`"'“”]+|[`"'“”]+$/g, '').toLowerCase();
+}
+
+function selectCompatibleSheets(sheets = [], requestedSheetName = '') {
+  const requested = normalizedSheetName(requestedSheetName);
+  if (!requested) return sheets;
+  const exact = (sheets || []).find((sheet) => normalizedSheetName(sheet?.sheetName) === requested);
+  if (exact) return [exact];
+  const error = new Error(`Requested worksheet "${String(requestedSheetName || '').trim()}" was not found with a safely writable two/three-POC layout. No other worksheet will be edited.`);
+  error.code = 'THREE_POC_TARGET_SHEET_NOT_FOUND';
+  error.subsystem = 'TARGETING';
+  error.errorType = 'CONFIG';
+  error.stage = 'three-poc-target-selection';
+  error.requestedSheetName = String(requestedSheetName || '').trim();
+  error.availableCompatibleSheets = (sheets || []).map((sheet) => sheet?.sheetName).filter(Boolean);
+  throw error;
+}
+
+async function inspectSource(source, options = {}) {
   const provider = sourceProvider(source);
   if (!provider) {
     return { compatible: false, provider: null, compatibleCount: 0, sheets: [] };
@@ -861,11 +934,13 @@ async function inspectSource(source) {
     });
   }
 
+  const selectedSheets = selectCompatibleSheets(sheets, options.sheetName || '');
   return {
-    compatible: sheets.length > 0,
+    compatible: selectedSheets.length > 0,
     provider,
-    compatibleCount: sheets.length,
-    sheets,
+    compatibleCount: selectedSheets.length,
+    requestedSheetName: String(options.sheetName || '').trim() || null,
+    sheets: selectedSheets,
   };
 }
 
@@ -891,13 +966,14 @@ async function enrichWorkbook(source, options = {}) {
   }
   const backupPath = provider === 'local-excel' ? backupWorkbook(source) : null;
   const workbookSheets = await readSourceSheets(source);
-  const compatible = [];
+  let compatible = [];
   for (const sheet of workbookSheets) {
     try { compatible.push({ ...sheet, layout: sheet.layout || detectThreePocLayout(sheet.rows) }); }
     catch (error) { if (error.code !== 'THREE_POC_LAYOUT_NOT_FOUND') throw error; }
   }
+  compatible = selectCompatibleSheets(compatible, options.sheetName || '');
   if (!compatible.length) {
-    const error = new Error('No worksheet has three safely writable POC blocks (name + phone + email).');
+    const error = new Error('No worksheet has at least two safely writable POC blocks (name + phone + email).');
     error.code = 'THREE_POC_LAYOUT_NOT_FOUND';
     throw error;
   }
@@ -911,6 +987,11 @@ async function enrichWorkbook(source, options = {}) {
     id: `three-poc-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
     source,
     provider,
+    requestedSheetName: String(options.sheetName || '').trim() || null,
+    startRowNumber: Number(options.startRowNumber || 0) || null,
+    rowLimit: null,
+    nextRowNumber: null,
+    remainingEligibleRows: 0,
     status: 'running',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -926,6 +1007,13 @@ async function enrichWorkbook(source, options = {}) {
     provider,
     spreadsheetUrl: provider === 'google' ? source : null,
     compatibleSheets: compatible.map((sheet) => sheet.sheetName),
+    requestedSheetName: String(options.sheetName || '').trim() || null,
+    startRowNumber: Number(options.startRowNumber || 0) || null,
+    rowLimit: 0,
+    rowLimitReached: false,
+    remainingEligibleRows: 0,
+    nextRowNumber: null,
+    maxPocSlots: Math.max(...compatible.map((sheet) => Number(sheet.layout?.slotCount || (sheet.layout?.third ? 3 : 2)))),
     scannedRows: 0,
     completedRows: 0,
     unresolvedRows: 0,
@@ -972,6 +1060,9 @@ async function enrichWorkbook(source, options = {}) {
   };
 
   const rowLimit = Math.max(1, Math.min(500, Number(options.rowLimit || process.env.ULTRON_M3_THREE_POC_ROW_LIMIT || 500)));
+  stats.rowLimit = rowLimit;
+  job.rowLimit = rowLimit;
+  saveState(state);
   const candidatePoolCache = new Map();
   const hiringCandidateTitles = [
     'recruiter', 'technical recruiter', 'talent acquisition', 'recruitment',
@@ -1014,18 +1105,23 @@ async function enrichWorkbook(source, options = {}) {
 
   for (const sheet of compatible) {
     const layout = sheet.layout;
-    const sheetStats = { scannedRows: 0, completedRows: 0, unresolvedRows: 0, failedRows: 0 };
+    const requestedStart = Math.max(layout.headerRowIndex + 2, Number(options.startRowNumber || 0) || (layout.headerRowIndex + 2));
+    const startIndex = requestedStart - 1;
+    let lastScannedIndex = startIndex - 1;
+    const sheetStats = { scannedRows: 0, completedRows: 0, unresolvedRows: 0, failedRows: 0, startRowNumber: requestedStart, lastScannedRowNumber: null };
     job.sheets[sheet.sheetName] = sheetStats;
-    for (let index = layout.headerRowIndex + 1; index < sheet.rows.length && stats.scannedRows < rowLimit; index++) {
+    for (let index = startIndex; index < sheet.rows.length && stats.scannedRows < rowLimit; index++) {
       const row = sheet.rows[index] || [];
       if (!row.some((value) => String(value ?? '').trim())) continue;
       const rowNumber = index + 1;
+      lastScannedIndex = index;
+      sheetStats.lastScannedRowNumber = rowNumber;
       stats.scannedRows++;
       sheetStats.scannedRows++;
       const context = rowContext(layout, row, sheet.sheetName, rowNumber);
 
       try {
-        if (layout.schema === 'anchored_first_poc') {
+        if (String(layout.schema || '').startsWith('anchored_first_poc')) {
           stats.anchoredRows++;
           if (context.linkedinProfileKind !== 'person') {
             stats.skippedNonPersonAnchorRows++;
@@ -1053,9 +1149,9 @@ async function enrichWorkbook(source, options = {}) {
           });
           stats.candidatesSeen += candidates.length;
 
-          const slotDefs = [layout.second, layout.third];
-          const slotPeople = [null, null];
-          const lockedSlots = [false, false];
+          const slotDefs = [layout.second, layout.third].filter(Boolean);
+          const slotPeople = slotDefs.map(() => null);
+          const lockedSlots = slotDefs.map(() => false);
           const usedKeys = new Set();
 
           for (let slotIndex = 0; slotIndex < slotDefs.length; slotIndex++) {
@@ -1196,7 +1292,7 @@ async function enrichWorkbook(source, options = {}) {
           if (String(row?.[layout.second.nameIndex] || '').trim() && (counts.poc2Phone || counts.poc2Email || counts.poc2Name)) {
             stats.existingPocSlotsRepaired++;
           }
-          if (String(row?.[layout.third.nameIndex] || '').trim() && (counts.poc3Phone || counts.poc3Email || counts.poc3Name)) {
+          if (layout.third && String(row?.[layout.third.nameIndex] || '').trim() && (counts.poc3Phone || counts.poc3Email || counts.poc3Name)) {
             stats.existingPocSlotsRepaired++;
           }
           stats.anchorsResolved += anchor.linkedinUrl ? 1 : 0;
@@ -1238,11 +1334,13 @@ async function enrichWorkbook(source, options = {}) {
         }, Number(options.aiCandidateLimit || process.env.ULTRON_M3_THREE_POC_AI_CANDIDATES || 10));
         stats.locallyPrerankedCandidates += reasoningCandidates.length;
 
+        const explicitSlots = [layout.first, layout.second, layout.third].filter(Boolean);
+        const requestedSlotCount = explicitSlots.length;
         let selected = { ranking: [], model: null, provider: null };
         let selectorFailed = false;
         try {
           stats.omniRouteSelectorCalls++;
-          selected = await selectorAgent(context, companyContext, reasoningCandidates, { count: 3 });
+          selected = await selectorAgent(context, companyContext, reasoningCandidates, { count: requestedSlotCount });
           if (selected.model) stats.agentModels.add(`${selected.provider || 'unknown'}/${selected.model}`);
           if (selected.transport !== 'omniroute' || selected.routingMode !== 'omniroute-only') {
             stats.personalModelFallbacks++;
@@ -1254,10 +1352,10 @@ async function enrichWorkbook(source, options = {}) {
         if (selectorFailed || !selected.ranking.length) stats.selectorEmptyOrFailedRows++;
 
         let finalRanking = selected.ranking.slice(0, 8);
-        if (reviewerRequired(selected.ranking, 3)) {
+        if (reviewerRequired(selected.ranking, requestedSlotCount)) {
           try {
             stats.omniRouteReviewerCalls++;
-            const reviewed = await reviewerAgent(context, companyContext, reasoningCandidates, selected.ranking, { count: 3 });
+            const reviewed = await reviewerAgent(context, companyContext, reasoningCandidates, selected.ranking, { count: requestedSlotCount });
             if (reviewed.model) stats.agentModels.add(`${reviewed.provider || 'unknown'}/${reviewed.model}`);
             if (reviewed.transport !== 'omniroute' || reviewed.routingMode !== 'omniroute-only') {
               stats.personalModelFallbacks++;
@@ -1283,7 +1381,7 @@ async function enrichWorkbook(source, options = {}) {
 
         const enriched = [];
         for (const person of people) {
-          if (enriched.length >= 3) break;
+          if (enriched.length >= requestedSlotCount) break;
           stats.candidateHydrations++;
           try {
             const hydrated = await enrichSelectedPerson(person, {}, { company: companyContext.company, domain: companyContext.domain });
@@ -1302,7 +1400,7 @@ async function enrichWorkbook(source, options = {}) {
           stats.unresolvedRows++; sheetStats.unresolvedRows++;
           continue;
         }
-        const changes = rowChanges(sheet.sheetName, rowNumber, layout, enriched);
+        const changes = rowChanges(sheet.sheetName, rowNumber, layout, enriched, row);
         const written = await writeSourceCells(source, changes);
         stats.updatedCells += written.updatedCells || 0;
         stats.contactsWritten += enriched.length;
@@ -1312,7 +1410,7 @@ async function enrichWorkbook(source, options = {}) {
         stats.aiSelections += enriched.length;
         stats.completedRows++; sheetStats.completedRows++;
 
-        const slots = [layout.first, layout.second, layout.third];
+        const slots = [layout.first, layout.second, layout.third].filter(Boolean);
         enriched.forEach((person, slotIndex) => {
           if (!person.phonePending || !person.apolloPersonId) return;
           job.pendingPhones.push(pendingRecord(source, sheet.sheetName, rowNumber, slots[slotIndex], person));
@@ -1325,10 +1423,27 @@ async function enrichWorkbook(source, options = {}) {
         sheetStats.lastError = error.message;
       }
     }
+
+    if (stats.scannedRows >= rowLimit) {
+      let nextIndex = lastScannedIndex + 1;
+      while (nextIndex < sheet.rows.length && !(sheet.rows[nextIndex] || []).some((value) => String(value ?? '').trim())) nextIndex++;
+      if (nextIndex < sheet.rows.length) {
+        stats.rowLimitReached = true;
+        stats.nextRowNumber ||= nextIndex + 1;
+        const remaining = sheet.rows.slice(nextIndex).filter((row) => (row || []).some((value) => String(value ?? '').trim())).length;
+        stats.remainingEligibleRows += remaining;
+        sheetStats.remainingEligibleRows = remaining;
+        sheetStats.nextRowNumber = nextIndex + 1;
+      }
+    }
   }
 
   stats.agentModels = [...stats.agentModels];
-  job.status = stats.failedRows ? 'completed_with_errors' : (stats.pendingPhones ? 'waiting_for_phone_webhooks' : 'completed');
+  job.status = stats.rowLimitReached
+    ? 'partial_safe_cap'
+    : (stats.failedRows ? 'completed_with_errors' : (stats.pendingPhones ? 'waiting_for_phone_webhooks' : 'completed'));
+  job.nextRowNumber = stats.nextRowNumber;
+  job.remainingEligibleRows = stats.remainingEligibleRows;
   job.stats = stats;
   job.updatedAt = new Date().toISOString();
   saveState(state);
@@ -1341,6 +1456,60 @@ async function enrichWorkbook(source, options = {}) {
     status: job.status,
     backupPath,
   };
+}
+
+function latestCappedJob() {
+  const state = loadState();
+  return [...(state.jobs || [])].reverse().find((job) =>
+    job?.status === 'partial_safe_cap'
+    && job?.requestedSheetName
+    && Number.isInteger(Number(job?.nextRowNumber))
+    && Number(job.nextRowNumber) > 1
+  ) || null;
+}
+
+async function resumeCappedJob(options = {}) {
+  const previous = latestCappedJob();
+  if (!previous) {
+    const error = new Error('No safely checkpointed POC enrichment chunk is waiting to resume.');
+    error.code = 'THREE_POC_RESUME_NOT_FOUND';
+    throw error;
+  }
+  if (options.jobId && String(options.jobId) !== String(previous.id)) {
+    const error = new Error('The approved POC resume checkpoint no longer matches the latest resumable job. Nothing was executed.');
+    error.code = 'THREE_POC_RESUME_CHECKPOINT_MISMATCH';
+    throw error;
+  }
+
+  const markCheckpoint = (status, patch = {}) => {
+    const state = loadState();
+    const job = (state.jobs || []).find((item) => String(item?.id) === String(previous.id));
+    if (!job) {
+      const error = new Error('The approved POC resume checkpoint disappeared before execution. Nothing was executed.');
+      error.code = 'THREE_POC_RESUME_CHECKPOINT_MISSING';
+      throw error;
+    }
+    Object.assign(job, patch, { status, updatedAt: new Date().toISOString() });
+    saveState(state);
+  };
+
+  markCheckpoint('resume_in_progress', { resumeStartedAt: new Date().toISOString() });
+  try {
+    const result = await enrichWorkbook(previous.source, {
+      sheetName: previous.requestedSheetName,
+      startRowNumber: Number(previous.nextRowNumber),
+      rowLimit: options.rowLimit || previous.rowLimit || undefined,
+    });
+    markCheckpoint('resumed', { resumedByJobId: result.jobId, resumedAt: new Date().toISOString() });
+    return result;
+  } catch (error) {
+    // Never make an ambiguous interrupted paid run automatically resumable.
+    markCheckpoint('resume_interrupted_needs_inspection', {
+      resumeInterruptedAt: new Date().toISOString(),
+      resumeErrorCode: String(error?.code || 'THREE_POC_RESUME_FAILED'),
+    });
+    throw error;
+  }
 }
 
 function pendingCount() {
@@ -1362,12 +1531,19 @@ function formatResult(result) {
   const anchoredWrites = result.anchoredRows
     ? ` Actual anchored writes: POC-1 F/G = ${result.poc1PhonesWritten || 0} phone, ${result.poc1EmailsWritten || 0} email; POC-2 H/I/J = ${result.poc2NamesWritten || 0} name/designation, ${result.poc2PhonesWritten || 0} phone, ${result.poc2EmailsWritten || 0} email; POC-3 K/L/M = ${result.poc3NamesWritten || 0} name/designation, ${result.poc3PhonesWritten || 0} phone, ${result.poc3EmailsWritten || 0} email. Existing POC slots repaired/upgraded: ${result.existingPocSlotsRepaired || 0}.`
     : '';
-  return `Agentic 3-POC enrichment finished. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${pending}${unresolved}`;
+  const cap = result.rowLimitReached
+    ? ` Safety cap reached after ${result.scannedRows} rows; ${result.remainingEligibleRows || 0} eligible row${Number(result.remainingEligibleRows || 0) === 1 ? '' : 's'} remain, checkpointed at row ${result.nextRowNumber}. Use “resume POC enrichment” and approve the new Apollo run to continue from that checkpoint; earlier rows will not be replayed.`
+    : '';
+  return `Agentic ${result.maxPocSlots || 3}-POC enrichment ${result.rowLimitReached ? 'chunk finished' : 'finished'}. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${pending}${unresolved}${cap}`;
 }
 
 module.exports = {
   STATE_FILE,
   detectThreePocLayout,
+  selectCompatibleSheets,
+  writeSourceCells,
+  rowChanges,
+  anchoredRowChanges,
   rowContext,
   linkedInProfileKind,
   personNameKey,
@@ -1394,6 +1570,8 @@ module.exports = {
   inspectSource,
   enrichWorkbook,
   syncPendingPhones,
+  latestCappedJob,
+  resumeCappedJob,
   startPhoneWatcher,
   pendingCount,
   formatResult,

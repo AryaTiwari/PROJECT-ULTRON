@@ -178,7 +178,7 @@ assert.match(source, /Contact-data availability must NOT influence responsibilit
 assert.match(source, /anchored_first_poc/);
 assert.match(source, /resolvePersonProfile/);
 assert.match(source, /Exact POC-1 LinkedIn profile -> current Apollo organization/);
-assert.match(source, /if \(layout\.schema === 'anchored_first_poc'\) return \[\];/);
+assert.match(source, /startsWith\('anchored_first_poc'\)\) return \[\];/, 'all anchored POC schema variants must skip automatic LinkedIn-column creation');
 assert.match(source, /resolvedIdentity\.title \|\| person\.title/);
 assert.match(source, /apollo\.resolveDecisionMaker\(person, company, domain/);
 assert.match(source, /apollo\.resolvePersonByNameCompany/);

@@ -43,6 +43,9 @@ jobs:
       - name: Run Google auth integrity contract
         working-directory: mark3-development
         run: npm run check:google-auth-integrity
+      - name: Run enrichment hard safety contract
+        working-directory: mark3-development
+        run: npm run check:enrichment-safety
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight

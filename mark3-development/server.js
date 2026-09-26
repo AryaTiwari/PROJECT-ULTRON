@@ -21,6 +21,8 @@ const voice = require('./core/voice-orchestrator');
 const nativeVoice = require('./core/native-voice-input');
 const multimodal = require('./core/multimodal');
 const commandControl = require('./core/command-control-plane');
+const enrichmentRequestSafety = require('./core/enrichment-request-safety');
+const paidTools = require('./core/paid-tool-approval');
 const enrichmentErrors = require('./core/spreadsheet-enrichment-errors');
 const fileVault = require('./core/file-vault');
 const { subscribe, emit } = require('./core/events');
@@ -48,7 +50,7 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
     'Content-Length': Buffer.byteLength(payload),
     'Cache-Control': 'no-store',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Ultron-Request-Id',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
   });
   res.end(payload);
@@ -123,6 +125,9 @@ function serveVaultFile(req, res) {
   fs.createReadStream(entry.path).pipe(res);
 }
 function errorStatus(error) {
+  const code = String(error?.code || '');
+  if (code === 'ENRICHMENT_REQUEST_ID_REQUIRED') return 428;
+  if (/ENRICHMENT_REQUEST_(?:INTERRUPTED|ALREADY_COMPLETED|FAILED|ID_COLLISION)/.test(code)) return 409;
   const upstream = Number(error?.status || 0);
   if (upstream === 400) return 400;
   if ([401,403].includes(upstream)) return 502;
@@ -290,6 +295,11 @@ const server = http.createServer(async (req,res) => {
       const heartbeat=setInterval(()=>{try{res.write(': keepalive\n\n');}catch{}},20000);
       req.on('close',()=>{clearInterval(heartbeat);sseClients.delete(res);}); return;
     }
+    if (req.method === 'GET' && /^\/api\/enrichment\/requests\/[A-Za-z0-9._:-]{8,180}$/.test(req.url || '')) {
+      const requestId = decodeURIComponent(String(req.url || '').split('/').pop() || '');
+      const requestState = enrichmentRequestSafety.status(requestId);
+      return send(res, requestState ? 200 : 404, { ok: Boolean(requestState), request: requestState || null });
+    }
     if (req.method === 'POST' && req.url === '/api/chat') {
       const data=await body(req, 4 * 1024 * 1024);
       // Older browser transports may have prefixed 'create' to an operational
@@ -313,16 +323,36 @@ const server = http.createServer(async (req,res) => {
           } : { id: String(item || '') };
         })
         .filter((item) => item?.id);
-      const controlled = await commandControl.dispatch(data.message, {
+      const routeContext = {
         inputMode: data.inputMode,
         history: data.history,
         // Ownership uses attachment metadata only, not file contents. The UI
         // sends attachment IDs, so resolve name/mime here before domain claim.
         attachments: routeAttachments,
-      });
+      };
+      const routeClaim = commandControl.claim(data.message, routeContext);
+      const pendingApolloApproval = Boolean(paidTools.pending('apollo'));
+      const protectedEnrichment = enrichmentRequestSafety.protects(routeClaim, { pendingApolloApproval });
+      const requestId = String(req.headers['x-ultron-request-id'] || data.requestId || '').trim();
+      const requestFingerprint = protectedEnrichment ? enrichmentRequestSafety.fingerprint({
+        message: data.message,
+        inputMode: data.inputMode,
+        routeDomain: routeClaim.domain,
+        attachments: routeAttachments,
+      }) : '';
+      const runControlled = () => commandControl.dispatch(data.message, routeContext);
+      const controlled = protectedEnrichment
+        ? await enrichmentRequestSafety.execute({
+            requestId,
+            requestFingerprint,
+            routeDomain: routeClaim.domain || (pendingApolloApproval ? 'paid-approval-reentry' : ''),
+          }, runControlled)
+        : await runControlled();
       if (controlled) {
         const delivery = responseDelivery(controlled.response || controlled.text || '');
         return send(res, 200, { ...controlled, response: delivery.text, text: delivery.text,
+          requestId: protectedEnrichment ? requestId || null : undefined,
+          requestProtected: protectedEnrichment,
           listenAfterResponseMs: delivery.listenAfterResponseMs, invitesReply: delivery.invitesReply });
       }
 
