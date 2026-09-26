@@ -47,14 +47,15 @@ export async function googleSetClientSecret(filePath){
   const result=await run(setupScript,["--client-secret",target]);
   return{ok:result.code===0,stdout:result.stdout,stderr:result.stderr};
 }
-export async function googleAuthUrl(services="drive,sheets"){
-  const result=await run(setupScript,["--auth-url","--services",String(services||"drive,sheets"),"--format","json"]);
-  const data=parse(result.stdout);return data||{ok:false,code:result.code,stdout:result.stdout,stderr:result.stderr};
+export async function googleAuthUrl(){
+  // Legacy compatibility alias. Hermes' old setup.py flow generated localhost:1
+  // and Chromium blocks that callback as ERR_UNSAFE_PORT. Use ULTRON's own
+  // ephemeral 127.0.0.1 PKCE flow instead.
+  return googleWorkspaceConnect();
 }
-export async function googleAuthCode(codeOrUrl){
-  const value=String(codeOrUrl||"").trim();if(!value)throw new Error("GOOGLE_AUTH_CODE_REQUIRED");
-  const result=await run(setupScript,["--auth-code",value,"--format","json"]);
-  const data=parse(result.stdout);return data||{ok:false,code:result.code,stdout:result.stdout,stderr:result.stderr};
+export async function googleAuthCode(){
+  const status=await googleWorkspaceStatus();
+  return{...status,legacyAuthCodeFlowDisabled:true,message:"Manual auth-code handling is no longer required. ULTRON completes OAuth through a secure ephemeral 127.0.0.1 callback automatically."};
 }
 function colName(n){let s="";for(let x=n;x>0;x=Math.floor((x-1)/26))s=String.fromCharCode(65+(x-1)%26)+s;return s;}
 function looksAuthFailure(value){return /auth|oauth|credential|refresh token|invalid_grant|unauthenticated|login required|token.*expired|token.*revoked/i.test(String(value||""));}
