@@ -41,6 +41,7 @@ for(const target of [
 
 const recovery=fs.readFileSync(path.join(root,"services/capability-host/src/google-auth-recovery.mjs"),"utf8");
 const workspace=fs.readFileSync(path.join(root,"services/capability-host/src/workspace.mjs"),"utf8");
+const server=fs.readFileSync(path.join(root,"services/capability-host/src/server.mjs"),"utf8");
 const mission=fs.readFileSync(path.join(root,"services/gateway/src/apollo-company-mission.mjs"),"utf8");
 const checks=[
   ["source-root",recovery,/import\.meta\.url/],
@@ -55,9 +56,18 @@ const checks=[
   ["pkce",recovery,/code_challenge_method:"S256"/],
   ["workspace-self-heal",workspace,/ensureGoogleWorkspace/],
   ["workspace-retry",workspace,/authRetried/],
-  ["mission-google-preflight",mission,/googleSheetPreflight/]
+  ["workspace-connect-export",workspace,/export async function googleWorkspaceConnect/],
+  ["capability-connect-import",server,/import \{[^}]*googleWorkspaceConnect[^}]*\} from "\.\/workspace\.mjs";/],
+  ["capability-connect-route",server,/name==="ultron_google_workspace_connect"[^\n]*googleWorkspaceConnect\(\)/],
+  ["mission-google-preflight",mission,/googleSheetPreflight/],
+  ["mission-apollo-discovery-checkpoint",mission,/discoveryComplete:true/],
+  ["mission-apollo-discovery-reuse",mission,/reusesApolloDiscovery/],
+  ["mission-selection-recovery",mission,/\["SELECTION","SHEET_WRITE","READBACK_VERIFY"\]/]
 ];
 for(const [name,source,pattern] of checks)if(!pattern.test(source))fail(`${name} contract missing`);
+const googlePreflightCall=mission.indexOf("const preflight=await workspace.googleSheetPreflight");
+const paidApolloCall=mission.indexOf("const result=await apollo.searchApolloOrganizations");
+if(googlePreflightCall<0||paidApolloCall<0||googlePreflightCall>paidApolloCall)fail("Apollo paid search can run before Google Sheet preflight");
 if(/process\.cwd\(\)/.test(recovery+workspace))fail("credential resolution depends on process.cwd()");
 if(/localhost:1/.test(recovery+workspace))fail("unsafe localhost:1 callback reintroduced");
 

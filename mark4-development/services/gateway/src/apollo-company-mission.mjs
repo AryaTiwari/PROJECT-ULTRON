@@ -43,7 +43,7 @@ function rowFor(item,headers,map){const row=Array(headers.length).fill("");if(ma
 export function createApolloCompanyMissionRunner({db,publish,workspace={googleSheetPreflight,googleSheetRead,googleSheetAppendRows,googleSheetReadback},apollo={searchApolloOrganizations}}){
   const emit=(missionId,type,payload={})=>{db.addEvent({missionId,type,payload});publish(type,{missionId,...payload});};
   const patch=(id,value)=>db.updateMission(id,value);
-  const fail=(id,error,stage)=>{const code=error.code||error.message||"MISSION_FAILED";patch(id,{status:"blocked",state:{currentStage:stage,error:code,errorMessage:error.message},blockers:[{code,message:error.message,stage}],nextAction:["SHEET_WRITE","READBACK_VERIFY"].includes(stage)?`Resume mission ${id} after Google Sheets access is restored; saved Apollo results will be reused.`:"Correct the reported problem and resume the mission."});emit(id,"mission.blocked",{stage,error:code,message:error.message});return db.getMission(id);};
+  const fail=(id,error,stage)=>{const code=error.code||error.message||"MISSION_FAILED";patch(id,{status:"blocked",state:{currentStage:stage,error:code,errorMessage:error.message},blockers:[{code,message:error.message,stage}],nextAction:["SELECTION","SHEET_WRITE","READBACK_VERIFY"].includes(stage)?`Resume mission ${id} after Google Sheets access is restored; saved Apollo results will be reused.`:"Correct the reported problem and resume the mission."});emit(id,"mission.blocked",{stage,error:code,message:error.message});return db.getMission(id);};
   async function start({sessionId,intent}){
     const id=`apollo-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
     db.createMission({id,objective:`Discover ${intent.targetCount} companies with Apollo and write them to Google Sheets`,originalRequest:intent.originalRequest,status:"active",state:{nativeOperation:"apollo-company-discovery",currentStage:"TARGET_VALIDATION",sessionId,intent,approvalRequired:true,approvalGranted:false,apolloCalls:0,candidates:[],selectedCompanies:[],writtenCompanies:[]},constraints:{...intent.filters,contactEnrichment:false},completionCriteria:{targetCount:intent.targetCount,verifiedSheetWrite:true},nextAction:"Validate Google authentication and the exact worksheet."});
@@ -79,17 +79,23 @@ export function createApolloCompanyMissionRunner({db,publish,workspace={googleSh
         const variants=[...(filters.concepts||[]),"B2B software","cloud software"].filter((v,i,a)=>v&&a.indexOf(v)===i);
         const target=Math.max(1,Number(intent.targetCount)||25),poolTarget=Math.max(100,target*4);let candidates=mission.state.candidates||[],calls=Number(mission.state.apolloCalls||0),pagesSearched=mission.state.pagesSearched||[];
         patch(id,{state:{searchVariants:variants,pagesSearched}});
-        emit(id,"apollo.search.started",{target,poolTarget,variants:variants.length});
-        outer:for(const keyword of variants){for(let page=1;page<=3;page++){
-          const result=await apollo.searchApolloOrganizations({locations:filters.geography||[],employeeMin:filters.employeeMin,employeeMax:filters.employeeMax,keywords:keyword,page,perPage:100});calls+=result.callCount||1;pagesSearched=[...pagesSearched,{keyword,page,received:(result.organizations||[]).length}];
-          const byKey=new Map(candidates.map(item=>[companyKey(item),item]));for(const item of result.organizations||[])byKey.set(companyKey(item),item);candidates=[...byKey.values()];
-          patch(id,{state:{currentStage:"APOLLO_SEARCH",candidates,apolloCalls:calls,searchCheckpoint:{keyword,page},pagesSearched,candidateCount:candidates.length},nextAction:`Qualify ${candidates.length} Apollo candidates.`});
-          emit(id,"apollo.search.page",{keyword,page,received:(result.organizations||[]).length,uniqueCandidates:candidates.length,calls});
-          if(candidates.length>=poolTarget||calls>=8)break outer;if(!(result.organizations||[]).length)break;
-        }}
-        emit(id,"apollo.search.completed",{calls,candidates:candidates.length});
+        if(!mission.state.discoveryComplete){
+          emit(id,"apollo.search.started",{target,poolTarget,variants:variants.length});
+          outer:for(const keyword of variants){for(let page=1;page<=3;page++){
+            const result=await apollo.searchApolloOrganizations({locations:filters.geography||[],employeeMin:filters.employeeMin,employeeMax:filters.employeeMax,keywords:keyword,page,perPage:100});calls+=result.callCount||1;pagesSearched=[...pagesSearched,{keyword,page,received:(result.organizations||[]).length}];
+            const byKey=new Map(candidates.map(item=>[companyKey(item),item]));for(const item of result.organizations||[])byKey.set(companyKey(item),item);candidates=[...byKey.values()];
+            patch(id,{state:{currentStage:"APOLLO_SEARCH",candidates,apolloCalls:calls,searchCheckpoint:{keyword,page},pagesSearched,candidateCount:candidates.length},nextAction:`Qualify ${candidates.length} Apollo candidates.`});
+            emit(id,"apollo.search.page",{keyword,page,received:(result.organizations||[]).length,uniqueCandidates:candidates.length,calls});
+            if(candidates.length>=poolTarget||calls>=8)break outer;if(!(result.organizations||[]).length)break;
+          }}
+          patch(id,{state:{discoveryComplete:true,discoveryCompletedAt:new Date().toISOString(),candidates,apolloCalls:calls,pagesSearched,candidateCount:candidates.length}});
+          emit(id,"apollo.search.completed",{calls,candidates:candidates.length});
+        }else{
+          emit(id,"apollo.search.reused",{calls,candidates:candidates.length});
+        }
         patch(id,{state:{currentStage:"QUALIFICATION"}});const qualified=candidates.filter(item=>qualifies(item,filters)).sort((a,b)=>score(b,filters)-score(a,filters));emit(id,"qualification.completed",{candidates:candidates.length,qualified:qualified.length});
         patch(id,{state:{currentStage:"DEDUPLICATION",qualifiedCount:qualified.length}});const unique=[...new Map(qualified.map(item=>[companyKey(item),item])).values()];emit(id,"deduplication.completed",{before:qualified.length,after:unique.length});
+        patch(id,{state:{currentStage:"SELECTION"},nextAction:"Compare saved Apollo candidates with the live Google Sheet before writing."});
         const targetInfo=mission.state.sheetTarget;const live=await workspace.googleSheetRead({spreadsheetId:targetInfo.spreadsheetId,range:`'${String(targetInfo.sheetName).replace(/'/g,"''")}'!A1:ZZ`});
         const map=mission.state.headerMap||columns(mission.state.headers||[]),seen=existingKeys(live.values||[],map);
         const available=unique.filter(item=>!seen.has(companyKey(item))&&!seen.has(`name:${norm(item.name)}`)&&!seen.has(`domain:${canonicalDomain(item.domain||item.website)}`)&&!seen.has(`linkedin:${canonicalUrl(item.linkedin)}`));selected=available.slice(0,target);
@@ -116,7 +122,7 @@ export function createApolloCompanyMissionRunner({db,publish,workspace={googleSh
       emit(id,"mission.completed",{operation:"apollo-company-discovery",companiesWritten:selected.length,candidatesInspected:mission.state.candidateCount||0,qualified:mission.state.qualifiedCount||0,duplicatesSkipped:duplicateCount,companyRowsRemoved:0,apolloCalls:mission.state.apolloCalls||0,artifact,message});emit(id,"assistant.completed",{native:true,sessionId:mission.state.sessionId,content:message,missionId:id});return mission;
     }catch(error){mission=db.getMission(id);const stage=mission?.state?.currentStage||"EXECUTION";return fail(id,error,["SHEET_WRITE","SELECTION","READBACK_VERIFY"].includes(stage)?stage:stage);}
   }
-  async function resume(id){const mission=db.getMission(id);if(!mission||mission.state?.nativeOperation!=="apollo-company-discovery")throw Object.assign(new Error("MISSION_NOT_RESUMABLE"),{code:"MISSION_NOT_RESUMABLE"});if(!mission.state.approvalGranted)throw Object.assign(new Error("MISSION_APPROVAL_REQUIRED"),{code:"MISSION_APPROVAL_REQUIRED"});patch(id,{status:"active",state:{currentStage:mission.state.writeCommitted?"READBACK_VERIFY":mission.state.selectedCompanies?.length?"SHEET_WRITE":"APOLLO_SEARCH",error:null,errorMessage:null},blockers:[],nextAction:"Resume from the saved checkpoint."});emit(id,"mission.resumed",{checkpoint:mission.state.searchCheckpoint||null,reusesSelectedCompanies:Boolean(mission.state.selectedCompanies?.length)});void execute(id);return{ok:true,started:true,mission:db.getMission(id)};}
+  async function resume(id){const mission=db.getMission(id);if(!mission||mission.state?.nativeOperation!=="apollo-company-discovery")throw Object.assign(new Error("MISSION_NOT_RESUMABLE"),{code:"MISSION_NOT_RESUMABLE"});if(!mission.state.approvalGranted)throw Object.assign(new Error("MISSION_APPROVAL_REQUIRED"),{code:"MISSION_APPROVAL_REQUIRED"});const resumeStage=mission.state.writeCommitted?"READBACK_VERIFY":mission.state.selectedCompanies?.length?"SHEET_WRITE":mission.state.discoveryComplete?"QUALIFICATION":"APOLLO_SEARCH";patch(id,{status:"active",state:{currentStage:resumeStage,error:null,errorMessage:null},blockers:[],nextAction:"Resume from the saved checkpoint."});emit(id,"mission.resumed",{checkpoint:mission.state.searchCheckpoint||null,reusesSelectedCompanies:Boolean(mission.state.selectedCompanies?.length),reusesApolloDiscovery:Boolean(mission.state.discoveryComplete)});void execute(id);return{ok:true,started:true,mission:db.getMission(id)};}
   const isNativeRun=id=>db.getMission(id)?.state?.nativeOperation==="apollo-company-discovery";
   return{start,approve,resume,execute,isNativeRun,qualifies,score,columns};
 }
