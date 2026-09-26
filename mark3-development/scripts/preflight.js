@@ -73,7 +73,7 @@ if (!/prematureFastFinalize:\s*false/.test(wakeBoost)) throw new Error('Prematur
 if (!/FLOW_REPLY_WINDOW_MS\s*=\s*10000/.test(chatTransport) || !/PLAYBACK_SETTLE_MS\s*=\s*700/.test(chatTransport)) throw new Error('Playback-safe ten-second flow is missing.');
 if (!/CHAT_TRANSPORT_TIMEOUT_MS\s*=\s*45\s*\*\s*60\s*\*\s*1000/.test(chatTransport)) throw new Error('Long-running full-sheet chat transport timeout is not aligned with the Mark 3 client.');
 if (!/X-Ultron-Request-Id/.test(chatTransport) || !/ENRICHMENT_RECONNECT_DELAYS_MS/.test(chatTransport)) throw new Error('Protected enrichment reconnect identity/retry policy is missing.');
-if (!/enrichmentRequestSafety\.execute/.test(serverSource) || !/\/api\/enrichment\/requests\//.test(serverSource)) throw new Error('Server-side enrichment idempotency/status gate is missing.');
+if (!/enrichmentRequestSafety\.execute/.test(serverSource) || !/api\\\/enrichment\\\/requests/.test(serverSource)) throw new Error('Server-side enrichment idempotency/status gate is missing.');
 const enrichmentSafetySource = fs.readFileSync(path.join(root,'core','enrichment-request-safety.js'),'utf8');
 if (!/ENRICHMENT_REQUEST_INTERRUPTED_NO_REPLAY/.test(enrichmentSafetySource) || !/ENRICHMENT_REQUEST_ID_REQUIRED/.test(enrichmentSafetySource) || !/requestFingerprint/.test(enrichmentSafetySource)) throw new Error('Crash-safe enrichment request replay protection is incomplete.');
 const threePocSource = fs.readFileSync(path.join(root,'core','three-poc-enrichment-operator.js'),'utf8');
