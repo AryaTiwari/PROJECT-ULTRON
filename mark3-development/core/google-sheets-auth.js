@@ -8,6 +8,7 @@ const config = require('./config');
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 let sessionValidated = false;
 let lastAuthEvent = null;
+let interactiveAuthorizationInFlight = null;
 
 function envFileValue(name) {
   for (const file of [path.join(config.projectRoot, '.env'), path.join(config.mark3Root, '.env')]) {
@@ -254,6 +255,49 @@ async function accessToken(options = {}) {
   return token.access_token;
 }
 
+
+function requiresInteractiveReauth(error) {
+  if (!error) return false;
+  const code = String(error.code || '');
+  const reason = String(error.authReason || '');
+  if (!['GOOGLE_SHEETS_AUTH_REQUIRED', 'GOOGLE_SHEETS_REFRESH_TOKEN_REQUIRED'].includes(code)) return false;
+  return [
+    'token_missing_or_unreadable',
+    'refresh_token_missing',
+    'refresh_token_rejected_by_google',
+    'google_rejected_authorization',
+    'refresh_returned_no_access_token',
+    'authorization_returned_no_refresh_token',
+  ].includes(reason) || code === 'GOOGLE_SHEETS_REFRESH_TOKEN_REQUIRED';
+}
+
+async function authorizeInteractiveOnce() {
+  if (!interactiveAuthorizationInFlight) {
+    interactiveAuthorizationInFlight = Promise.resolve()
+      .then(() => authorizeInteractive())
+      .finally(() => { interactiveAuthorizationInFlight = null; });
+  }
+  return interactiveAuthorizationInFlight;
+}
+
+async function ensureAccessToken(options = {}) {
+  const interactive = options.interactive !== false;
+  try {
+    return await accessToken({ forceRefresh: Boolean(options.forceRefresh) });
+  } catch (error) {
+    if (!interactive || !requiresInteractiveReauth(error)) throw error;
+    lastAuthEvent = {
+      type: 'interactive-reauthorization-started',
+      at: new Date().toISOString(),
+      reason: error.authReason || error.code || 'authorization_required',
+    };
+    await authorizeInteractiveOnce();
+    const token = await accessToken({ forceRefresh: false });
+    lastAuthEvent = { type: 'interactive-reauthorization-complete', at: new Date().toISOString() };
+    return token;
+  }
+}
+
 function base64url(buffer) {
   return Buffer.from(buffer).toString('base64url');
 }
@@ -405,6 +449,7 @@ module.exports = {
   saveToken,
   status,
   accessToken,
+  ensureAccessToken,
   authorizeInteractive,
   oauthErrorCode,
   tokenRequest,
