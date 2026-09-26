@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findCompanyContact, findCompanyContacts } from "./apollo.mjs";
 import { searchApolloOrganizations } from "./apollo-organizations.mjs";
-import { googleWorkspaceStatus, googleSetClientSecret, googleAuthUrl, googleAuthCode, createGoogleSheet, googleSheetMetadata, resolveGoogleSheetTarget, googleSheetRead, googleSheetAppendRows, googleSheetUpdateCells, googleSheetReadback } from "./workspace.mjs";
+import { googleWorkspaceStatus, googleWorkspaceConnect, googleSetClientSecret, googleAuthUrl, googleAuthCode, createGoogleSheet, googleSheetMetadata, resolveGoogleSheetTarget, googleSheetRead, googleSheetAppendRows, googleSheetUpdateCells, googleSheetReadback } from "./workspace.mjs";
 import { createReelJob, getReelJob, renderReelJob, inspectReelJob, mediaEngineStatus } from "../../media-engine/src/engine.mjs";
 
 const here=path.dirname(fileURLToPath(import.meta.url)),mark4Root=path.resolve(here,"../../..");
