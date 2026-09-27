@@ -1,4 +1,4 @@
-export type ViewMode = "command" | "mission" | "branches" | "operations";
+export type ViewMode = "home" | "command" | "mission" | "tasks" | "branches" | "skills" | "memory" | "models" | "artifacts" | "system" | "about";
 
 export interface BranchMetadata {
   sessionId: string;
@@ -74,6 +74,40 @@ export interface ModelRoute {
   state?: Record<string, unknown> | null;
 }
 
+
+export interface SkillDescriptor {
+  id: string;
+  name: string;
+  summary: string;
+  source: string;
+  path?: string;
+  available: boolean;
+}
+
+export interface WorkspaceState {
+  available: boolean;
+  repository?: string;
+  root?: string;
+  branch?: string;
+  head?: string;
+  subject?: string;
+  upstream?: string | null;
+  dirty?: boolean;
+  changes?: Array<{ code:string; path:string }>;
+  recentCommits?: Array<{ hash:string; subject:string; relativeDate:string }>;
+  worktrees?: Array<{ path:string; head:string; branch:string }>;
+  error?: string;
+}
+
+export interface SystemOverview {
+  generatedAt: string;
+  workspace: WorkspaceState;
+  skills: SkillDescriptor[];
+  memory: { available:boolean; source?:string; excerpt?:string; updatedAt?:string };
+  purpose: { name:string; statement:string; source:string };
+  artifacts: Array<Record<string, unknown>>;
+  services: Array<{ id:string; label:string; status:string; detail:string }>;
+}
 export interface AttachmentRef {
   id: string;
   name: string;

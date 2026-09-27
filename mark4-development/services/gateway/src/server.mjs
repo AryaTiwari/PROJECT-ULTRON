@@ -11,6 +11,7 @@ import { createNestedBranch } from "./branching.mjs";
 import { normalizeRunEvent, isTerminalRunEvent } from "./run-events.mjs";
 import { compileCommand } from "./command-control-plane.mjs";
 import { createApolloCompanyMissionRunner } from "./apollo-company-mission.mjs";
+import { systemOverview } from "./system-overview.mjs";
 import { setGoogleWorkspaceAuthEventSink } from "../../capability-host/src/workspace.mjs";
 
 setGoogleWorkspaceAuthEventSink((type,data)=>publish(type,data));
@@ -209,7 +210,8 @@ const server=http.createServer(async(req,res)=>{
       await hermes.messages(sessionId);
       return json(res,200,{ok:true,health,sessionId,modelFabric:fabricStatus()});
     }
-    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=80&include_children=true")]);return json(res,200,{health,sessions:decorateSessions(sessions),missions:listMissions(),leadStats:leadStats(),creatorStats:creatorStats(),modelFabric:fabricStatus()});}
+    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=80&include_children=true")]);const missions=listMissions(),modelFabric=fabricStatus();return json(res,200,{health,sessions:decorateSessions(sessions),missions,leadStats:leadStats(),creatorStats:creatorStats(),modelFabric,overview:systemOverview({missions,health,modelFabric})});}
+    if(req.method==="GET"&&url.pathname==="/api/system-overview"){const health=await hermes.health().catch(()=>({ok:false})),missions=listMissions(),modelFabric=fabricStatus();return json(res,200,systemOverview({missions,health,modelFabric}));}
     if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,decorateSessions(await hermes.sessions(url.searchParams.toString())));
     if(req.method==="POST"&&url.pathname==="/api/sessions")return json(res,201,unwrapSession(await hermes.createSession(await body(req))));
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="messages")return json(res,200,unwrapList(await hermes.messages(p[2])));
@@ -259,3 +261,5 @@ const server=http.createServer(async(req,res)=>{
   }catch(error){return json(res,Number(error.status)||500,{error:error.message,details:error.data||null});}
 });
 server.listen(config.port,config.host,()=>{console.log(`ULTRON Mark 4 gateway listening on http://${config.host}:${config.port}`);console.log(`Hermes: ${config.hermesUrl}`);});
+
+
