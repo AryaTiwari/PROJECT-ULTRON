@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"../../..");
-test("launcher gates UI on deep readiness and explicit project cwd",()=>{
+test("launcher gates UI on gateway liveness and keeps explicit project cwd",()=>{
   const dev=fs.readFileSync(path.join(root,"scripts","dev.mjs"),"utf8");
   const policy=fs.readFileSync(path.join(root,"scripts","conversation-model-policy.mjs"),"utf8");
-  assert.match(dev,/\/api\/ready/);
+  assert.match(dev,/\/api\/health/);assert.doesNotMatch(dev,/waitFor\("http:\/\/127\.0\.0\.1:8787\/api\/ready"/);
   assert.match(dev,/TERMINAL_CWD = root/);
   assert.match(policy,/gemini-3\.7-flash/);
 });

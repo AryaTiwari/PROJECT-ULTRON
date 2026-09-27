@@ -61,6 +61,12 @@ function parseSse(block){
   if(!data.length)return null;const raw=data.join("\n");try{return{type,data:JSON.parse(raw)};}catch{return{type,data:{raw}};}
 }
 const UI_TELEMETRY=new Set(["voice.listening","voice.transcribing","voice.transcribed","voice.speaking","voice.idle","voice.error"]);
+function runtimeStatus(health,modelFabric=fabricStatus()){
+  const routes=Array.isArray(modelFabric)?modelFabric:[];
+  const modelReady=routes.some(route=>route?.configured&&!route?.cooling);
+  const hermesReady=Boolean(health?.ok);
+  return{ok:true,status:hermesReady&&modelReady?"online":"degraded",gateway:{ok:true,host:config.host,port:config.port},hermes:{ok:hermesReady,status:Number(health?.status||0),error:health?.error||null},model:{ok:modelReady,readyRoutes:routes.filter(route=>route?.configured&&!route?.cooling).length},checkedAt:new Date().toISOString()};
+}
 function createMissionObserved(input){const mission=createMission(input);publish("mission.started",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state});return mission;}
 function updateMissionObserved(id,patch){const mission=updateMission(id,patch);if(mission)publish(mission.status==="completed"?"mission.completed":"mission.updated",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state,nextAction:mission.nextAction});return mission;}
 function addEvidenceObserved(input){const evidence=addEvidence(input);publish("evidence.recorded",{missionId:input.missionId,kind:evidence.kind,source:evidence.source,verified:evidence.verified});return evidence;}
@@ -196,9 +202,13 @@ const server=http.createServer(async(req,res)=>{
   try{
     if(req.method==="GET"&&url.pathname==="/api/live"){res.writeHead(200,{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache","Connection":"keep-alive"});return subscribe(res);}
     if(req.method==="POST"&&url.pathname==="/api/telemetry"){const input=await body(req,10000),type=String(input.type||"");if(!UI_TELEMETRY.has(type))return json(res,400,{error:"TELEMETRY_TYPE_NOT_ALLOWED"});publish(type,{source:"browser",...(input.data||{})});return json(res,202,{ok:true});}
+    if(req.method==="GET"&&url.pathname==="/api/health"){
+      const health=await hermes.health();
+      return json(res,200,runtimeStatus(health));
+    }
     if(req.method==="GET"&&url.pathname==="/api/ready"){
       const health=await hermes.health();
-      if(!health.ok)return json(res,503,{ok:false,stage:"hermes-health",health});
+      if(!health.ok)return json(res,503,{...runtimeStatus(health),ok:false,status:"degraded",stage:"hermes-health",health});
       let sessions=unwrapList(await hermes.sessions("limit=2&include_children=true"));
       let session=sessions[0]||null;
       if(!session){
@@ -206,12 +216,18 @@ const server=http.createServer(async(req,res)=>{
         sessions=[session];
       }
       const sessionId=String(session?.id||session?.session_id||"");
-      if(!sessionId)return json(res,503,{ok:false,stage:"session-create",error:"Hermes returned no session id"});
+      if(!sessionId)return json(res,503,{...runtimeStatus(health),ok:false,status:"degraded",stage:"session-create",error:"Hermes returned no session id"});
       await hermes.messages(sessionId);
-      return json(res,200,{ok:true,health,sessionId,modelFabric:fabricStatus()});
+      return json(res,200,{...runtimeStatus(health),ok:true,status:"online",health,sessionId,modelFabric:fabricStatus()});
     }
-    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){const[health,sessions]=await Promise.all([hermes.health(),hermes.sessions("limit=80&include_children=true")]);const missions=listMissions(),modelFabric=fabricStatus();return json(res,200,{health,sessions:decorateSessions(sessions),missions,leadStats:leadStats(),creatorStats:creatorStats(),modelFabric,overview:systemOverview({missions,health,modelFabric})});}
-    if(req.method==="GET"&&url.pathname==="/api/system-overview"){const health=await hermes.health().catch(()=>({ok:false})),missions=listMissions(),modelFabric=fabricStatus();return json(res,200,systemOverview({missions,health,modelFabric}));}
+    if(req.method==="GET"&&url.pathname==="/api/bootstrap"){
+      const health=await hermes.health();
+      let sessions=[],sessionError=null;
+      if(health.ok){try{sessions=decorateSessions(await hermes.sessions("limit=80&include_children=true"));}catch(error){sessionError=String(error?.message||error);}}
+      const missions=listMissions(),modelFabric=fabricStatus(),runtime=runtimeStatus(health,modelFabric);
+      if(sessionError){runtime.status="degraded";runtime.hermes={...runtime.hermes,ok:false,error:sessionError};}
+      return json(res,200,{ok:true,runtime,health,sessions,missions,leadStats:leadStats(),creatorStats:creatorStats(),modelFabric,overview:systemOverview({missions,health,modelFabric})});
+    }    if(req.method==="GET"&&url.pathname==="/api/system-overview"){const health=await hermes.health().catch(()=>({ok:false})),missions=listMissions(),modelFabric=fabricStatus();return json(res,200,systemOverview({missions,health,modelFabric}));}
     if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,decorateSessions(await hermes.sessions(url.searchParams.toString())));
     if(req.method==="POST"&&url.pathname==="/api/sessions")return json(res,201,unwrapSession(await hermes.createSession(await body(req))));
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="messages")return json(res,200,unwrapList(await hermes.messages(p[2])));
@@ -261,5 +277,3 @@ const server=http.createServer(async(req,res)=>{
   }catch(error){return json(res,Number(error.status)||500,{error:error.message,details:error.data||null});}
 });
 server.listen(config.port,config.host,()=>{console.log(`ULTRON Mark 4 gateway listening on http://${config.host}:${config.port}`);console.log(`Hermes: ${config.hermesUrl}`);});
-
-

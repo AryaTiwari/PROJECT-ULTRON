@@ -273,7 +273,9 @@ const children = [];
 let shuttingDown = false;
 let fatalChildError = null;
 
-function run(command, args, cwd = root) {
+function run(command, args, cwd = root, options = {}) {
+  const name = options.name || path.basename(command);
+  const critical = options.critical !== false;
   const child = spawn(command, args, {
     cwd,
     env: process.env,
@@ -282,15 +284,20 @@ function run(command, args, cwd = root) {
     windowsHide: process.platform === "win32"
   });
   children.push(child);
-  child.on("exit", code => {
-    if (!shuttingDown && code && code !== 0) {
-      fatalChildError = new Error(command + " exited with code " + code);
-      console.error(fatalChildError.message);
-    }
+  child.on("error", error => {
+    if (shuttingDown) return;
+    const failure = new Error(`${name} failed to start: ${error.message}`);
+    if (critical) fatalChildError = failure;
+    console.error("\nULTRON PROCESS FAILURE:", failure.message);
+  });
+  child.on("exit", (code, signal) => {
+    if (shuttingDown) return;
+    const failure = new Error(`${name} exited unexpectedly (${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`})`);
+    if (critical) fatalChildError = failure;
+    console.error("\nULTRON PROCESS FAILURE:", failure.message);
   });
   return child;
 }
-
 function resolveViteCli() {
   const candidates = [
     path.join(root,"node_modules","vite","bin","vite.js"),
@@ -402,9 +409,10 @@ async function main() {
     if (!truthy(process.env.ULTRON_M4_OMNIROUTE_READY)) await probeOmniRoute();
   }
   console.log("Starting Hermes with a fresh Mark 4 runtime...");
-  run(hermesPython, ["-m", "hermes_cli.main", "gateway", "run", "--replace"], root);
-  await waitFor(hermesHealth, "Hermes", Math.max(60000, Number(process.env.ULTRON_M4_HERMES_START_TIMEOUT_MS || 300000)));
-
+  run(hermesPython, ["-m", "hermes_cli.main", "gateway", "run", "--replace"], root, { name:"Hermes", critical:false });
+  const hermesStartup = waitFor(hermesHealth, "Hermes", Math.max(60000, Number(process.env.ULTRON_M4_HERMES_START_TIMEOUT_MS || 300000)))
+    .then(() => console.log("Hermes cognition is online."))
+    .catch(error => console.warn("Hermes remains unavailable; Mark 4 is running in degraded mode:", error.message));
   if (selectedModelRoute.provider) {
     console.log("Model route:", selectedModelRoute.provider + " / " + selectedModelRoute.model + " (" + selectedModelRoute.source + ")");
     if (!omniRoute.testMode) console.log("Direct conversation credentials:", selectedModelRoute.directCredentialCount || 0);
@@ -416,9 +424,8 @@ async function main() {
   }
 
   console.log("Starting ULTRON gateway...");
-  run(process.execPath, ["services/gateway/src/server.mjs"]);
-  await waitFor("http://127.0.0.1:8787/api/ready", "ULTRON deep readiness");
-
+  run(process.execPath, ["services/gateway/src/server.mjs"], root, { name:"ULTRON gateway", critical:true });
+  await waitFor("http://127.0.0.1:8787/api/health", "ULTRON gateway liveness");
   console.log("Starting cockpit...");
   runVite();
   await waitFor("http://127.0.0.1:5174/", "Vite cockpit");

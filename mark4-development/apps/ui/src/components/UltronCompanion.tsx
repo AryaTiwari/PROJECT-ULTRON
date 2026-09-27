@@ -2,10 +2,10 @@ import {useEffect,useMemo,useRef,useState} from "react";
 import type{LiveEvent,Mission,ViewMode}from"../types";
 
 type Mood="ready"|"thinking"|"working"|"pleased"|"concerned"|"listening"|"offline";
-const moodFrom=(events:LiveEvent[],online:boolean,busy:boolean,approval:boolean,voice:string):Mood=>{if(!online)return"offline";if(voice==="listening"||voice==="transcribing")return"listening";if(approval)return"concerned";const type=events.at(-1)?.type||"";if(type==="mission.completed"||type==="artifact.created")return"pleased";if(/failed|error|blocked/.test(type))return"concerned";if(busy||/tool\.|sheet\.|apollo\.|run\.started/.test(type))return"working";if(/request|model\.selected|skill\.selected/.test(type))return"thinking";return"ready";};
+const moodFrom=(events:LiveEvent[],online:boolean,degraded:boolean,busy:boolean,approval:boolean,voice:string):Mood=>{if(!online)return"offline";if(degraded)return"concerned";if(voice==="listening"||voice==="transcribing")return"listening";if(approval)return"concerned";const type=events.at(-1)?.type||"";if(type==="mission.completed"||type==="artifact.created")return"pleased";if(/failed|error|blocked/.test(type))return"concerned";if(busy||/tool\.|sheet\.|apollo\.|run\.started/.test(type))return"working";if(/request|model\.selected|skill\.selected/.test(type))return"thinking";return"ready";};
 const labels:Record<Mood,string>={ready:"Ready",thinking:"Thinking",working:"Executing",pleased:"Mission complete",concerned:"Needs attention",listening:"Listening",offline:"Core offline"};
-export function UltronCompanion(p:{events:LiveEvent[];online:boolean;busy:boolean;approval:boolean;error:boolean;hasArtifact:boolean;voiceState:string;mission?:Mission|null;onNavigate:(v:ViewMode)=>void;onVoice:()=>void;onFile:(file:File)=>void;}){
- const mood=useMemo(()=>moodFrom(p.events,p.online,p.busy,p.approval,p.voiceState),[p.events.length,p.online,p.busy,p.approval,p.voiceState]);
+export function UltronCompanion(p:{events:LiveEvent[];online:boolean;degraded:boolean;busy:boolean;approval:boolean;error:boolean;hasArtifact:boolean;voiceState:string;mission?:Mission|null;onNavigate:(v:ViewMode)=>void;onVoice:()=>void;onFile:(file:File)=>void;}){
+ const mood=useMemo(()=>moodFrom(p.events,p.online,p.degraded,p.busy,p.approval,p.voiceState),[p.events.length,p.online,p.degraded,p.busy,p.approval,p.voiceState]);
  const [pos,setPos]=useState<{x:number;y:number}>(()=>{try{const saved=JSON.parse(localStorage.getItem("ultron.companion.position")||"null");return saved&&typeof saved.x==="number"?saved:{x:0,y:0}}catch{return{x:0,y:0}}});
  const [menu,setMenu]=useState(false),[dragging,setDragging]=useState(false);
  const origin=useRef({x:0,y:0,px:0,py:0,moved:false}),hold=useRef<number|undefined>(undefined);

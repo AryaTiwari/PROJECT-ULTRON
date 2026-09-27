@@ -10,4 +10,20 @@ export function workspaceState(){try{const root=safeGit(["rev-parse","--show-top
 function firstParagraph(text){return text.replace(/^---[\s\S]*?---\s*/,"").split(/\r?\n\s*\r?\n/).map(x=>x.replace(/^#+\s*/gm,"").trim()).find(Boolean)||"Installed capability";}
 export function skillRegistry(){const root=path.join(mark4Root,"hermes","skills");if(!fs.existsSync(root))return[];return fs.readdirSync(root,{withFileTypes:true}).filter(x=>x.isDirectory()).map(dir=>{const file=path.join(root,dir.name,"SKILL.md");const text=fs.existsSync(file)?fs.readFileSync(file,"utf8"):"";const title=text.match(/^#\s+(.+)$/m)?.[1]?.trim()||dir.name.replace(/-/g," ");return{id:dir.name,name:title,summary:firstParagraph(text).slice(0,260),source:"Hermes workspace",path:file,available:Boolean(text)};}).sort((a,b)=>a.name.localeCompare(b.name));}
 export function memoryState(){const file=path.join(mark4Root,"hermes","MEMORY.md");if(!fs.existsSync(file))return{available:false};const stat=fs.statSync(file),text=fs.readFileSync(file,"utf8").replace(/^#.+$/m,"").trim();return{available:true,source:file,excerpt:text.slice(0,700),updatedAt:stat.mtime.toISOString()};}
-export function systemOverview({missions=[],health={},modelFabric=[]}={}){const artifacts=missions.flatMap(m=>(m.artifacts||[]).map((artifact,index)=>({...artifact,missionId:m.id,mission:m.objective,index}))).slice(0,100);return{generatedAt:new Date().toISOString(),workspace:workspaceState(),skills:skillRegistry(),memory:memoryState(),purpose:{name:"ULTRON Mark 4",statement:"A local-first personal operating intelligence that turns verified intent into observable, recoverable work.",source:"Mark 4 product architecture"},artifacts,services:[{id:"gateway",label:"Mark 4 Gateway",status:"online",detail:"Local API and event hub"},{id:"hermes",label:"Hermes cognition",status:health?.ok?"online":"offline",detail:health?.ok?"Session and tool runtime connected":"Runtime health check failed"},{id:"model-fabric",label:"Model broker",status:modelFabric.some(x=>x.configured&&!x.cooling)?"ready":"degraded",detail:`${modelFabric.filter(x=>x.configured&&!x.cooling).length} routes ready`} ]};}
+function asArtifacts(value){
+  if(Array.isArray(value))return value;
+  if(!value)return[];
+  if(typeof value==="string"){try{return asArtifacts(JSON.parse(value));}catch{return[];}}
+  if(typeof value==="object"){
+    if(Array.isArray(value.items))return value.items;
+    return[value];
+  }
+  return[];
+}
+export function systemOverview({missions=[],health={},modelFabric=[]}={}){
+  const rows=Array.isArray(missions)?missions:[];
+  const routes=Array.isArray(modelFabric)?modelFabric:[];
+  const artifacts=rows.flatMap(m=>asArtifacts(m?.artifacts).map((artifact,index)=>({...(artifact&&typeof artifact==="object"?artifact:{value:artifact}),missionId:m?.id,mission:m?.objective,index}))).slice(0,100);
+  const readyRoutes=routes.filter(x=>x?.configured&&!x?.cooling).length;
+  return{generatedAt:new Date().toISOString(),workspace:workspaceState(),skills:skillRegistry(),memory:memoryState(),purpose:{name:"ULTRON Mark 4",statement:"A local-first personal operating intelligence that turns verified intent into observable, recoverable work.",source:"Mark 4 product architecture"},artifacts,services:[{id:"gateway",label:"Mark 4 Gateway",status:"online",detail:"Local API and event hub"},{id:"hermes",label:"Hermes cognition",status:health?.ok?"online":"unavailable",detail:health?.ok?"Session and tool runtime connected":String(health?.error||"Runtime health check failed")},{id:"model-fabric",label:"Model broker",status:readyRoutes?"ready":"degraded",detail:`${readyRoutes} routes ready`} ]};
+}

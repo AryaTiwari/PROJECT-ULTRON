@@ -1,15 +1,35 @@
 import type { AttachmentRef } from "./types";
 
-const BASE = String(import.meta.env.VITE_ULTRON_API || "").replace(/\/$/, "");
+export const GATEWAY_URL = String(
+  import.meta.env.VITE_ULTRON_GATEWAY_URL ||
+  import.meta.env.VITE_ULTRON_API ||
+  "http://127.0.0.1:8787"
+).replace(/\/$/, "");
 
-async function request(path: string, options: RequestInit = {}) {
-  const response = await fetch(BASE + path, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error || ("HTTP " + response.status));
-  return data;
+async function request(path: string, options: RequestInit = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(GATEWAY_URL + path, {
+      ...options,
+      signal: options.signal || controller.signal,
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error: any = new Error(data?.error || ("HTTP " + response.status));
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+    return data;
+  } catch (error: any) {
+    if (controller.signal.aborted) throw new Error("Gateway request timed out.");
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 const fileData = (file: File) => new Promise<string>((resolve, reject) => {
@@ -20,7 +40,9 @@ const fileData = (file: File) => new Promise<string>((resolve, reject) => {
 });
 
 export const api = {
-  bootstrap: () => request("/api/bootstrap"),
+  health: () => request("/api/health", {}, 3500),
+  ready: () => request("/api/ready", {}, 6500),
+  bootstrap: () => request("/api/bootstrap", {}, 10000),
   sessions: () => request("/api/sessions?limit=80&include_children=true"),
   createSession: (title = "ULTRON") => request("/api/sessions", { method: "POST", body: JSON.stringify({ title }) }),
   renameSession: (id: string, title: string) => request("/api/sessions/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify({ title }) }),
@@ -51,7 +73,7 @@ function parseBlock(block: string) {
 }
 
 export async function streamChat(sessionId: string, input: Record<string, unknown>, onEvent: (type: string, data: any) => void) {
-  const response = await fetch(BASE + "/api/sessions/" + encodeURIComponent(sessionId) + "/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+  const response = await fetch(GATEWAY_URL + "/api/sessions/" + encodeURIComponent(sessionId) + "/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
   if (!response.ok || !response.body) {
     const data = await response.json().catch(() => ({}));
     throw new Error(data?.error || ("HTTP " + response.status));
@@ -74,17 +96,42 @@ export async function streamChat(sessionId: string, input: Record<string, unknow
   if (trailing) onEvent(trailing.type, trailing.data);
 }
 
-export function liveEvents(onEvent: (type: string, data: any) => void, onStatus?: (state: "online"|"recovering"|"offline") => void) {
+export type LiveConnection = (() => void) & { retry: () => void };
+
+export function liveEvents(onEvent: (type: string, data: any) => void, onStatus?: (state: "online"|"recovering"|"offline") => void): LiveConnection {
   let source: EventSource | null = null, stopped = false, attempt = 0, timer = 0;
   const known = ["connected","request.received","model.selected","model.route_failed","skill.selected","run.started","run.settled","run.failed","tool.started","tool.completed","subagent.start","subagent.complete","assistant.delta","assistant.completed","message.started","run.completed","run.cancelled","run.interrupted","tool.progress","tool.failed","approval.request","approval.required","approval.granted","operation.selected","target.resolved","auth.checking","auth.ready","apollo.search.started","apollo.search.page","apollo.search.completed","qualification.completed","deduplication.completed","selection.completed","sheet.write.started","sheet.write.completed","verification.completed","mission.blocked","mission.resumed","model.route_failed","memory.loaded","evidence.recorded","mission.started","mission.updated","mission.completed","artifact.created","voice.listening","voice.transcribing","voice.transcribed","voice.speaking","voice.idle","error","done"];
   const connect = () => {
-    if (stopped) return;
-    source = new EventSource(BASE + "/api/live");
+    if (stopped || source) return;
+    source = new EventSource(GATEWAY_URL + "/api/live");
     source.onopen = () => { attempt = 0; onStatus?.("online"); };
     source.onmessage = event => { try { onEvent("message", JSON.parse(event.data)); } catch {} };
     for (const type of known) source.addEventListener(type, (event: any) => { try { onEvent(type, JSON.parse(event.data)); } catch {} });
-    source.onerror = () => { source?.close(); source = null; if (stopped) return; attempt += 1; onStatus?.(attempt > 2 ? "offline" : "recovering"); window.clearTimeout(timer); timer = window.setTimeout(connect, Math.min(15000, 750 * 2 ** Math.min(attempt, 5))); };
+    source.onerror = () => {
+      source?.close();
+      source = null;
+      if (stopped) return;
+      attempt += 1;
+      onStatus?.(attempt > 2 ? "offline" : "recovering");
+      window.clearTimeout(timer);
+      timer = window.setTimeout(connect, Math.min(15000, 1000 * 2 ** Math.min(attempt - 1, 4)));
+    };
+  };
+  const close = (() => {
+    stopped = true;
+    window.clearTimeout(timer);
+    source?.close();
+    source = null;
+  }) as LiveConnection;
+  close.retry = () => {
+    if (stopped) return;
+    window.clearTimeout(timer);
+    source?.close();
+    source = null;
+    attempt = 0;
+    onStatus?.("recovering");
+    connect();
   };
   connect();
-  return () => { stopped = true; window.clearTimeout(timer); source?.close(); };
+  return close;
 }
