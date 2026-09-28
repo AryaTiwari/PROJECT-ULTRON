@@ -95,7 +95,9 @@ function normalize(selection) {
 function contains(selection, rowNumber) {
   const row = integer(rowNumber);
   if (!row) return false;
-  const normalized = normalize(selection);
+  const normalized = selection?.mode === 'ranges' && Array.isArray(selection.ranges)
+    ? selection
+    : normalize(selection);
   if (!normalized) return false;
 
   // ranges are ordered, so stop once the row would be before the next interval.
