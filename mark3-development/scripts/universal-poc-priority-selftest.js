@@ -383,7 +383,7 @@ assert.match(rescueSource, /rescueTargetsForRecord\(record\)\.length > 0/);
 assert.match(rescueSource, /contactabilityExhaustedTargets/);
 assert.match(rescueSource, /base\.contactabilityTargetKey/);
 assert.match(rescueSource, /targetRows\.has\(Number\(record\.rowNumber\)\)/, 'AI rescue must remain inside an explicit target-row set');
-assert.match(targetedSource, /targetRows && !targetRows\.has\(rowNumber\)/, 'the final live audit must remain inside an explicit target-row set');
+assert.match(targetedSource, /rowMatchesTargetSelection\(options, rowNumber\)/, 'the final live audit must remain inside sparse target rows and compact forward-row selections');
 assert.match(rescueSource, /no-open-secondary-poc-residue/);
 assert.doesNotMatch(rescueSource, /const wantedOrdinal = 2/);
 assert.match(rescueSource, /unresolvedContextInput/);
