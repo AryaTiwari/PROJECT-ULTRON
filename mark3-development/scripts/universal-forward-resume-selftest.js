@@ -134,6 +134,16 @@ try {
   );
   assert.equal(scope.protectedColumns.some((item) => item.columnIndex === 8), true, 'Outcome must remain protected');
   assert.equal(scope.protectedColumns.some((item) => item.columnIndex >= 9), true, 'accidental APOLLO columns must remain protected');
+  assert.doesNotThrow(() => writeScope.assertChanges(scope, { schema }, [{
+    range: "'Arya-24 sept'!C170",
+    value: 'Verified POC — Founder',
+    field: 'name',
+    groupId: 'poc-1',
+  }]), 'verified POC owner identity must be writable when contact enrichment needs to create an empty slot');
+  assert.throws(() => writeScope.assertChanges(scope, { schema }, [{
+    range: "'Arya-24 sept'!I170",
+    value: 'changed',
+  }]), /outside requested scope/i, 'Outcome must remain blocked');
 
   const noNameScope = writeScope.compile(
     'enrich the companies with number and email of 1st poc and 2nd poc; do not change poc names',
