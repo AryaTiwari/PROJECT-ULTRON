@@ -256,9 +256,9 @@ assert.ok(googleNaturalRequest, 'Google Sheet anchored 3-POC wording must route 
 assert.equal(googleNaturalRequest.provider, 'google');
 assert.equal(googleNaturalRequest.url, googleSheetUrl);
 const googleControlRoute = controlPlane.claim(`Use ${googleSheetUrl} and perform anchored 3-POC enrichment. POC-1 uses LinkedIn Id; fill POC-2 and POC-3 phone and email.`);
-assert.equal(googleControlRoute.domain, 'three-poc-spreadsheet');
+assert.equal(googleControlRoute.domain, 'spreadsheet-enrichment');
 assert.equal(googleControlRoute.exclusive, true);
-assert.equal(googleControlRoute.controller, 'three-poc-domain-controller');
+assert.equal(googleControlRoute.controller, 'universal-spreadsheet-domain-controller');
 assert.equal(googleControlRoute.generalModelAllowed, false);
 
 const paidApprovalSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'paid-tool-approval.js'), 'utf8');
