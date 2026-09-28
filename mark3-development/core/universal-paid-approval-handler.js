@@ -333,4 +333,14 @@ function install() {
   return Object.freeze({ installed: true, operation: OPERATION, owner: 'command-control-plane' });
 }
 
-module.exports = { OPERATION, EXECUTION_CONTRACT, install, execute, modePrefix, canonicalApprovedTarget };
+module.exports = {
+  OPERATION,
+  EXECUTION_CONTRACT,
+  install,
+  execute,
+  modePrefix,
+  canonicalApprovedTarget,
+  publicApproval,
+  publicEnrichmentResult,
+  boundedRows,
+};
