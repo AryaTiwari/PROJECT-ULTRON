@@ -44,6 +44,74 @@ function modePrefix(rowLimit) {
   return 'FULL-SHEET MODE: no row cap was active.';
 }
 
+function publicApproval(decision = {}) {
+  return {
+    id: decision.id || null,
+    tool: decision.tool || null,
+    operation: decision.operation || null,
+    status: decision.status || null,
+    requestedAt: decision.requestedAt || null,
+    resolvedAt: decision.resolvedAt || null,
+    expiresAt: decision.expiresAt || null,
+  };
+}
+
+function boundedRows(values = [], limit = 8) {
+  const rows = [...new Set((Array.isArray(values) ? values : [])
+    .map(Number)
+    .filter(Number.isInteger))]
+    .sort((a, b) => a - b);
+  return {
+    count: rows.length,
+    sample: rows.slice(0, Math.max(1, Math.min(20, Number(limit) || 8))),
+  };
+}
+
+function publicEnrichmentResult(result = {}) {
+  const s = result.stats || {};
+  const schema = result.schema || {};
+  return {
+    ok: result.ok !== false,
+    completedFully: Boolean(result.completedFully),
+    partialCompletion: Boolean(result.partialCompletion || s.haltedEarly),
+    resumeSafe: result.resumeSafe !== false,
+    spreadsheetId: result.spreadsheetId || null,
+    spreadsheetTitle: result.spreadsheetTitle || null,
+    sheetName: result.sheetName || null,
+    contactPhaseOrdinal: result.contactPhaseOrdinal || null,
+    schema: {
+      headerRowNumber: schema.headerRowNumber || null,
+      confidence: Number(schema.confidence || 0),
+      personGroups: Array.isArray(schema.personGroups) ? schema.personGroups.length : 0,
+      companyGroups: Array.isArray(schema.companyGroups) ? schema.companyGroups.length : 0,
+      fingerprint: schema.fingerprint || null,
+    },
+    stats: {
+      rowsSeen: Number(s.rowsSeen || 0),
+      rowsProcessed: Number(s.rowsProcessed || 0),
+      rowsChanged: Number(s.rowsChanged || 0),
+      cellsChanged: Number(s.cellsChanged || 0),
+      anchorsResolved: Number(s.anchorsResolved || 0),
+      existingGroupsRepaired: Number(s.existingGroupsRepaired || 0),
+      newPeopleSelected: Number(s.newPeopleSelected || 0),
+      candidateSearches: Number(s.candidateSearches || 0),
+      candidateCacheHits: Number(s.candidateCacheHits || 0),
+      hydrationAttempts: Number(s.hydrationAttempts || 0),
+      phoneCellsFilled: Number(s.phoneCellsFilled || 0),
+      phoneStillPending: Number(s.phoneStillPending || 0),
+      emailCellsFilled: Number(s.emailCellsFilled || 0),
+      emailStillPending: Number(s.emailStillPending || 0),
+      rowFailures: Number(s.rowFailures || 0),
+      deferredRows: boundedRows(s.primarySweepDeferredRows || []),
+      unresolvedMandatoryRows: boundedRows(s.deterministicRecheckRemainingMandatoryRows || []),
+      unresolvedRepairRows: boundedRows(s.deterministicRecheckRemainingRepairRows || []),
+      unresolvedWarningRows: boundedRows(s.deterministicRecheckRemainingWarningRows || []),
+      haltedEarly: Boolean(s.haltedEarly),
+      haltAtRow: s.haltAtRow || null,
+    },
+  };
+}
+
 async function canonicalApprovedTarget(payload = {}) {
   const url = String(payload.url || '').trim();
   if (!url) return { sheetName: payload.sheetName || '', sheetId: payload.sheetId ?? null, matchedBy: 'payload-only' };
@@ -87,7 +155,7 @@ async function execute(decision) {
       model: 'apollo-approval-gate',
       provider: 'local-approval-gate',
       taskType: 'paid-tool-approval',
-      paidToolApproval: decision,
+      paidToolApproval: publicApproval(decision),
       apolloCalled: false,
     });
   }
@@ -150,6 +218,7 @@ async function execute(decision) {
       writeScope: payload.writeScope || undefined,
       apolloBudget: payload.apolloBudget || undefined,
       targetRows: Array.isArray(payload.targetRows) ? payload.targetRows : undefined,
+      targetRowSelection: payload.targetRowSelection || undefined,
     }));
 
     const enriched = {
@@ -194,7 +263,7 @@ async function execute(decision) {
       || reportFormattingError
     );
     return response(true, body, {
-      universalEnrichment: enriched,
+      universalEnrichment: publicEnrichmentResult(enriched),
       spreadsheetProvider: 'google',
       spreadsheetUrl: payload.url,
       sheetName: result.sheetName || canonicalTarget.sheetName || payload.sheetName,
@@ -215,7 +284,7 @@ async function execute(decision) {
       haltError: result?.stats?.haltError || result?.bigPickleFallback?.haltError || result?.bigPickleFallback?.error || result?.postPrimaryError || reportFormattingError || null,
       postPrimaryError: result?.postPrimaryError || null,
       reportFormattingError,
-      rowFailureAudit: result?.stats?.rowFailureAudit || [],
+      rowFailureAudit: boundedRows((result?.stats?.rowFailureAudit || []).map((item) => item?.rowNumber)),
       provider: fallbackUsed ? 'deterministic+apollo+google-sheets+bounded-direct-env-ai' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
