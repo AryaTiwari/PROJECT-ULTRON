@@ -175,10 +175,19 @@
       const id = String(parsed.requestId || '').trim() || requestId();
       const headers = new Headers(init.headers || {});
       headers.set('X-Ultron-Request-Id', id);
+      // Deterministic enrichment is self-contained: the command, durable mission
+      // store and current worksheet are authoritative. Never resend conversation
+      // history with protected enrichment requests; a previous large mission
+      // report must not be reflected back into /api/chat and trigger a 413.
+      const compact = {
+        ...parsed,
+        history: [],
+        requestId: id,
+      };
       return {
         protectedRequest: true,
         requestId: id,
-        init: { ...init, headers, body: JSON.stringify({ ...parsed, requestId: id }) },
+        init: { ...init, headers, body: JSON.stringify(compact) },
       };
     } catch {
       return { init, protectedRequest: false, requestId: '' };
