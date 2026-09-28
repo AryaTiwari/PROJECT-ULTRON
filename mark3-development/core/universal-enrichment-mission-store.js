@@ -68,7 +68,7 @@ function save(state) {
   JSON.parse(fs.readFileSync(temp, 'utf8'));
   if (fs.existsSync(FILE)) fs.copyFileSync(FILE, BACKUP);
   if (fs.existsSync(FILE)) fs.rmSync(FILE, { force: true });
-  fs.renameSync(temp, FILE);
+  fs.renameSync(temp,FILE);
   try { fs.chmodSync(FILE, 0o600); } catch {}
   return state;
 }
