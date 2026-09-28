@@ -17,6 +17,7 @@ const linkedinOperator = require('../core/linkedin-account-operator');
 require('../core/universal-deterministic-bootstrap').install();
 const schemaTools = require('../core/universal-sheet-schema');
 const schemaSafety = require('../core/universal-schema-safety');
+const targetedUniversal = require('../core/universal-sheet-enrichment-targeted');
 
 try {
   assert.equal(controlPlane.isResume('resume enrichment'), true);
@@ -120,11 +121,47 @@ try {
     'enrich the companies with number and email of 1st poc and 2nd poc',
     schema,
   );
+  assert.deepEqual(scope.requestedFields.sort(), ['email', 'phone']);
   assert.deepEqual(
     [...new Set(scope.allowed.map((item) => item.columnIndex))].sort((a, b) => a - b),
-    [3, 4, 6, 7],
-    'requested phone/email scope must not include Outcome or the accidental APOLLO section',
+    [2, 3, 4, 5, 6, 7],
+    'contact enrichment must allow verified POC owner names plus requested phone/email, but never Outcome or accidental APOLLO columns',
   );
+  assert.deepEqual(
+    scope.allowed.filter((item) => item.supporting).map((item) => [item.ordinal, item.field, item.columnIndex]),
+    [[1, 'name', 2], [2, 'name', 5]],
+    'POC name columns are ownership-support writes, not extra user-requested contact fields',
+  );
+  assert.equal(scope.protectedColumns.some((item) => item.columnIndex === 8), true, 'Outcome must remain protected');
+  assert.equal(scope.protectedColumns.some((item) => item.columnIndex >= 9), true, 'accidental APOLLO columns must remain protected');
+  assert.doesNotThrow(() => writeScope.assertChanges(scope, { schema }, [{
+    range: "'Arya-24 sept'!C170",
+    value: 'Verified POC — Founder',
+    field: 'name',
+    groupId: 'poc-1',
+  }]), 'verified POC owner identity must be writable when contact enrichment needs to create an empty slot');
+  assert.throws(() => writeScope.assertChanges(scope, { schema }, [{
+    range: "'Arya-24 sept'!I170",
+    value: 'changed',
+  }]), /outside requested scope/i, 'Outcome must remain blocked');
+
+  const noNameScope = writeScope.compile(
+    'enrich the companies with number and email of 1st poc and 2nd poc; do not change poc names',
+    schema,
+  );
+  assert.equal(noNameScope.allowed.some((item) => item.field === 'name'), false, 'explicit name exclusion must override implicit owner support');
+
+  const forwardSelection = { mode: 'ranges', ranges: [{ start: 170, end: 172 }], count: 3, firstRow: 170, lastRow: 172 };
+  assert.equal(targetedUniversal.rowMatchesTargetSelection({ targetRowSelection: forwardSelection }, 169), false);
+  assert.equal(targetedUniversal.rowMatchesTargetSelection({ targetRowSelection: forwardSelection }, 170), true);
+  assert.equal(targetedUniversal.rowMatchesTargetSelection({ targetRowSelection: forwardSelection }, 172), true);
+  assert.equal(targetedUniversal.rowMatchesTargetSelection({ targetRowSelection: forwardSelection }, 173), false);
+  assert.equal(
+    targetedUniversal.rowMatchesTargetSelection({ targetRows: [171], targetRowSelection: forwardSelection }, 170),
+    false,
+    'sparse explicit target rows must further narrow a forward range when both are supplied',
+  );
+  assert.equal(targetedUniversal.rowMatchesTargetSelection({ targetRows: [171], targetRowSelection: forwardSelection }, 171), true);
 
   const rows = Array.from({ length: 173 }, () => Array(15).fill(''));
   rows[0] = headers.slice();
@@ -132,6 +169,10 @@ try {
   rows[168][1] = 'https://www.linkedin.com/company/syscraft-information-system';
   rows[168][2] = 'Sagar Medhekar — Business Development Manager';
   rows[168][3] = '+919893324281';
+
+  // Supporting identity is writable for a new POC, but a pre-existing name alone
+  // must never advance a contact-enrichment resume frontier.
+  rows[170][2] = 'Pre-existing POC name without requested contact data';
 
   // Simulate data in the accidental dedicated Apollo section after the intended
   // forward frontier. It must not move the recovery cursor because J:O is outside
@@ -174,7 +215,7 @@ try {
   assert.equal(saved.lastProcessedRow, 10, 'historical checkpoints must never rewind the forward frontier');
   assert.equal(saved.nextRow, 11);
 
-  console.log('Forward enrichment resume regression passed: POC Google requests stay universal, worksheet-name labels parse correctly, accidental APOLLO columns cannot contaminate POC ownership or resume recovery, and the durable cursor advances monotonically.');
+  console.log('Forward enrichment resume regression passed: POC Google requests stay universal, contact-only requests safely authorize verified POC owner identity writes, final audits remain inside the forward range, accidental APOLLO columns cannot contaminate ownership/recovery, and the durable cursor advances monotonically.');
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });
 }

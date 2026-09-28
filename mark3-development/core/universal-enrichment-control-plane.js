@@ -167,6 +167,11 @@ function eligibleRows(inspection) {
 function scopeColumnIndexes(mission) {
   return [...new Set(
     (mission.writeScope?.allowed || [])
+      // Supporting owner-identity fields may be writable when creating a new
+      // POC slot, but they are not evidence that a contact-enrichment pass has
+      // already reached that row. Resume recovery must follow the fields the
+      // user actually requested (for this incident: phone/email).
+      .filter((item) => item?.supporting !== true)
       .map((item) => Number(item.columnIndex))
       .filter(Number.isInteger),
   )];
