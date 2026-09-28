@@ -14,6 +14,9 @@ const controlPlane = require('../core/universal-enrichment-control-plane');
 const commandControl = require('../core/command-control-plane');
 const writeScope = require('../core/universal-enrichment-write-scope');
 const linkedinOperator = require('../core/linkedin-account-operator');
+require('../core/universal-deterministic-bootstrap').install();
+const schemaTools = require('../core/universal-sheet-schema');
+const schemaSafety = require('../core/universal-schema-safety');
 
 try {
   assert.equal(controlPlane.isResume('resume enrichment'), true);
@@ -40,6 +43,54 @@ try {
     'APOLLO PHONE', 'APOLLO EMAIL', 'APOLLO STATUS',
   ];
   assert.equal(linkedinOperator.explicitPocHeaderContract(headers), true);
+
+  const liveShapeRows = [
+    headers.slice(),
+    [
+      'Koncepts Lab',
+      'http://www.linkedin.com/company/koncepts-lab',
+      'Firose Babu — Director, Chief Administrative Officer (CAO)',
+      '+971526224528',
+      'firose@konceptslab.com',
+      '', '', '', '',
+      'Firose Babu',
+      'Director, Chief Administrative Officer (CAO)',
+      'https://www.linkedin.com/in/firose-babu-786a04271',
+      '+971526224528',
+      'firose@konceptslab.com',
+      'ENRICHED',
+    ],
+    [
+      'MindBrain',
+      'http://www.linkedin.com/company/mindbrain',
+      'Shubham Mohapatra — Founder & CEO',
+      '+919178587486',
+      'shubham.m@mindbrain.co.in',
+      'Sebastian Drees — Managing Director',
+      '+4923089769770',
+      'sebastian.drees@mindbrain.de',
+      '',
+      'Shubham Mohapatra',
+      'Founder & CEO',
+      'https://www.linkedin.com/in/shubhambytes',
+      '+919178587486',
+      'shubham.m@mindbrain.co.in',
+      'ENRICHED',
+    ],
+  ];
+  const inferredLiveShape = schemaTools.inferSchema(liveShapeRows, { expectedPersonGroups: 2 });
+  const inferredSafety = schemaSafety.assess(inferredLiveShape);
+  const inferredPoc1 = inferredLiveShape.personGroups.find((group) => Number(group.ordinal) === 1);
+  const inferredPoc2 = inferredLiveShape.personGroups.find((group) => Number(group.ordinal) === 2);
+  assert.equal(inferredSafety.safe, true, `live Arya-24 sept A:O schema must remain safe: ${inferredSafety.questions.join(' | ')}`);
+  assert.equal(inferredPoc1?.fields?.phone?.index, 3);
+  assert.equal(inferredPoc1?.fields?.email?.index, 4);
+  assert.equal(inferredPoc2?.fields?.phone?.index, 6);
+  assert.equal(inferredPoc2?.fields?.email?.index, 7);
+  assert.ok(
+    !(inferredPoc2?.alternates || []).some((item) => [12, 13].includes(Number(item.index))),
+    'APOLLO PHONE/EMAIL must never become POC-2 alternate ownership candidates',
+  );
 
   const schema = {
     columns: headers.map((header, index) => ({ index, header, role: 'unknown' })),
@@ -123,7 +174,7 @@ try {
   assert.equal(saved.lastProcessedRow, 10, 'historical checkpoints must never rewind the forward frontier');
   assert.equal(saved.nextRow, 11);
 
-  console.log('Forward enrichment resume regression passed: POC Google requests stay universal, bare resume cannot be stolen by LinkedIn, accidental APOLLO columns do not influence recovery, and the durable cursor advances monotonically.');
+  console.log('Forward enrichment resume regression passed: POC Google requests stay universal, worksheet-name labels parse correctly, accidental APOLLO columns cannot contaminate POC ownership or resume recovery, and the durable cursor advances monotonically.');
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });
 }
