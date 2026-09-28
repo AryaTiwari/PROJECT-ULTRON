@@ -3903,7 +3903,7 @@ function formatResult(result) {
     `LinkedIn fallback: ${Number(s.linkedinFallbackCompanyProfiles || 0)} company profiles, ${Number(s.linkedinFallbackCompanyUrns || 0)} company URNs, ${Number(s.linkedinFallbackProfilesFound || 0)} profile refs, ${Number(s.linkedinFallbackVerifiedCandidates || 0)} Apollo-verified candidates.`,
     `Results-first: ${deferred.count} rows deferred from the fast sweep; deterministic recheck ${s.deterministicRecheckAttempted ? 'ran' : 'not needed'}.`,
     issueParts.length ? `Remaining: ${issueParts.join('; ')}.` : 'Remaining: no bounded deterministic blockers recorded.',
-    `Phone waterfall: ${Number(contactQuality.phoneWaterfallStarted || 0)} started, ${Number(contactQuality.phoneWaterfallSucceeded || 0)} found, ${Number(contactQuality.phoneWaterfallPending || 0)} pending.`,
+    `Final-POC contact waterfall: phone ${Number(contactQuality.phoneWaterfallStarted || 0)} started, ${Number(contactQuality.phoneWaterfallSucceeded || 0)} found, ${Number(contactQuality.phoneWaterfallPending || 0)} pending; email ${Number(contactQuality.waterfallStarted || 0)} started, ${Number(contactQuality.waterfallSucceeded || 0)} found, ${Number(contactQuality.waterfallPending || 0)} pending.`,
     `Resume-safe: yes.${halt}`,
   ].join(' ');
 }
