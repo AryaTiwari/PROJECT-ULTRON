@@ -31,7 +31,10 @@ function profileColumn(rows, headerRowIndex, columnIndex, limit = 80) {
 }
 
 function claimedIndexes(schema) {
-  const claimed = new Set();
+  // Explicit POC missions may mark dedicated provider-output columns as outside
+  // the Universal ownership graph. Treat those indexes as already claimed so
+  // structural recovery cannot resurrect them as synthetic POC groups later.
+  const claimed = new Set((schema.providerSectionColumns || []).map(Number).filter(Number.isInteger));
   for (const group of [...(schema.personGroups || []), ...(schema.companyGroups || [])]) {
     for (const descriptor of Object.values(group.fields || {})) {
       if (Number.isInteger(descriptor?.index)) claimed.add(descriptor.index);
