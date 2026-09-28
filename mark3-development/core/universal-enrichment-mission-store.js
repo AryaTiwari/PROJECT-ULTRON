@@ -319,6 +319,60 @@ function setRecoveredFrontier(id, { lastProcessedRow, nextRow, endRow, source = 
   });
 }
 
+function publicSummary(mission) {
+  if (!mission) return null;
+  const checkpoints = Object.values(mission.rowCheckpoints || {});
+  const processed = checkpoints.filter(rowIsProcessed).length;
+  const unresolved = checkpoints.filter((row) => row && !rowIsProcessed(row) && row.state && row.state !== 'UNTOUCHED').length;
+  const allowed = Array.isArray(mission.writeScope?.allowed) ? mission.writeScope.allowed : [];
+  return {
+    missionId: mission.missionId,
+    provider: mission.provider,
+    spreadsheetId: mission.spreadsheetId,
+    spreadsheetTitle: mission.spreadsheetTitle,
+    sheetName: mission.sheetName,
+    sheetId: mission.sheetId,
+    schemaFingerprint: mission.schemaFingerprint,
+    requestedPOCs: mission.requestedPOCs || [],
+    requestedFields: mission.requestedFields || [],
+    status: mission.status,
+    completionState: mission.completionState,
+    createdAt: mission.createdAt,
+    updatedAt: mission.updatedAt,
+    startedAt: mission.startedAt,
+    completedAt: mission.completedAt,
+    totalEligibleRows: Number(mission.totalEligibleRows || 0),
+    rowsProcessed: Math.max(Number(mission.rowsProcessed || 0), processed),
+    rowsRemaining: Number(mission.rowsRemaining || 0),
+    checkpointCount: checkpoints.length,
+    unresolvedCheckpointCount: unresolved,
+    startRow: mission.startRow,
+    endRow: mission.endRow,
+    lastProcessedRow: mission.lastProcessedRow,
+    lastVerifiedWriteRow: mission.lastVerifiedWriteRow,
+    nextRow: mission.nextRow,
+    frontierSource: mission.frontierSource,
+    lastSafeCheckpoint: mission.lastSafeCheckpoint || null,
+    approvalId: mission.approvalId || null,
+    approvalValid: Boolean(mission.approvalValid),
+    nextEligibleAt: mission.nextEligibleAt || null,
+    nextEligibleAtSource: mission.nextEligibleAtSource || null,
+    apolloUsageLedger: { ...(mission.apolloUsageLedger || {}) },
+    providerState: { ...(mission.providerState || {}) },
+    writeScope: {
+      allowedCount: allowed.length,
+      fields: [...new Set(allowed.map((item) => `POC-${item.ordinal} ${item.field}`))],
+      protectedColumns: Array.isArray(mission.protectedColumns) ? mission.protectedColumns.length : 0,
+    },
+    lastError: mission.lastError ? {
+      code: mission.lastError.code || null,
+      type: mission.lastError.type || null,
+      stage: mission.lastError.stage || null,
+      nextEligibleAt: mission.lastError.nextEligibleAt || null,
+    } : null,
+  };
+}
+
 function markInterruptedOnStartup() {
   const state = load();
   let changed = false;
@@ -361,5 +415,6 @@ module.exports = {
   recordProvenance,
   recordCommit,
   setRecoveredFrontier,
+  publicSummary,
   markInterruptedOnStartup,
 };

@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const enrichmentMissions = require('./universal-enrichment-mission-store');
 const enrichmentWriteScope = require('./universal-enrichment-write-scope');
 const apolloBudget = require('./universal-apollo-budget');
+const rowSelection = require('./universal-row-selection');
 
 approvalHandler.install();
 
@@ -460,7 +461,8 @@ async function handle(message, context = {}) {
   let startRow = eligibleRowNumbers[0] || null;
   const endRow = eligibleRowNumbers.at(-1) || null;
   let forwardFrontier = null;
-  let targetRows = null;
+  let targetRowSelection = null;
+  let targetRowCount = eligibleRowNumbers.length;
 
   if (forwardResumeRequested && eligibleRowNumbers.length) {
     const controlPlane = require('./universal-enrichment-control-plane');
@@ -471,8 +473,8 @@ async function handle(message, context = {}) {
       endRow,
     }, inspection);
     const nextRow = Number(forwardFrontier?.nextRow);
-    targetRows = eligibleRowNumbers.filter((rowNumber) => !Number.isInteger(nextRow) || rowNumber >= nextRow);
-    if (!targetRows.length) {
+    const forwardRows = eligibleRowNumbers.filter((rowNumber) => !Number.isInteger(nextRow) || rowNumber >= nextRow);
+    if (!forwardRows.length) {
       return response(true,
         `Forward enrichment is already at the end of worksheet "${exactSheetName}". Last processed row: ${forwardFrontier?.lastProcessedRow ?? 'unknown'}. Use "retry unresolved enrichment" only if you intentionally want to revisit historical unresolved rows.`,
         {
@@ -486,10 +488,12 @@ async function handle(message, context = {}) {
           resumeFrontier: forwardFrontier,
         });
     }
-    startRow = targetRows[0];
+    startRow = forwardRows[0];
+    targetRowCount = forwardRows.length;
+    targetRowSelection = rowSelection.fromRange(startRow, endRow, targetRowCount);
     Object.assign(request, {
       resumeMode: 'forward-only',
-      targetRows,
+      targetRowSelection,
       resumeFrontier: {
         lastProcessedRow: forwardFrontier?.lastProcessedRow ?? null,
         nextRow: forwardFrontier?.nextRow ?? startRow,
@@ -516,7 +520,7 @@ async function handle(message, context = {}) {
     requestedFields: writeScope.requestedFields, ignoredFields: writeScope.ignoredFields,
     readScope: writeScope.readScope, writeScope, protectedColumns: writeScope.protectedColumns,
     status: 'AWAITING_APOLLO_APPROVAL',
-    totalEligibleRows: targetRows ? targetRows.length : (eligibleRowNumbers.length || inspection.analysis?.stats?.dataRows || 0),
+    totalEligibleRows: forwardResumeRequested ? targetRowCount : (eligibleRowNumbers.length || inspection.analysis?.stats?.dataRows || 0),
     startRow, endRow,
     budget: apolloBudget.limits({}), request,
   });
@@ -539,8 +543,18 @@ async function handle(message, context = {}) {
     provider: 'local-approval-gate',
     taskType: 'paid-tool-approval',
     paidToolApproval: { id: approval.id, tool: approval.tool, operation: approval.operation, expiresAt: approval.expiresAt },
-    universalEnrichmentRequest: request,
-    universalEnrichmentMission: enrichmentMissions.get(mission.missionId),
+    universalEnrichmentRequest: {
+      missionId: request.missionId,
+      provider: request.provider,
+      sheetName: request.sheetName,
+      sheetId: request.sheetId,
+      expectedPersonGroups: request.expectedPersonGroups,
+      requestedAt: request.requestedAt,
+      resumeMode: request.resumeMode || null,
+      resumeFrontier: request.resumeFrontier || null,
+      targetRowSelection: request.targetRowSelection || null,
+    },
+    universalEnrichmentMission: enrichmentMissions.publicSummary(enrichmentMissions.get(mission.missionId)),
     writeScope,
     estimatedApolloUsage: estimate,
     universalSchema: summary,

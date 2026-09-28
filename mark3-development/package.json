@@ -78,8 +78,9 @@
     "check:google-auth-integrity": "node scripts/google-auth-integrity-guard.js",
     "check:enrichment-production": "node --env-file=../.env scripts/universal-enrichment-production-selftest.js && node --env-file=../.env scripts/universal-enrichment-failure-matrix-selftest.js && node --env-file=../.env scripts/universal-enrichment-performance-benchmark.js && node scripts/universal-enrichment-integrity-guard.js",
     "enrichment:health": "node --env-file=../.env scripts/universal-enrichment-doctor.js",
-    "check:enrichment-safety": "node scripts/enrichment-hard-safety-selftest.js && node scripts/universal-forward-resume-selftest.js",
-    "check:enrichment-forward-resume": "node scripts/universal-forward-resume-selftest.js"
+    "check:enrichment-safety": "node scripts/enrichment-hard-safety-selftest.js && node scripts/universal-forward-resume-selftest.js && node scripts/universal-large-payload-selftest.js",
+    "check:enrichment-forward-resume": "node scripts/universal-forward-resume-selftest.js",
+    "check:enrichment-large-payload": "node scripts/universal-large-payload-selftest.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
