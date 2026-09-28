@@ -41,7 +41,7 @@ function response(body, extra = {}) {
     taskType: 'universal-enrichment-control',
     mode: 'operator',
     toolRounds: 0,
-    apolloCalled: false,
+    apolloCalled:false,
     ...extra,
   };
 }
