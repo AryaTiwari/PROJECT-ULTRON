@@ -112,6 +112,48 @@ assert.ok(Buffer.byteLength(formatted) < 7000, 'human-facing large-run result mu
 assert.match(formatted, /\+3470 more/);
 assert.doesNotMatch(formatted, /170, 171, 172[\s\S]*3647/, 'formatter must never dump the entire row list');
 
+const runReport = require('../core/universal-run-report');
+const repeatedIssues = rows.map((rowNumber) => ({
+  rowNumber,
+  groupOrdinal: 2,
+  target: 'POC-2',
+  message: 'Mandatory POC-2 is still empty after all safe strategies.',
+  detail: 'The required evidence did not pass verification.',
+  nextAction: 'Treat this as data exhaustion unless new company/person evidence becomes available.',
+}));
+const compactDiagnosticReport = runReport.build({
+  sheetName: 'Arya-24 sept',
+  completionState: 'PARTIAL',
+  schema: { personGroups: [{ ordinal: 1 }, { ordinal: 2 }] },
+  stats: {
+    rowsProcessed: rows.length,
+    rowsChanged: 120,
+    cellsChanged: 260,
+    rowFailureAudit: [{
+      rowNumber: 172,
+      code: 'UNIVERSAL_WRITE_SCOPE_VIOLATION',
+      subsystem: 'WRITE_FIREWALL',
+      errorType: 'WRITE_CONFLICT',
+      stage: 'verified-write',
+      message: "Write blocked outside requested scope at 'Arya-24 sept'!.",
+    }],
+  },
+  metrics: { providerCalls: { apollo: 10, linkedin: 4, publicSearch: 2, ai: 0, googleSheets: 20 }, pending: [] },
+  completionGate: {
+    issues: repeatedIssues,
+    requiredIdentityIssues: repeatedIssues,
+    contactGaps: [],
+  },
+});
+const compactDiagnosticBytes = Buffer.byteLength(compactDiagnosticReport);
+assert.ok(compactDiagnosticBytes < 9000, `grouped diagnostic report unexpectedly large: ${compactDiagnosticBytes} bytes`);
+assert.match(compactDiagnosticReport, /POC-2: 3478 rows affected/);
+assert.match(compactDiagnosticReport, /Sample rows: 170, 171, 172, 173, 174, 175, 176, 177 \(\+3470 more\)/);
+assert.match(compactDiagnosticReport, /write scope|write blocked|internal error/i, 'distinct row-local write failure must remain visible');
+assert.doesNotMatch(compactDiagnosticReport, /- Row 3638/);
+assert.doesNotMatch(compactDiagnosticReport, /- Row 3647/);
+assert.ok((compactDiagnosticReport.match(/Mandatory POC-2 is still empty after all safe strategies/g) || []).length <= 1, 'repeated POC-2 problem must be printed once');
+
 const publicResult = approvalHandler.publicEnrichmentResult({
   ok: true,
   sheetName: 'Arya-24 sept',
@@ -131,4 +173,4 @@ assert.match(serverSource, /compactProtectedEnrichmentResponse/);
 assert.match(serverSource, /REQUEST_TOO_LARGE/);
 assert.match(serverSource, /ULTRON_M3_ENRICHMENT_RESPONSE_MAX_BYTES/);
 
-console.log(`Large enrichment payload regression passed: 3,478 forward rows compress to ${Buffer.byteLength(JSON.stringify(selection))} bytes; public mission ${missionBytes} bytes; public result ${resultBytes} bytes; report ${Buffer.byteLength(formatted)} bytes.`);
+console.log(`Large enrichment payload regression passed: 3,478 forward rows compress to ${Buffer.byteLength(JSON.stringify(selection))} bytes; public mission ${missionBytes} bytes; public result ${resultBytes} bytes; base report ${Buffer.byteLength(formatted)} bytes; grouped diagnostic report ${compactDiagnosticBytes} bytes.`);
