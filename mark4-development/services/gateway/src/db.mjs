@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { dataRoot } from "./config.mjs";
 import {APOLLO_CONTACT_STAGES,LEAD_DISCOVERY_STAGES,CREATOR_RESEARCH_STAGES,REEL_STAGES,progressFor} from "./workflow-contracts.mjs";
+import { companyIdentityKeys,mergeSourceEvidence } from "./lead-fusion.mjs";
 
 fs.mkdirSync(dataRoot, { recursive: true });
 const db = new DatabaseSync(path.join(dataRoot, "state.db"));
@@ -414,15 +415,15 @@ export function upsertLead(input = {}) {
   if (!companyName) throw new Error("LEAD_COMPANY_NAME_REQUIRED");
   const companyKey = canonicalCompanyKey(companyName);
   if (!companyKey) throw new Error("LEAD_COMPANY_KEY_INVALID");
-  const existing = db.prepare("SELECT * FROM lead_master WHERE company_key=?").get(companyKey);
+  const identityKeys=companyIdentityKeys(input);
+  let existing = db.prepare("SELECT * FROM lead_master WHERE company_key=?").get(companyKey);
+  if(!existing&&identityKeys.length){existing=db.prepare("SELECT * FROM lead_master ORDER BY updated_at DESC").all().find(row=>{const stored={companyLink:row.company_link,evidence:parse(row.evidence_json)};const keys=new Set(companyIdentityKeys(stored));return identityKeys.some(key=>keys.has(key));})||null;}
   const verificationStatus = normalizeVerification(input);
-  const evidence = input.evidence && typeof input.evidence === "object"
-    ? { ...(existing ? parse(existing.evidence_json) : {}), ...input.evidence }
-    : (existing ? parse(existing.evidence_json) : {});
+  const evidence = mergeSourceEvidence(existing ? parse(existing.evidence_json) : {}, input.evidence && typeof input.evidence === "object" ? {...input.evidence,source:input.source} : {source:input.source});
   const at = now();
   const next = {
     id: existing?.id || input.id || `lead-${crypto.randomUUID()}`,
-    companyKey,
+    companyKey: existing?.company_key || companyKey,
     companyName,
     companyLink: cleanText(input.companyLink ?? input.company_link) ?? existing?.company_link ?? null,
     jobLink: cleanText(input.jobLink ?? input.job_link) ?? existing?.job_link ?? null,

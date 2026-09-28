@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { CoreState } from "../activity";
-const tones:Record<CoreState,string>={idle:"#4f9cff",listening:"#44d6ee",transcribing:"#7cc9ff",understanding:"#559fff",model:"#78b7ff",skill:"#54c9e8",tool:"#4f9cff",mission:"#6ea8ff",approval:"#e2ad54",writing:"#48c6d8",speaking:"#72d7ef",completed:"#67dbb0",fallback:"#e2ad54",offline:"#596572",error:"#e36e7c"};
+const tones:Record<CoreState,string>={idle:"#4f9cff",listening:"#44d6ee",transcribing:"#7cc9ff",understanding:"#559fff",waiting:"#7c8cff",executing:"#43eeff",model:"#78b7ff",skill:"#54c9e8",tool:"#4f9cff",mission:"#6ea8ff",approval:"#e2ad54",writing:"#48c6d8",speaking:"#72d7ef",completed:"#67dbb0",fallback:"#e2ad54",offline:"#596572",error:"#e36e7c"};
 export function CognitiveCore({state,level=0,title,detail,progress}:{state:CoreState;level?:number;title:string;detail:string;progress?:number|null}){
  const ref=useRef<HTMLCanvasElement|null>(null);
  useEffect(()=>{const canvas=ref.current;if(!canvas)return;const ctx=canvas.getContext("2d");if(!ctx)return;let raf=0,last=0,alive=true;const reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;

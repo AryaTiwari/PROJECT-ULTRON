@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { mark4Root, repoRoot } from "./config.mjs";
+import { normalizeOutput } from "./attention.mjs";
 
 function git(args){return execFileSync("git",args,{cwd:repoRoot,encoding:"utf8",windowsHide:true,timeout:3500,maxBuffer:1024*1024}).trim();}
 function safeGit(args,fallback=""){try{return git(args);}catch{return fallback;}}
@@ -20,10 +21,10 @@ function asArtifacts(value){
   }
   return[];
 }
-export function systemOverview({missions=[],health={},modelFabric=[]}={}){
+export function systemOverview({missions=[],health={},modelFabric=[],integrations=[]}={}){
   const rows=Array.isArray(missions)?missions:[];
   const routes=Array.isArray(modelFabric)?modelFabric:[];
-  const artifacts=rows.flatMap(m=>asArtifacts(m?.artifacts).map((artifact,index)=>({...(artifact&&typeof artifact==="object"?artifact:{value:artifact}),missionId:m?.id,mission:m?.objective,index}))).slice(0,100);
+  const artifacts=rows.flatMap(m=>asArtifacts(m?.artifacts).map((artifact,index)=>normalizeOutput({...(artifact&&typeof artifact==="object"?artifact:{value:artifact}),index},m))).slice(0,100);
   const readyRoutes=routes.filter(x=>x?.configured&&!x?.cooling).length;
-  return{generatedAt:new Date().toISOString(),workspace:workspaceState(),skills:skillRegistry(),memory:memoryState(),purpose:{name:"ULTRON Mark 4",statement:"A local-first personal operating intelligence that turns verified intent into observable, recoverable work.",source:"Mark 4 product architecture"},outputs:artifacts,artifacts,services:[{id:"gateway",label:"Mark 4 Gateway",status:"online",detail:"Local API and event hub"},{id:"hermes",label:"Hermes cognition",status:health?.ok?"online":"unavailable",detail:health?.ok?"Session and tool runtime connected":String(health?.error||"Runtime health check failed")},{id:"model-fabric",label:"Model broker",status:readyRoutes?"ready":"degraded",detail:`${readyRoutes} routes ready`} ]};
+  return{generatedAt:new Date().toISOString(),workspace:workspaceState(),skills:skillRegistry(),memory:memoryState(),purpose:{name:"ULTRON Mark 4",statement:"A local-first personal operating intelligence that turns verified intent into observable, recoverable work.",source:"Mark 4 product architecture"},outputs:artifacts,artifacts,integrations,services:[{id:"gateway",label:"Mark 4 Gateway",status:"online",detail:"Local API and event hub"},{id:"hermes",label:"Hermes cognition",status:health?.ok?"online":"unavailable",detail:health?.ok?"Session and tool runtime connected":String(health?.error||"Runtime health check failed")},{id:"model-fabric",label:"Model broker",status:readyRoutes?"ready":"degraded",detail:`${readyRoutes} routes ready`} ]};
 }

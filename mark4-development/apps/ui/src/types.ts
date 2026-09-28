@@ -1,4 +1,4 @@
-export type ViewMode = "home" | "command" | "mission" | "workspace" | "skills" | "outputs" | "system" | "about";
+export type ViewMode = "home" | "command" | "mission" | "integrations" | "skills" | "outputs" | "system" | "about";
 
 export interface BranchMetadata {
   sessionId: string;
@@ -128,6 +128,7 @@ export interface SystemOverview {
   outputs: Array<Record<string, unknown>>;
   artifacts: Array<Record<string, unknown>>;
   services: Array<{ id:string; label:string; status:string; detail:string }>;
+  integrations?: IntegrationDescriptor[];
 }
 export interface AttachmentRef {
   id: string;
@@ -151,3 +152,7 @@ export interface ChatMessage {
   content: string;
   createdAt?: string;
 }
+
+export type IntegrationStatus="CONNECTED"|"NOT_CONNECTED"|"AUTH_REQUIRED"|"INVALID"|"DEGRADED"|"RATE_LIMITED"|"UNAVAILABLE";
+export interface IntegrationDescriptor{id:string;name:string;kind:string;status:IntegrationStatus;detail:string;configured:boolean;managed:boolean;capabilities:string[];scopes:string[];actions:string[];}
+export interface AttentionItem{id:string;type:string;missionId?:string;integrationId?:string;title:string;detail:string;choices?:Array<{sheetId?:number;title:string}>;severity:string;action:string;}

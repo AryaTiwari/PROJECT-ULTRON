@@ -93,8 +93,9 @@ export function selectGoogleSheet(sheets,{sheetId=null,sheetName=null}={}){
   const rows=(sheets||[]).map(item=>item.properties||item);let selected=null,method=null;
   if(sheetId!==null&&sheetId!==undefined){selected=rows.find(item=>Number(item.sheetId)===Number(sheetId))||null;method="sheetId";}
   if(!selected&&sheetName){selected=rows.find(item=>String(item.title)===String(sheetName))||null;method="exact-title";}
-  if(!selected&&sheetName){const wanted=normalized(sheetName),matches=rows.filter(item=>normalized(item.title)===wanted);if(matches.length===1){selected=matches[0];method="normalized-unique-title";}else if(matches.length>1){const error=new Error("GOOGLE_SHEETS_TAB_AMBIGUOUS");error.code="GOOGLE_SHEETS_TAB_AMBIGUOUS";throw error;}}
-  if(!selected){const error=new Error("GOOGLE_SHEETS_TAB_NOT_FOUND");error.code="GOOGLE_SHEETS_TAB_NOT_FOUND";error.availableSheets=rows.map(item=>({sheetId:item.sheetId,title:item.title}));throw error;}
+  if(!selected&&sheetName){const wanted=normalized(sheetName),matches=rows.filter(item=>normalized(item.title)===wanted);if(matches.length===1){selected=matches[0];method="normalized-unique-title";}else if(matches.length>1){const error=new Error("GOOGLE_SHEETS_TAB_AMBIGUOUS");error.code="GOOGLE_SHEETS_TAB_AMBIGUOUS";error.availableSheets=matches.map(item=>({sheetId:item.sheetId,title:item.title}));throw error;}}
+  if(!selected&&!sheetName&&sheetId==null&&rows.length===1){selected=rows[0];method="only-worksheet";}
+  if(!selected){const error=new Error(sheetName||sheetId!=null?"GOOGLE_SHEETS_TAB_NOT_FOUND":"GOOGLE_SHEETS_TAB_AMBIGUOUS");error.code=error.message;error.availableSheets=rows.map(item=>({sheetId:item.sheetId,title:item.title}));throw error;}
   return{selected,method};
 }
 export async function resolveGoogleSheetTarget({spreadsheetId,sheetId=null,sheetName=null}={}){

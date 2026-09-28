@@ -1,5 +1,5 @@
 import type { LiveEvent, Mission, ModelRoute } from "./types";
-export type CoreState="idle"|"listening"|"transcribing"|"understanding"|"model"|"skill"|"tool"|"mission"|"approval"|"writing"|"speaking"|"completed"|"fallback"|"offline"|"error";
+export type CoreState="idle"|"listening"|"transcribing"|"understanding"|"waiting"|"executing"|"model"|"skill"|"tool"|"mission"|"approval"|"writing"|"speaking"|"completed"|"fallback"|"offline"|"error";
 export type ActivityCategory="REQUEST"|"ROUTING"|"MODEL"|"SKILL"|"TOOL"|"SEARCH"|"MEMORY"|"WRITE"|"APPROVAL"|"MISSION"|"RESULT"|"WARNING"|"ERROR"|"VOICE"|"GOOGLE"|"SYSTEM";
 export interface ActivityItem{event:LiveEvent;category:ActivityCategory;title:string;detail:string;state:CoreState;tone:"neutral"|"active"|"success"|"warning"|"danger"}
 const words=(v:unknown)=>String(v??"").replace(/^ultron[_/.:-]?/i,"").replace(/[_.:/-]+/g," ").replace(/\s+/g," ").trim();

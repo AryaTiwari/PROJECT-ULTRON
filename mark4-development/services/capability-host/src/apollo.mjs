@@ -1,3 +1,4 @@
+import { readCredential } from "./secure-credentials.mjs";
 const SEARCH="https://api.apollo.io/api/v1/mixed_people/api_search";
 const TIERS=[
   {priority:1,label:"Founder / CEO / Director / Owner",titles:["founder","chief executive officer","ceo","owner","managing director","director","executive director"]},
@@ -21,7 +22,7 @@ async function searchTier(key,{company,domain,location},tier){
   return (data.people||data.contacts||[]).filter(x=>sameOrg(x,company)).map(p=>personOf(p,tier,company));
 }
 export async function findCompanyContacts({company,domain="",location="",limit=2,excludeLinkedin="",excludeName="",excludeEmail="",requireIndianPhone=false}){
-  const key=String(process.env.APOLLO_API_KEY||"").trim();if(!key)throw new Error("APOLLO_API_KEY is not configured.");if(!company)throw new Error("company is required.");
+  const key=String(process.env.APOLLO_API_KEY||readCredential("apollo")||"").trim();if(!key)throw new Error("APOLLO_API_KEY is not configured.");if(!company)throw new Error("company is required.");
   const selected=[],seen=new Set();let callCount=0;
   const blockedLinkedin=String(excludeLinkedin||"").trim().toLowerCase().replace(/\/$/,"");
   const blockedName=String(excludeName||"").trim().toLowerCase();
