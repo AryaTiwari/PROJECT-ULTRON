@@ -2,6 +2,7 @@
 
 const missions = require('./universal-enrichment-mission-store');
 const paidTools = require('./paid-tool-approval');
+const rowSelection = require('./universal-row-selection');
 
 missions.markInterruptedOnStartup();
 
@@ -277,7 +278,11 @@ async function inspectMission(mission) {
   }
 }
 
-function requestApproval(mission, inspection, targetRows, summary) {
+function requestApproval(mission, inspection, targetSelection, summary, targetCount = null) {
+  const selection = rowSelection.normalize(targetSelection);
+  const count = Number.isInteger(Number(targetCount)) && Number(targetCount) >= 0
+    ? Number(targetCount)
+    : Number(selection?.count || 0);
   const payload = {
     ...(mission.request || {}),
     url: mission.spreadsheetUrl,
@@ -287,8 +292,9 @@ function requestApproval(mission, inspection, targetRows, summary) {
     missionId: mission.missionId,
     writeScope: mission.writeScope,
     apolloBudget: mission.budget,
-    targetRows,
+    targetRowSelection: selection,
   };
+  delete payload.targetRows;
 
   const approval = paidTools.request(
     'apollo',
@@ -303,7 +309,7 @@ function requestApproval(mission, inspection, targetRows, summary) {
     approvalId: approval.id,
     approvalValid: false,
     sheetName: inspection.sheetName,
-    rowsRemaining: targetRows.length,
+    rowsRemaining: count,
   });
 
   return response(
@@ -315,8 +321,8 @@ function requestApproval(mission, inspection, targetRows, summary) {
         operation: approval.operation,
         expiresAt: approval.expiresAt,
       },
-      universalEnrichmentMission: missions.get(mission.missionId),
-      targetRows,
+      universalEnrichmentMission: missions.publicSummary(missions.get(mission.missionId)),
+      targetRowSelection: selection,
     },
   );
 }
@@ -328,7 +334,7 @@ async function resume() {
   if (mission.nextEligibleAt && Date.now() < Date.parse(mission.nextEligibleAt)) {
     return response(
       `Enrichment safely paused\n\nReason: Apollo provider cooldown\nCompleted: ${mission.rowsProcessed || 0} / ${mission.totalEligibleRows || '?'}\nLast processed row: ${mission.lastProcessedRow ?? 'unknown'}\nNext row: ${mission.nextRow ?? 'unknown'}\nNext safe retry: ${new Date(mission.nextEligibleAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST\nNo completed work will be repeated.`,
-      { universalEnrichmentMission: mission },
+      { universalEnrichmentMission: missions.publicSummary(mission) },
     );
   }
 
@@ -342,6 +348,9 @@ async function resume() {
       ? rowNumber >= Number(frontier.nextRow)
       : true
   ));
+  const targetSelection = targetRows.length
+    ? rowSelection.fromRange(targetRows[0], targetRows.at(-1), targetRows.length)
+    : null;
 
   if (!targetRows.length) {
     const completed = missions.update(mission.missionId, {
@@ -352,7 +361,7 @@ async function resume() {
     });
     return response(
       `Forward enrichment is already at the end of the worksheet. Last processed row: ${completed.lastProcessedRow ?? frontier.lastProcessedRow ?? 'unknown'}. Use "retry unresolved enrichment" if you intentionally want to revisit earlier unresolved rows.`,
-      { universalEnrichmentMission: completed },
+      { universalEnrichmentMission: missions.publicSummary(completed) },
     );
   }
 
@@ -360,8 +369,9 @@ async function resume() {
   return requestApproval(
     saved,
     inspection,
-    targetRows,
+    targetSelection,
     `Resume saved enrichment mission ${mission.missionId} in FORWARD-ONLY mode from row ${frontier.nextRow}. Rows before ${frontier.nextRow} will not be replayed. Historical unresolved rows require the separate "retry unresolved enrichment" command.`,
+    targetRows.length,
   );
 }
 
@@ -399,15 +409,16 @@ async function retryUnresolved() {
   if (!targetRows.length) {
     return response(
       'No historical unresolved rows were found inside the saved enrichment write scope. Forward progress was left unchanged.',
-      { universalEnrichmentMission: mission },
+      { universalEnrichmentMission: missions.publicSummary(mission) },
     );
   }
 
   return requestApproval(
     mission,
     inspection,
-    targetRows,
+    rowSelection.fromRows(targetRows),
     `Retry ${targetRows.length} historical unresolved enrichment row(s). This is an explicit BACKFILL pass; the normal forward cursor remains at row ${frontier.nextRow ?? 'unknown'} and will not be rewound.`,
+    targetRows.length,
   );
 }
 
@@ -415,7 +426,7 @@ async function handle(value) {
   if (isHealth(value)) return health();
   if (isStatus(value)) {
     const mission = missions.latestResumable() || missions.latest();
-    return response(format(mission), { universalEnrichmentMission: mission });
+    return response(format(mission), { universalEnrichmentMission: missions.publicSummary(mission) });
   }
   if (isRetryUnresolved(value)) return retryUnresolved();
   if (isResume(value)) return resume();
