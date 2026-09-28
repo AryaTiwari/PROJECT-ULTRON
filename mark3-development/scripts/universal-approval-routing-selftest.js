@@ -103,8 +103,8 @@ const googleThreePocRoute = control.claim(
   'Use https://docs.google.com/spreadsheets/d/example123/edit and run 3 POCs: first POC, second POC, third POC enrichment.',
   {}
 );
-assert.equal(googleThreePocRoute.domain, 'three-poc-spreadsheet');
-assert.equal(googleThreePocRoute.controller, 'three-poc-domain-controller');
+assert.equal(googleThreePocRoute.domain, 'spreadsheet-enrichment');
+assert.equal(googleThreePocRoute.controller, 'universal-spreadsheet-domain-controller');
 
 
 (async () => {
