@@ -155,6 +155,12 @@ function parseFullSheetRequested(message) {
   return /\b(?:full[ -]?sheet|entire\s+(?:sheet|worksheet|tab)|all\s+non[- ]?empty\s+(?:data\s+)?rows|no\s+row\s+limit)\b/i.test(value);
 }
 
+function parseForwardResumeRequested(message) {
+  const value = String(message || '');
+  if (/\b(?:retry|backfill)\s+(?:unresolved|failed|incomplete)\b/i.test(value)) return false;
+  return /\b(?:resume|continue)\s+(?:(?:the|my|current|latest)\s+)?(?:(?:apollo|poc|spreadsheet|lead)\s+)?enrichment\b/i.test(value);
+}
+
 function configuredRowLimit(message = '') {
   // An explicit full-sheet instruction is authoritative for this exact request.
   if (parseFullSheetRequested(message)) return undefined;
