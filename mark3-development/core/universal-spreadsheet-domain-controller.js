@@ -449,17 +449,60 @@ async function handle(message, context = {}) {
     repairSlots: inspection.analysis?.stats?.partialPersonSlots || 0,
     newPersonSlots: inspection.analysis?.stats?.openPersonSlots || 0,
   });
-  const requestKey = crypto.createHash('sha256').update(JSON.stringify({
-    spreadsheetId: inspection.spreadsheetId, sheetId: inspection.sheetId,
-    schemaFingerprint: summary.fingerprint, fields: writeScope.requestedFields,
-    ordinals: writeScope.requestedOrdinals, rowLimit: rowLimit || null,
-  })).digest('hex');
+  const forwardResumeRequested = parseForwardResumeRequested(original);
   const eligibleRowNumbers = (inspection.analysis?.rowPlans || [])
     .map((plan) => Number(plan?.rowNumber))
     .filter(Number.isInteger)
     .sort((a, b) => a - b);
-  const startRow = eligibleRowNumbers[0] || null;
+  let startRow = eligibleRowNumbers[0] || null;
   const endRow = eligibleRowNumbers.at(-1) || null;
+  let forwardFrontier = null;
+  let targetRows = null;
+
+  if (forwardResumeRequested && eligibleRowNumbers.length) {
+    const controlPlane = require('./universal-enrichment-control-plane');
+    forwardFrontier = controlPlane.recoverForwardFrontier({
+      writeScope,
+      rowCheckpoints: {},
+      startRow,
+      endRow,
+    }, inspection);
+    const nextRow = Number(forwardFrontier?.nextRow);
+    targetRows = eligibleRowNumbers.filter((rowNumber) => !Number.isInteger(nextRow) || rowNumber >= nextRow);
+    if (!targetRows.length) {
+      return response(true,
+        `Forward enrichment is already at the end of worksheet "${exactSheetName}". Last processed row: ${forwardFrontier?.lastProcessedRow ?? 'unknown'}. Use "retry unresolved enrichment" only if you intentionally want to revisit historical unresolved rows.`,
+        {
+          model: 'universal-enrichment-control-plane',
+          provider: 'local-live-frontier-recovery',
+          taskType: 'universal-enrichment-control',
+          apolloCalled: false,
+          spreadsheetUrl: sheetUrl,
+          sheetName: exactSheetName,
+          resumeMode: 'forward-only',
+          resumeFrontier: forwardFrontier,
+        });
+    }
+    startRow = targetRows[0];
+    Object.assign(request, {
+      resumeMode: 'forward-only',
+      targetRows,
+      resumeFrontier: {
+        lastProcessedRow: forwardFrontier?.lastProcessedRow ?? null,
+        nextRow: forwardFrontier?.nextRow ?? startRow,
+        endRow: forwardFrontier?.endRow ?? endRow,
+        source: forwardFrontier?.source || 'sheet-write-scope-recovery',
+      },
+    });
+  }
+
+  const requestKey = crypto.createHash('sha256').update(JSON.stringify({
+    spreadsheetId: inspection.spreadsheetId, sheetId: inspection.sheetId,
+    schemaFingerprint: summary.fingerprint, fields: writeScope.requestedFields,
+    ordinals: writeScope.requestedOrdinals, rowLimit: rowLimit || null,
+    resumeMode: forwardResumeRequested ? 'forward-only' : 'standard',
+    startRow,
+  })).digest('hex');
 
   const mission = enrichmentMissions.create({
     requestKey, provider: 'apollo', spreadsheetId: inspection.spreadsheetId,
@@ -469,10 +512,12 @@ async function handle(message, context = {}) {
     requestedPOCs: writeScope.requestedOrdinals.length ? writeScope.requestedOrdinals : (summary.personGroups || []).map(group => group.ordinal),
     requestedFields: writeScope.requestedFields, ignoredFields: writeScope.ignoredFields,
     readScope: writeScope.readScope, writeScope, protectedColumns: writeScope.protectedColumns,
-    status: 'AWAITING_APOLLO_APPROVAL', totalEligibleRows: eligibleRowNumbers.length || inspection.analysis?.stats?.dataRows || 0,
+    status: 'AWAITING_APOLLO_APPROVAL',
+    totalEligibleRows: targetRows ? targetRows.length : (eligibleRowNumbers.length || inspection.analysis?.stats?.dataRows || 0),
     startRow, endRow,
     budget: apolloBudget.limits({}), request,
   });
+  if (forwardFrontier) enrichmentMissions.setRecoveredFrontier(mission.missionId, forwardFrontier);
   Object.assign(request, { missionId: mission.missionId, writeScope: mission.writeScope, apolloBudget: mission.budget });
   enrichmentMissions.update(mission.missionId, { request, estimatedApolloUsage: estimate });
   const pendingApproval = paidTools.pending('apollo');
