@@ -3876,7 +3876,7 @@ function formatResult(result) {
 
   const groups = Array.isArray(schema.personGroups) ? schema.personGroups.length : 0;
   const companies = Array.isArray(schema.companyGroups) ? schema.companyGroups.length : 0;
-  const status = s.haltedEarly ? 'PARTIAL' : 'CHECKPOINTED';
+  const status = s.haltedEarly ? 'PARTIALLY completed' : 'finished';
   const deferred = boundedRowList(s.primarySweepDeferredRows || []);
   const mandatory = boundedRowList(s.deterministicRecheckRemainingMandatoryRows || []);
   const repair = boundedRowList(s.deterministicRecheckRemainingRepairRows || []);
