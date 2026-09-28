@@ -178,7 +178,7 @@ async function execute(decision) {
       errorHint: typed.hint,
       errorMessage: typed.message,
       diagnostic: typedErrors.format(typed),
-      paidToolApproval: decision,
+      paidToolApproval: publicApproval(decision),
       apolloCalled: false,
     });
   }
@@ -268,7 +268,7 @@ async function execute(decision) {
       spreadsheetUrl: payload.url,
       sheetName: result.sheetName || canonicalTarget.sheetName || payload.sheetName,
       approvedTargetMatchedBy: canonicalTarget.matchedBy,
-      paidToolApproval: decision,
+      paidToolApproval: publicApproval(decision),
       deterministicPrimary: true,
       deterministic: !fallbackUsed,
       fallbackModelUsed: fallbackUsed,
@@ -322,7 +322,7 @@ async function execute(decision) {
       spreadsheetProvider: 'google',
       spreadsheetUrl: payload.url,
       sheetName: payload.sheetName,
-      paidToolApproval: decision,
+      paidToolApproval: publicApproval(decision),
     });
   }
 }
