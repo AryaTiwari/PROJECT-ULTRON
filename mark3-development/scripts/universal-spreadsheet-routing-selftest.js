@@ -18,12 +18,22 @@ const flexible = control.claim(`Research and fill missing people data in ${url};
 assert.equal(flexible.domain, 'spreadsheet-enrichment');
 assert.equal(flexible.controller, 'universal-spreadsheet-domain-controller');
 
-// Historical explicit 3-POC wording keeps its compatibility route. That
-// controller delegates Google execution to the universal deterministic engine.
+// Google Sheets with explicit POC semantics are owned directly by the universal
+// enrichment domain. The legacy 3-POC compatibility controller is reserved for
+// attached/local workbook compatibility.
 const legacyWordingOnGoogle = control.claim(`Run anchored 3-POC enrichment on ${url}. POC 1, POC 2 and POC 3 must be completed.`);
-assert.equal(legacyWordingOnGoogle.domain, 'three-poc-spreadsheet');
-assert.equal(legacyWordingOnGoogle.controller, 'three-poc-domain-controller');
+assert.equal(legacyWordingOnGoogle.domain, 'spreadsheet-enrichment');
+assert.equal(legacyWordingOnGoogle.controller, 'universal-spreadsheet-domain-controller');
 assert.equal(legacyWordingOnGoogle.generalModelAllowed, false);
+
+const aryaIncident = control.claim([
+  `Google sheet url: ${url}`,
+  'worksheet name - Arya-24 sept.',
+  'enrich the companies in this sheet with number and email of 1st poc and 2nd poc',
+].join('\n'));
+assert.equal(aryaIncident.domain, 'spreadsheet-enrichment');
+assert.equal(aryaIncident.controller, 'universal-spreadsheet-domain-controller');
+assert.notEqual(aryaIncident.controller, 'linkedin-domain-controller');
 
 const localLegacy = control.claim('Run anchored 3-POC enrichment on this workbook. POC 1, POC 2 and POC 3 must be completed.', {
   attachments: [{ id: 'file-1', name: 'contacts.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }],
@@ -214,4 +224,4 @@ assert.equal(untargeted.targeted, false);
 assert.equal(untargeted.targetSource, 'none');
 assert.equal(untargeted.targets.length, 3);
 
-console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, isolated 3-POC compatibility, quoted tab/worksheet parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, exact Google titles with surrounding whitespace survive approved execution by sheetId/folded-name without identifier trimming, and visible validation/full-sheet mode are protected.');
+console.log('Universal spreadsheet routing self-test passed: generic Google enrichment ownership, Google POC requests route directly to universal enrichment, attached/local 3-POC compatibility stays isolated, quoted tab/worksheet parsing, direct URL conflict safety, explicit-tab-over-mention-gid targeting, metadata-miss/empty-metadata exact-name bypass, exact Google titles with surrounding whitespace survive approved execution by sheetId/folded-name without identifier trimming, and visible validation/full-sheet mode are protected.');
