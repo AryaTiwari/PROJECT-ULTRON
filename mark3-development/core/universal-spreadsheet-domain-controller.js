@@ -233,6 +233,9 @@ function approvalSummary(inspection, policy = {}) {
   return [
     `ULTRON deterministically inspected worksheet "${inspection?.sheetName || '?'}" before Apollo approval.`,
     rowLimitNotice(inspection?.rowLimitApplied),
+    policy.resumeMode === 'forward-only'
+      ? `FORWARD RESUME MODE: live write-scope recovery found the last processed row at ${policy.resumeFrontier?.lastProcessedRow ?? 'unknown'}; this approved pass will start at row ${policy.resumeFrontier?.nextRow ?? policy.targetRows?.[0] ?? 'unknown'} and will not rewind into historical unresolved rows.`
+      : '',
     `It detected header row ${header}, ${people} person/contact group${people === 1 ? '' : 's'} and ${companies} company group${companies === 1 ? '' : 's'} without assuming a fixed POC count or fixed column letters.`,
     (summary.continuityRecoveries || []).length
       ? `Schema continuity recovery reconstructed ${(summary.continuityRecoveries || []).length} explicitly expected missing contact group${(summary.continuityRecoveries || []).length === 1 ? '' : 's'} in blank trailing columns. ${(summary.headerRepairs || []).length} missing header cell${(summary.headerRepairs || []).length === 1 ? '' : 's'} will be restored only after approval and only if those cells are still blank.`
@@ -570,6 +573,7 @@ module.exports = {
   parseAutomaticTwoPocIndianPolicy,
   parseContactPhaseOrdinal,
   parseFullSheetRequested,
+  parseForwardResumeRequested,
   configuredRowLimit,
   rowLimitNotice,
   schemaReadable,
