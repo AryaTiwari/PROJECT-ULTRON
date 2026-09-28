@@ -98,6 +98,17 @@ function claim(message, options = {}) {
       yieldTo: null,
     });
   }
+  // Apollo's first-class discovery engine still owns true company/people
+  // discovery missions, including discovery-only missions that project results
+  // into a Sheet. Existing-row POC/contact enrichment is excluded by the Apollo
+  // compiler itself and remains Universal-owned.
+  if (apolloLeadIntent.isApolloLeadRequest(text)) {
+    return Object.freeze({
+      domain: 'apollo-lead', claimed: true, exclusive: true,
+      controller: 'apollo-lead-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+    });
+  }
   if (isUniversalSpreadsheetEnrichmentRequest(text, options)) {
     return Object.freeze({
       domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
@@ -109,13 +120,6 @@ function claim(message, options = {}) {
     return Object.freeze({
       domain: 'linkedin', claimed: true, exclusive: true,
       controller: 'linkedin-domain-controller', generalModelAllowed: false,
-      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
-    });
-  }
-  if (apolloLeadIntent.isApolloLeadRequest(text)) {
-    return Object.freeze({
-      domain: 'apollo-lead', claimed: true, exclusive: true,
-      controller: 'apollo-lead-domain-controller', generalModelAllowed: false,
       artifactAllowed: false, allowWebFallback: false, yieldTo: null,
     });
   }
