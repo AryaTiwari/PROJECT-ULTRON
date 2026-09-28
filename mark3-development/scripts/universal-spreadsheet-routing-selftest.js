@@ -34,6 +34,20 @@ const aryaIncident = control.claim([
 assert.equal(aryaIncident.domain, 'spreadsheet-enrichment');
 assert.equal(aryaIncident.controller, 'universal-spreadsheet-domain-controller');
 assert.notEqual(aryaIncident.controller, 'linkedin-domain-controller');
+assert.equal(
+  spreadsheetController.parseForwardResumeRequested([
+    `google sheet url: ${url}?gid=1229007269#gid=1229007269`,
+    'worksheet name - Arya-24 sept',
+    'resume enrichment the companies in this sheet with number and email of 1st poc and 2nd poc',
+  ].join('\n')),
+  true,
+  'URL + worksheet + resume enrichment must enter forward-only resume semantics',
+);
+assert.equal(
+  spreadsheetController.parseForwardResumeRequested('retry unresolved enrichment'),
+  false,
+  'historical unresolved backfill must remain distinct from normal forward resume',
+);
 
 const localLegacy = control.claim('Run anchored 3-POC enrichment on this workbook. POC 1, POC 2 and POC 3 must be completed.', {
   attachments: [{ id: 'file-1', name: 'contacts.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }],
