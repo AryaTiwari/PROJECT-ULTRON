@@ -22,6 +22,7 @@ const nativeVoice = require('./core/native-voice-input');
 const multimodal = require('./core/multimodal');
 const commandControl = require('./core/command-control-plane');
 const enrichmentRequestSafety = require('./core/enrichment-request-safety');
+const enrichmentMissions = require('./core/universal-enrichment-mission-store');
 const paidTools = require('./core/paid-tool-approval');
 const enrichmentErrors = require('./core/spreadsheet-enrichment-errors');
 const fileVault = require('./core/file-vault');
@@ -65,7 +66,11 @@ function body(req, maxBytes = 1000000) {
       raw += chunk;
       if (Buffer.byteLength(raw) > maxBytes) {
         settled = true;
-        reject(new Error(`Request too large. Limit is ${Math.round(maxBytes / 1024 / 1024)} MB.`));
+        const error = new Error(`Request too large. Limit is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
+        error.code = 'REQUEST_TOO_LARGE';
+        error.status = 413;
+        error.maxBytes = maxBytes;
+        reject(error);
       }
     });
     req.on('end', () => {
@@ -126,6 +131,7 @@ function serveVaultFile(req, res) {
 }
 function errorStatus(error) {
   const code = String(error?.code || '');
+  if (code === 'REQUEST_TOO_LARGE' || Number(error?.status) === 413) return 413;
   if (code === 'ENRICHMENT_REQUEST_ID_REQUIRED') return 428;
   if (/ENRICHMENT_REQUEST_(?:INTERRUPTED|ALREADY_COMPLETED|FAILED|ID_COLLISION)/.test(code)) return 409;
   const upstream = Number(error?.status || 0);
@@ -135,6 +141,76 @@ function errorStatus(error) {
   if (upstream >= 500 && upstream <= 599) return 502;
   return 500;
 }
+function compactApproval(value = {}) {
+  return value && typeof value === 'object' ? {
+    id: value.id || null,
+    tool: value.tool || null,
+    operation: value.operation || null,
+    status: value.status || null,
+    requestedAt: value.requestedAt || null,
+    resolvedAt: value.resolvedAt || null,
+    expiresAt: value.expiresAt || null,
+  } : null;
+}
+
+function compactProtectedEnrichmentResponse(controlled = {}) {
+  if (!controlled || typeof controlled !== 'object') return controlled;
+  const compact = { ...controlled };
+
+  if (compact.universalEnrichmentMission) {
+    compact.universalEnrichmentMission = enrichmentMissions.publicSummary(compact.universalEnrichmentMission);
+  }
+  if (compact.paidToolApproval) compact.paidToolApproval = compactApproval(compact.paidToolApproval);
+  if (compact.universalEnrichmentRequest && typeof compact.universalEnrichmentRequest === 'object') {
+    const request = compact.universalEnrichmentRequest;
+    compact.universalEnrichmentRequest = {
+      missionId: request.missionId || null,
+      provider: request.provider || null,
+      sheetName: request.sheetName || null,
+      sheetId: request.sheetId ?? null,
+      expectedPersonGroups: request.expectedPersonGroups || null,
+      requestedAt: request.requestedAt || null,
+      resumeMode: request.resumeMode || null,
+      resumeFrontier: request.resumeFrontier || null,
+      targetRowSelection: request.targetRowSelection || null,
+    };
+  }
+  delete compact.targetRows;
+
+  const maxBytes = Math.max(32 * 1024, Number(process.env.ULTRON_M3_ENRICHMENT_RESPONSE_MAX_BYTES || 192 * 1024));
+  let size = 0;
+  try { size = Buffer.byteLength(JSON.stringify(compact)); } catch {}
+  if (!size || size <= maxBytes) return compact;
+
+  return {
+    ok: compact.ok !== false,
+    response: compact.response || compact.text || 'Enrichment response was compacted safely.',
+    text: compact.text || compact.response || 'Enrichment response was compacted safely.',
+    model: compact.model,
+    provider: compact.provider,
+    taskType: compact.taskType,
+    mode: compact.mode,
+    runtimeBuildId: compact.runtimeBuildId,
+    runtimeRevision: compact.runtimeRevision,
+    spreadsheetProvider: compact.spreadsheetProvider,
+    spreadsheetUrl: compact.spreadsheetUrl,
+    sheetName: compact.sheetName,
+    paidToolApproval: compactApproval(compact.paidToolApproval),
+    universalEnrichmentMission: enrichmentMissions.publicSummary(compact.universalEnrichmentMission),
+    universalEnrichment: compact.universalEnrichment,
+    resumeSafe: compact.resumeSafe,
+    completedFully: compact.completedFully,
+    partialCompletion: compact.partialCompletion,
+    haltError: compact.haltError || null,
+    error: compact.error,
+    errorCode: compact.errorCode,
+    errorType: compact.errorType,
+    errorStage: compact.errorStage,
+    responseCompacted: true,
+    originalResponseBytes: size,
+  };
+}
+
 function isLoopbackRequest(req) {
   const remote = String(req.socket?.remoteAddress || '').toLowerCase();
   return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
@@ -349,8 +425,11 @@ const server = http.createServer(async (req,res) => {
           }, runControlled)
         : await runControlled();
       if (controlled) {
-        const delivery = responseDelivery(controlled.response || controlled.text || '');
-        return send(res, 200, { ...controlled, response: delivery.text, text: delivery.text,
+        const boundedControlled = protectedEnrichment
+          ? compactProtectedEnrichmentResponse(controlled)
+          : controlled;
+        const delivery = responseDelivery(boundedControlled.response || boundedControlled.text || '');
+        return send(res, 200, { ...boundedControlled, response: delivery.text, text: delivery.text,
           requestId: protectedEnrichment ? requestId || null : undefined,
           requestProtected: protectedEnrichment,
           listenAfterResponseMs: delivery.listenAfterResponseMs, invitesReply: delivery.invitesReply });
