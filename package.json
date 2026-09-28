@@ -22,7 +22,9 @@
     "core:test-build": "node --env-file=.env core/test-build-check.js",
     "core:diagnose": "node --env-file=.env core/diagnostics.js",
     "core:self-update": "node --env-file=.env core/self-upgrade.js",
-    "start": "node scripts/start-unified.mjs && npm run interface:build && node --env-file=.env core/server.js"
+    "start": "npm --prefix mark3-development start",
+    "start:mark2-legacy": "node scripts/start-unified.mjs && npm run interface:build && node --env-file=.env core/server.js",
+    "start:mark3": "npm --prefix mark3-development start"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
@@ -42,5 +44,7 @@
     "@types/react-dom": "^19.0.0",
     "typescript": "~5.8.2"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }
