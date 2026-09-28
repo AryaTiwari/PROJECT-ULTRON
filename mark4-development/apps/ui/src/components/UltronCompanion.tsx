@@ -10,7 +10,7 @@ export function UltronCompanion(p:{events:LiveEvent[];online:boolean;degraded:bo
  const [menu,setMenu]=useState(false),[dragging,setDragging]=useState(false);
  const origin=useRef({x:0,y:0,px:0,py:0,moved:false}),hold=useRef<number|undefined>(undefined);
  useEffect(()=>{localStorage.setItem("ultron.companion.position",JSON.stringify(pos))},[pos]);
- const route=()=>p.error?p.onNavigate("system"):p.approval?p.onNavigate("tasks"):p.mission?p.onNavigate("mission"):p.hasArtifact?p.onNavigate("artifacts"):p.onNavigate("command");
+ const route=()=>p.error?p.onNavigate("system"):p.approval?p.onNavigate("mission"):p.mission?p.onNavigate("mission"):p.hasArtifact?p.onNavigate("outputs"):p.onNavigate("command");
  function down(e:React.PointerEvent){origin.current={x:e.clientX,y:e.clientY,px:pos.x,py:pos.y,moved:false};setDragging(true);(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);hold.current=window.setTimeout(()=>{p.onVoice();hold.current=undefined},650)}
  function move(e:React.PointerEvent){if(!dragging)return;const dx=e.clientX-origin.current.x,dy=e.clientY-origin.current.y;if(Math.abs(dx)+Math.abs(dy)>7){origin.current.moved=true;if(hold.current)clearTimeout(hold.current)}setPos({x:Math.max(-window.innerWidth+190,Math.min(40,origin.current.px+dx)),y:Math.max(-window.innerHeight+220,Math.min(40,origin.current.py+dy))})}
  function up(){if(hold.current)clearTimeout(hold.current);setDragging(false);if(!origin.current.moved)route()}
@@ -24,6 +24,6 @@ export function UltronCompanion(p:{events:LiveEvent[];online:boolean;degraded:bo
    <g className="pet-head"><path d="M60 36 78 14h24l18 22-5 36-25 14-25-14z" fill="url(#armor)" stroke="#e4ecf7" strokeWidth="2"/><path d="m67 43 14-10 9 8 9-8 14 10-7 21-16 10-16-10z" fill="#222a39"/><path className="pet-eyes" d="m72 48 14 5-12 5zm36 0-14 5 12 5z" fill="#ff6a24"/><path d="M85 61h10l6 6-11 8-11-8z" fill="#717d91"/></g>
    <g className="pet-legs"><path d="m61 151 24 3-5 42-24 4-8-17zM119 151l-24 3 5 42 24 4 8-17z" fill="url(#armor)" stroke="#c6d1e1"/><path d="m55 190 26-3 5 17-37 2zM125 190l-26-3-5 17 37 2z" fill="url(#dark)" stroke="#8996aa"/></g>
   </svg>
-  {menu&&<div className="companion-menu" onPointerDown={e=>e.stopPropagation()}>{[["command","Open chat"],["mission","Active mission"],["tasks","Task queue"],["system","System health"]].map(([id,label])=><button key={id} onClick={()=>{setMenu(false);p.onNavigate(id as ViewMode)}}>{label}</button>)}</div>}
+  {menu&&<div className="companion-menu" onPointerDown={e=>e.stopPropagation()}>{[["command","Open chat"],["mission","Active mission"],["outputs","Outputs"],["system","System health"]].map(([id,label])=><button key={id} onClick={()=>{setMenu(false);p.onNavigate(id as ViewMode)}}>{label}</button>)}</div>}
  </div>
 }

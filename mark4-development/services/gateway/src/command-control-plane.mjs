@@ -57,8 +57,8 @@ function concepts(text){
 
 export function compileCommand(input=""){
   const text=String(input||""),n=normalized(text),sheet=parseSheetTarget(text);
-  const resume=n.match(/\b(?:resume|continue)\s+(?:apollo\s+)?(?:mission\s+)?(mission-[a-z0-9-]+|apollo-[a-z0-9-]+)/i);
-  if(resume)return{owned:true,domain:"apollo-company-discovery",operation:"resume",missionId:resume[1],confidence:1,source:"deterministic-control-plane"};
+  const resume=n.match(/\b(?:resume|continue)\s+(?:apollo\s+)?(?:mission\s+)?(mission-[a-z0-9-]+|apollo(?:-contact)?-[a-z0-9-]+)/i);
+  if(resume){const contact=resume[1].startsWith("apollo-contact-");return{owned:true,domain:contact?"apollo-contact-enrichment":"apollo-company-discovery",operation:"resume",missionId:resume[1],confidence:1,source:"deterministic-control-plane"};}
 
   const hasApollo=/\bapollo\b/.test(n);
   const asksCompanies=/\b(compan(?:y|ies)|organizations?|businesses?|startups?|leads?)\b/.test(n)||(hasApollo&&/\b(saas|software|product|platform)\b/.test(n));
@@ -74,7 +74,7 @@ export function compileCommand(input=""){
       contactEnrichment:false,
     };
   }
-  if(hasApollo&&contacts)return{owned:true,domain:"apollo-contact-enrichment",operation:"enrich-contacts",confidence:.98,source:"deterministic-control-plane",originalRequest:text,sheet};
+  if(contacts&&(hasApollo||sheet.spreadsheetId||/\blead master\b/.test(n)))return{owned:true,domain:"apollo-contact-enrichment",operation:"enrich-contacts",confidence:.98,source:"deterministic-control-plane",originalRequest:text,sheet};
   if(sheet.spreadsheetId&&/\b(sheet|worksheet|spreadsheet|append|update|fill)\b/.test(n))return{owned:true,domain:"google-sheet-operation",operation:"sheet-operation",confidence:.92,source:"deterministic-control-plane",originalRequest:text,sheet};
   if(/\blinkedin\b/.test(n)&&asksCompanies)return{owned:true,domain:"linkedin-company-research",operation:"company-research",confidence:.95,source:"deterministic-control-plane",originalRequest:text,sheet};
   if(/\b(reel|short video|instagram video)\b/.test(n))return{owned:true,domain:"reel-production",operation:"produce-reel",confidence:.9,source:"deterministic-control-plane",originalRequest:text};

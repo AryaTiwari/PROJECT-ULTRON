@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { dataRoot } from "./config.mjs";
+import {APOLLO_CONTACT_STAGES,LEAD_DISCOVERY_STAGES,CREATOR_RESEARCH_STAGES,REEL_STAGES,progressFor} from "./workflow-contracts.mjs";
 
 fs.mkdirSync(dataRoot, { recursive: true });
 const db = new DatabaseSync(path.join(dataRoot, "state.db"));
@@ -155,15 +156,24 @@ for (const [column,type] of [
 const parse = (value, fallback = {}) => { try { return JSON.parse(value ?? ""); } catch { return fallback; } };
 const now = () => new Date().toISOString();
 
+function missionState(row) {
+  const state=parse(row.state_json),operation=String(state.nativeOperation||"");
+  if(state.progress?.currentStage)return state;
+  let stages=operation==="apollo-company-discovery"?LEAD_DISCOVERY_STAGES:operation==="apollo-contact-enrichment"?APOLLO_CONTACT_STAGES:operation.includes("creator")?CREATOR_RESEARCH_STAGES:operation.includes("reel")?REEL_STAGES:["PLANNING","EXECUTION","VERIFICATION","COMPLETE"];
+  let current=state.currentStage||((row.status==="completed")?"COMPLETE":row.status==="planning"?"PLANNING":"EXECUTION");
+  if(!stages.includes(current)){const aliases={TARGET_VALIDATION:"INPUT_RESOLUTION",AUTH_CHECK:"TARGET_PRECHECK",AWAITING_APOLLO_APPROVAL:"SELECTION",APOLLO_SEARCH:"DISCOVERY",QUALIFICATION:"QUALIFICATION",DEDUPLICATION:"DEDUPE",SELECTION:"SELECTION",SHEET_WRITE:"WRITE",READBACK_VERIFY:"READBACK_VERIFY",COMPLETE:"COMPLETE"};current=aliases[current]||"EXECUTION";}
+  return{...state,progress:progressFor(stages,current,{completed:state.verifiedRows||state.processed||state.companiesWritten||0,total:state.intent?.targetCount||state.targets?.length||null,currentItem:state.currentItem||null})};
+}
 function mapMission(row) {
   if (!row) return null;
   return {
     id: row.id, objective: row.objective, originalRequest: row.original_request || null, status: row.status,
-    state: parse(row.state_json), constraints: parse(row.constraints_json),
+    state: missionState(row), constraints: parse(row.constraints_json),
     completionCriteria: parse(row.completion_json), strategy: parse(row.strategy_json),
-    artifacts: parse(row.artifacts_json, []), blockers: parse(row.blockers_json, []),
+    artifacts: parse(row.artifacts_json, []), outputs: parse(row.artifacts_json, []), blockers: parse(row.blockers_json, []),
     approvals: parse(row.approvals_json, []), relatedSessions: parse(row.related_sessions_json, []),
     childBranches: parse(row.child_branches_json, []), nextAction: row.next_action || null,
+    projectId: missionState(row).projectId || null, repository: missionState(row).repository || null, branch: missionState(row).branch || null, worktree: missionState(row).worktree || null, sessionId: missionState(row).sessionId || null, codingContext: missionState(row).codingContext || null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
 }
@@ -518,7 +528,7 @@ export function leadStats(target = null) {
   const enriched = Number(db.prepare(`SELECT COUNT(*) AS count FROM lead_master
     WHERE verification_status='verified' AND (email IS NOT NULL OR phone IS NOT NULL OR secondary_email IS NOT NULL OR secondary_phone IS NOT NULL OR tertiary_email IS NOT NULL OR tertiary_phone IS NOT NULL)`).get()?.count || 0);
   const numericTarget = target === null || target === undefined || target === "" ? null : Math.max(0,Math.round(Number(target)||0));
-  return { ...counts, enriched, target:numericTarget, remaining:numericTarget === null ? null : Math.max(0,numericTarget-counts.verified) };
+  return { ...counts, enriched, target:numericTarget, remaining:numericTarget === null ? null : Math.max(0,numericTarget-counts.verified), workflowStages:LEAD_DISCOVERY_STAGES };
 }
 
 export function canonicalCreatorKey(platform, handle) {
@@ -615,5 +625,5 @@ export function creatorStats(target=null) {
   for(const row of rows){const n=Number(row.count||0);counts.total+=n;if(row.qualification_status in counts)counts[row.qualification_status]=n;}
   const contacted=Number(db.prepare("SELECT COUNT(*) AS count FROM creator_registry WHERE outreach_status!='not_contacted'").get()?.count||0);
   const numericTarget=target===null||target===undefined||target===""?null:Math.max(0,Math.round(Number(target)||0));
-  return{...counts,contacted,target:numericTarget,remaining:numericTarget===null?null:Math.max(0,numericTarget-counts.qualified)};
+  return{...counts,contacted,target:numericTarget,remaining:numericTarget===null?null:Math.max(0,numericTarget-counts.qualified),workflowStages:CREATOR_RESEARCH_STAGES};
 }
