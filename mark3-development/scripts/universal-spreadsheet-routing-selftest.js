@@ -62,6 +62,22 @@ assert.equal(spreadsheetController.parseSheetName('Use only the Arya 2 worksheet
 assert.equal(spreadsheetController.parseSheetName('Target worksheet: "Arya 2"'), 'Arya 2');
 assert.equal(spreadsheetController.parseSheetName('Target tab: "Arya 2"'), 'Arya 2');
 assert.equal(
+  spreadsheetController.parseSheetName('google sheet url: https://docs.google.com/spreadsheets/d/example/edit?gid=1229007269 worksheet name - Arya-24 sept. resume enrichment the companies in this sheet with number and email of 1st poc and 2nd poc'),
+  'Arya-24 sept',
+  '"worksheet name - <tab>. resume ..." must capture only the worksheet title',
+);
+assert.equal(
+  spreadsheetController.parseSheetName([
+    'google sheet url: https://docs.google.com/spreadsheets/d/example/edit?gid=1229007269',
+    '',
+    'worksheet name - Arya-24 sept',
+    '',
+    'resume enrichment the companies in this sheet with number and email of 1st poc and 2nd poc',
+  ].join('\n')),
+  'Arya-24 sept',
+  'multiline worksheet-name labels must not include the literal "name -" prefix',
+);
+assert.equal(
   spreadsheetController.parseSheetName('Enrich all POCs together on the "Arya 2" worksheet in:'),
   'Arya 2',
   '"on the <name> worksheet" production wording must resolve the exact tab',

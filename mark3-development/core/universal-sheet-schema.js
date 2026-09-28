@@ -84,6 +84,24 @@ function assignPersonGroups(columns){
   return groups.filter((g)=>Object.keys(g.fields).length).sort((a,b)=>(a.ordinal||999)-(b.ordinal||999)||(a.seedIndex??999)-(b.seedIndex??999));
 }
 function assignCompanyGroups(columns,claimed=new Set()){const seeds=columns.filter((c)=>companySeed(c)&&!claimed.has(c.index)).sort((a,b)=>a.index-b.index);if(!seeds.length)return[];const groups=[];for(const seed of seeds){if(groups.some((g)=>Object.values(g.fields).some((f)=>f.index===seed.index)))continue;const g=makeGroup('company',seed.slotHint||groups.length+1,seed);putField(g,canonicalCompanyField(seed.role),seed);groups.push(g);}for(const c of columns){if(claimed.has(c.index))continue;const f=canonicalCompanyField(c.role);if(!f||c.role==='name'||!groups.length)continue;if(groups.some((g)=>Object.values(g.fields).some((v)=>v.index===c.index)))continue;let target=groups[0];for(const g of groups){if((g.seedIndex??-1)<=c.index)target=g;else break;}putField(target,f,c);}for(const g of groups)g.confidence=Math.min(1,.45+Object.keys(g.fields).length*.12);return groups;}
-function inferSchema(rows,options={}){const header=detectHeaderRow(rows,options);if(!header){const e=new Error('Could not infer a reliable spreadsheet header row or semantic column graph.');e.code='UNIVERSAL_SCHEMA_NOT_FOUND';throw e;}const columns=header.columns,personGroups=assignPersonGroups(columns),personIndexes=new Set(personGroups.flatMap((g)=>Object.values(g.fields).map((f)=>f.index))),companyGroups=assignCompanyGroups(columns,personIndexes),context={};for(const c of columns){if(personIndexes.has(c.index))continue;if(companyGroups.some((g)=>Object.values(g.fields).some((f)=>f.index===c.index)))continue;if(['details','location','source','status','notes','website','company'].includes(c.role))(context[c.role]||=[]).push({index:c.index,header:c.header,confidence:c.confidence});}const semantic=columns.filter((c)=>c.role!=='unknown'),groupEvidence=[...personGroups,...companyGroups].reduce((s,g)=>s+g.confidence,0),confidence=Math.max(0,Math.min(1,.25+Math.min(.25,semantic.length*.025)+Math.min(.35,groupEvidence*.12)+Math.min(.15,header.score/400)));return{schemaVersion:1,headerRowIndex:header.rowIndex,headerRowNumber:header.rowNumber,confidence,columns,entityGroups:[...personGroups,...companyGroups],personGroups,companyGroups,contextColumns:context,fingerprint:columns.map((c)=>normalizeHeader(c.header)).join('|')};}
+function dedicatedProviderColumn(column){return /^(?:apollo)(?:\s|$)/.test(String(column?.normalizedHeader||''));}
+function inferSchema(rows,options={}){
+  const header=detectHeaderRow(rows,options);
+  if(!header){const e=new Error('Could not infer a reliable spreadsheet header row or semantic column graph.');e.code='UNIVERSAL_SCHEMA_NOT_FOUND';throw e;}
+  const columns=header.columns;
+  const explicitPocScope=Number(options.expectedPersonGroups||0)>0;
+  // When a command explicitly targets POC groups, dedicated provider-output
+  // columns such as APOLLO CONTACT/PHONE/EMAIL are evidence from another
+  // workflow, not alternate ownership candidates for POC-1/POC-2.
+  const graphColumns=explicitPocScope?columns.filter((column)=>!dedicatedProviderColumn(column)):columns;
+  const providerSectionColumns=explicitPocScope?columns.filter(dedicatedProviderColumn).map((column)=>column.index):[];
+  const personGroups=assignPersonGroups(graphColumns);
+  const personIndexes=new Set(personGroups.flatMap((g)=>Object.values(g.fields).map((f)=>f.index)));
+  const companyGroups=assignCompanyGroups(graphColumns,personIndexes);
+  const context={};
+  for(const c of graphColumns){if(personIndexes.has(c.index))continue;if(companyGroups.some((g)=>Object.values(g.fields).some((f)=>f.index===c.index)))continue;if(['details','location','source','status','notes','website','company'].includes(c.role))(context[c.role]||=[]).push({index:c.index,header:c.header,confidence:c.confidence});}
+  const semantic=graphColumns.filter((c)=>c.role!=='unknown'),groupEvidence=[...personGroups,...companyGroups].reduce((s,g)=>s+g.confidence,0),confidence=Math.max(0,Math.min(1,.25+Math.min(.25,semantic.length*.025)+Math.min(.35,groupEvidence*.12)+Math.min(.15,header.score/400)));
+  return{schemaVersion:1,headerRowIndex:header.rowIndex,headerRowNumber:header.rowNumber,confidence,columns,entityGroups:[...personGroups,...companyGroups],personGroups,companyGroups,contextColumns:context,providerSectionColumns,fingerprint:columns.map((c)=>normalizeHeader(c.header)).join('|')};
+}
 function fieldIndex(group,field){return Number.isInteger(group?.fields?.[field]?.index)?group.fields[field].index:-1;}
-module.exports={normalizeHeader,words,slotHint,looksEmail,looksPhone,linkedInKind,looksUrl,valueSignature,headerRoleScores,bestRole,analyzeColumns,detectHeaderRow,inferSchema,assignPersonGroups,assignCompanyGroups,fieldIndex};
+module.exports={normalizeHeader,words,slotHint,looksEmail,looksPhone,linkedInKind,looksUrl,valueSignature,headerRoleScores,bestRole,analyzeColumns,detectHeaderRow,inferSchema,assignPersonGroups,assignCompanyGroups,dedicatedProviderColumn,fieldIndex};
