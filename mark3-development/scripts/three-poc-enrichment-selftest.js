@@ -299,7 +299,8 @@ assert.match(modelRouterSource, /personalApiFallbackAllowed: false/);
 assert.match(modelRouterSource, /omniRouteOnly: true/);
 
 const controlPlaneSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'command-control-plane.js'), 'utf8');
-assert.match(controlPlaneSource, /controller: 'three-poc-domain-controller'/);
+assert.match(controlPlaneSource, /googleUniversal \? 'universal-spreadsheet-domain-controller' : 'three-poc-domain-controller'/);
+assert.match(controlPlaneSource, /googleUniversal \? 'spreadsheet-enrichment' : 'three-poc-spreadsheet'/);
 assert.match(controlPlaneSource, /generalModelAllowed: false/);
 
 console.log('Agentic 3-POC enrichment self-test passed. Anchored/explicit schemas, exclusive routing, Apollo ID hydration, verified POC isolation, OmniRoute-only heavy reasoning, compact pre-ranking and fallback hydration are protected.');
