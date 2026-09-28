@@ -16,6 +16,7 @@ const typedErrors = require('./spreadsheet-enrichment-errors');
 const diagnostics = require('./universal-enrichment-diagnostics');
 const apollo = require('./apollo-enrichment');
 const companyOwnership = require('./company-ownership-guard');
+const rowSelection = require('./universal-row-selection');
 
 function text(value) { return String(value == null ? '' : value).trim(); }
 function exactSheetTitle(value) { return value == null ? '' : String(value); }
@@ -141,11 +142,14 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
   const targetRows = Array.isArray(options.targetRows)
     ? new Set(options.targetRows.map(Number).filter(Number.isInteger))
     : null;
+  const targetRowSelection = rowSelection.normalize(options.targetRowSelection);
 
   for (const record of analysis.rowPlans || []) {
     const rowNumber = Number(record.rowNumber);
     const plan = record.plan;
-    if (!Number.isInteger(rowNumber) || (targetRows && !targetRows.has(rowNumber))) continue;
+    if (!Number.isInteger(rowNumber)) continue;
+    if (targetRows && !targetRows.has(rowNumber)) continue;
+    if (targetRowSelection && !rowSelection.contains(targetRowSelection, rowNumber)) continue;
     checkedRows.push(rowNumber);
     const scopedPhoneGroups = (source.schema.personGroups || [])
       .filter((group) => Number(group.ordinal || 1) <= 2 && group?.fields?.phone);
@@ -374,6 +378,7 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
   const targetRows = Array.isArray(options.targetRows)
     ? new Set(options.targetRows.map(Number).filter(Number.isInteger))
     : null;
+  const targetRowSelection = rowSelection.normalize(options.targetRowSelection);
   const accepted = [];
   const foreignFallback = [];
   const unresolved = [];
@@ -382,7 +387,9 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
 
   for (const record of analysis.rowPlans || []) {
     const rowNumber = Number(record?.rowNumber);
-    if (!Number.isInteger(rowNumber) || (targetRows && !targetRows.has(rowNumber))) continue;
+    if (!Number.isInteger(rowNumber)) continue;
+    if (targetRows && !targetRows.has(rowNumber)) continue;
+    if (targetRowSelection && !rowSelection.contains(targetRowSelection, rowNumber)) continue;
     const phoneGroups = (source.schema.personGroups || [])
       .filter((group) => Number(group?.ordinal || 1) <= 2 && group?.fields?.phone);
     if (!phoneGroups.length || !record?.plan?.anchor) {
