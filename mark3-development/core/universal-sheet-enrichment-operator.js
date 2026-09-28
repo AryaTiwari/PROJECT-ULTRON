@@ -3876,7 +3876,9 @@ function formatResult(result) {
 
   const groups = Array.isArray(schema.personGroups) ? schema.personGroups.length : 0;
   const companies = Array.isArray(schema.companyGroups) ? schema.companyGroups.length : 0;
-  const status = s.haltedEarly ? 'PARTIALLY completed' : 'finished';
+  const status = s.haltedEarly
+    ? `Universal enrichment PARTIALLY completed on ${result.sheetName || 'the worksheet'}, preserving all earlier verified writes.`
+    : `Universal enrichment finished on ${result.sheetName || 'the worksheet'}.`;
   const deferred = boundedRowList(s.primarySweepDeferredRows || []);
   const mandatory = boundedRowList(s.deterministicRecheckRemainingMandatoryRows || []);
   const repair = boundedRowList(s.deterministicRecheckRemainingRepairRows || []);
@@ -3894,7 +3896,7 @@ function formatResult(result) {
     : '';
 
   return [
-    `Universal enrichment ${status} on ${result.sheetName || 'the worksheet'}.`,
+    status,
     `Schema: header row ${schema.headerRowNumber || '?'}, ${groups} POC group${groups === 1 ? '' : 's'}, ${companies} company group${companies === 1 ? '' : 's'}, confidence ${Number(schema.confidence || 0).toFixed(2)}.`,
     `Progress: processed ${Number(s.rowsProcessed || 0)}/${Number(s.rowsSeen || 0)} rows; changed ${Number(s.cellsChanged || 0)} cells across ${Number(s.rowsChanged || 0)} rows; selected ${Number(s.newPeopleSelected || 0)} new people; repaired ${Number(s.existingGroupsRepaired || 0)} existing POCs.`,
     `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
