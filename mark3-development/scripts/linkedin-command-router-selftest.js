@@ -66,10 +66,10 @@ if (run('intent')) {
   ].join(' ');
   assert.equal(controlPlane.isThreePocSpreadsheetRequest(googleThreePocCommand), true);
   const googleThreePocRoute = controlPlane.claim(googleThreePocCommand);
-  assert.equal(googleThreePocRoute.domain, 'three-poc-spreadsheet');
+  assert.equal(googleThreePocRoute.domain, 'spreadsheet-enrichment');
   assert.equal(googleThreePocRoute.exclusive, true);
   assert.equal(googleThreePocRoute.claimed, true);
-  assert.equal(googleThreePocRoute.controller, 'three-poc-domain-controller');
+  assert.equal(googleThreePocRoute.controller, 'universal-spreadsheet-domain-controller');
   assert.equal(googleThreePocRoute.generalModelAllowed, false);
 
   const normalLinkedInRoute = controlPlane.claim('Find 20 SAP companies on LinkedIn in Maharashtra with active job openings');

@@ -3147,6 +3147,13 @@ function baseHeaderIndex(headers, key) {
   );
 }
 
+function explicitPocHeaderContract(headers = []) {
+  const joined = (headers || []).map((value) => String(value || '').trim()).join(' | ');
+  const first = /\b(?:1st|first)\s+poc\b|\bpoc\s*[- ]?1\b/i.test(joined);
+  const second = /\b(?:2nd|second)\s+poc\b|\bpoc\s*[- ]?2\b/i.test(joined);
+  return first && second;
+}
+
 async function ensureApolloSection(sheetUrl, options = {}) {
   const request = {
     entityMode: 'company',
@@ -3158,6 +3165,20 @@ async function ensureApolloSection(sheetUrl, options = {}) {
   const destination = await inspectDestinationSheet(sheetUrl, request);
   const headerRow = (destination.rows[destination.headerRowNumber - 1] || []).map((value) => String(value || '').trim());
   const headers = headerRow.slice();
+
+  if (explicitPocHeaderContract(headers)) {
+    const error = new Error('This worksheet already contains an explicit POC-1 / POC-2 schema. Universal spreadsheet enrichment owns contact writes here; dedicated Apollo columns are forbidden.');
+    error.code = 'LINKEDIN_APOLLO_POC_SCHEMA_OWNED_BY_UNIVERSAL';
+    error.routeOwner = 'spreadsheet-enrichment';
+    throw error;
+  }
+
+  if (options.allowDedicatedApolloSection !== true) {
+    const error = new Error('Dedicated Apollo columns may be created only for a verified LinkedIn mission Sheet or the canonical Final Master.');
+    error.code = 'LINKEDIN_APOLLO_SHEET_NOT_OWNED';
+    throw error;
+  }
+
   let cursor = headers.reduce((last, value, index) => String(value || '').trim() ? index + 1 : last, 0);
   const changes = [];
 
@@ -3328,9 +3349,16 @@ function apolloStatusForValues(personLinkedin, phone, email, existingStatus = ''
 
 async function finalizeApolloSheetStatuses(sheetUrl) {
   if (!sheetUrl) return { updated: 0, statuses: {}, sheetUrl: null };
-  const layout = await ensureApolloSection(sheetUrl);
+  const request = {
+    entityMode: 'company',
+    hiring: true,
+    wantsContacts: false,
+    filters: {},
+    destinationSheetUrl: sheetUrl,
+  };
+  const layout = await inspectDestinationSheet(sheetUrl, request);
   const rows = await sheets.values(layout.spreadsheetId, `${sheets.quoteSheet(layout.sheetName)}!A:ZZ`);
-  const headers = rows[layout.headerRowNumber - 1] || layout.rawHeaders || [];
+  const headers = rows[layout.headerRowNumber - 1] || [];
   const companyIndex = baseHeaderIndex(headers, 'company');
   const personLinkedinIndex = exactHeaderIndex(headers, 'APOLLO LINKEDIN');
   const phoneIndex = exactHeaderIndex(headers, 'APOLLO PHONE');
@@ -3385,8 +3413,19 @@ async function prepareApolloCompanyContacts(missionId = null, sheetUrl = null) {
     throw error;
   }
 
+  const masterUrl = finalMaster.masterSheetUrl();
+  const missionOwnsSheet = Boolean(mission?.sheetUrl && mission.sheetUrl === resolvedSheetUrl);
+  const canonicalMaster = Boolean(masterUrl && masterUrl === resolvedSheetUrl);
+  if (!missionOwnsSheet && !canonicalMaster) {
+    const error = new Error('This Sheet is not owned by a LinkedIn mission or the canonical Final Master. Existing business/POC Sheets must use Universal Spreadsheet Enrichment.');
+    error.code = 'LINKEDIN_APOLLO_SHEET_NOT_OWNED';
+    error.routeOwner = 'spreadsheet-enrichment';
+    throw error;
+  }
+
   const prepared = await prepareApolloSheetContacts(resolvedSheetUrl, {
     priorityMode: mission?.request?.hiring === false ? 'general' : 'hiring',
+    allowDedicatedApolloSection: true,
   });
   if (mission) {
     mission.apolloDecisionMakers = prepared.contacts;
@@ -3405,7 +3444,10 @@ async function enrichFinalMasterContacts() {
     throw error;
   }
 
-  const selection = await prepareApolloSheetContacts(master.sheetUrl, { priorityMode: 'hiring' });
+  const selection = await prepareApolloSheetContacts(master.sheetUrl, {
+    priorityMode: 'hiring',
+    allowDedicatedApolloSection: true,
+  });
   const leadEnrichment = require('./lead-enrichment-operator');
   const stats = await leadEnrichment.enrichSheet(master.sheetUrl, {
     provider: 'google',
@@ -3562,6 +3604,16 @@ async function fillLatestMissionIntoSheet(sheetUrl = null) {
 function isContinueSearchRequest(text) {
   const value = String(text || '').trim();
   if (!/\b(?:continue|resume|keep\s+searching|search\s+more|find\s+more|more\s+results?|another\s+batch)\b/i.test(value)) return false;
+
+  // Bare "resume" and spreadsheet-enrichment continuation belong to the durable
+  // enrichment control plane. LinkedIn continuation must carry actual LinkedIn
+  // research/search context instead of stealing any command that happens to use
+  // the word resume while an old LinkedIn mission exists.
+  if (/^(?:resume|continue)(?:\s+enrichment)?\s*[.!]?$/i.test(value)) return false;
+  if (/\benrichment\b/i.test(value) && !/\blinkedin\b/i.test(value)) return false;
+  const linkedinContext = /\blinkedin\b|\b(?:search|research|results?|companies|jobs?|leads?|mission)\b/i.test(value);
+  if (!linkedinContext) return false;
+
   return Boolean(latestCompletedMission());
 }
 
@@ -4450,6 +4502,7 @@ module.exports = {
   personMission,
   exactMission,
   contactRemark,
+  explicitPocHeaderContract,
   verifiedRecordSnapshot,
   isExistingSheetFillRequest,
   fillLatestMissionIntoSheet,

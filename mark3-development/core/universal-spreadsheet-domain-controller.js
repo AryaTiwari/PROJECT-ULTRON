@@ -443,6 +443,13 @@ async function handle(message, context = {}) {
     schemaFingerprint: summary.fingerprint, fields: writeScope.requestedFields,
     ordinals: writeScope.requestedOrdinals, rowLimit: rowLimit || null,
   })).digest('hex');
+  const eligibleRowNumbers = (inspection.analysis?.rowPlans || [])
+    .map((plan) => Number(plan?.rowNumber))
+    .filter(Number.isInteger)
+    .sort((a, b) => a - b);
+  const startRow = eligibleRowNumbers[0] || null;
+  const endRow = eligibleRowNumbers.at(-1) || null;
+
   const mission = enrichmentMissions.create({
     requestKey, provider: 'apollo', spreadsheetId: inspection.spreadsheetId,
     spreadsheetUrl: sheetUrl, spreadsheetTitle: inspection.spreadsheetTitle,
@@ -451,7 +458,8 @@ async function handle(message, context = {}) {
     requestedPOCs: writeScope.requestedOrdinals.length ? writeScope.requestedOrdinals : (summary.personGroups || []).map(group => group.ordinal),
     requestedFields: writeScope.requestedFields, ignoredFields: writeScope.ignoredFields,
     readScope: writeScope.readScope, writeScope, protectedColumns: writeScope.protectedColumns,
-    status: 'AWAITING_APOLLO_APPROVAL', totalEligibleRows: inspection.analysis?.stats?.dataRows || 0,
+    status: 'AWAITING_APOLLO_APPROVAL', totalEligibleRows: eligibleRowNumbers.length || inspection.analysis?.stats?.dataRows || 0,
+    startRow, endRow,
     budget: apolloBudget.limits({}), request,
   });
   Object.assign(request, { missionId: mission.missionId, writeScope: mission.writeScope, apolloBudget: mission.budget });

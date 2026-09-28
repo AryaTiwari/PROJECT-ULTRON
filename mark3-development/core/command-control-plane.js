@@ -80,20 +80,28 @@ function claim(message, options = {}) {
       controlCommand: true, readOnlyStatus: true,
     });
   }
-  if (linkedinIntent.isLeadDiscoveryRequest(text)) {
-    return Object.freeze({
-      domain: 'linkedin', claimed: true, exclusive: true,
-      controller: 'linkedin-domain-controller', generalModelAllowed: false,
-      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
-    });
-  }
+  // Spreadsheet ownership outranks LinkedIn discovery whenever the user supplied
+  // a concrete spreadsheet source and asked for POC/contact enrichment. LinkedIn
+  // URLs inside rows are evidence, not permission for the LinkedIn operator to
+  // take ownership of the mutation.
   if (isThreePocSpreadsheetRequest(text, options)) {
+    const source = spreadsheetSourceSignals(text, options);
+    const googleUniversal = source.hasGoogleSheet;
     return Object.freeze({
-      domain: 'three-poc-spreadsheet', claimed: true, exclusive: true,
-      controller: 'three-poc-domain-controller', generalModelAllowed: false,
-      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+      domain: googleUniversal ? 'spreadsheet-enrichment' : 'three-poc-spreadsheet',
+      claimed: true,
+      exclusive: true,
+      controller: googleUniversal ? 'universal-spreadsheet-domain-controller' : 'three-poc-domain-controller',
+      generalModelAllowed: false,
+      artifactAllowed: false,
+      allowWebFallback: false,
+      yieldTo: null,
     });
   }
+  // Apollo's first-class discovery engine still owns true company/people
+  // discovery missions, including discovery-only missions that project results
+  // into a Sheet. Existing-row POC/contact enrichment is excluded by the Apollo
+  // compiler itself and remains Universal-owned.
   if (apolloLeadIntent.isApolloLeadRequest(text)) {
     return Object.freeze({
       domain: 'apollo-lead', claimed: true, exclusive: true,
@@ -105,6 +113,13 @@ function claim(message, options = {}) {
     return Object.freeze({
       domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
       controller: 'universal-spreadsheet-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+    });
+  }
+  if (linkedinIntent.isLeadDiscoveryRequest(text)) {
+    return Object.freeze({
+      domain: 'linkedin', claimed: true, exclusive: true,
+      controller: 'linkedin-domain-controller', generalModelAllowed: false,
       artifactAllowed: false, allowWebFallback: false, yieldTo: null,
     });
   }

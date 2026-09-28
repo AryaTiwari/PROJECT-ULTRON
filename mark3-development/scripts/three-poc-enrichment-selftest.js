@@ -256,9 +256,9 @@ assert.ok(googleNaturalRequest, 'Google Sheet anchored 3-POC wording must route 
 assert.equal(googleNaturalRequest.provider, 'google');
 assert.equal(googleNaturalRequest.url, googleSheetUrl);
 const googleControlRoute = controlPlane.claim(`Use ${googleSheetUrl} and perform anchored 3-POC enrichment. POC-1 uses LinkedIn Id; fill POC-2 and POC-3 phone and email.`);
-assert.equal(googleControlRoute.domain, 'three-poc-spreadsheet');
+assert.equal(googleControlRoute.domain, 'spreadsheet-enrichment');
 assert.equal(googleControlRoute.exclusive, true);
-assert.equal(googleControlRoute.controller, 'three-poc-domain-controller');
+assert.equal(googleControlRoute.controller, 'universal-spreadsheet-domain-controller');
 assert.equal(googleControlRoute.generalModelAllowed, false);
 
 const paidApprovalSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'paid-tool-approval.js'), 'utf8');
@@ -299,7 +299,8 @@ assert.match(modelRouterSource, /personalApiFallbackAllowed: false/);
 assert.match(modelRouterSource, /omniRouteOnly: true/);
 
 const controlPlaneSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'command-control-plane.js'), 'utf8');
-assert.match(controlPlaneSource, /controller: 'three-poc-domain-controller'/);
+assert.match(controlPlaneSource, /googleUniversal \? 'universal-spreadsheet-domain-controller' : 'three-poc-domain-controller'/);
+assert.match(controlPlaneSource, /googleUniversal \? 'spreadsheet-enrichment' : 'three-poc-spreadsheet'/);
 assert.match(controlPlaneSource, /generalModelAllowed: false/);
 
 console.log('Agentic 3-POC enrichment self-test passed. Anchored/explicit schemas, exclusive routing, Apollo ID hydration, verified POC isolation, OmniRoute-only heavy reasoning, compact pre-ranking and fallback hydration are protected.');
