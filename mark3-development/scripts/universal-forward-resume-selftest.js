@@ -170,6 +170,10 @@ try {
   rows[168][2] = 'Sagar Medhekar — Business Development Manager';
   rows[168][3] = '+919893324281';
 
+  // Supporting identity is writable for a new POC, but a pre-existing name alone
+  // must never advance a contact-enrichment resume frontier.
+  rows[170][2] = 'Pre-existing POC name without requested contact data';
+
   // Simulate data in the accidental dedicated Apollo section after the intended
   // forward frontier. It must not move the recovery cursor because J:O is outside
   // the universal mission WriteScope.
