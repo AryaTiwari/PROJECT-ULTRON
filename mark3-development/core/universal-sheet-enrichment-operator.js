@@ -3098,6 +3098,21 @@ function isTransientProviderRowFailure(typed = {}) {
   return /NETWORK|TIMEOUT|UNAVAILABLE|FETCH_FAILED/.test(code);
 }
 
+function rowFailureDisposition(typed = {}, state = {}, options = {}) {
+  if (isRecoverableRowFailure(typed)) {
+    return { action: 'continue', checkpointState: 'RETRY_REQUIRED', kind: 'row-local', nextConsecutiveTransientFailures: 0 };
+  }
+  if (isTransientProviderRowFailure(typed)) {
+    const maxTransient = integer(options.maxTransientRowFailures, 2, 1, 5);
+    const next = Number(state.consecutiveTransientProviderFailures || 0) + 1;
+    if (next <= maxTransient) {
+      return { action: 'continue', checkpointState: 'PROVIDER_WAIT', kind: 'provider-transient', nextConsecutiveTransientFailures: next };
+    }
+    return { action: 'halt', kind: 'provider-circuit', nextConsecutiveTransientFailures: next };
+  }
+  return { action: 'halt', kind: 'systemic', nextConsecutiveTransientFailures: 0 };
+}
+
 function formatFailureSummary(typed = {}) {
   return typedErrors.format(typed);
 }
@@ -3765,7 +3780,8 @@ async function run(request = {}, options = {}) {
       stats.rowFailures++;
       stats.rowFailureAudit.push({ rowNumber, ...typed });
 
-      if (isRecoverableRowFailure(typed)) {
+      const disposition = rowFailureDisposition(typed, stats, options);
+      if (disposition.kind === 'row-local') {
         stats.recoverableRowFailures++;
         stats.consecutiveTransientProviderFailures = 0;
         markLeftover(stats, rowNumber, 'recoverable-row-failure', {
@@ -3779,17 +3795,16 @@ async function run(request = {}, options = {}) {
       // exhausted row-level network failure should still not invalidate or stop
       // unrelated rows immediately. Continue a bounded number of consecutive
       // transient provider failures, then open the circuit and halt safely.
-      if (isTransientProviderRowFailure(typed)) {
-        const maxTransient = integer(options.maxTransientRowFailures, 2, 1, 5);
+      if (disposition.kind === 'provider-transient' || disposition.kind === 'provider-circuit') {
         stats.transientProviderFailures++;
-        stats.consecutiveTransientProviderFailures++;
-        if (stats.consecutiveTransientProviderFailures <= maxTransient) {
+        stats.consecutiveTransientProviderFailures = disposition.nextConsecutiveTransientFailures;
+        if (disposition.action === 'continue') {
           stats.transientProviderContinuations++;
-          stats.rowsProcessed++; runContext.checkpoint({ source, rowNumber, row, plan, stats, state: 'PROVIDER_WAIT' });
+          stats.rowsProcessed++; runContext.checkpoint({ source, rowNumber, row, plan, stats, state: disposition.checkpointState });
           continue;
         }
       } else {
-        stats.consecutiveTransientProviderFailures = 0;
+        stats.consecutiveTransientProviderFailures = disposition.nextConsecutiveTransientFailures;
       }
 
       stats.systemicHalts++;
@@ -3990,6 +4005,7 @@ module.exports = {
   typedFailureSummary,
   isRecoverableRowFailure,
   isTransientProviderRowFailure,
+  rowFailureDisposition,
   formatFailureSummary,
   diagnostics,
   freshStats,

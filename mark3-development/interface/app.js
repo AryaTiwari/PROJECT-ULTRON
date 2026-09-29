@@ -77,6 +77,7 @@ app.innerHTML=`
       <div class="telemetry-item"><span class="telemetry-label">TASK</span><span class="telemetry-value" id="task">READY</span></div>
       <div class="telemetry-item"><span class="telemetry-label">MEMORY</span><span class="telemetry-value" id="memory">0</span></div>
       <div class="telemetry-item"><span class="telemetry-label">COMMITMENTS</span><span class="telemetry-value" id="commitments">0</span></div>
+      <div class="telemetry-item"><span class="telemetry-label">BUILD</span><span class="telemetry-value" id="runtimeBuild">CHECKING</span></div>
     </div>
     <div class="hint">WAKE → LISTEN → UNDERSTAND → ACT → RESPOND</div>
   </footer>
@@ -86,6 +87,7 @@ const els={
   shell:document.querySelector('.m3-shell'),statusText:document.querySelector('#statusText'),hudState:document.querySelector('#hudState'),
   hudModel:document.querySelector('#hudModel'),hudLatency:document.querySelector('#hudLatency'),hudMemory:document.querySelector('#hudMemory'),
   model:document.querySelector('#model'),task:document.querySelector('#task'),memory:document.querySelector('#memory'),commitments:document.querySelector('#commitments'),
+  runtimeBuild:document.querySelector('#runtimeBuild'),
   activityList:document.querySelector('#activityList'),messages:document.querySelector('#messages'),input:document.querySelector('#input'),send:document.querySelector('#send'),
   voiceToggle:document.querySelector('#voiceToggle'),wakeToggle:document.querySelector('#wakeToggle'),chatToggle:document.querySelector('#chatToggle'),chatClose:document.querySelector('#chatClose'),
   voiceOrb:document.querySelector('#voiceOrb'),globeWrap:document.querySelector('#globeWrap'),voiceEyebrow:document.querySelector('#voiceEyebrow'),voicePrompt:document.querySelector('#voicePrompt'),
@@ -133,6 +135,7 @@ function renderCore(){
 function setState(s){state.status=String(s||'IDLE').toUpperCase();els.statusText.textContent=`ONLINE // ${state.status}`;els.hudState.textContent=state.status;renderCore();}
 function setChatOpen(open){state.chatOpen=Boolean(open);els.shell.classList.toggle('chat-open',state.chatOpen);els.chatToggle.classList.toggle('active',state.chatOpen);localStorage.setItem('ultron-m3-chat-open',state.chatOpen?'1':'0');if(state.chatOpen)setTimeout(()=>els.input.focus(),160);}
 async function refreshState(){try{const r=await fetch(`${API}/api/state`);const d=await r.json();els.memory.textContent=d.memory?.total??0;els.commitments.textContent=d.commitments?.length??0;els.hudMemory.textContent=String(d.memory?.total??0);}catch{}}
+async function refreshRuntime(){try{const r=await fetch(`${API}/api/runtime`,{cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw new Error('runtime unavailable');const revision=String(d.revision||'unknown').slice(0,8),fingerprint=String(d.sourceFingerprint||'unknown').slice(0,8);els.runtimeBuild.textContent=`${revision} · ${fingerprint}`;els.runtimeBuild.title=d.buildId||`${revision}:${fingerprint}`;document.documentElement.dataset.ultronBuild=d.buildId||'';}catch{els.runtimeBuild.textContent='UNAVAILABLE';els.runtimeBuild.title='Runtime build metadata could not be verified.';}}
 
 function renderVoiceButton(){els.voiceToggle.textContent=state.voiceEnabled?'AUDIO ON':'AUDIO OFF';els.voiceToggle.classList.toggle('muted',!state.voiceEnabled);els.voiceToggle.setAttribute('aria-pressed',String(!state.voiceEnabled));els.voiceToggle.title=state.voiceEnabled?'Mute ULTRON voice':'Enable ULTRON voice';}
 function clearRecognitionRestart(){if(state.recognitionRestartTimer){clearTimeout(state.recognitionRestartTimer);state.recognitionRestartTimer=null;}}
@@ -356,4 +359,4 @@ function draw(now){
 }
 requestAnimationFrame(draw);
 
-initRecognition();connectEvents();refreshState();refreshVoiceStatus();setChatOpen(state.chatOpen);renderWakeButton();setInterval(refreshState,15000);setState('IDLE');addMessage('assistant','ULTRON Mark 3 online. Say “Ultron” when you need me; chat is standing by.','SYSTEM · READY');setTimeout(()=>{if(state.wakeEnabled)armWake();},900);
+initRecognition();connectEvents();refreshState();refreshRuntime();refreshVoiceStatus();setChatOpen(state.chatOpen);renderWakeButton();setInterval(refreshState,15000);setState('IDLE');addMessage('assistant','ULTRON Mark 3 online. Say “Ultron” when you need me; chat is standing by.','SYSTEM · READY');setTimeout(()=>{if(state.wakeEnabled)armWake();},900);

@@ -12,6 +12,9 @@
     "core/universal-enrichment-mission-store.js",
     "core/universal-enrichment-control-plane.js",
     "core/universal-enrichment-write-scope.js",
+    "core/universal-enrichment-planner.js",
+    "core/universal-schema-entity-disambiguation.js",
+    "core/runtime-build.js",
     "core/universal-enrichment-recovery.js",
     "core/universal-provider-circuit-breaker.js",
     "core/universal-apollo-budget.js",
@@ -23,6 +26,7 @@
     "scripts/universal-enrichment-integrity-guard.js",
     "scripts/universal-enrichment-performance-benchmark.js",
     "core/universal-enrichment-cache.js",
-    "scripts/universal-enrichment-failure-matrix-selftest.js"
+    "scripts/universal-enrichment-failure-matrix-selftest.js",
+    "scripts/universal-aryatry-semantic-selftest.js"
   ]
 }

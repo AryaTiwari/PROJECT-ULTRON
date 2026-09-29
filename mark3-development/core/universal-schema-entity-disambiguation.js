@@ -30,10 +30,59 @@ function descriptorHeader(descriptor) {
   return descriptor?.header || '';
 }
 
+function descriptorIndex(descriptor) {
+  return Number.isInteger(descriptor) ? descriptor : descriptor?.index;
+}
+
+function rowSemanticAnchorHints(schema) {
+  const hints = [];
+  const columns = schema?.columns || [];
+  for (const linkColumn of columns) {
+    const header = schemaTools.normalizeHeader(linkColumn.header || '');
+    if (!/\b(?:company|organisation|organization|employer|business)\b/.test(header)) continue;
+    if (!/\b(?:link|linkedin|profile|url)\b/.test(header)) continue;
+    if (Number(linkColumn.signature?.linkedinPerson || 0) <= 0) continue;
+
+    const company = [...(schema.companyGroups || [])]
+      .filter((group) => Number.isInteger(descriptorIndex(group.fields?.company)))
+      .sort((a, b) => Math.abs(descriptorIndex(a.fields.company) - linkColumn.index)
+        - Math.abs(descriptorIndex(b.fields.company) - linkColumn.index))[0];
+    const nameColumnIndex = descriptorIndex(company?.fields?.company);
+    if (!Number.isInteger(nameColumnIndex) || Math.abs(nameColumnIndex - linkColumn.index) > 2) continue;
+
+    hints.push({
+      kind: 'person-anchor',
+      nameColumnIndex,
+      linkedinColumnIndex: linkColumn.index,
+      reason: 'company-header-person-linkedin-contradiction',
+    });
+  }
+  return hints;
+}
+
 function reconcile(schema) {
   if (!schema?.companyGroups?.length || !schema?.personGroups?.length) return schema;
   const retained = [];
   const changes = [];
+  const semanticHints = rowSemanticAnchorHints(schema);
+  const semanticLinkedinColumns = new Set(semanticHints.map((hint) => hint.linkedinColumnIndex));
+
+  // A value-shaped personal LinkedIn URL under a misleading company-link
+  // header is source/anchor evidence. It must not become the identity field of
+  // the nearest explicit POC group (for Aryatry that would incorrectly make B
+  // satisfy POC-1 in C/D/E).
+  for (const group of schema.personGroups) {
+    const linkedinIndex = descriptorIndex(group.fields?.linkedin);
+    if (!semanticLinkedinColumns.has(linkedinIndex)) continue;
+    if (!group.fields?.name || descriptorIndex(group.fields.name) <= linkedinIndex) continue;
+    delete group.fields.linkedin;
+    changes.push({
+      from: group.id,
+      to: 'row-person-anchor',
+      fields: ['linkedin'],
+      reason: 'company-header-person-linkedin-contradiction',
+    });
+  }
 
   for (const group of schema.personGroups) {
     if (!genericContactOnly(group)) {
@@ -68,6 +117,7 @@ function reconcile(schema) {
   schema.personGroups = retained;
   schema.entityGroups = [...retained, ...(schema.companyGroups || [])];
   schema.entityOwnershipRecoveries = changes;
+  schema.rowSemanticAnchorHints = semanticHints;
   return schema;
 }
 
@@ -77,9 +127,9 @@ function install() {
   schemaTools.inferSchema = function disambiguatedSchema(rows, options = {}) {
     return reconcile(originalInfer(rows, options));
   };
-  const api = Object.freeze({ reconcile, genericContactOnly, personSpecificHeader });
+  const api = Object.freeze({ reconcile, genericContactOnly, personSpecificHeader, rowSemanticAnchorHints });
   globalThis[INSTALL_FLAG] = api;
   return api;
 }
 
-module.exports = { install, reconcile, genericContactOnly, personSpecificHeader };
+module.exports = { install, reconcile, genericContactOnly, personSpecificHeader, rowSemanticAnchorHints };

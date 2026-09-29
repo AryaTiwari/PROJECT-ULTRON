@@ -2,7 +2,9 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const single = require('./replace-stale-mark3');
+const runtimeBuild = require('../core/runtime-build');
 assert.equal(single.classify(null, 'new'), 'foreign');
 assert.equal(single.classify({ service: 'Other', buildId: 'old' }, 'new'), 'foreign');
 assert.equal(single.classify({ service: 'ULTRON Mark 3', buildId: 'new' }, 'new'), 'current');
@@ -10,8 +12,17 @@ assert.equal(single.classify({ service: 'ULTRON Mark 3', buildId: 'old' }, 'new'
 assert.equal(single.classify({ service: 'ULTRON Mark 3' }, 'new'), 'stale');
 const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const packageSource = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
+const interfaceSource = fs.readFileSync(path.join(__dirname, '..', 'interface', 'app.js'), 'utf8');
+const runtimeSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'runtime-build.js'), 'utf8');
+const actualHead = String(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path.join(__dirname, '..', '..'), encoding: 'utf8' })).trim();
+assert.equal(runtimeBuild.revision, actualHead, 'runtime metadata must resolve the actual checkout HEAD');
+assert.equal(runtimeBuild.id, `${actualHead}:${runtimeBuild.fingerprint}`);
+assert.match(runtimeSource, /path\.join\(config\.mark3Root, 'interface'\)/, 'runtime fingerprint must include browser assets');
 assert.match(serverSource, /req\.url === '\/api\/runtime'/);
 assert.match(serverSource, /REFUSING stale runtime/);
 assert.match(serverSource, /\[Apollo Lead\] Contract:/);
+assert.match(serverSource, /'Cache-Control':'no-store', 'X-Ultron-Build':runtimeBuild\.id/);
+assert.match(interfaceSource, /fetch\(`\$\{API\}\/api\/runtime`,\{cache:'no-store'\}\)/);
+assert.match(interfaceSource, /id="runtimeBuild"/);
 assert.match(packageSource, /"mark3:sync":\s*"node --env-file=\.\.\/\.env scripts\/sync-mark3\.js"/);
-console.log('Mark 3 single-instance self-test passed: current builds are retained, stale/legacy ULTRON builds are replaceable, foreign port owners remain protected, runtime identity is exposed, stale direct-server reuse is refused, and the safe sync command is registered.');
+console.log('Mark 3 single-instance self-test passed: runtime metadata matches checkout HEAD, API/static/browser surfaces share a no-store build identity, current builds are retained, stale/legacy ULTRON builds are replaceable, foreign port owners remain protected, and stale direct-server reuse is refused.');
