@@ -209,8 +209,15 @@ function safeWritesForGroup(row, group, person, options = {}) {
     conflicts.push('identity-conflict');
     return { writes, conflicts, allowed: false };
   }
+  const scope = options.writeScope || require('./universal-run-context').current()?.writeScope;
+  const inScope = field => require('./universal-enrichment-write-scope').allowed(scope, group.id, field, group.fields[field]?.index);
+  // Contact-only approval must never produce an anonymous new contact slot.
+  if (!existingIdentity && !['name', 'linkedin'].some(field => values[field] && inScope(field))) {
+    return { writes, conflicts: ['identity-outside-requested-scope'], allowed: false };
+  }
   require('./universal-run-context').verified(row, group);
   for (const field of expectedPersonFields(group)) {
+    if (!inScope(field)) continue;
     const descriptor = group.fields[field];
     const current = snapshot.values[field];
     const next = field === 'name' ? displayNameForGroup(group, values) : values[field];
@@ -283,6 +290,12 @@ function replacementWritesForGroup(row, group, person, options = {}) {
     });
   }
 
+  const scope = options.writeScope || require('./universal-run-context').current()?.writeScope;
+  // Never filter an atomic replacement: that could attach a new person's
+  // phone to the previous person's protected name or email.
+  if (writes.some(write => !require('./universal-enrichment-write-scope').allowed(scope, group.id, write.field, write.columnIndex))) {
+    return { writes: [], conflicts: ['replacement-outside-requested-scope'], allowed: false };
+  }
   return {
     writes,
     conflicts,

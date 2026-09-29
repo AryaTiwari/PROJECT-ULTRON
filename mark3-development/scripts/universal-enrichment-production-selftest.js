@@ -5,6 +5,36 @@ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ultron-enrichment-'));process.en
 const store=require('../core/universal-enrichment-mission-store'),scope=require('../core/universal-enrichment-write-scope'),budget=require('../core/universal-apollo-budget'),circuits=require('../core/universal-provider-circuit-breaker'),recovery=require('../core/universal-enrichment-recovery'),adaptive=require('../core/universal-adaptive-concurrency'),durableCache=require('../core/universal-enrichment-cache');
 const schema={headerRowNumber:1,columns:[{index:0,header:'Company',role:'company_name'},{index:1,header:'POC 1 Name',role:'person_name'},{index:2,header:'POC 1 Phone',role:'phone'},{index:3,header:'POC 1 Email',role:'email'},{index:4,header:'POC 2 Name',role:'person_name'},{index:5,header:'POC 2 Phone',role:'phone'},{index:6,header:'POC 2 Email',role:'email'}],personGroups:[{id:'poc1',ordinal:1,fields:{name:{index:1},phone:{index:2},email:{index:3}}},{id:'poc2',ordinal:2,fields:{name:{index:4},phone:{index:5},email:{index:6}}}]};
 const writeScope=scope.compile('enrich the 1st and 2nd POC phone and emails',schema);assert.deepEqual(writeScope.requestedOrdinals,[1,2]);assert.deepEqual(new Set(writeScope.requestedFields),new Set(['phone','email']));assert.equal(writeScope.allowed.find(item=>item.groupId==='poc1'&&item.field==='name')?.supporting,true);const source={schema,sheetName:'Arya',spreadsheetId:'sheet-1'};assert.equal(scope.assertChanges(writeScope,source,[{range:"'Arya'!C2",field:'phone',groupId:'poc1',columnIndex:2}]),true);assert.equal(scope.assertChanges(writeScope,source,[{range:"'Arya'!B2",field:'name',groupId:'poc1',columnIndex:1}]),true);assert.throws(()=>scope.assertChanges(writeScope,source,[{range:"'Arya'!A2",columnIndex:0}]),/outside requested scope/i);
+
+// Exercise both explicitly restricted and owner-support contact scopes.
+const planner=require('../core/universal-enrichment-planner'),runContext=require('../core/universal-run-context');
+const strictScope=scope.compile('enrich 1st and 2nd POC phone and emails. do not change POC names or profile links or roles.',schema);
+runContext.run({writeScope:strictScope},()=>{
+ const person={name:'Asha Rao',title:'HR Manager',email:'asha@example.com',phone:'+919876543210'};
+ for(const group of schema.personGroups){
+  const row=Array(7).fill('');row[0]='Example';row[group.fields.name.index]='Asha Rao';
+  const plan=planner.safeWritesForGroup(row,group,person);
+  assert.equal(plan.allowed,true);
+  assert.ok(plan.writes.length>0,'contact updates must survive an out-of-scope name/role suggestion');
+  assert.ok(plan.writes.every(w=>['phone','email'].includes(w.field)));
+  scope.assertChanges(strictScope,source,plan.writes);
+  assert.equal(row[group.fields.name.index],'Asha Rao','planning must preserve the existing identity');
+ }
+ const blank=planner.safeWritesForGroup(Array(7).fill(''),schema.personGroups[1],person);
+ assert.equal(blank.allowed,false,'contact-only scope cannot create an anonymous contact');
+ assert.deepEqual(blank.writes,[]);
+ const replacement=planner.replacementWritesForGroup(['Example','Previous Person','','old@example.com'],schema.personGroups[0],person);
+ assert.equal(replacement.allowed,false,'partial identity replacement must be rejected atomically');
+ assert.deepEqual(replacement.writes,[]);
+});
+const fullScope=scope.compile('resume enrichment the companies in this sheet with number and email of 1st poc and 2nd poc',schema);
+runContext.run({writeScope:fullScope},()=>{
+ const plan=planner.safeWritesForGroup(Array(7).fill(''),schema.personGroups[1],{name:'Asha Rao',email:'asha@example.com',phone:'+919876543210'});
+ assert.equal(plan.allowed,true,'ordinary two-POC enrichment must still populate blank identities');
+ assert.ok(plan.writes.some(w=>w.field==='name'));
+ scope.assertChanges(fullScope,source,plan.writes);
+});
+
 const input={requestKey:'same-request',spreadsheetId:'sheet-1',spreadsheetUrl:'https://docs.google.com/spreadsheets/d/sheet-1/edit',spreadsheetTitle:'Leads',sheetName:'Arya',sheetId:9,schemaFingerprint:'schema-v1',requestedPOCs:[1,2],requestedFields:['phone','email'],writeScope,totalEligibleRows:2200,status:'AWAITING_APOLLO_APPROVAL'};const first=store.create(input),duplicate=store.create(input);assert.equal(first.missionId,duplicate.missionId);store.checkpointRow(first.missionId,2199,{state:'COMPLETE',processed:true,slots:{1:{phone:{state:'FOUND'}}}});store.checkpointRow(first.missionId,2200,{state:'PROVIDER_WAIT',processed:true});assert.equal(store.get(first.missionId).lastSafeCheckpoint.rowNumber,2200);delete require.cache[require.resolve('../core/universal-enrichment-mission-store')];const restarted=require('../core/universal-enrichment-mission-store');assert.equal(restarted.get(first.missionId).rowsProcessed,2);restarted.update(first.missionId,{status:'INTERRUPTED',completionState:'INTERRUPTED'});
 const router=require('../core/command-control-plane');assert.equal(router.claim('resume').domain,'spreadsheet-enrichment');assert.equal(router.claim('resume enrichment').domain,'spreadsheet-enrichment');assert.equal(router.claim('resume enrichment').controller,'universal-spreadsheet-domain-controller');assert.equal(router.claim('continue LinkedIn research').domain,'linkedin');assert.notEqual(router.claim('resume enrichment').domain,'linkedin');
 const estimated=budget.estimate({eligibleRows:100,completeSlots:30,repairSlots:20,newPersonSlots:50,expectedCacheHitRate:.4});assert.equal(estimated.expectedCacheHits,28);assert.equal(estimated.creditEstimateAvailable,false);let ledger=budget.empty();ledger=budget.record(ledger,'discovery');assert.throws(()=>budget.assert(ledger,{maxApolloDiscoveryCalls:1},'discovery'),/budget reached/i);
