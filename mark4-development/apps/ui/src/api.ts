@@ -110,7 +110,7 @@ export function liveEvents(onEvent: (type: string, data: any) => void, onStatus?
     source = new EventSource(GATEWAY_URL + "/api/live");
     source.onopen = () => { attempt = 0; onStatus?.("online"); };
     source.onmessage = event => { try { onEvent("message", JSON.parse(event.data)); } catch {} };
-    for (const type of known) source.addEventListener(type, (event: any) => { try { onEvent(type, JSON.parse(event.data)); } catch {} });
+    for (const type of new Set(known)) source.addEventListener(type, (event: any) => { try { onEvent(type, JSON.parse(event.data)); } catch {} });
     source.onerror = () => {
       source?.close();
       source = null;

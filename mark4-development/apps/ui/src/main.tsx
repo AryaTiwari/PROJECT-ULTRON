@@ -11,3 +11,4 @@ createRoot(rootElement).render(
     <App />
   </UiErrorBoundary>
 );
+import "./polish.css";
