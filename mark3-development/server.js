@@ -50,6 +50,7 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
     'Content-Type': type,
     'Content-Length': Buffer.byteLength(payload),
     'Cache-Control': 'no-store',
+    'X-Ultron-Build': runtimeBuild.id,
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, X-Ultron-Request-Id',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -100,7 +101,7 @@ function serve(req, res) {
   const target = file && fs.existsSync(file) && fs.statSync(file).isFile() ? file : path.join(webRoot, 'index.html');
   if (!fs.existsSync(target)) return send(res, 404, { ok:false, error:'Interface not built.' });
   const stat = fs.statSync(target);
-  res.writeHead(200, { 'Content-Type':mimeType(target), 'Content-Length':stat.size, 'Cache-Control':/\.(js|css)$/i.test(target)?'no-cache':'no-store' });
+  res.writeHead(200, { 'Content-Type':mimeType(target), 'Content-Length':stat.size, 'Cache-Control':'no-store', 'X-Ultron-Build':runtimeBuild.id });
   fs.createReadStream(target).pipe(res);
 }
 function serveAudio(req, res) {

@@ -5,12 +5,12 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const config = require('./config');
 
-function filesUnder(root) {
+function filesUnder(root, extensions = new Set(['.js'])) {
   const output = [];
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     const full = path.join(root, entry.name);
-    if (entry.isDirectory()) output.push(...filesUnder(full));
-    else if (entry.isFile() && entry.name.endsWith('.js')) output.push(full);
+    if (entry.isDirectory()) output.push(...filesUnder(full, extensions));
+    else if (entry.isFile() && extensions.has(path.extname(entry.name).toLowerCase())) output.push(full);
   }
   return output;
 }
@@ -28,7 +28,12 @@ function gitRevision() {
 }
 
 function sourceFingerprint() {
-  const files = [path.join(config.mark3Root, 'server.js'), path.join(config.mark3Root, 'package.json'), ...filesUnder(path.join(config.mark3Root, 'core'))]
+  const files = [
+    path.join(config.mark3Root, 'server.js'),
+    path.join(config.mark3Root, 'package.json'),
+    ...filesUnder(path.join(config.mark3Root, 'core')),
+    ...filesUnder(path.join(config.mark3Root, 'interface'), new Set(['.js', '.css', '.html'])),
+  ]
     .filter((file) => fs.existsSync(file))
     .sort();
   const hash = crypto.createHash('sha256');

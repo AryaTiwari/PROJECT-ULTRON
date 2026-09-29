@@ -43,7 +43,46 @@ function companySnapshot(row, group) {
   return groupSnapshot(row, group);
 }
 
-function rowContext(row, schema) {
+function personNameEvidence(value) {
+  const candidate = text(value);
+  if (!candidate || candidate.length > 100 || /@|https?:\/\/|linkedin\.com/i.test(candidate)) return false;
+  if (/\b(?:pvt|private|limited|ltd|llp|inc|corp|corporation|company|technologies|solutions|systems|consulting|services)\b/i.test(candidate)) return false;
+  const tokens = candidate.split(/\s+/).filter(Boolean);
+  return tokens.length >= 2 && tokens.length <= 6 && tokens.every((token) => /[\p{L}]/u.test(token));
+}
+
+function rowSemanticPersonAnchor(row, schema) {
+  for (const hint of schema?.rowSemanticAnchorHints || []) {
+    const linkedin = text(row?.[hint.linkedinColumnIndex]);
+    const name = text(row?.[hint.nameColumnIndex]);
+    if (schemaTools.linkedInKind(linkedin) !== 'linkedin_person' || !personNameEvidence(name)) continue;
+    const group = {
+      id: `row-person-anchor-${hint.nameColumnIndex}-${hint.linkedinColumnIndex}`,
+      kind: 'person-anchor',
+      ordinal: 0,
+      seedIndex: hint.nameColumnIndex,
+      anchorOnly: true,
+      fields: {
+        name: { index: hint.nameColumnIndex, header: schema.columns?.[hint.nameColumnIndex]?.header || '', readOnly: true },
+        linkedin: { index: hint.linkedinColumnIndex, header: schema.columns?.[hint.linkedinColumnIndex]?.header || '', readOnly: true },
+      },
+    };
+    const snapshot = groupSnapshot(row, group);
+    return {
+      type: 'person',
+      group,
+      snapshot,
+      score: 130,
+      proof: ['row-person-linkedin', 'neighbor-person-name', 'header-value-contradiction'],
+      semanticRecovery: true,
+      sourceColumns: [hint.nameColumnIndex, hint.linkedinColumnIndex],
+      reason: hint.reason,
+    };
+  }
+  return null;
+}
+
+function rowContext(row, schema, semanticAnchor = null) {
   const context = {};
   for (const [role, columns] of Object.entries(schema?.contextColumns || {})) {
     const values = (columns || []).map((column) => text(row?.[column.index])).filter(Boolean);
@@ -51,8 +90,15 @@ function rowContext(row, schema) {
     context[role] = values.join(' | ');
   }
   for (const group of schema.companyGroups || []) {
-    if (group.fields.company && valueAt(row, group.fields.company)) context.company ||= valueAt(row, group.fields.company);
+    const companyIndex = group.fields?.company?.index;
+    const contradictedCompany = semanticAnchor?.semanticRecovery
+      && semanticAnchor.sourceColumns?.includes(companyIndex);
+    if (!contradictedCompany && group.fields.company && valueAt(row, group.fields.company)) context.company ||= valueAt(row, group.fields.company);
     if (group.fields.website && valueAt(row, group.fields.website)) context.website ||= valueAt(row, group.fields.website);
+  }
+  if (semanticAnchor?.semanticRecovery) {
+    context.personAnchorName = semanticAnchor.snapshot.values.name;
+    context.personAnchorLinkedin = semanticAnchor.snapshot.values.linkedin;
   }
   return context;
 }
@@ -114,16 +160,18 @@ function inferMode(anchor, groups) {
 }
 
 function planRow(row, schema, options = {}) {
-  const anchor = chooseAnchor(row, schema);
+  const semanticAnchor = rowSemanticPersonAnchor(row, schema);
+  const anchor = semanticAnchor || chooseAnchor(row, schema);
   const groups = classifyPersonGroups(row, schema, anchor);
   const mode = inferMode(anchor, groups);
   const targets = [...groups.partial, ...groups.open]
     .filter((item) => !(item.isAnchor && mode === 'person-employer-to-contacts'))
     .sort((a, b) => (a.group.ordinal || 999) - (b.group.ordinal || 999));
-  const context = rowContext(row, schema);
+  const context = rowContext(row, schema, semanticAnchor);
   const warnings = [];
   if (!anchor) warnings.push('no-reliable-anchor');
   if (anchor?.type === 'person' && anchor.snapshot.linkedinKind !== 'linkedin_person') warnings.push('person-anchor-without-person-linkedin');
+  if (semanticAnchor) warnings.push('row-person-anchor-recovery');
   if (schema.confidence < 0.55) warnings.push('low-schema-confidence');
   const confidence = Math.max(0, Math.min(1,
     schema.confidence * 0.55
@@ -141,6 +189,11 @@ function planRow(row, schema, options = {}) {
     repairCount: targets.filter((item) => !item.snapshot.empty).length,
     warnings,
     deterministic: true,
+    rowSemantics: semanticAnchor ? {
+      anchorType: 'person',
+      reason: semanticAnchor.reason,
+      sourceColumns: semanticAnchor.sourceColumns,
+    } : null,
   };
 }
 
@@ -326,6 +379,8 @@ module.exports = {
   groupSnapshot,
   companySnapshot,
   rowContext,
+  personNameEvidence,
+  rowSemanticPersonAnchor,
   chooseAnchor,
   classifyPersonGroups,
   planRow,
