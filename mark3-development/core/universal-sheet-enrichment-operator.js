@@ -26,6 +26,7 @@ const runContext = require('./universal-run-context');
 const liveWrites = require('./universal-live-write-guard');
 const durableEnrichmentCache = require('./universal-enrichment-cache');
 const rowSelection = require('./universal-row-selection');
+const targetResolver = require('./universal-sheet-target-resolver');
 
 function text(value) { return String(value ?? '').trim(); }
 function throwSystemic(error) {
@@ -124,21 +125,27 @@ function selectUniversalSheetTargets(meta = {}, options = {}) {
     }))
     .filter((sheet) => sheet.name && Number.isFinite(sheet.sheetId));
 
+  if (requestedName) {
+    const exact = tabs.find((tab) => tab.name === requestedName);
+    if (exact) return { tabs, targets: [exact], requestedName, requestedSheetId, matchedBy: requestedSheetId === exact.sheetId ? 'sheetId' : 'exact-name' };
+
+    const folded = tabs.filter((tab) => foldedSheetTitle(tab.name) === foldedSheetTitle(requestedName));
+    if (folded.length === 1) {
+      return { tabs, targets: [folded[0]], requestedName, requestedSheetId, matchedBy: requestedSheetId === folded[0].sheetId ? 'sheetId' : 'folded-name' };
+    }
+  }
+
   if (requestedSheetId != null) {
     const byId = tabs.find((tab) => tab.sheetId === requestedSheetId);
     if (byId) return { tabs, targets: [byId], requestedName, requestedSheetId, matchedBy: 'sheetId' };
   }
 
-  if (requestedName) {
-    const exact = tabs.find((tab) => tab.name === requestedName);
-    if (exact) return { tabs, targets: [exact], requestedName, requestedSheetId, matchedBy: 'exact-name' };
-
-    const folded = tabs.filter((tab) => foldedSheetTitle(tab.name) === foldedSheetTitle(requestedName));
-    if (folded.length === 1) {
-      return { tabs, targets: [folded[0]], requestedName, requestedSheetId, matchedBy: 'folded-name' };
-    }
-    return { tabs, targets: [], requestedName, requestedSheetId, matchedBy: 'none' };
+  if (requestedName && options.explicitNameAuthoritative && requestedSheetId == null) {
+    const target = targetResolver.syntheticNamedTarget(requestedName);
+    return { tabs, targets: [target], requestedName, requestedSheetId, matchedBy: 'explicit-name-metadata-bypass', metadataFallback: true };
   }
+
+  if (requestedName) return { tabs, targets: [], requestedName, requestedSheetId, matchedBy: 'none' };
 
   return { tabs, targets: tabs, requestedName: '', requestedSheetId, matchedBy: 'all-tabs' };
 }
@@ -3382,6 +3389,7 @@ async function run(request = {}, options = {}) {
     ...options,
     sheetName: request.sheetName || options.sheetName,
     sheetId: request.sheetId ?? options.sheetId ?? null,
+    explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative || options.explicitNameAuthoritative),
   });
   const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema });
   if (options.dryRun) return { ok: true, dryRun: true, deterministic: true, modelCalls: 0, ...source, analysis, schema: engine.schemaSummary(source.schema), stats: { ...freshStats(), rowsSeen: analysis.stats.dataRows } };

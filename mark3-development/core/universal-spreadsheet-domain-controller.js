@@ -29,7 +29,7 @@ function parseSheetName(message) {
     // Common chat phrasing: "worksheet name - Arya-24 sept" (optionally
     // followed by another command on the same line). Capture only the actual
     // worksheet title; do not let "name -" become part of the identifier.
-    /\b(?:worksheet|sheet|tab)\s+name\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120}?)[`"'“”]?(?=\s*(?:\.\s*(?:resume|continue|retry|backfill|enrich|run|fill|complete|finish)\b|\.\s*$|\n|$))/im,
+    /\b(?:worksheet|sheet|tab)\s+name\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120}?)[`"'“”]?(?=\s*(?:(?:\.?\s*)(?:resume|continue|retry|backfill|enrich|run|fill|complete|finish)\b|\.\s*$|\n|$))/im,
     // Explicit target/use clauses are authoritative and must be evaluated before
     // loose prose such as "run enrichment on the Google Sheet below". Otherwise
     // that sentence can be misread as a request for a tab literally named Google.
@@ -277,15 +277,18 @@ function recoverMentionedSheetName(meta = {}, sourceText = '') {
 
 function metadataFallbackTarget(sheetUrl, requestedSheetName) {
   const requestedGid = targetResolver.parseGid(sheetUrl);
-  const sheetId = requestedGid !== null && requestedGid !== undefined && Number.isFinite(Number(requestedGid)) ? Number(requestedGid) : null;
   return {
     targeted: true,
     targetSource: 'explicit-name-metadata-fallback',
     requestedName: requestedSheetName,
     requestedGid,
-    ignoredViewGid: false,
+    ignoredViewGid: requestedGid,
     metadataFallback: true,
-    target: { name: requestedSheetName, sheetId },
+    // A gid is only a verified immutable worksheet identity after Google
+    // metadata maps it to this exact title. During metadata fallback it is just
+    // a URL view hint. Carrying it as sheetId can make approval re-entry select
+    // a different tab before the exact named A1 read gets a chance to run.
+    target: { name: requestedSheetName, sheetId: null, synthetic: true },
   };
 }
 

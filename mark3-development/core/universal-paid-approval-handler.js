@@ -13,6 +13,7 @@ const runtimeBuild = require('./runtime-build');
 const enrichmentMissions = require('./universal-enrichment-mission-store');
 const enrichmentRecovery = require('./universal-enrichment-recovery');
 const providerCircuits = require('./universal-provider-circuit-breaker');
+const targetResolver = require('./universal-sheet-target-resolver');
 
 const OPERATION = 'universal-spreadsheet-enrichment';
 const EXECUTION_CONTRACT = 'universal-coordinated-multi-poc-v4';
@@ -125,17 +126,36 @@ async function canonicalApprovedTarget(payload = {}) {
     .filter((tab) => tab.name && Number.isFinite(tab.sheetId));
 
   const requestedSheetId = payload.sheetId !== null && payload.sheetId !== undefined && String(payload.sheetId).trim() !== '' && Number.isFinite(Number(payload.sheetId)) ? Number(payload.sheetId) : null;
+  const rawName = payload.sheetName == null ? '' : String(payload.sheetName);
+  if (rawName) {
+    const exact = tabs.find((tab) => tab.name === rawName);
+    if (exact) return { sheetName: exact.name, sheetId: exact.sheetId, matchedBy: requestedSheetId === exact.sheetId ? 'sheetId' : 'exact-name' };
+    const folded = tabs.filter((tab) => tab.name.trim().toLowerCase() === rawName.trim().toLowerCase());
+    if (folded.length === 1) return { sheetName: folded[0].name, sheetId: folded[0].sheetId, matchedBy: requestedSheetId === folded[0].sheetId ? 'sheetId' : 'folded-name' };
+  }
+
+  // Stable ids recover a renamed worksheet, but only after an explicitly named
+  // live target had a chance to win. This prevents a stale URL gid from routing
+  // approval to a different tab.
   if (requestedSheetId != null) {
     const byId = tabs.find((tab) => tab.sheetId === requestedSheetId);
     if (byId) return { sheetName: byId.name, sheetId: byId.sheetId, matchedBy: 'sheetId' };
   }
 
-  const rawName = payload.sheetName == null ? '' : String(payload.sheetName);
-  if (rawName) {
-    const exact = tabs.find((tab) => tab.name === rawName);
-    if (exact) return { sheetName: exact.name, sheetId: exact.sheetId, matchedBy: 'exact-name' };
-    const folded = tabs.filter((tab) => tab.name.trim().toLowerCase() === rawName.trim().toLowerCase());
-    if (folded.length === 1) return { sheetName: folded[0].name, sheetId: folded[0].sheetId, matchedBy: 'folded-name' };
+  // Some Google/connector metadata responses are incomplete. When no immutable
+  // id was verified and the user supplied an exact title, let the downstream
+  // named A1 read prove existence instead of failing before execution.
+  if (rawName && requestedSheetId == null) {
+    const resolved = targetResolver.resolveTabs(meta, url, {
+      sheetName: rawName,
+      explicitNameAuthoritative: true,
+    });
+    if (resolved.target?.name) return {
+      sheetName: resolved.target.name,
+      sheetId: resolved.target.sheetId,
+      matchedBy: resolved.targetSource,
+      metadataFallback: Boolean(resolved.metadataFallback),
+    };
   }
 
   const error = new Error(`Approved worksheet target could not be re-resolved. Requested name="${rawName}" sheetId=${requestedSheetId ?? 'none'}.`);

@@ -138,6 +138,7 @@ async function mandatoryCompletionAudit(request, options = {}, terminalEvidence 
     ...options,
     sheetName: request.sheetName || options.sheetName,
     sheetId: request.sheetId ?? options.sheetId ?? null,
+    explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative || options.explicitNameAuthoritative),
   });
   const analysis = engine.analyzeSheet(source.rows, {
     rowLimit: options.rowLimit,
@@ -371,6 +372,7 @@ async function enforceIndianPhoneCompanyGate(request, options = {}, result = {})
     ...options,
     sheetName: request.sheetName || options.sheetName,
     sheetId: request.sheetId ?? options.sheetId ?? null,
+    explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative || options.explicitNameAuthoritative),
   });
   const analysis = engine.analyzeSheet(source.rows, {
     rowLimit: options.rowLimit,
