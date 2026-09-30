@@ -11,6 +11,26 @@ const apollo = require('../core/apollo-enrichment');
 const companyContext = { company: 'Example Technologies Pvt Ltd', domain: 'example.com' };
 const existing = { names: new Set(['anchor person']), linkedins: new Set() };
 
+const partialDecisionMaker = base.chooseVerifiedPartialCandidate([
+  {
+    person: { identityVerified: true, name: 'Global Director', title: 'Director', email: 'director@example.com', location: 'London' },
+    writePlan: { allowed: true, writes: [{ field: 'name', value: 'Global Director — Director' }] },
+    index: 0,
+  },
+  {
+    person: { identityVerified: true, name: 'India Talent Lead', title: 'Talent Acquisition Lead', location: 'Bengaluru, India' },
+    writePlan: { allowed: true, writes: [{ field: 'name', value: 'India Talent Lead — Talent Acquisition Lead' }] },
+    index: 1,
+  },
+  {
+    person: { identityVerified: false, name: 'Unverified India Head', title: 'Head HR', location: 'Mumbai, India' },
+    writePlan: { allowed: true, writes: [{ field: 'name', value: 'Unverified India Head — Head HR' }] },
+    index: 2,
+  },
+]);
+assert.equal(partialDecisionMaker.person.name, 'India Talent Lead', 'verified partial fallback must preserve India preference after all bounded phone checks fail');
+assert.equal(base.chooseVerifiedPartialCandidate([{ person: { identityVerified: false, title: 'Director' }, writePlan: { allowed: true, writes: [{}] } }]), null, 'partial fallback must never write an unverified identity');
+
 const cachedPeers = base.cachedVerifiedPeopleForCompany(companyContext, { people: {
   'https://www.linkedin.com/in/cached-director': {
     apolloPersonId: 'cached-1', name: 'Cached Director', title: 'Director',
