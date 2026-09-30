@@ -73,8 +73,8 @@ const ISSUE_CATALOG = Object.freeze({
     severity: 'BLOCKER',
     blocking: true,
     retryable: false,
-    message: 'Verified preferred POC candidates were found, but none returned an actual usable phone within the bounded top-3 policy.',
-    nextAction: 'Leave the slot blank for this run. Retry only when provider contact data changes; do not spend more credits on the same candidate set or ask AI to reselect it.',
+    message: 'A preferred POC was identity- and employer-verified, but none of the bounded top-three candidates returned an actual usable phone.',
+    nextAction: 'Keep the verified name, designation and available work email; leave only the unavailable phone blank and retry that phone only when provider data changes.',
   },
   'existing-contact-repair-unresolved': {
     code: 'EXISTING_CONTACT_REPAIR_UNRESOLVED',
