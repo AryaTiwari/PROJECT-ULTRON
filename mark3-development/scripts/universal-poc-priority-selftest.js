@@ -358,7 +358,7 @@ assert.match(operatorSource, /targetRows: leftoverRows/);
 assert.match(operatorSource, /fillManualPriorityGroup/);
 assert.match(operatorSource, /pragmaticSameEmployerCandidates/);
 assert.match(operatorSource, /ordinal: 2/);
-assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5/);
+assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| phoneQualifiedCandidateLimit\(options\)/);
 assert.match(operatorSource, /ordinal: 3/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS/);
 assert.match(operatorSource, /phaseOrdinal === 3 \? 5 : \(!phaseOrdinal \? 3 : 1\)/);

@@ -180,9 +180,9 @@ assert.match(targetedSource, /\? await runPocPhasePipeline\(exact\.request, runO
 assert.match(targetedSource, /: await base\.run\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /poc-phase-deterministic-only/);
 assert.match(targetedSource, /async function runPocPhasePipeline/);
-assert.match(targetedSource, /ordinal: 1/);
-assert.match(targetedSource, /ordinal: 2/);
-assert.match(targetedSource, /ordinal: 3/);
+assert.match(targetedSource, /const expectedGroups = Math\.max\(2, Math\.min\(3/);
+assert.match(targetedSource, /for \(const ordinal of ordinals\)/);
+assert.match(targetedSource, /contactPhaseOrdinal: ordinal/);
 assert.match(targetedSource, /deferOpenGroupSelectionToAi: boundedAiEnabled/);
 assert.match(targetedSource, /targetOrdinals: undefined/);
 assert.match(targetedSource, /targetRows: unresolvedRows/);
@@ -203,7 +203,7 @@ assert.match(operatorSource, /An empty result is still useful run-local evidence
 assert.match(operatorSource, /cache\.set\(key, merged\)/);
 assert.doesNotMatch(operatorSource, /else cache\.delete\(key\)/);
 assert.match(operatorSource, /optionalPoc3Deferred/);
-assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| 5/);
+assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS \|\| phoneQualifiedCandidateLimit\(options\)/);
 assert.match(operatorSource, /ULTRON_M3_UNIVERSAL_POC3_HYDRATION_ATTEMPTS/);
 assert.match(operatorSource, /phaseOrdinal === 3 \? 5 : \(!phaseOrdinal \? 3 : 1\)/);
 assert.match(operatorSource, /const discoveryTargets = phaseOrdinal === 3[\s\S]*?openPersonTargets/);

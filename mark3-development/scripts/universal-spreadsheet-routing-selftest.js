@@ -40,8 +40,13 @@ assert.equal(
     'worksheet name - Arya-24 sept',
     'resume enrichment the companies in this sheet with number and email of 1st poc and 2nd poc',
   ].join('\n')),
+  false,
+  'plain resume enrichment must revisit historical gaps instead of silently entering forward-only mode',
+);
+assert.equal(
+  spreadsheetController.parseForwardResumeRequested('continue enrichment from the next unprocessed row'),
   true,
-  'URL + worksheet + resume enrichment must enter forward-only resume semantics',
+  'forward-only mode must remain available through explicit row-frontier language',
 );
 assert.equal(
   spreadsheetController.parseForwardResumeRequested('retry unresolved enrichment'),

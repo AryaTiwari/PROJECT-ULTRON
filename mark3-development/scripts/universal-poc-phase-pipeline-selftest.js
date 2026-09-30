@@ -80,7 +80,7 @@ assert.equal(merged.stats.newPeopleSelected, 6);
 assert.deepEqual(merged.stats.deferredPoc2Rows, [5]);
 assert.equal(merged.stats.pocPhaseSummaries.length, 3);
 assert.deepEqual(merged.stats.pocPhaseSummaries.map((item) => item.ordinal), [1, 2, 3]);
-assert.equal(merged.stats.contactPhaseLabel, 'POC-1 -> POC-2 -> POC-3');
+assert.equal(merged.stats.contactPhaseLabel, 'FAST ALL -> DEEP POC-1 -> DEEP POC-2');
 assert.equal(merged.stats.unfilledOpenGroups, 4);
 
 assert.equal(controller.parseContactPhaseOrdinal('Fill POC-1 only in Arya 2'), 1);
@@ -146,6 +146,7 @@ assert.equal(
 const root = path.join(__dirname, '..', 'core');
 const operatorSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-operator.js'), 'utf8');
 const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
+const controllerSource = fs.readFileSync(path.join(root, 'universal-spreadsheet-domain-controller.js'), 'utf8');
 
 assert.match(operatorSource, /contactPhaseOrdinal/);
 assert.match(operatorSource, /phaseOrdinal === 1/);
@@ -156,9 +157,14 @@ assert.match(operatorSource, /targetOrdinals: phaseOrdinals/);
 
 assert.match(targetedSource, /const phasedExecution = options\.pocPhasePipeline === true \|\| Boolean\(options\.contactPhaseOrdinal\)/);
 assert.match(targetedSource, /async function runPocPhasePipeline/);
-assert.match(targetedSource, /ordinal: 1/);
-assert.match(targetedSource, /ordinal: 2/);
-assert.match(targetedSource, /ordinal: 3/);
+assert.match(targetedSource, /timed\('fast-all'/);
+assert.match(targetedSource, /deferDeterministicRecheck: true/);
+assert.match(targetedSource, /for \(const ordinal of ordinals\)/);
+assert.match(targetedSource, /timed\(`deep-poc-\$\{ordinal\}`/);
+assert.ok(targetedSource.indexOf("timed('fast-all'") < targetedSource.indexOf('for (const ordinal of ordinals)'), 'the sheet-wide easy pass must finish before ordered deep revision');
+assert.match(operatorSource, /maxNewHydrations/);
+assert.match(operatorSource, /candidateHydrationConcurrency/);
+assert.match(operatorSource, /!options\.deferDeterministicRecheck/);
 assert.match(targetedSource, /\? await runPocPhasePipeline\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /: await base\.run\(exact\.request, runOptions\)/);
 assert.match(targetedSource, /POC-phase pipeline:/);
@@ -166,6 +172,8 @@ assert.match(targetedSource, /poc-phase-deterministic-only/);
 assert.match(targetedSource, /const phaseOrdinal = Number\(options\.contactPhaseOrdinal \|\| 0\) \|\| null/);
 assert.match(targetedSource, /\(!phaseOrdinal \|\| phaseOrdinal === 1\)/);
 assert.match(targetedSource, /\(!phaseOrdinal \|\| phaseOrdinal === 2\)/);
+assert.match(controllerSource, /writes easy verified results across the whole sheet first/);
+assert.match(controllerSource, /deeply revises unresolved POC-1 rows from top to bottom/);
 assert.doesNotMatch(targetedSource, /const boundedAiEnabled = aiBatchRescue\.enabled\(\) && options\.apolloApproved/);
 
-console.log('Universal POC phase pipeline self-test passed: enrichment is sheet-wide POC-1 -> POC-2 -> POC-3, each phase is ordinal-scoped, POC-3 owns discovery when needed, and aggregate reporting preserves POC-2 residue.');
+console.log('Universal POC phase pipeline self-test passed: enrichment writes a sheet-wide fast pass first, then deeply revises unresolved POC-1 before POC-2, uses bounded concurrent hydration waves, and aggregate reporting preserves final residue.');
