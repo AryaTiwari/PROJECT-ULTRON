@@ -17,6 +17,8 @@ const linkedinCompiler=require('../core/linkedin-request-compiler');
 const linkedinContract=require('../core/linkedin-mission-contract');
 const chooser=require('../core/skill-chooser');
 const diagnostics=require('../core/adaptive-diagnostic-layer');
+const commandControl=require('../core/command-control-plane');
+const universalController=require('../core/universal-spreadsheet-domain-controller');
 
 (async()=>{
   const headers=['COMPANY NAME','COMPANY LINK','1st POC NAME','PHONE','EMAIL','2ND POC NAME','PHONE','EMAIL'];
@@ -140,5 +142,57 @@ const diagnostics=require('../core/adaptive-diagnostic-layer');
   assert.equal(uncertain.userActionRequired,true);
   assert.match(uncertain.question,/which columns/i);
 
-  console.log('Mark 3 adaptive control regression passed: Aryatry person anchors request exact Apollo POC-1 contact data, no-phone anchors fall back to company decision-makers, India-first company research is shared across Apollo/LinkedIn, skill selection is top-k/read-only, and diagnostics retry only safe pre-approval reads.');
+  const originalHandle=universalController.handle;
+  try{
+    let attempts=0;
+    universalController.handle=async()=>{
+      attempts++;
+      if(attempts===1){
+        return {
+          ok:false,
+          text:'Universal spreadsheet inspection stopped safely.',
+          response:'Universal spreadsheet inspection stopped safely.',
+          error:'GOOGLE_SHEETS_NETWORK',
+          errorCode:'GOOGLE_SHEETS_NETWORK',
+          errorSubsystem:'GOOGLE_SHEETS',
+          errorType:'NETWORK',
+          errorStage:'preapproval-inspection',
+          errorMessage:'Failed to fetch Google Sheets metadata',
+        };
+      }
+      return {ok:true,text:'Recovered after one safe read retry.',response:'Recovered after one safe read retry.'};
+    };
+    const healed=await commandControl.dispatch(
+      'google sheet url: https://docs.google.com/spreadsheets/d/adaptivefixture/edit worksheet name - Aryatry resume enrichment with number and email of 1st poc and 2nd poc'
+    );
+    assert.equal(attempts,2,'typed returned safe-read failure must receive one bounded retry');
+    assert.equal(healed.ok,true);
+    assert.equal(healed.diagnostic?.healed,true);
+
+    attempts=0;
+    universalController.handle=async()=>{
+      attempts++;
+      return {
+        ok:false,
+        text:'Universal spreadsheet enrichment stopped safely.',
+        response:'Universal spreadsheet enrichment stopped safely.',
+        error:'UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW',
+        errorCode:'UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW',
+        errorSubsystem:'SCHEMA',
+        errorType:'SCHEMA',
+        errorStage:'schema-confidence-gate',
+        errorMessage:'Schema confidence is below the safe threshold.',
+      };
+    };
+    const clarification=await commandControl.dispatch(
+      'google sheet url: https://docs.google.com/spreadsheets/d/adaptivefixture/edit worksheet name - Aryatry resume enrichment with number and email of 1st poc and 2nd poc'
+    );
+    assert.equal(attempts,1,'schema ambiguity must not be blindly retried');
+    assert.equal(clarification.ok,false);
+    assert.match(clarification.text,/which columns/i,'returned schema ambiguity must ask a targeted user question');
+  }finally{
+    universalController.handle=originalHandle;
+  }
+
+  console.log('Mark 3 adaptive control regression passed: Aryatry person anchors request exact Apollo POC-1 contact data, no-phone anchors fall back to company decision-makers, India-first company research is shared across Apollo/LinkedIn, skill selection is top-k/read-only, returned/thrown diagnostics retry only safe pre-approval reads, and schema ambiguity asks the user instead of guessing.');
 })().catch((error)=>{console.error(error);process.exitCode=1;});
