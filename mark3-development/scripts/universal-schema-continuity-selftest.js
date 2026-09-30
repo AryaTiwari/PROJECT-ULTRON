@@ -34,6 +34,8 @@ assert.equal(controller.parseExpectedPersonGroups(prompt), 3);
 assert.equal(controller.parseExpectedPersonGroups('Use 3 POCs for this run.'), 3);
 assert.equal(controller.parseExpectedPersonGroups('POC-2 and POC-3 must be filled.'), 3);
 assert.equal(controller.parseExpectedPersonGroups('Run generic enrichment only.'), 0);
+assert.equal(controller.parseExpectedPersonGroups('Enrich 1st and 2nd POC. If the worksheet contains a 3rd POC group, enrich it too.'), 2);
+assert.equal(controller.parseExpectedPersonGroups('Enrich 1st and 2nd POC and 3rd (if there is any).'), 2);
 
 const rows = brokenArya2Rows();
 const schema = schemaTools.inferSchema(rows, { expectedPersonGroups: 3 });

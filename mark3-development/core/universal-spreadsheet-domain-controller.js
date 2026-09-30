@@ -57,7 +57,7 @@ function parseSheetName(message) {
 }
 
 function parseExpectedPersonGroups(message) {
-  const value = String(message || '');
+  const value = requiredPocText(message);
   const found = [];
 
   for (const match of value.matchAll(/\b(?:poc|contact|person)(?:\s*[-#:]?\s*)(\d{1,2})\b/gi)) {
@@ -92,6 +92,17 @@ function parseExpectedPersonGroups(message) {
   return Number.isInteger(env) && env >= 1 && env <= 20 ? env : 0;
 }
 
+// Conditional POC language describes capability, not a request to invent
+// columns. For example, "if the sheet contains a 3rd POC group, enrich it too"
+// must use POC-3 when its headings exist, while an A:I two-POC sheet remains a
+// two-POC sheet. Mandatory language outside these clauses still drives schema
+// continuity recovery.
+function requiredPocText(message) {
+  return String(message || '')
+    .replace(/\bif\s+(?:the\s+)?(?:sheet|worksheet|tab)\s+(?:already\s+)?(?:contains?|has|includes?|defines?|provides?)\b[^.\n]{0,180}(?:[.\n]|$)/gi, ' ')
+    .replace(/\b(?:third|3rd|poc\s*[-#:]?\s*3)\b\s*\(\s*if\s+(?:there\s+is|present|available|defined)[^)]*\)/gi, ' ');
+}
+
 function parseIndianPhonePolicy(message) {
   const value = String(message || '');
   const indianNumber = /(?:\+\s*91|indian|india)[ -]?(?:mobile|phone|number)s?|(?:mobile|phone|number)s?\s+(?:from|in)\s+india/i.test(value);
@@ -100,7 +111,7 @@ function parseIndianPhonePolicy(message) {
 }
 
 function parseAutomaticTwoPocIndianPolicy(message) {
-  const value = String(message || '');
+  const value = requiredPocText(message);
   const sharedPair = /\b(?:first|1st)\s*(?:,|and|&)\s*(?:second|2nd)\s+(?:pocs?|contacts?|persons?)\b/i.test(value);
   const explicitCount = /\b(?:two|2)\s+(?:pocs?|person\s+groups?|contact\s+groups?)\b/i.test(value);
   const hasPoc1 = /\b(?:poc|contact|person)(?:\s*[-#:]?\s*)1\b|\b(?:first|1st)\s+(?:poc|contact|person)\b/i.test(value);
@@ -586,6 +597,7 @@ module.exports = {
   resolveRequestedTarget,
   parseSheetName,
   parseExpectedPersonGroups,
+  requiredPocText,
   parseIndianPhonePolicy,
   parseAutomaticTwoPocIndianPolicy,
   parseContactPhaseOrdinal,

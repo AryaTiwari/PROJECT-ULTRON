@@ -82,6 +82,37 @@ function rowSemanticPersonAnchor(row, schema) {
   return null;
 }
 
+function rowSemanticCompanyAnchor(row, schema) {
+  const columns = schema?.columns || [];
+  for (const linkColumn of columns) {
+    const linkedin = text(row?.[linkColumn.index]);
+    if (schemaTools.linkedInKind(linkedin) !== 'linkedin_company') continue;
+    const header = schemaTools.normalizeHeader(linkColumn.header || '');
+    if (!/\b(?:company|organisation|organization|employer|business|linkedin|link|profile|url)\b/.test(header)) continue;
+    const companyGroup = [...(schema?.companyGroups || [])]
+      .filter((group) => Number.isInteger(group.fields?.company?.index))
+      .sort((a, b) => Math.abs(a.fields.company.index - linkColumn.index) - Math.abs(b.fields.company.index - linkColumn.index))[0];
+    const nameColumnIndex = companyGroup?.fields?.company?.index;
+    const company = Number.isInteger(nameColumnIndex) ? text(row?.[nameColumnIndex]) : '';
+    if (!company) continue;
+    const group = {
+      id: `row-company-anchor-${nameColumnIndex}-${linkColumn.index}`,
+      kind: 'company-anchor', ordinal: 0, seedIndex: nameColumnIndex, anchorOnly: true,
+      fields: {
+        company: { index: nameColumnIndex, header: columns[nameColumnIndex]?.header || '', readOnly: true },
+        linkedin: { index: linkColumn.index, header: linkColumn.header || '', readOnly: true },
+      },
+    };
+    return {
+      type: 'company', group, snapshot: companySnapshot(row, group), score: 135,
+      proof: ['row-company-linkedin', 'neighbor-company-name', 'row-value-semantics'],
+      semanticRecovery: true, sourceColumns: [nameColumnIndex, linkColumn.index],
+      reason: 'mixed-linkedin-column-company-row',
+    };
+  }
+  return null;
+}
+
 function rowContext(row, schema, semanticAnchor = null) {
   const context = {};
   for (const [role, columns] of Object.entries(schema?.contextColumns || {})) {
@@ -91,14 +122,19 @@ function rowContext(row, schema, semanticAnchor = null) {
   }
   for (const group of schema.companyGroups || []) {
     const companyIndex = group.fields?.company?.index;
-    const contradictedCompany = semanticAnchor?.semanticRecovery
+    const contradictedCompany = semanticAnchor?.type === 'person' && semanticAnchor?.semanticRecovery
       && semanticAnchor.sourceColumns?.includes(companyIndex);
     if (!contradictedCompany && group.fields.company && valueAt(row, group.fields.company)) context.company ||= valueAt(row, group.fields.company);
     if (group.fields.website && valueAt(row, group.fields.website)) context.website ||= valueAt(row, group.fields.website);
   }
   if (semanticAnchor?.semanticRecovery) {
-    context.personAnchorName = semanticAnchor.snapshot.values.name;
-    context.personAnchorLinkedin = semanticAnchor.snapshot.values.linkedin;
+    if (semanticAnchor.type === 'person') {
+      context.personAnchorName = semanticAnchor.snapshot.values.name;
+      context.personAnchorLinkedin = semanticAnchor.snapshot.values.linkedin;
+    } else if (semanticAnchor.type === 'company') {
+      context.company = semanticAnchor.snapshot.values.company;
+      context.companyLinkedin = semanticAnchor.snapshot.values.linkedin;
+    }
   }
   return context;
 }
@@ -160,7 +196,7 @@ function inferMode(anchor, groups) {
 }
 
 function planRow(row, schema, options = {}) {
-  const semanticAnchor = rowSemanticPersonAnchor(row, schema);
+  const semanticAnchor = rowSemanticPersonAnchor(row, schema) || rowSemanticCompanyAnchor(row, schema);
   const anchor = semanticAnchor || chooseAnchor(row, schema);
   const groups = classifyPersonGroups(row, schema, anchor);
   const mode = inferMode(anchor, groups);
@@ -171,7 +207,7 @@ function planRow(row, schema, options = {}) {
   const warnings = [];
   if (!anchor) warnings.push('no-reliable-anchor');
   if (anchor?.type === 'person' && anchor.snapshot.linkedinKind !== 'linkedin_person') warnings.push('person-anchor-without-person-linkedin');
-  if (semanticAnchor) warnings.push('row-person-anchor-recovery');
+  if (semanticAnchor) warnings.push(`row-${semanticAnchor.type}-anchor-recovery`);
   if (schema.confidence < 0.55) warnings.push('low-schema-confidence');
   const confidence = Math.max(0, Math.min(1,
     schema.confidence * 0.55
@@ -190,7 +226,7 @@ function planRow(row, schema, options = {}) {
     warnings,
     deterministic: true,
     rowSemantics: semanticAnchor ? {
-      anchorType: 'person',
+      anchorType: semanticAnchor.type,
       reason: semanticAnchor.reason,
       sourceColumns: semanticAnchor.sourceColumns,
     } : null,
@@ -381,6 +417,7 @@ module.exports = {
   rowContext,
   personNameEvidence,
   rowSemanticPersonAnchor,
+  rowSemanticCompanyAnchor,
   chooseAnchor,
   classifyPersonGroups,
   planRow,
