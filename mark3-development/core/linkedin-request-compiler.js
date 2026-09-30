@@ -67,6 +67,18 @@ function normalizeLocation(value) {
   return raw;
 }
 
+function applyCompanyResearchPolicy(ir, sourceText = '') {
+  if (!ir || ir.entityMode !== 'company') return ir;
+  if (ir.allowedLocations?.length || ir.preferredLocations?.length) return ir;
+  const policy = indiaPolicy.companyResearch(sourceText, '', 'company');
+  if (!policy.preferIndia) return ir;
+  ir.allowedLocations = ['India'];
+  ir.preferredLocations = ['India'];
+  ir.locationScope = 'company';
+  ir.indiaCompanyPolicy = policy.mode;
+  return ir;
+}
+
 function normalizedIR(raw) {
   const parsed = MissionIR.safeParse(raw);
   if (!parsed.success) {
@@ -205,16 +217,7 @@ async function compile(text) {
     if (!raw) return { ok: false, reason: 'compiler_returned_no_structured_contract', model: result?.model || COMPILER_MODEL };
     const validated = normalizedIR(raw);
     if (!validated.ok) return { ...validated, reason: 'compiler_contract_invalid', model: result?.model || COMPILER_MODEL };
-    const ir = validated.value;
-    if (ir.entityMode === 'company' && !ir.allowedLocations.length && !ir.preferredLocations.length) {
-      const policy = indiaPolicy.companyResearch(text, '', 'company');
-      if (policy.preferIndia) {
-        ir.allowedLocations = ['India'];
-        ir.preferredLocations = ['India'];
-        ir.locationScope = 'company';
-        ir.indiaCompanyPolicy = policy.mode;
-      }
-    }
+    const ir = applyCompanyResearchPolicy(validated.value, text);
     return {
       ok: true,
       ir,
@@ -240,6 +243,7 @@ module.exports = {
   hasGeminiCredential,
   shouldCompile,
   normalizedIR,
+  applyCompanyResearchPolicy,
   canonicalPrompt,
   toolSpec,
   parseCandidate,
