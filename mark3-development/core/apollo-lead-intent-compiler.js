@@ -4,6 +4,7 @@ const COMPANY_WORDS = /\b(?:compan(?:y|ies)|startups?|businesses|firms|organizat
 const PEOPLE_WORDS = /\b(?:founders?|co[- ]?founders?|owners?|directors?|recruiters?|hr\s+managers?|talent\s+acquisition|people|persons?|contacts?|decision[- ]?makers?|pocs?)\b/i;
 const ACTION_WORDS = /\b(?:find|discover|search|source|list|show|bring|get|identify|build|fill|add|enrich|repair|complete)\b/i;
 const sheetAliases = require('./sheet-source-alias-store');
+const indiaPolicy = require('./india-preference-policy');
 
 const EXPANSIONS = Object.freeze({
   ai: ['artificial intelligence', 'machine learning', 'generative ai', 'ai saas', 'ai platform', 'ai product'],
@@ -213,13 +214,20 @@ function compile(input, context = {}) {
   const keywords = baseKeywords(query);
   const discoveryWithContactRequest = !existing && !people && enrich;
   const reserveCount = 0;
+  const explicitGeography = parseGeography(query);
+  const researchPolicy = indiaPolicy.companyResearch(
+    query,
+    explicitGeography,
+    existing ? 'sheet' : people ? 'person' : 'organization',
+  );
   return Object.freeze({
     query,
     missionType: existing ? 'apollo_existing_sheet_enrichment' : people ? 'apollo_people_discovery' : 'apollo_company_discovery',
     entityType: existing ? 'sheet' : people ? 'person' : 'organization',
     targetCount,
     reserveCount,
-    geography: parseGeography(query),
+    geography: researchPolicy.geography || explicitGeography,
+    indiaCompanyPolicy: researchPolicy,
     employeeRange: size,
     keywords,
     expandedKeywords: keywordExpansion(keywords),
