@@ -316,6 +316,8 @@ const rescueSource = fs.readFileSync(path.join(root, 'universal-ai-batch-rescue.
 const targetedSource = fs.readFileSync(path.join(root, 'universal-sheet-enrichment-targeted.js'), 'utf8');
 const approvalSource = fs.readFileSync(path.join(root, 'universal-paid-approval-handler.js'), 'utf8');
 const qualitySource = fs.readFileSync(path.join(root, 'apollo-three-poc-quality.js'), 'utf8');
+const controllerSource = fs.readFileSync(path.join(root, 'universal-spreadsheet-domain-controller.js'), 'utf8');
+const enrichmentDiagnosticsSource = fs.readFileSync(path.join(root, 'universal-enrichment-diagnostics.js'), 'utf8');
 
 const anchorCompletionIndex = operatorSource.indexOf('writes.push(...await enrichAnchorGroup');
 const unresolvedEmployerGuardIndex = operatorSource.indexOf('if (!companyContext || companyContext.unresolved || !companyContext.company)');
@@ -334,6 +336,10 @@ assert.match(operatorSource, /Fast sweep deferred deeper deterministic discovery
 assert.match(operatorSource, /const poc2Reason = result\.reason/);
 assert.match(operatorSource, /'poc2-verification-unresolved' : 'poc2-no-candidates'/);
 assert.match(operatorSource, /contactability-top3-exhausted/);
+assert.match(controllerSource, /still writes the best safely identity- and employer-verified decision-maker name/);
+assert.match(enrichmentDiagnosticsSource, /Keep the verified name, designation and available work email/);
+assert.doesNotMatch(controllerSource, /a no-phone POC remains unresolved/);
+assert.doesNotMatch(enrichmentDiagnosticsSource, /Leave the slot blank for this run/);
 assert.match(operatorSource, /companyBrandFromDomain/);
 assert.match(operatorSource, /adaptiveBroadCandidateLimit/);
 assert.match(operatorSource, /APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED/);
