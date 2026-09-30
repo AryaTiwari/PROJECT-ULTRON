@@ -27,6 +27,8 @@ const liveWrites = require('./universal-live-write-guard');
 const durableEnrichmentCache = require('./universal-enrichment-cache');
 const rowSelection = require('./universal-row-selection');
 const targetResolver = require('./universal-sheet-target-resolver');
+const indiaPolicy = require('./india-preference-policy');
+const personAnchorPolicy = require('./person-anchor-enrichment-policy');
 
 function text(value) { return String(value ?? '').trim(); }
 function throwSystemic(error) {
@@ -41,14 +43,7 @@ function integer(value, fallback, min = 1, max = 100000) {
 function websiteDomain(value) { return ranker.hostname(value); }
 
 function candidateIndiaPriority(candidate = {}) {
-  const values = [
-    candidate.country, candidate.countryName, candidate.country_name,
-    candidate.location, candidate.city, candidate.state,
-    candidate.organization?.country, candidate.organization?.countryName,
-  ].map(text).filter(Boolean).join(' ');
-  if (/\b(?:india|ind)\b/i.test(values)) return 2;
-  if (/\b(?:mumbai|delhi|bengaluru|bangalore|hyderabad|pune|chennai|kolkata|gurugram|gurgaon|noida|ahmedabad|kochi|jaipur|indore)\b/i.test(values)) return 1;
-  return 0;
+  return indiaPolicy.personIndiaPriority(candidate);
 }
 
 const PHONE_ASSIGNMENTS_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'pending-phone-assignments.json');
@@ -332,14 +327,18 @@ function extractAnchorContactEvidence(plan = {}) {
   };
 }
 
-function anchorNeedsHydration(plan = {}, evidence = {}) {
+function anchorNeedsHydration(plan = {}, evidence = {}, destinationGroup = null) {
   const anchor = plan?.anchor;
   if (!anchor || anchor.type !== 'person') return false;
   const values = anchor.snapshot?.values || {};
-  const fields = anchor.group?.fields || {};
+  const fields = anchor.semanticRecovery && destinationGroup
+    ? destinationGroup.fields || {}
+    : anchor.group?.fields || {};
   if (fields.phone && !text(values.phone) && !text(evidence.phone)) return true;
   if (fields.email && !text(values.email) && !text(evidence.email)) return true;
-  if (fields.role && !text(values.role)) return true;
+  // Aryatry-style semantic anchors need designation for the NAME — DESIGNATION
+  // destination even though A/B themselves do not own a role column.
+  if ((fields.name || fields.role) && !text(values.role)) return true;
   return false;
 }
 
@@ -372,10 +371,12 @@ async function resolvePersonAnchor(plan, row, options = {}) {
   if (!anchor || anchor.type !== 'person') return null;
   const values = anchor.snapshot?.values || {};
   const group = anchor.group;
+  const destinationGroup = anchor.semanticRecovery ? options.destinationGroup || null : null;
+  const contactFields = destinationGroup?.fields || group.fields || {};
   const completeContacts = options.completeContacts !== false;
   const contactEvidence = options.contactEvidence || {};
-  const needEmail = completeContacts && Boolean(group.fields.email && !values.email && !text(contactEvidence.email));
-  const needPhone = completeContacts && Boolean(group.fields.phone && !values.phone && !text(contactEvidence.phone));
+  const needEmail = completeContacts && Boolean(contactFields.email && !text(contactEvidence.email));
+  const needPhone = completeContacts && Boolean(contactFields.phone && !text(contactEvidence.phone));
   const normalizedLinkedin = apollo.normalizeLinkedIn(values.linkedin || '');
   let profile = null;
   let company = '';
