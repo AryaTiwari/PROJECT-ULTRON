@@ -24,7 +24,7 @@ assert.equal(apollo.decisionPriority('Head Recruiter'), 2);
 assert.equal(apollo.decisionPriority('Recruitment Manager'), 2);
 assert.equal(apollo.decisionPriority('Manager'), 2);
 assert.equal(apollo.decisionPriority('HR Recruiter'), 3);
-assert.equal(apollo.decisionPriority('Account Manager'), 99);
+assert.equal(apollo.decisionPriority('Account Manager'), 4);
 assert.deepEqual(
   apollo.COMPANY_DECISION_PRIORITY.map((tier) => tier.priority),
   [1, 2, 3],

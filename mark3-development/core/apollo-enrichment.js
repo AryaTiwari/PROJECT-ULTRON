@@ -452,6 +452,9 @@ function decisionPriority(title, mode = 'general') {
   ) return 2;
 
   if (/\b(?:hr recruiter|human resources recruiter|technical recruiter|talent acquisition recruiter|recruiter|talent acquisition specialist|recruitment specialist|human resources specialist|hr specialist|people operations|people ops|hr business partner|human resources business partner|staffing specialist|placement coordinator)\b/.test(value)) return 3;
+  // Last-resort authority fallback requested for phone-qualified POCs. This is
+  // deliberately below founders, HR/TA leaders and recruiters.
+  if (/\bmanager\b/.test(value)) return 4;
   return 99;
 }
 

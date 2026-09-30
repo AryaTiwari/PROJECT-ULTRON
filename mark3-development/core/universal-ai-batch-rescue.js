@@ -495,7 +495,7 @@ async function run(request = {}, primaryResult = {}, options = {}) {
   if (!stats.enabled || options.dryRun || options.apolloApproved !== true) return stats;
 
   // Deterministic contactability exhaustion is terminal for this run. Re-offering
-  // the same top-3 candidates to AI only repeats Apollo hydration/reveal spend;
+  // the same bounded candidates to AI only repeats Apollo hydration/reveal spend;
   // AI cannot create a phone number that the verified provider did not return.
   const exhaustedTargets = new Set(
     (primaryResult?.stats?.contactabilityExhaustedTargets || primaryResult?.primaryStats?.contactabilityExhaustedTargets || [])
