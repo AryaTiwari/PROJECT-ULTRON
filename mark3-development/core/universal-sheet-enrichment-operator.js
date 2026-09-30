@@ -2656,6 +2656,26 @@ function chooseContactabilityCandidate(entries = []) {
   return qualified[0] || null;
 }
 
+function chooseVerifiedPartialCandidate(entries = []) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry, index) => ({
+      ...entry,
+      index: Number.isInteger(entry?.index) ? entry.index : index,
+      indiaPriority: Number.isFinite(Number(entry?.indiaPriority))
+        ? Number(entry.indiaPriority)
+        : candidateIndiaPriority(entry?.person || entry),
+      hasWorkEmail: Boolean(apollo.validEmail(entry?.person?.email || entry?.email || '')),
+    }))
+    .filter((entry) => entry?.person?.identityVerified
+      && entry?.person?.title
+      && entry?.writePlan?.allowed
+      && Array.isArray(entry.writePlan.writes)
+      && entry.writePlan.writes.length > 0)
+    .sort((a, b) => b.indiaPriority - a.indiaPriority
+      || Number(b.hasWorkEmail) - Number(a.hasWorkEmail)
+      || a.index - b.index)[0] || null;
+}
+
 
 async function selectContactableReplacement(item, plan, companyContext, stats, options = {}) {
   if (!item?.snapshot?.hasIdentity || item.isAnchor) return null;
@@ -2825,36 +2845,43 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       index: attempt,
       tier: contactabilityTier(person),
     };
-    if (entry.tier > 0) checked.push(entry);
+    // Keep every safely verified employer match. A usable phone still wins, but
+    // a missing Apollo phone must not erase a verified name/title/work email.
+    checked.push(entry);
 
     // +91 phone + email is the maximum possible result. Stop immediately rather
     // than spending more credits merely to confirm that perfection remains perfect.
     if (entry.tier === 4) break;
   }
 
-  // Empty POC slots are STRICTLY contactable-only. If none of the bounded
-  // preferred candidates yields an actual usable phone, leave the slot empty.
-  // Never write a verified-but-uncontactable identity merely to fill the sheet.
-  const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
+  let selected = checked.length ? chooseContactabilityCandidate(checked) : null;
+  let partial = false;
 
   if (!selected || selected.tier <= 0) {
-    stats.emptyPocNoPhoneRejected = Number(stats.emptyPocNoPhoneRejected || 0) + 1;
+    selected = chooseVerifiedPartialCandidate(checked);
+    if (!selected) {
+      stats.emptyPocNoPhoneRejected = Number(stats.emptyPocNoPhoneRejected || 0) + 1;
+      stats.selectionAudit.push({
+        groupId: target.group.id,
+        ordinal,
+        strategy: 'no-verified-poc-after-bounded-search',
+        shortlistSize: shared.length,
+        phoneAvailable: false,
+        reason: 'No preferred candidate passed exact identity, employer, title, dedupe, and write-safety checks.',
+      });
+      return { writes: [], filled: false, selected: null, reason: 'verified-poc-unavailable' };
+    }
+
+    partial = true;
+    stats.verifiedPartialPocs = Number(stats.verifiedPartialPocs || 0) + 1;
+    stats.phoneUnavailablePartialPocs = Number(stats.phoneUnavailablePartialPocs || 0) + 1;
     markContactabilityExhausted(
       stats,
       options.rowNumber,
       ordinal,
       companyContext?.company || '',
-      'The bounded preferred shortlist was verified, but none of its candidates returned an actual usable phone.'
+      'A decision maker was identity- and employer-verified and written with every available field, but Apollo returned no usable phone for the bounded top-three candidates.'
     );
-    stats.selectionAudit.push({
-      groupId: target.group.id,
-      ordinal,
-      strategy: 'empty-poc-left-blank-no-phone',
-      shortlistSize: shared.length,
-      phoneAvailable: false,
-      reason: 'No preferred candidate produced an actual usable phone within the bounded shortlist.',
-    });
-    return { writes: [], filled: false, selected: null, reason: 'contactability-top3-exhausted' };
   }
 
   const { raw, rawKey, person, writePlan, tier } = selected;
@@ -2876,7 +2903,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   stats.selectionAudit.push({
     groupId: target.group.id,
     ordinal,
-    strategy: 'top3-contactability',
+    strategy: partial ? 'verified-partial-after-phone-exhaustion' : 'top3-contactability',
     priority: apollo.decisionPriority(person.title || raw.title || ''),
     shortlistSize: shared.length,
     contactabilityTier: tier,
@@ -2889,7 +2916,13 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     fields: writePlan.writes.map((write) => write.field),
   });
 
-  return { writes: writePlan.writes, filled: true, selected: person };
+  return {
+    writes: writePlan.writes,
+    filled: true,
+    partial,
+    selected: person,
+    reason: partial ? 'verified-partial-phone-unavailable' : '',
+  };
 }
 
 async function fillOpenGroups(row, plan, companyContext, candidates, stats, options = {}) {
@@ -3199,6 +3232,8 @@ function freshStats() {
     existingGroupsReplaced: 0,
     replacementCandidateChecks: 0,
     emptyPocNoPhoneRejected: 0,
+    verifiedPartialPocs: 0,
+    phoneUnavailablePartialPocs: 0,
     contactabilityExhaustedTargets: [],
     candidatePhoneSettlementAttempts: 0,
     candidatePhoneSettlementFound: 0,
@@ -3302,7 +3337,7 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
     'linkedinHydrationRecoveryAttempts','linkedinHydrationRecoverySuccesses','linkedinHydrationRecoveryFailures',
     'postHydrationDuplicates','existingVerificationAttempts','existingPublicIndexSearches',
     'existingPublicIndexVerificationAttempts','existingPublicIndexVerified','existingGroupsRepaired','existingGroupsReplaced',
-    'replacementCandidateChecks','emptyPocNoPhoneRejected','candidatePhoneSettlementAttempts',
+    'replacementCandidateChecks','emptyPocNoPhoneRejected','verifiedPartialPocs','phoneUnavailablePartialPocs','candidatePhoneSettlementAttempts',
     'candidatePhoneSettlementFound','candidatePhoneSettlementPending','candidatePhoneSettlementNotFound',
     'candidatePhoneSettlementUnavailable','candidatePhoneSettlementErrors','embeddedDesignationWrites',
     'newPeopleSelected','hydrationAttempts','hydrationFailures','manualPoc2Attempts','manualPoc2Filled',
@@ -3970,7 +4005,7 @@ function formatResult(result) {
   return [
     status,
     `Schema: header row ${schema.headerRowNumber || '?'}, ${groups} POC group${groups === 1 ? '' : 's'}, ${companies} company group${companies === 1 ? '' : 's'}, confidence ${Number(schema.confidence || 0).toFixed(2)}.`,
-    `Progress: processed ${Number(s.rowsProcessed || 0)}/${Number(s.rowsSeen || 0)} rows; changed ${Number(s.cellsChanged || 0)} cells across ${Number(s.rowsChanged || 0)} rows; selected ${Number(s.newPeopleSelected || 0)} new people; repaired ${Number(s.existingGroupsRepaired || 0)} existing POCs.`,
+    `Progress: processed ${Number(s.rowsProcessed || 0)}/${Number(s.rowsSeen || 0)} rows; changed ${Number(s.cellsChanged || 0)} cells across ${Number(s.rowsChanged || 0)} rows; selected ${Number(s.newPeopleSelected || 0)} new people; repaired ${Number(s.existingGroupsRepaired || 0)} existing POCs; wrote ${Number(s.verifiedPartialPocs || 0)} verified partial POCs after bounded phone exhaustion.`,
     `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
     `LinkedIn fallback: ${Number(s.linkedinFallbackCompanyProfiles || 0)} company profiles, ${Number(s.linkedinFallbackCompanyUrns || 0)} company URNs, ${Number(s.linkedinFallbackProfilesFound || 0)} profile refs, ${Number(s.linkedinFallbackVerifiedCandidates || 0)} Apollo-verified candidates.`,
     `Results-first: ${deferred.count} rows deferred from the fast sweep; deterministic recheck ${s.deterministicRecheckAttempted ? 'ran' : 'not needed'}.`,
@@ -4055,6 +4090,7 @@ module.exports = {
   contactabilityTier,
   preferredContactShortlist,
   chooseContactabilityCandidate,
+  chooseVerifiedPartialCandidate,
   selectContactableReplacement,
   fillManualPriorityGroup,
   fillOpenGroups,

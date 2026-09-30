@@ -283,7 +283,9 @@ assert.match(
 );
 assert.match(operatorSource, /contactabilityCandidateLimit:\s*3/);
 assert.match(operatorSource, /top3-contactability/);
-assert.match(operatorSource, /empty-poc-left-blank-no-phone/);
+assert.match(operatorSource, /verified-partial-after-phone-exhaustion/);
+assert.match(operatorSource, /chooseVerifiedPartialCandidate/);
+assert.doesNotMatch(operatorSource, /empty-poc-left-blank-no-phone/);
 assert.doesNotMatch(operatorSource, /top3-first-preferred-fallback/);
 assert.match(operatorSource, /selectContactableReplacement/);
 assert.match(operatorSource, /slice\(0, 2\)/, 'existing POC plus at most two replacement candidates must preserve the three-person budget');
