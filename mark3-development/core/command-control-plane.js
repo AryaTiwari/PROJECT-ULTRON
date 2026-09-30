@@ -349,7 +349,6 @@ async function dispatch(message, options = {}) {
           route: route.domain,
           routing: route,
           skillSelection,
-          diagnostic: routeDiagnosis,
         };
       }
       const routeDiagnosis = diagnosticLayer.assess(error, {
@@ -369,10 +368,13 @@ async function dispatch(message, options = {}) {
           taskType: 'apollo-lead-intelligence',
           route: 'apollo-lead',
           routing: route,
+          skillSelection,
+          diagnostic: routeDiagnosis,
         };
       }
       return { ok: false, text: error.message, response: error.message, error: error.code || 'LINKEDIN_CONTROLLER_FAILED',
-        model: 'linkedin-account-operator', provider: 'linkedin-account-mcp', taskType: 'linkedin-account-research', route: 'linkedin', routing: route };
+        model: 'linkedin-account-operator', provider: 'linkedin-account-mcp', taskType: 'linkedin-account-research',
+        route: 'linkedin', routing: route, skillSelection, diagnostic: routeDiagnosis };
     }
   });
 }
