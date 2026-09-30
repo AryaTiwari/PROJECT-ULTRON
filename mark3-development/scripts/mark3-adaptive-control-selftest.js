@@ -28,6 +28,22 @@ const universalController=require('../core/universal-spreadsheet-domain-controll
   const plan=engine.analyzeSheet(rows,{schema:{expectedPersonGroups:2}}).rowPlans[0].plan;
   const poc1=anchorPolicy.pocGroup(plan,1);
 
+  const exactUserPrompt='Enrich the 1st POC and 2nd POC with verified hiring decision-maker name, designation, phone number, and work email. If the worksheet contains a 3rd POC group, enrich it too.';
+  assert.equal(universalController.parseExpectedPersonGroups(exactUserPrompt),2,'conditional POC-3 must not synthesize missing columns');
+  assert.equal(universalController.parseAutomaticTwoPocIndianPolicy(exactUserPrompt),true,'conditional POC-3 must not disable the automatic India phone policy');
+  const exactSchema=schemaTools.inferSchema(rows,{expectedPersonGroups:universalController.parseExpectedPersonGroups(exactUserPrompt)});
+  assert.equal(exactSchema.personGroups.length,2);
+  assert.equal((exactSchema.continuityRecoveries||[]).length,0);
+  assert.equal(require('../core/universal-schema-safety').assess(exactSchema).safe,true);
+
+  const mixedRows=[headers,row,['Example India','https://www.linkedin.com/company/example-india/','','','','','','']];
+  const mixedAnalysis=engine.analyzeSheet(mixedRows,{schema:{expectedPersonGroups:2}});
+  const directCompany=mixedAnalysis.rowPlans[1].plan;
+  assert.equal(directCompany.anchor.type,'company');
+  assert.equal(directCompany.anchor.snapshot.values.company,'Example India');
+  assert.equal(directCompany.anchor.snapshot.linkedinKind,'linkedin_company');
+  assert.equal(directCompany.context.companyLinkedin,'https://www.linkedin.com/company/example-india/');
+
   assert.equal(anchorPolicy.isSemanticPersonAnchor(plan),true);
   assert.ok(poc1);
   assert.equal(operator.anchorNeedsHydration(plan,{},poc1),true,'semantic anchor must request POC-1 contact fields');
