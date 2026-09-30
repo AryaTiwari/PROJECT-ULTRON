@@ -303,8 +303,60 @@ async function dispatch(message, options = {}) {
             ? require('./diagnostic-domain-controller')
             : require('./linkedin-domain-controller');
     try {
-      const result = await controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage });
+      let result = await controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage });
       if (scope.getStore().violation) throw scope.getStore().violation;
+
+      // Universal spreadsheet controllers intentionally return typed safe
+      // failures for many pre-approval problems instead of throwing. Diagnose
+      // those too, otherwise the healer would be blind to the safest failures.
+      if (spreadsheetDomain && result?.ok === false && result?.errorCode) {
+        const returnedError = Object.assign(new Error(result.errorMessage || result.text || result.response || result.errorCode), {
+          code: result.errorCode,
+          subsystem: result.errorSubsystem,
+          errorType: result.errorType,
+          stage: result.errorStage,
+          status: result.providerStatus,
+        });
+        const health = diagnosticLayer.assess(returnedError, {
+          route: route.domain,
+          approvalReentry: false,
+          paidExecution: false,
+          stage: result.errorStage || 'spreadsheet-controller-return',
+        });
+
+        if (health.autoRetry && !options.__diagnosticRetry) {
+          try {
+            const healed = await diagnosticLayer.attemptSafeRetry(health, () =>
+              controller.handle(resolvedMessage, {
+                ...options,
+                originalMessage,
+                resolvedMessage,
+                __diagnosticRetry: true,
+              })
+            );
+            if (healed?.ok) {
+              result = { ...healed, diagnostic: { ...health, healed: true } };
+            } else if (healed) {
+              result = healed;
+            }
+          } catch {}
+        }
+
+        if (result?.ok === false) {
+          const question = health.question;
+          const currentText = String(result.text || result.response || '');
+          const withQuestion = question && !currentText.includes(question)
+            ? `${currentText} Question: ${question}`
+            : currentText;
+          result = {
+            ...result,
+            text: withQuestion,
+            response: withQuestion,
+            diagnostic: health,
+          };
+        }
+      }
+
       return { ...result, route: route.domain, routing: route, skillSelection };
     } catch (error) {
       if (spreadsheetDomain) {
