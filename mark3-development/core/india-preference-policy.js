@@ -26,6 +26,13 @@ function explicitForeignScope(query) {
     && !/\bindia\b/i.test(value);
 }
 
+function explicitNoGeography(query) {
+  const value = text(query);
+  return /\b(?:remove|drop|ignore|clear|relax)\s+(?:the\s+)?(?:location|geography|country|region)(?:\s+filter)?\b/i.test(value)
+    || /\b(?:no|without)\s+(?:location|geography|country|region)\s+(?:filter|restriction|constraint)\b/i.test(value)
+    || /\b(?:location|geography|country|region)\s+(?:doesn['’]?t|does\s+not)\s+matter\b/i.test(value);
+}
+
 function companyResearch(query, geography = '', entityMode = 'company') {
   const value = text(query);
   const geo = text(geography);
@@ -41,7 +48,7 @@ function companyResearch(query, geography = '', entityMode = 'company') {
     return Object.freeze({ mode:'explicit-location-override', geography:geo, preferIndia:false, hardIndia:false, explicitOverride:true });
   }
 
-  if (explicitGlobalScope(value) || explicitForeignScope(value)) {
+  if (explicitGlobalScope(value) || explicitForeignScope(value) || explicitNoGeography(value)) {
     return Object.freeze({ mode:'explicit-scope-override', geography:'', preferIndia:false, hardIndia:false, explicitOverride:true });
   }
 
@@ -94,6 +101,7 @@ module.exports = {
   isIndiaLocation,
   explicitGlobalScope,
   explicitForeignScope,
+  explicitNoGeography,
   companyResearch,
   companyLocationEvidence,
   companyIndiaPriority,
