@@ -74,6 +74,7 @@ const diagnostics=require('../core/adaptive-diagnostic-layer');
 
   assert.equal(indiaPolicy.companyResearch('find 20 SaaS companies on Apollo','','organization').geography,'India');
   assert.equal(indiaPolicy.companyResearch('find 20 SaaS companies in Singapore on Apollo','Singapore','organization').preferIndia,false);
+  assert.equal(indiaPolicy.companyResearch('remove location filter and find 20 companies','','organization').preferIndia,false,'explicit no-location instruction must override the India default');
 
   const apolloIndia=apolloCompiler.compile('find 20 SaaS companies on Apollo');
   assert.equal(apolloIndia.geography,'India');
