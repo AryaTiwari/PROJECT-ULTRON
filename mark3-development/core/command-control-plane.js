@@ -3,6 +3,8 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const scope = new AsyncLocalStorage();
 const linkedinIntent = require('./linkedin-lead-intent');
 const apolloLeadIntent = require('./apollo-lead-intent-compiler');
+const skillChooser = require('./skill-chooser');
+const diagnosticLayer = require('./adaptive-diagnostic-layer');
 
 // Ownership precedes interpretation. No model/bootstrap import belongs here.
 // HTTP dispatch owns exclusive domain routing and paid-tool approval re-entry.
@@ -64,6 +66,14 @@ function isLocalThreePocWorkbookRequest(message, options = {}) {
 
 function claim(message, options = {}) {
   const text = normalize(message);
+  if (/\b(?:mark\s*3|ultron)\b[\s\S]{0,50}\b(?:diagnostic|doctor|self[- ]?heal|system health)\b/i.test(text)) {
+    return Object.freeze({
+      domain: 'diagnostic', claimed: true, exclusive: true,
+      controller: 'diagnostic-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
+      readOnlyStatus: true,
+    });
+  }
   if (require('./universal-enrichment-control-plane').isControlRequest(text)) {
     return Object.freeze({
       domain: 'spreadsheet-enrichment', claimed: true, exclusive: true,
@@ -153,6 +163,7 @@ function invariantCodeForDomain(domain) {
   if (domain === 'three-poc-spreadsheet') return 'THREE_POC_ROUTE_INVARIANT_VIOLATION';
   if (domain === 'spreadsheet-enrichment') return 'SPREADSHEET_ENRICHMENT_ROUTE_INVARIANT_VIOLATION';
   if (domain === 'apollo-lead') return 'APOLLO_LEAD_ROUTE_INVARIANT_VIOLATION';
+  if (domain === 'diagnostic') return 'DIAGNOSTIC_ROUTE_INVARIANT_VIOLATION';
   return 'DOMAIN_ROUTE_INVARIANT_VIOLATION';
 }
 
@@ -217,11 +228,19 @@ async function resolveUniversalPaidApproval(message) {
     const typed = typedErrors.normalize(error, {
       stage: error?.stage || 'approval-reentry-dispatch',
     });
+    const health = diagnosticLayer.assess(error, {
+      route: 'spreadsheet-enrichment',
+      approvalReentry: true,
+      paidExecution: true,
+      stage: typed.stage,
+    });
     const diagnostic = typedErrors.format(typed);
+    const question = health.question ? ` Question: ${health.question}` : '';
     result = {
       ok: false,
-      text: `Universal spreadsheet approval re-entry stopped safely: ${diagnostic}. ${typed.hint}`,
-      response: `Universal spreadsheet approval re-entry stopped safely: ${diagnostic}. ${typed.hint}`,
+      text: `Universal spreadsheet approval re-entry stopped safely: ${diagnostic}. ${typed.hint}${question}`,
+      response: `Universal spreadsheet approval re-entry stopped safely: ${diagnostic}. ${typed.hint}${question}`,
+      diagnostic: health,
       error: typed.code,
       errorCode: typed.code,
       errorSubsystem: typed.subsystem,
@@ -265,11 +284,14 @@ async function dispatch(message, options = {}) {
   if (paidApprovalResult) return paidApprovalResult;
 
   const resolvedMessage = normalize(originalMessage);
-  const route = claim(originalMessage, options);
+  const baseRoute = claim(originalMessage, options);
+  const skillSelection = skillChooser.choose(originalMessage, baseRoute, options);
+  const route = Object.freeze({ ...baseRoute, skill: skillSelection.selected || null });
   require('./events').emit('command_route_decision', route);
-  if (process.env.ULTRON_M3_ROUTE_DEBUG === '1') console.log('[Command Control]', JSON.stringify(route));
+  require('./events').emit('skill_selection', skillSelection);
+  if (process.env.ULTRON_M3_ROUTE_DEBUG === '1') console.log('[Command Control]', JSON.stringify({ route, skillSelection }));
   if (!route.exclusive) return null;
-  return scope.run({ route, compiler: false }, async () => {
+  return scope.run({ route, compiler: false, skillSelection }, async () => {
     const spreadsheetDomain = ['three-poc-domain-controller', 'universal-spreadsheet-domain-controller'].includes(route.controller);
     const controller = route.controller === 'universal-spreadsheet-domain-controller'
       ? require('./universal-spreadsheet-domain-controller')
@@ -277,20 +299,38 @@ async function dispatch(message, options = {}) {
         ? require('./three-poc-domain-controller')
         : route.controller === 'apollo-lead-domain-controller'
           ? require('./apollo-lead-domain-controller')
-          : require('./linkedin-domain-controller');
+          : route.controller === 'diagnostic-domain-controller'
+            ? require('./diagnostic-domain-controller')
+            : require('./linkedin-domain-controller');
     try {
       const result = await controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage });
       if (scope.getStore().violation) throw scope.getStore().violation;
-      return { ...result, route: route.domain, routing: route };
+      return { ...result, route: route.domain, routing: route, skillSelection };
     } catch (error) {
       if (spreadsheetDomain) {
         const typedErrors = require('./spreadsheet-enrichment-errors');
         const typed = typedErrors.normalize(error, { stage: error?.stage || 'spreadsheet-controller-dispatch' });
+        const health = diagnosticLayer.assess(error, {
+          route: route.domain,
+          approvalReentry: false,
+          paidExecution: false,
+          stage: typed.stage,
+        });
+        if (health.autoRetry && !options.__diagnosticRetry) {
+          try {
+            const healed = await diagnosticLayer.attemptSafeRetry(health, () =>
+              controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage, __diagnosticRetry: true })
+            );
+            if (healed) return { ...healed, route: route.domain, routing: route, skillSelection, diagnostic: { ...health, healed: true } };
+          } catch {}
+        }
         const diagnostic = typedErrors.format(typed);
+        const question = health.question ? ` Question: ${health.question}` : '';
         return {
           ok: false,
-          text: `Universal spreadsheet control stopped safely: ${diagnostic}. ${typed.hint}`,
-          response: `Universal spreadsheet control stopped safely: ${diagnostic}. ${typed.hint}`,
+          text: `Universal spreadsheet control stopped safely: ${diagnostic}. ${typed.hint}${question}`,
+          response: `Universal spreadsheet control stopped safely: ${diagnostic}. ${typed.hint}${question}`,
+          diagnostic: health,
           error: typed.code,
           errorCode: typed.code,
           errorSubsystem: typed.subsystem,
@@ -308,8 +348,16 @@ async function dispatch(message, options = {}) {
           taskType: 'universal-sheet-enrichment',
           route: route.domain,
           routing: route,
+          skillSelection,
+          diagnostic: routeDiagnosis,
         };
       }
+      const routeDiagnosis = diagnosticLayer.assess(error, {
+        route: route.domain,
+        approvalReentry: false,
+        paidExecution: route.domain === 'apollo-lead',
+        stage: error?.stage || 'domain-controller-dispatch',
+      });
       if (route.domain === 'apollo-lead') {
         return {
           ok: false,
