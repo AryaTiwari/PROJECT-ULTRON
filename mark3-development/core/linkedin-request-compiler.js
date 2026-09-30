@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const direct = require('./direct-provider-router');
 const leadIntent = require('./linkedin-lead-intent');
+const indiaPolicy = require('./india-preference-policy');
 
 const COMPILER_MODEL = String(process.env.ULTRON_M3_LINKEDIN_COMPILER_MODEL || 'gemini/gemini-3.6-flash').trim();
 const COMPILER_TIMEOUT_MS = Math.max(5000, Number(process.env.ULTRON_M3_LINKEDIN_COMPILER_TIMEOUT_MS || 15000));
@@ -204,10 +205,20 @@ async function compile(text) {
     if (!raw) return { ok: false, reason: 'compiler_returned_no_structured_contract', model: result?.model || COMPILER_MODEL };
     const validated = normalizedIR(raw);
     if (!validated.ok) return { ...validated, reason: 'compiler_contract_invalid', model: result?.model || COMPILER_MODEL };
+    const ir = validated.value;
+    if (ir.entityMode === 'company' && !ir.allowedLocations.length && !ir.preferredLocations.length) {
+      const policy = indiaPolicy.companyResearch(text, '', 'company');
+      if (policy.preferIndia) {
+        ir.allowedLocations = ['India'];
+        ir.preferredLocations = ['India'];
+        ir.locationScope = 'company';
+        ir.indiaCompanyPolicy = policy.mode;
+      }
+    }
     return {
       ok: true,
-      ir: validated.value,
-      canonicalPrompt: canonicalPrompt(validated.value),
+      ir,
+      canonicalPrompt: canonicalPrompt(ir),
       model: result?.model || COMPILER_MODEL,
       provider: result?.provider || 'gemini',
     };
