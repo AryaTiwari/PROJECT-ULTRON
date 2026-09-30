@@ -234,9 +234,10 @@ assert.match(contactQualitySource, /apollo\.resolvePersonProfile = async functio
 assert.match(contactQualitySource, /improveVerifiedContacts\(carryLegacyPhoneRequest\(result, legacyPhoneRequestId\), options\)/);
 assert.match(contactQualitySource, /if \(options\.needPhone !== false\) next = await improveVerifiedPhone\(next\)/);
 assert.match(operatorSource, /Final-POC contact waterfall:/);
-assert.match(operatorSource, /const anchorContactHydrationNeeded = \(!phaseOrdinal \|\| phaseOrdinal === 1\)[\s\S]*?anchorNeedsHydration\(plan, anchorContactEvidence\)/);
+assert.match(operatorSource, /const semanticPoc1Group = personAnchorPolicy\.isSemanticPersonAnchor\(plan\)[\s\S]*?anchorNeedsHydration\(plan, anchorContactEvidence, semanticPoc1Group\)/, 'semantic person anchors must hydrate against the writable POC-1 destination fields');
 assert.match(operatorSource, /completeContacts: true/);
 assert.match(operatorSource, /contactEvidence: anchorContactEvidence/);
+assert.match(operatorSource, /destinationGroup: semanticPoc1Group/);
 assert.match(operatorSource, /completeContacts: false/);
 
 assert.match(bootstrapSource, /apollo-three-poc-quality/);
