@@ -16,6 +16,7 @@ const controlPlane = require('../core/universal-enrichment-control-plane');
 const headers = ['COMPANY NAME','COMPANY LINK','1st POC NAME','PHONE','EMAIL','2ND POC NAME','PHONE','EMAIL'];
 const anchorRow = ['Abhishek Tiwari','ID: https://www.linkedin.com/in/abhishek-tiwari-31174012a/','','','','','',''];
 const rows = [headers, anchorRow, ['Riya Sharma','https://www.linkedin.com/in/riya-sharma/','','','','','',''], ['Karan Mehta','https://www.linkedin.com/in/karan-mehta/','','','','','','']];
+const threePocHeaders = ['COMPANY NAME','COMPANY LINK','1st POC NAME','PHONE','EMAIL','2ND POC NAME','PHONE','EMAIL','3RD POC NAME','PHONE','EMAIL'];
 
 (async () => {
   const originalFetch = global.fetch;
@@ -97,6 +98,18 @@ const rows = [headers, anchorRow, ['Riya Sharma','https://www.linkedin.com/in/ri
     const identityOnly = controlPlane.recoverForwardFrontier({ writeScope:scope, rowCheckpoints:{}, startRow:2, endRow:3 }, inspection);
     assert.equal(identityOnly.nextRow, 2, 'supporting POC names must not advance a contact-only frontier');
     assert.equal(providerCalls, 0, 'schema inspection, planning and approval preparation must not call Apollo');
+
+    // Heading-driven cardinality: a third POC is supported only when the sheet
+    // actually defines its owned name/phone/email coordinates.
+    const threePocRows = [threePocHeaders, ['Acme','https://www.linkedin.com/company/acme','','','','','','','','','']];
+    const threePocSchema = schemaTools.inferSchema(threePocRows, { expectedPersonGroups: 3 });
+    assert.deepEqual(threePocSchema.personGroups.map((group) => [group.ordinal, group.fields.name.index, group.fields.phone.index, group.fields.email.index]), [
+      [1,2,3,4], [2,5,6,7], [3,8,9,10],
+    ]);
+    const threePocScope = writeScope.compile('enrich number and email of 1st poc, 2nd poc and 3rd poc', threePocSchema);
+    assert.deepEqual([...new Set(threePocScope.allowed.map((item) => item.columnIndex))].sort((a,b) => a-b), [2,3,4,5,6,7,8,9,10]);
+    assert.equal(threePocScope.protectedColumns.some((item) => item.columnIndex === 0), true);
+    assert.equal(threePocScope.protectedColumns.some((item) => item.columnIndex === 1), true);
 
     console.log('Aryatry semantic regression passed: A/B recover as read-only person-anchor evidence, C:E and F:H remain POC-1/POC-2, supporting owners stay scope-safe, row-local failure continues to rows 3/4, audits honor the forward range, and no provider call occurs before approval.');
   } finally {

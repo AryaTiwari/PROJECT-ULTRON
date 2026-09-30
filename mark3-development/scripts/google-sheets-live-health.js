@@ -60,10 +60,16 @@ function fail(error, stage = 'unknown') {
 
   try {
     const meta = await sheets.metadata(id);
-    const tabs = (meta?.sheets || []).map((item) => String(item?.properties?.title || '')).filter(Boolean);
+    const tabDetails = (meta?.sheets || []).map((item) => ({
+      title: String(item?.properties?.title || ''),
+      sheetId: Number(item?.properties?.sheetId),
+      index: Number(item?.properties?.index),
+    })).filter((item) => item.title && Number.isFinite(item.sheetId));
+    const tabs = tabDetails.map((item) => item.title);
     console.log('[Google Sheets Health] metadata read: OK');
     console.log('[Google Sheets Health] spreadsheet title:', meta?.properties?.title || '(unknown)');
     console.log('[Google Sheets Health] tabs:', JSON.stringify(tabs));
+    console.log('[Google Sheets Health] tab identities:', JSON.stringify(tabDetails));
   } catch (error) {
     fail(error, 'metadata');
     return;

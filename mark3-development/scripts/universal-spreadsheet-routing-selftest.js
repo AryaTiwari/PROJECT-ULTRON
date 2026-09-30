@@ -81,6 +81,11 @@ assert.equal(
   '"worksheet name - <tab>. resume ..." must capture only the worksheet title',
 );
 assert.equal(
+  spreadsheetController.parseSheetName('worksheet name - Aryatry enrich the companies in this sheet with number and email of 1st poc and 2nd poc'),
+  'Aryatry',
+  'same-line worksheet commands without punctuation must not become part of the tab title',
+);
+assert.equal(
   spreadsheetController.parseSheetName([
     'google sheet url: https://docs.google.com/spreadsheets/d/example/edit?gid=1229007269',
     '',
@@ -196,6 +201,18 @@ const executionByFoldedName = enrichmentOperator.selectUniversalSheetTargets(whi
 assert.equal(executionByFoldedName.targets.length, 1);
 assert.equal(executionByFoldedName.targets[0].name, 'Arya ');
 assert.equal(executionByFoldedName.matchedBy, 'folded-name');
+
+const executionMetadataBypass = enrichmentOperator.selectUniversalSheetTargets({
+  sheets: [{ properties: { title: 'Other', sheetId: 111, index: 0 } }],
+}, {
+  sheetName: 'Aryatry',
+  sheetId: null,
+  explicitNameAuthoritative: true,
+});
+assert.equal(executionMetadataBypass.targets.length, 1);
+assert.equal(executionMetadataBypass.targets[0].name, 'Aryatry');
+assert.equal(executionMetadataBypass.targets[0].sheetId, null);
+assert.equal(executionMetadataBypass.metadataFallback, true);
 
 assert.equal(enrichmentOperator.exactSheetTitle('Arya '), 'Arya ');
 assert.equal(enrichmentOperator.foldedSheetTitle('Arya '), 'arya');
