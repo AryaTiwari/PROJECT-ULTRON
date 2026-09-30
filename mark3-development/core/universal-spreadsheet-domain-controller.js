@@ -16,6 +16,7 @@ const enrichmentMissions = require('./universal-enrichment-mission-store');
 const enrichmentWriteScope = require('./universal-enrichment-write-scope');
 const apolloBudget = require('./universal-apollo-budget');
 const rowSelection = require('./universal-row-selection');
+const selfHealer = require('./universal-enrichment-self-healer');
 
 approvalHandler.install();
 
@@ -214,6 +215,15 @@ function response(ok, body, extra = {}) {
 
 function typedFailure(error, context = {}) {
   const typed = typedErrors.normalize(error, context);
+  let googleAuth = null;
+  if (typed.subsystem === 'GOOGLE_SHEETS' && typed.type === 'AUTH') {
+    try { googleAuth = require('./google-sheets-auth').status(); } catch {}
+  }
+  const targetDiagnostic = selfHealer.worksheetDiagnostic(error, {
+    sheetName: error?.requestedSheetName || error?.sheetName,
+    requestedGid: error?.requestedGid,
+    availableTabs: error?.availableTabs,
+  });
   return {
     typed,
     diagnostic: typedErrors.format(typed),
@@ -229,6 +239,14 @@ function typedFailure(error, context = {}) {
       attemptedRange: typed.attemptedRange || null,
       endpoint: typed.endpoint || null,
       providerStatus: typed.providerStatus ?? typed.status ?? null,
+      reauthorizeCommand: error?.reauthorizeCommand || (typed.subsystem === 'GOOGLE_SHEETS' && typed.type === 'AUTH'
+        ? 'npm run google-sheets:auth'
+        : null),
+      authUrl: error?.authUrl || googleAuth?.lastAuthEvent?.authUrl || null,
+      availableTabs: selfHealer.cleanTabs(error?.availableTabs),
+      targetDiagnostic: targetDiagnostic.availableTabs.length || targetDiagnostic.requestedSheetName ? targetDiagnostic : null,
+      headerPreview: Array.isArray(error?.headerPreview) ? error.headerPreview : null,
+      schemaQuestions: selfHealer.cleanList(error?.questions || error?.schema?.safety?.questions),
     },
   };
 }
@@ -358,14 +376,24 @@ async function inspect(sheetUrl, sheetName, rowLimit, options = {}) {
     ...options,
     sourceText: options.sourceText || '',
   });
-  const inspection = await inspector.inspectExact({
-    spreadsheetId: target.spreadsheetId,
-    spreadsheetTitle: target.spreadsheetTitle,
-    sheetName: target.sheetName,
-    sheetId: target.sheetId,
-    rowLimit,
-    schemaOptions: options.schema || {},
-  });
+  let inspection;
+  try {
+    inspection = await inspector.inspectExact({
+      spreadsheetId: target.spreadsheetId,
+      spreadsheetTitle: target.spreadsheetTitle,
+      sheetName: target.sheetName,
+      sheetId: target.sheetId,
+      rowLimit,
+      schemaOptions: options.schema || {},
+    });
+  } catch (error) {
+    error.spreadsheetId ||= target.spreadsheetId;
+    error.sheetName ||= target.sheetName;
+    error.requestedSheetName ||= sheetName || target.sheetName;
+    error.requestedGid ??= target.resolution?.requestedGid ?? null;
+    error.availableTabs ||= (target.resolution?.tabs || []).map((tab) => tab.name).filter(Boolean);
+    throw error;
+  }
   return {
     ...inspection,
     rowLimitApplied: rowLimit || null,
@@ -434,6 +462,7 @@ async function handle(message, context = {}) {
   const exactSheetName = inspection.sheetName || inspection.requestedTarget?.sheetName || requestedSheetName || '';
   const summary = inspection.schema || {};
   if (!schemaReadable(summary)) {
+    const schemaDiagnostic = selfHealer.schemaDiagnostic(summary);
     const failure = typedFailure(Object.assign(new Error(`Schema confidence ${Number(summary.confidence || 0).toFixed(2)} is below the safe enrichment threshold.`), {
       code: 'UNIVERSAL_SCHEMA_CONFIDENCE_TOO_LOW',
       subsystem: 'SCHEMA',
@@ -441,10 +470,12 @@ async function handle(message, context = {}) {
       stage: 'schema-confidence-gate',
       hint: summary.safety?.questions?.[0],
       completionState: 'NEEDS_SCHEMA_CLARIFICATION',
+      schema: summary,
+      questions: schemaDiagnostic.questions,
     }));
     return response(false,
       `Universal spreadsheet enrichment stopped safely: ${failure.diagnostic}. ${failure.typed.hint} Nothing was edited and Apollo was not called.`,
-      { ...failure.fields, diagnostic: failure.diagnostic, apolloCalled: false, spreadsheetUrl: sheetUrl, sheetName: exactSheetName || null, schema: summary });
+      { ...failure.fields, diagnostic: failure.diagnostic, apolloCalled: false, spreadsheetUrl: sheetUrl, sheetName: exactSheetName || null, schema: summary, schemaDiagnostic });
   }
 
   const request = {

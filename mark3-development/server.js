@@ -348,6 +348,29 @@ const server = http.createServer(async (req,res) => {
       return send(res,result.ok?200:409,result);
     }
     if (req.method === 'GET' && req.url === '/api/providers') return send(res,200,{ ok:true, ...(await integrations.providerHealthSnapshot()) });
+    if (req.method === 'GET' && req.url === '/api/diagnostics/enrichment') {
+      const diagnostic = require('./core/adaptive-diagnostic-layer').summary();
+      const authStatus = googleSheetsAuth.status();
+      return send(res, 200, {
+        ok: true,
+        status: diagnostic.status,
+        recent: diagnostic.recent,
+        benchmark: diagnostic.benchmark,
+        recoverySafety: diagnostic.safety,
+        googleSheets: {
+          credentialsReady: authStatus.credentialsReady,
+          authorized: authStatus.authorized,
+          durableAuthorization: authStatus.durableAuthorization,
+          hasRefreshToken: authStatus.hasRefreshToken,
+          tokenExpired: authStatus.tokenExpired,
+          clientCompatible: authStatus.clientCompatible,
+          scopeCompatible: authStatus.scopeCompatible,
+          healthReason: authStatus.healthReason,
+          lastAuthEvent: authStatus.lastAuthEvent?.type || null,
+          authUrl: authStatus.lastAuthEvent?.authUrl || null,
+        },
+      });
+    }
     if (req.method === 'GET' && req.url === '/api/diagnostics/omniroute') {
       let catalog=null,catalogError=null;
       try { catalog=await models.catalog(); } catch(error) { catalogError=error instanceof Error?error.message:String(error); }

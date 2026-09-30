@@ -16,6 +16,7 @@
     "core/universal-schema-entity-disambiguation.js",
     "core/runtime-build.js",
     "core/universal-enrichment-recovery.js",
+    "core/universal-enrichment-self-healer.js",
     "core/universal-provider-circuit-breaker.js",
     "core/universal-apollo-budget.js",
     "core/universal-adaptive-concurrency.js",
@@ -25,6 +26,9 @@
     "scripts/universal-enrichment-production-selftest.js",
     "scripts/universal-enrichment-integrity-guard.js",
     "scripts/universal-enrichment-performance-benchmark.js",
+    "scripts/universal-enrichment-self-healing-selftest.js",
+    "scripts/universal-enrichment-doctor.js",
+    "universal-enrichment-benchmark-contract.json",
     "core/universal-enrichment-cache.js",
     "scripts/universal-enrichment-failure-matrix-selftest.js",
     "scripts/universal-aryatry-semantic-selftest.js"

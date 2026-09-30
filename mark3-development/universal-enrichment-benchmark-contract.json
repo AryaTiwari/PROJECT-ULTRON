@@ -1,0 +1,8 @@
+{
+  "contractVersion": "universal-enrichment-benchmark-v1",
+  "minimumElapsedImprovementPercent": 60,
+  "minimumGoogleCallReductionPercent": 80,
+  "minimumApolloCallReductionPercent": 15,
+  "maximumUnsafeWrites": 0,
+  "maximumWorkers": 3
+}

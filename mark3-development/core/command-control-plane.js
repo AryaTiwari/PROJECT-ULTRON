@@ -317,12 +317,18 @@ async function dispatch(message, options = {}) {
           stage: result.errorStage,
           status: result.providerStatus,
         });
-        const health = diagnosticLayer.assess(returnedError, {
+        const diagnosticContext = {
           route: route.domain,
           approvalReentry: false,
           paidExecution: false,
           stage: result.errorStage || 'spreadsheet-controller-return',
-        });
+          sheetName: result.sheetName || null,
+          spreadsheetId: result.spreadsheetId || null,
+          availableTabs: result.availableTabs || result.targetDiagnostic?.availableTabs || [],
+          schema: result.schema || null,
+          exactTargetSupplied: Boolean(result.sheetName),
+        };
+        let health = diagnosticLayer.assess(returnedError, diagnosticContext);
 
         if (health.autoRetry && !options.__diagnosticRetry) {
           try {
@@ -338,6 +344,8 @@ async function dispatch(message, options = {}) {
               result = { ...healed, diagnostic: { ...health, healed: true } };
             } else if (healed) {
               result = healed;
+            } else {
+              health = diagnosticLayer.assess(returnedError, { ...diagnosticContext, approvalReentry: true });
             }
           } catch {}
         }
@@ -362,18 +370,25 @@ async function dispatch(message, options = {}) {
       if (spreadsheetDomain) {
         const typedErrors = require('./spreadsheet-enrichment-errors');
         const typed = typedErrors.normalize(error, { stage: error?.stage || 'spreadsheet-controller-dispatch' });
-        const health = diagnosticLayer.assess(error, {
+        const diagnosticContext = {
           route: route.domain,
           approvalReentry: false,
           paidExecution: false,
           stage: typed.stage,
-        });
+          sheetName: error.sheetName || null,
+          spreadsheetId: error.spreadsheetId || null,
+          availableTabs: error.availableTabs || [],
+          schema: error.schema || null,
+          exactTargetSupplied: Boolean(error.sheetName),
+        };
+        let health = diagnosticLayer.assess(error, diagnosticContext);
         if (health.autoRetry && !options.__diagnosticRetry) {
           try {
             const healed = await diagnosticLayer.attemptSafeRetry(health, () =>
               controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage, __diagnosticRetry: true })
             );
             if (healed) return { ...healed, route: route.domain, routing: route, skillSelection, diagnostic: { ...health, healed: true } };
+            health = diagnosticLayer.assess(error, { ...diagnosticContext, approvalReentry: true });
           } catch {}
         }
         const diagnostic = typedErrors.format(typed);

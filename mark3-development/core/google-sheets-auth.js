@@ -427,7 +427,17 @@ async function authorizeInteractive() {
     code_challenge_method: 'S256',
   }).toString();
 
-  emitAuthEvent('google_auth_reconnect_opening', { message: 'Opening secure Google reconnection' });
+  // Publish the secure link before browser launch. The UI can always present a
+  // deterministic OPEN GOOGLE recovery action even when the OS reports that it
+  // launched a browser which never became visible to the user.
+  emitAuthEvent('google_auth_action_required', {
+    message: 'Google Sheets authorization needs your approval. Open the secure Google authorization link.',
+    authUrl: authUrl.toString(),
+  });
+  emitAuthEvent('google_auth_reconnect_opening', {
+    message: 'Opening secure Google reconnection',
+    authUrl: authUrl.toString(),
+  });
   console.log('Opening Google authorization in your browser...');
   const browserOpened = await openBrowser(authUrl.toString());
   if (!browserOpened) {

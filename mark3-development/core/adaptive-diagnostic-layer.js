@@ -2,13 +2,11 @@
 
 const recovery=require('./universal-enrichment-recovery');
 const errors=require('./spreadsheet-enrichment-errors');
-
-const journal=[];
-const MAX_JOURNAL=50;
+const healer=require('./universal-enrichment-self-healer');
 
 function text(value){return String(value==null?'':value).trim();}
-function record(entry){journal.push({...entry,at:new Date().toISOString()});while(journal.length>MAX_JOURNAL)journal.shift();return journal.at(-1);}
-function recent(limit=10){return journal.slice(-Math.max(1,Math.min(50,Number(limit)||10))).map(item=>({...item}));}
+function record(entry){return healer.recordDiagnosis(entry);}
+function recent(limit=10){return healer.recent(limit).map(item=>({...item}));}
 
 function questionFor(typed,context={}){
   const code=text(typed.code).toUpperCase();
@@ -16,13 +14,18 @@ function questionFor(typed,context={}){
     return 'I cannot prove the worksheet ownership/schema safely. Which columns should be treated as the source anchor and which columns are the writable POC fields?';
   }
   if(/TAB_NOT_FOUND|TARGET/.test(code)||typed.subsystem==='TARGETING'){
-    return 'I could not prove the requested worksheet target. Which exact worksheet/tab should I use?';
+    const available=healer.cleanTabs(context.availableTabs||typed.original?.availableTabs);
+    return available.length
+      ? `I could not prove the requested worksheet target. Which exact worksheet/tab should I use? Available tabs: ${available.join(', ')}.`
+      : 'I could not prove the requested worksheet target. Which exact worksheet/tab should I use?';
   }
   if(/WRITE_SCOPE|LIVE_CONFLICT|IDENTITY_UNVERIFIED/.test(code)){
     return 'The planned write conflicts with the current safety contract or live row. Should I re-inspect and re-plan only the affected row, or leave it untouched?';
   }
   if(typed.type==='AUTH'||typed.type==='PERMISSION'){
-    return 'The required provider authorization is unavailable. Re-authorize that provider, then retry the same mission.';
+    return typed.subsystem==='GOOGLE_SHEETS'
+      ? 'Google Sheets authorization needs attention. Complete the secure Google authorization opened by ULTRON, then retry the same mission.'
+      : 'The required provider authorization is unavailable. Re-authorize that provider, then retry the same mission.';
   }
   return null;
 }
@@ -30,13 +33,12 @@ function questionFor(typed,context={}){
 function assess(error={},context={}){
   const typed=errors.normalize(error,{stage:error?.stage||context.stage||'diagnostic'});
   const classified=recovery.classify(error,{stage:typed.stage});
-  const preApproval=!context.approvalReentry&&!context.paidExecution;
-  const safeReadStage=/metadata|inspection|preapproval|target|schema|read/i.test(text(typed.stage));
-  const autoRetry=Boolean(preApproval&&safeReadStage&&['NETWORK','TIMEOUT'].includes(typed.type));
-  const safeAction=autoRetry?'retry_safe_read':classified.safeToRepair?(
+  const plan=healer.recoveryPlan(error,{...context,stage:typed.stage});
+  const autoRetry=Boolean(plan.autoRetry);
+  const safeAction=plan.safeAction||(classified.safeToRepair?(
     typed.type==='RATE_LIMIT'||typed.type==='COOLDOWN'?'wait_cooldown':
     typed.type==='NETWORK'||typed.type==='TIMEOUT'?'retry_idempotent_request':null
-  ):null;
+  ):null);
   const question=autoRetry?null:questionFor(typed,context);
   const diagnosis={
     code:typed.code,subsystem:typed.subsystem,type:typed.type,stage:typed.stage,
@@ -44,15 +46,37 @@ function assess(error={},context={}){
     autoRetry,safeAction,userActionRequired:Boolean(question),question,
     recommendation:typed.hint||classified.recommendedAction||null,
     nextEligibleAt:error?.nextEligibleAt||classified.nextEligibleAt||null,
+    maxAttempts:plan.maxAttempts,backoffMs:plan.backoffMs,
+    authRedirectRequired:plan.authRedirectRequired,
+    worksheetDiagnostic:plan.worksheet,
+    schemaDiagnostic:plan.schema,
   };
-  record({route:context.route||null,...diagnosis});
+  record({route:context.route||null,sheetName:context.sheetName,spreadsheetId:context.spreadsheetId,
+    availableTabs:context.availableTabs,attemptedRange:typed.attemptedRange,...diagnosis});
   return diagnosis;
 }
 
 async function attemptSafeRetry(diagnosis,fn){
   if(!diagnosis?.autoRetry||!diagnosis.safeAction||typeof fn!=='function')return null;
   recovery.assert(diagnosis.safeAction);
-  try{return await fn();}catch(error){assess(error,{route:'diagnostic-retry',stage:error?.stage||'diagnostic-retry'});throw error;}
+  const attempts=Math.max(1,Math.min(3,Number(diagnosis.maxAttempts||1)));
+  let last=null;
+  for(let attempt=1;attempt<attempts;attempt++){
+    const delay=Number(diagnosis.backoffMs?.[attempt-1]||0);
+    if(delay>0)await new Promise(resolve=>setTimeout(resolve,delay));
+    try{
+      const result=await fn(attempt);
+      if(result?.ok!==false){
+        record({...diagnosis,healed:true,route:'diagnostic-retry'});
+        return result;
+      }
+      last=Object.assign(new Error(result.errorMessage||result.text||result.errorCode||'Safe retry failed.'),{
+        code:result.errorCode,subsystem:result.errorSubsystem,errorType:result.errorType,stage:result.errorStage,
+      });
+    }catch(error){last=error;}
+  }
+  if(last)assess(last,{route:'diagnostic-retry',stage:last?.stage||'diagnostic-retry',approvalReentry:true});
+  return null;
 }
 
 function summary(){
@@ -60,6 +84,7 @@ function summary(){
   return {
     status:rows.some(item=>item.userActionRequired)?'attention':rows.some(item=>item.retryable)?'recoverable':'healthy',
     recent:rows,
+    benchmark:healer.benchmarkStatus(),
     safety:{automaticActions:[...recovery.SAFE],forbiddenActions:[...recovery.FORBIDDEN]},
   };
 }

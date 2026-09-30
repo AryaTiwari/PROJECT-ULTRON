@@ -294,14 +294,14 @@ function connectEvents(){
     const ev=JSON.parse(e.data);
     if(ev.result?.text)addMessage('assistant',ev.result.text,'LINKEDIN RESEARCH');
   } catch {} });
-  const types=['task_started','context_ready','plan_created','model_selection','model_started','model_candidate_started','model_candidate_failed','model_candidate_succeeded','model_failed','model_delta','model_stream_fallback','model_stream_reset','model_backup_selected','model_league_started','model_league_trial_started','model_league_trial_completed','model_league_trial_failed','model_league_completed','model_league_promoted','model_league_error','tool_started','tool_completed','tool_failed','verification_complete','response_ready','task_completed','proactive_alert','model_catalog_unavailable','voice_started','voice_ready','voice_prefetch_next','voice_completed','voice_error','voice_state_changed','google_auth_refreshing','google_auth_restored','google_auth_expired','google_auth_reconnect_opening','google_auth_manual_url','google_auth_connected'];
+  const types=['task_started','context_ready','plan_created','model_selection','model_started','model_candidate_started','model_candidate_failed','model_candidate_succeeded','model_failed','model_delta','model_stream_fallback','model_stream_reset','model_backup_selected','model_league_started','model_league_trial_started','model_league_trial_completed','model_league_trial_failed','model_league_completed','model_league_promoted','model_league_error','tool_started','tool_completed','tool_failed','verification_complete','response_ready','task_completed','proactive_alert','model_catalog_unavailable','voice_started','voice_ready','voice_prefetch_next','voice_completed','voice_error','voice_state_changed','google_auth_refreshing','google_auth_restored','google_auth_expired','google_auth_reconnect_opening','google_auth_action_required','google_auth_manual_url','google_auth_connected'];
   types.forEach(type=>es.addEventListener(type,e=>{try{
     const ev=JSON.parse(e.data);
     if(type==='model_delta'){appendStream(ev.delta);if(ev.model){state.model=ev.model;els.model.textContent=state.model;els.hudModel.textContent=state.model;}setState('GENERATING');return;}
     if(type==='model_stream_reset'){resetStream();state.events.push(ev);renderEvents();setState('ROUTING');return;}
     if(type==='voice_state_changed'){state.voiceEnabled=Boolean(ev.enabled);if(!state.voiceEnabled)stopLocalAudio();renderVoiceButton();return;}
     const leagueEvent=type.startsWith('model_league_');const backgroundExact=Boolean(ev.exactRouting&&els.task.textContent==='READY');state.events.push(ev);if(state.events.length>120)state.events.shift();if(leagueEvent||backgroundExact){renderEvents();return;}
-    if(type==='google_auth_manual_url'){setCaption('Google authorization needs your approval. Use OPEN GOOGLE in Live Activity.');setState('AUTHORIZATION');}
+    if(type==='google_auth_manual_url'||type==='google_auth_action_required'){setCaption('Google authorization needs your approval. Use OPEN GOOGLE in Live Activity.');setState('AUTHORIZATION');}
     else if(type==='google_auth_refreshing')setState('REFRESHING');
     else if(type==='google_auth_restored'||type==='google_auth_connected')setState('CONNECTED');
     else if(type==='google_auth_expired'||type==='google_auth_reconnect_opening')setState('AUTHORIZATION');
