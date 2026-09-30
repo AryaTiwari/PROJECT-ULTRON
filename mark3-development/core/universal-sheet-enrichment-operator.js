@@ -3467,15 +3467,19 @@ async function run(request = {}, options = {}) {
 
     try {
       const rowEvidenceContext = inferHiringCompanyFromEvidence(plan, row);
+      const semanticPoc1Group = personAnchorPolicy.isSemanticPersonAnchor(plan)
+        ? personAnchorPolicy.pocGroup(plan, 1)
+        : null;
       const anchorContactEvidence = (!phaseOrdinal || phaseOrdinal === 1)
         ? extractAnchorContactEvidence(plan)
         : { email: '', phone: '', source: '' };
-      const anchorHadBlankEmail = Boolean(plan.anchor?.group?.fields?.email && !text(plan.anchor?.snapshot?.values?.email));
-      const anchorHadBlankPhone = Boolean(plan.anchor?.group?.fields?.phone && !text(plan.anchor?.snapshot?.values?.phone));
+      const anchorContactFields = semanticPoc1Group?.fields || plan.anchor?.group?.fields || {};
+      const anchorHadBlankEmail = Boolean(anchorContactFields.email && !text(plan.anchor?.snapshot?.values?.email));
+      const anchorHadBlankPhone = Boolean(anchorContactFields.phone && !text(plan.anchor?.snapshot?.values?.phone));
       if (anchorHadBlankEmail && text(anchorContactEvidence.email)) stats.rowEvidenceContactEmails++;
       if (anchorHadBlankPhone && text(anchorContactEvidence.phone)) stats.rowEvidenceContactPhones++;
       const anchorContactHydrationNeeded = (!phaseOrdinal || phaseOrdinal === 1)
-        && anchorNeedsHydration(plan, anchorContactEvidence);
+        && anchorNeedsHydration(plan, anchorContactEvidence, semanticPoc1Group);
       let anchorCompanyContext = null;
       if (plan.anchor.type === 'company') {
         anchorCompanyContext = companyFromCompanyAnchor(plan.anchor);
@@ -3490,6 +3494,7 @@ async function run(request = {}, options = {}) {
           allowLinkedInEmployerFallback: false,
           completeContacts: true,
           contactEvidence: anchorContactEvidence,
+          destinationGroup: semanticPoc1Group,
         });
         if (anchorContactHydrationNeeded && !anchorCompanyContext?.anchorPerson) stats.hydrationFailures++;
       } else {
@@ -3569,6 +3574,37 @@ async function run(request = {}, options = {}) {
 
       stats.anchorsResolved++;
 
+      // Aryatry/person-anchor contract:
+      // 1) exact source person becomes POC-1 only when Apollo/verified evidence
+      //    yields an actual usable phone;
+      // 2) otherwise POC-1 falls back to the highest-priority verified
+      //    decision-maker from that person's current employer;
+      // 3) POC-2 is selected later from the same employer and must be distinct.
+      let semanticAnchorPoc1Filled = false;
+      let semanticAnchorPerson = anchorCompanyContext?.anchorPerson || null;
+      if (personAnchorPolicy.isSemanticPersonAnchor(plan) && semanticPoc1Group && (!phaseOrdinal || phaseOrdinal === 1)) {
+        if (semanticAnchorPerson?.identityVerified && !apollo.validPhone(semanticAnchorPerson.phone || '')) {
+          semanticAnchorPerson = await settleVerifiedPhoneForSelection(semanticAnchorPerson, stats, runOptions);
+          if (anchorCompanyContext) anchorCompanyContext.anchorPerson = semanticAnchorPerson;
+        }
+        const anchorDecision = personAnchorPolicy.decision(plan, semanticAnchorPerson, companyContext);
+        stats.semanticPersonAnchorRows = Number(stats.semanticPersonAnchorRows || 0) + 1;
+        stats.semanticPersonAnchorStrategy = stats.semanticPersonAnchorStrategy || {};
+        stats.semanticPersonAnchorStrategy[anchorDecision.reason] = Number(stats.semanticPersonAnchorStrategy[anchorDecision.reason] || 0) + 1;
+        if (anchorDecision.useAnchorAsPoc1) {
+          const writePlan = planner.safeWritesForGroup(row, semanticPoc1Group, semanticAnchorPerson, {
+            writeScope: runOptions.writeScope,
+          });
+          if (writePlan.allowed && writePlan.writes.length) {
+            writes.push(...writePlan.writes);
+            semanticAnchorPoc1Filled = true;
+            stats.semanticAnchorPoc1Filled = Number(stats.semanticAnchorPoc1Filled || 0) + 1;
+          }
+        } else if (anchorDecision.reason === 'anchor-phone-unavailable') {
+          stats.semanticAnchorPoc1CompanyFallbacks = Number(stats.semanticAnchorPoc1CompanyFallbacks || 0) + 1;
+        }
+      }
+
       const poc2Targets = openPersonTargets.filter((target) => Number(target.group?.ordinal || 0) === 2);
       const poc3Targets = openPersonTargets.filter((target) => Number(target.group?.ordinal || 0) >= 3);
 
@@ -3613,6 +3649,13 @@ async function run(request = {}, options = {}) {
       }
 
       const rowExistingIdentities = existingIdentityKeys(plan);
+      // The source person is anchor evidence, not a second candidate. Once exact
+      // Apollo evidence has shown the anchor (with or without a phone), exclude
+      // that same identity from generic company POC selection to avoid duplicate
+      // POC-1/POC-2 rows and repeated paid hydration.
+      if (personAnchorPolicy.isSemanticPersonAnchor(plan) && semanticAnchorPerson?.identityVerified) {
+        rememberCandidate(rowExistingIdentities, semanticAnchorPerson);
+      }
       const contactabilityShortlist = preferredContactShortlist(
         people,
         plan,
@@ -3637,7 +3680,12 @@ async function run(request = {}, options = {}) {
       // verification, keep trying distinct same-company HR/recruiting authorities.
       // This lets two verified HR managers/technical recruiters legitimately fill
       // POC-1 and POC-2 instead of leaving POC-1 blank.
-      for (const target of openPersonTargets.filter(target => ![2,3].includes(Number(target.group.ordinal)))) {
+      for (const target of openPersonTargets.filter(target => {
+        const ordinal = Number(target.group.ordinal);
+        if ([2,3].includes(ordinal)) return false;
+        if (ordinal === 1 && semanticAnchorPoc1Filled) return false;
+        return true;
+      })) {
         const targetOrdinal = Number(target.group.ordinal || 0);
         const result = await fillManualPriorityGroup(row, plan, companyContext, people, stats, {
           ...rowOptions, ordinal: targetOrdinal, claimed: manualClaimed,
