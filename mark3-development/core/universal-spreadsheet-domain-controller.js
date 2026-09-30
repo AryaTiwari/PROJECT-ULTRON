@@ -170,7 +170,11 @@ function parseFullSheetRequested(message) {
 function parseForwardResumeRequested(message) {
   const value = String(message || '');
   if (/\b(?:retry|backfill)\s+(?:unresolved|failed|incomplete)\b/i.test(value)) return false;
-  return /\b(?:resume|continue)\s+(?:(?:the|my|current|latest)\s+)?(?:(?:apollo|poc|spreadsheet|lead)\s+)?enrichment\b/i.test(value);
+  // Plain "resume enrichment" means finish the incomplete sheet. Forward-only
+  // traversal is destructive to recall when historical POC gaps exist, so it
+  // now requires an explicit next/new/unprocessed-row instruction.
+  return /\b(?:resume|continue)\b[^\n.]{0,80}\b(?:from|with|at)\s+(?:the\s+)?(?:next(?:\s+unprocessed)?|new|unprocessed|first\s+unprocessed|last\s+processed)\s+(?:row|rows)\b/i.test(value)
+    || /\bforward[- ]only\s+(?:resume|enrichment)\b/i.test(value);
 }
 
 function configuredRowLimit(message = '') {
@@ -258,6 +262,7 @@ function approvalSummary(inspection, policy = {}) {
     policy.requireIndianPhone
       ? 'Priority contract: this run enriches POC-1 and POC-2 with shared discovery/cache state. POC-1 exact-anchor contact completion runs first; POC-2 receives deterministic discovery, rechecks and bounded verified-candidate rescue when needed. Exact person evidence may fill missing phone/email even when row employer context is stale; employer verification remains mandatory whenever ULTRON selects a new person.'
       : 'Priority contract: ordinary production enrichment is coordinated across POC-1, POC-2 and POC-3 in one sheet run with shared discovery/cache state. POC-1 exact-anchor contact completion runs first within each row; existing POC-2/POC-3 identities remain contact-completion jobs; blank secondary POC identities may be discovered from the verified hiring-company context. Explicit requests such as POC-1 only, POC-2 only or POC-3 only switch to isolated deterministic diagnostic phases. Exact person evidence may fill missing phone/email even when row employer context is stale; employer verification remains mandatory whenever ULTRON selects a new person.',
+    'Execution order is exam-style: ULTRON writes easy verified results across the whole sheet first, then deeply revises unresolved POC-1 rows from top to bottom, followed by unresolved POC-2 rows. Both passes share discovery and hydration evidence so the revision does not pay for the same work twice.',
     'After deterministic employer resolution, POC-2 discovery runs a results-first waterfall: targeted Apollo -> bounded broad Apollo -> brand/domain variants -> authenticated read-only LinkedIn company/people discovery when Apollo is sparse. Deterministic selection tries the preferred Founder/Director/Owner > HR/Talent/Recruiting Head/Manager > Recruiter ladder first, then a pragmatic same-company HR/talent/staffing/placement/people/leadership fallback. Every final person still requires exact identity and employer verification before a write.',
     policy.requireIndianPhone
       ? `Indian-number preference${policy.indianPhonePolicySource === 'automatic-poc1-poc2-default' ? ' (automatic POC-1/POC-2 default)' : ''}: only POC-1 and POC-2 are eligible; India-located hiring decision-makers rank first. A usable phone is mandatory for every newly selected POC. ULTRON checks a bounded shared shortlist of up to eight same-company decision-makers in this order: founder/co-founder/director/owner, HR/recruiting/talent leaders and managers, recruiters, then other managers. It continues past candidates without phones until it finds two distinct phone-qualified POCs or safely exhausts that shortlist. +91 phones rank first and verified foreign phones are accepted only as fallback. People without usable phones are not written into empty POC slots. The existing company row is always preserved and Apollo enrichment has no authority to clear or delete it. Pending exact Apollo callbacks remain staged.`

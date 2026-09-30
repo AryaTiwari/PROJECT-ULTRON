@@ -2171,19 +2171,30 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   const company = text(companyContext?.company);
   const domain = websiteDomain(companyContext?.domain || '');
   const discoveryMode = options.primarySweep ? 'sweep' : 'deep';
+  const requiredPool = integer(
+    options.minimumUsefulCandidatePool ?? process.env.ULTRON_M3_UNIVERSAL_MIN_USEFUL_CANDIDATE_POOL,
+    3,
+    2,
+    8,
+  );
   const key = `priority-fast-v3|${discoveryMode}|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
+  let initialDeepSeed = [];
   if (cache.has(key)) {
     stats.candidateCacheHits++;
     runContext.cacheHit('discovery');
-    return cache.get(key);
+    const cached = cache.get(key) || [];
+    if (options.primarySweep || cached.length >= requiredPool) return cached;
+    initialDeepSeed = cached;
   }
   const persisted = durableEnrichmentCache.get('priority-candidate-discovery', key);
   if (persisted.hit) {
     stats.candidateCacheHits++;
     stats.persistentCandidateCacheHits = Number(stats.persistentCandidateCacheHits || 0) + 1;
     runContext.cacheHit('discovery');
-    cache.set(key, persisted.value || []);
-    return persisted.value || [];
+    const cached = persisted.value || [];
+    cache.set(key, cached);
+    if (options.primarySweep || cached.length >= requiredPool) return cached;
+    initialDeepSeed = mergeCandidatePools(initialDeepSeed, cached);
   }
 
   const merged = [];
@@ -2192,14 +2203,29 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     merged.length = 0;
     merged.push(...combined);
   };
+  add(initialDeepSeed);
+  let reusedSweep = false;
+  if (!options.primarySweep) {
+    const sweepKey = `priority-fast-v3|sweep|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
+    if (cache.has(sweepKey)) {
+      add(cache.get(sweepKey) || []);
+      reusedSweep = true;
+      stats.candidateCacheHits++;
+      runContext.cacheHit('discovery');
+    } else {
+      const priorSweep = durableEnrichmentCache.get('priority-candidate-discovery', sweepKey);
+      if (priorSweep.hit) {
+        add(priorSweep.value || []);
+        reusedSweep = true;
+        stats.candidateCacheHits++;
+        stats.persistentCandidateCacheHits = Number(stats.persistentCandidateCacheHits || 0) + 1;
+        runContext.cacheHit('discovery');
+      }
+    }
+  }
   const priorityLimit = integer(options.priorityCandidateLimit, 20, 6, 40);
   const broadLimit = integer(options.adaptiveBroadCandidateLimit, 30, 10, 50);
-  const minimumUsefulPool = integer(
-    options.minimumUsefulCandidatePool ?? process.env.ULTRON_M3_UNIVERSAL_MIN_USEFUL_CANDIDATE_POOL,
-    3,
-    2,
-    8,
-  );
+  const minimumUsefulPool = requiredPool;
 
   // Reuse exact Apollo profiles already verified elsewhere in this workbook or
   // an earlier run. This is especially useful when several rows belong to the
@@ -2212,7 +2238,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   }
 
   // 1. Fast canonical title search against the strongest known organization identity.
-  if (merged.length < minimumUsefulPool) {
+  if (merged.length < minimumUsefulPool && !reusedSweep) {
     try {
       const priority = await apollo.searchCompanyPeopleBroad({
         company,
@@ -2791,71 +2817,96 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   });
 
   const checked = [];
-
+  const evidenceCache = options.contactabilityEvidenceCache instanceof Map
+    ? options.contactabilityEvidenceCache
+    : null;
+  const maxNewHydrations = integer(
+    options.maxHydrationAttempts,
+    shortlist.length || 1,
+    1,
+    phoneQualifiedCandidateLimit(options),
+  );
+  let newHydrationsPlanned = 0;
+  const work = [];
   for (let attempt = 0; attempt < shortlist.length; attempt++) {
     const raw = shortlist[attempt];
     const rawKey = candidateDiscoveryKey(raw);
-    const evidenceCache = options.contactabilityEvidenceCache instanceof Map
-      ? options.contactabilityEvidenceCache
-      : null;
+    const cached = Boolean(evidenceCache?.has(rawKey));
+    if (!cached && newHydrationsPlanned >= maxNewHydrations) {
+      stats.hydrationBudgetSkips = Number(stats.hydrationBudgetSkips || 0) + 1;
+      continue;
+    }
+    if (!cached) newHydrationsPlanned++;
+    work.push({ raw, rawKey, attempt, cached });
+  }
 
-    let person = null;
-    if (evidenceCache?.has(rawKey)) {
-      person = evidenceCache.get(rawKey);
-      stats.contactabilityEvidenceCacheHits = Number(stats.contactabilityEvidenceCacheHits || 0) + 1;
-    } else {
+  const adaptiveHydration = Number(runContext.current()?.concurrency?.get?.('apolloHydration') || 3);
+  const hydrationConcurrency = Math.max(1, Math.min(3, Number(options.candidateHydrationConcurrency ?? adaptiveHydration) || 1));
+  for (let cursor = 0; cursor < work.length; cursor += hydrationConcurrency) {
+    const wave = work.slice(cursor, cursor + hydrationConcurrency);
+    stats.candidateHydrationWaves = Number(stats.candidateHydrationWaves || 0) + 1;
+    const outcomes = await runContext.settledMap(wave, async (item) => {
+      if (item.cached) {
+        stats.contactabilityEvidenceCacheHits = Number(stats.contactabilityEvidenceCacheHits || 0) + 1;
+        return { ...item, person: evidenceCache.get(item.rawKey) };
+      }
+
       stats.hydrationAttempts++;
-      try {
-        person = await hydrateDecisionMakerVerified(raw, companyContext, stats, {
-          needEmail: Boolean(target.group.fields.email),
-          needPhone: Boolean(target.group.fields.phone),
-        });
-      } catch (error) {
-        throwSystemic(error);
+      let person = await hydrateDecisionMakerVerified(item.raw, companyContext, stats, {
+        needEmail: Boolean(target.group.fields.email),
+        needPhone: Boolean(target.group.fields.phone),
+      });
+      if (person?.identityVerified && person?.title && ranker.sameEmployer(person, companyContext)) {
+        person = await settleVerifiedPhoneForSelection(person, stats, options);
+      }
+      evidenceCache?.set(item.rawKey, person || null);
+      return { ...item, person };
+    }, hydrationConcurrency);
+
+    for (let index = 0; index < outcomes.length; index++) {
+      const outcome = outcomes[index];
+      const item = wave[index];
+      if (outcome.status !== 'fulfilled') {
+        throwSystemic(outcome.reason);
         stats.hydrationFailures++;
-        evidenceCache?.set(rawKey, null);
+        evidenceCache?.set(item.rawKey, null);
+        claimed.add(item.rawKey);
+        continue;
+      }
+
+      const { raw, rawKey, attempt, person } = outcome.value;
+      if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) {
+        stats.hydrationFailures++;
+        claimed.add(rawKey);
+        continue;
+      }
+      if (candidateAlreadyPresent(person, existing)) {
+        stats.postHydrationDuplicates++;
         claimed.add(rawKey);
         continue;
       }
 
-      if (person?.identityVerified && person?.title && ranker.sameEmployer(person, companyContext)) {
-        person = await settleVerifiedPhoneForSelection(person, stats, options);
+      const writePlan = planner.safeWritesForGroup(row, target.group, person);
+      if (!writePlan.allowed || (!writePlan.writes.length && person.phoneStatus !== 'pending')) {
+        stats.identityConflicts++;
+        claimed.add(rawKey);
+        continue;
       }
-      evidenceCache?.set(rawKey, person || null);
+
+      const entry = {
+        raw,
+        rawKey,
+        person,
+        writePlan,
+        index: attempt,
+        tier: contactabilityTier(person),
+      };
+      if (entry.tier > 0) checked.push(entry);
     }
 
-    if (!person?.identityVerified || !person?.title || !ranker.sameEmployer(person, companyContext)) {
-      stats.hydrationFailures++;
-      claimed.add(rawKey);
-      continue;
-    }
-
-    if (candidateAlreadyPresent(person, existing)) {
-      stats.postHydrationDuplicates++;
-      claimed.add(rawKey);
-      continue;
-    }
-
-    const writePlan = planner.safeWritesForGroup(row, target.group, person);
-    if (!writePlan.allowed || (!writePlan.writes.length && person.phoneStatus !== 'pending')) {
-      stats.identityConflicts++;
-      claimed.add(rawKey);
-      continue;
-    }
-
-    const entry = {
-      raw,
-      rawKey,
-      person,
-      writePlan,
-      index: attempt,
-      tier: contactabilityTier(person),
-    };
-    if (entry.tier > 0) checked.push(entry);
-
-    // +91 phone + email is the maximum possible result. Stop immediately rather
-    // than spending more credits merely to confirm that perfection remains perfect.
-    if (entry.tier === 4) break;
+    // Stop before another provider wave once the strongest possible +91/email
+    // result exists. Calls inside the completed wave remain bounded and parallel.
+    if (checked.some((entry) => entry.tier === 4)) break;
   }
 
   const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
@@ -3231,6 +3282,8 @@ function freshStats() {
     candidatePhoneSettlementUnavailable: 0,
     candidatePhoneSettlementErrors: 0,
     contactabilityEvidenceCacheHits: 0,
+    hydrationBudgetSkips: 0,
+    candidateHydrationWaves: 0,
     existingRepairAudit: [],
     embeddedDesignationWrites: 0,
     newPeopleSelected: 0,
@@ -3327,7 +3380,8 @@ function mergeDeterministicRecheckStats(primary, recheck, targetRows = []) {
     'existingPublicIndexVerificationAttempts','existingPublicIndexVerified','existingGroupsRepaired','existingGroupsReplaced',
     'replacementCandidateChecks','emptyPocNoPhoneRejected','candidatePhoneSettlementAttempts',
     'candidatePhoneSettlementFound','candidatePhoneSettlementPending','candidatePhoneSettlementNotFound',
-    'candidatePhoneSettlementUnavailable','candidatePhoneSettlementErrors','embeddedDesignationWrites',
+    'candidatePhoneSettlementUnavailable','candidatePhoneSettlementErrors','contactabilityEvidenceCacheHits',
+    'hydrationBudgetSkips','candidateHydrationWaves','embeddedDesignationWrites',
     'newPeopleSelected','hydrationAttempts','hydrationFailures','manualPoc2Attempts','manualPoc2Filled',
     'manualPoc3Attempts','manualPoc3Filled','optionalPoc3Deferred','requestedPoc3Deferred','orphanContactTargets','orphanContactVerified',
     'orphanContactBlocked','orphanContactMismatches','phoneCellsFilled','phoneRowsChanged','phoneNotFound',
@@ -3647,6 +3701,7 @@ async function run(request = {}, options = {}) {
             location: plan.context?.location || '',
             priorityCandidateLimit: options.manualPriorityCandidateLimit ?? 20,
             adaptiveBroadCandidateLimit: options.adaptiveBroadCandidateLimit ?? 30,
+            minimumUsefulCandidatePool: options.resultsFirstSweep ? 3 : phoneQualifiedCandidateLimit(options),
             primarySweep: Boolean(options.resultsFirstSweep),
           });
         } catch (error) {
@@ -3716,7 +3771,7 @@ async function run(request = {}, options = {}) {
             ? (targetOrdinal === 1
               ? Number(process.env.ULTRON_M3_UNIVERSAL_PRIMARY_POC1_HYDRATION_ATTEMPTS || 3)
               : 1)
-            : 5,
+            : phoneQualifiedCandidateLimit(options),
         });
         writes.push(...result.writes);
         if (!result.filled) {
@@ -3739,7 +3794,7 @@ async function run(request = {}, options = {}) {
           maxHydrationAttempts: options.resultsFirstSweep
             ? Number(process.env.ULTRON_M3_UNIVERSAL_PRIMARY_POC2_HYDRATION_ATTEMPTS || 1)
             : (options.poc2HydrationAttempts
-              ?? Number(process.env.ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS || 5)),
+              ?? Number(process.env.ULTRON_M3_UNIVERSAL_POC2_HYDRATION_ATTEMPTS || phoneQualifiedCandidateLimit(options))),
           fallbackMinimumScore: options.poc2FallbackMinimumScore ?? 26,
         });
         writes.push(...result.writes);
@@ -3912,7 +3967,7 @@ async function run(request = {}, options = {}) {
   // on difficult rows. Re-read the live sheet, then re-run only the queued rows
   // with the full deterministic waterfall. AI/last-resort sees only residue after
   // this pass, never a row that merely failed the cheap first attempt.
-  if (options.resultsFirstSweep && !options.recheckPass && !stats.haltedEarly) {
+  if (options.resultsFirstSweep && !options.deferDeterministicRecheck && !options.recheckPass && !stats.haltedEarly) {
     const leftoverRows = [...new Set((stats.leftoverQueue || [])
       .map((item) => Number(item.rowNumber))
       .filter(Number.isInteger))];

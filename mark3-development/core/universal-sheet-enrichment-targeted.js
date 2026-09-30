@@ -502,7 +502,8 @@ function mergePocPhaseResults(results = []) {
     'hydrationAttempts','hydrationFailures','lowConfidenceCandidates','manualPoc2Attempts','manualPoc2Filled',
     'manualPoc3Attempts','manualPoc3Filled','optionalPoc3Deferred','orphanContactTargets','orphanContactVerified',
     'orphanContactBlocked','orphanContactMismatches','identityConflicts','phoneCellsFilled','phoneRowsChanged',
-    'phoneNotFound','phoneWriteSkippedPopulated','phoneSyncPolls','phoneSyncErrors'
+    'phoneNotFound','phoneWriteSkippedPopulated','phoneSyncPolls','phoneSyncErrors',
+    'contactabilityEvidenceCacheHits','hydrationBudgetSkips','candidateHydrationWaves'
   ];
   for (const field of additive) {
     stats[field] = completed.reduce((sum, item) => sum + Number(item?.stats?.[field] || 0), 0);
@@ -528,11 +529,32 @@ function mergePocPhaseResults(results = []) {
   }
 
   const leftoverByKey = new Map();
-  for (const item of completed.flatMap((phase) => phase?.stats?.leftoverQueue || [])) {
-    const key = `${item?.rowNumber ?? ''}|${item?.groupOrdinal ?? ''}|${item?.code || item?.reason || ''}`;
-    leftoverByKey.set(key, item);
+  const exhaustedByKey = new Map();
+  for (const phase of completed) {
+    const ordinal = Number(phase?.contactPhaseOrdinal || phase?.stats?.contactPhaseOrdinal || 0) || null;
+    const targetRows = new Set((phase?.pipelineTargetRows || []).map(Number).filter(Number.isInteger));
+    if (ordinal && targetRows.size) {
+      for (const [key, item] of leftoverByKey) {
+        const itemOrdinal = Number(item?.groupOrdinal || 0) || null;
+        if (targetRows.has(Number(item?.rowNumber)) && (!itemOrdinal || itemOrdinal === ordinal)) leftoverByKey.delete(key);
+      }
+      for (const [key, item] of exhaustedByKey) {
+        if (targetRows.has(Number(item?.rowNumber)) && Number(item?.groupOrdinal || 0) === ordinal) exhaustedByKey.delete(key);
+      }
+    }
+    for (const item of phase?.stats?.leftoverQueue || []) {
+      const key = `${item?.rowNumber ?? ''}|${item?.groupOrdinal ?? ''}|${item?.code || item?.reason || ''}`;
+      leftoverByKey.set(key, item);
+    }
+    for (const item of phase?.stats?.contactabilityExhaustedTargets || []) {
+      const key = item?.key || `${item?.rowNumber ?? ''}:${item?.groupOrdinal ?? ''}`;
+      exhaustedByKey.set(key, item);
+    }
   }
   stats.leftoverQueue = [...leftoverByKey.values()];
+  stats.contactabilityExhaustedTargets = [...exhaustedByKey.values()];
+  stats.rowsSeen = Math.max(...completed.map((item) => Number(item?.stats?.rowsSeen || 0)), 0);
+  stats.rowsProcessed = Math.max(...completed.map((item) => Number(item?.stats?.rowsProcessed || 0)), 0);
 
   stats.haltedEarly = completed.some((item) => item?.stats?.haltedEarly);
   const halted = completed.find((item) => item?.stats?.haltedEarly);
@@ -542,8 +564,9 @@ function mergePocPhaseResults(results = []) {
   }
   stats.partialCompletion = completed.some((item) => item?.partialCompletion);
   stats.contactPhaseOrdinal = null;
-  stats.contactPhaseLabel = 'POC-1 -> POC-2 -> POC-3';
+  stats.contactPhaseLabel = 'FAST ALL -> DEEP POC-1 -> DEEP POC-2';
   stats.pocPhaseSummaries = completed.map((item) => ({
+    stage: item.pipelineStage || '',
     ordinal: Number(item.contactPhaseOrdinal || item?.stats?.contactPhaseOrdinal || 0),
     label: item.contactPhaseLabel || item?.stats?.contactPhaseLabel || '',
     rowsSeen: Number(item?.stats?.rowsSeen || 0),
@@ -553,6 +576,7 @@ function mergePocPhaseResults(results = []) {
     newPeopleSelected: Number(item?.stats?.newPeopleSelected || 0),
     existingGroupsRepaired: Number(item?.stats?.existingGroupsRepaired || 0),
     unfilledOpenGroups: Number(item?.stats?.unfilledOpenGroups || 0),
+    elapsedMs: Number(item.pipelineElapsedMs || 0),
     haltedEarly: Boolean(item?.stats?.haltedEarly),
   }));
 
@@ -582,22 +606,62 @@ async function runPocPhasePipeline(request, runOptions = {}) {
   }
 
   const phases = [];
-  const definitions = [
-    { ordinal: 1, resultsFirstSweep: false, deferOpenGroupSelectionToAi: false },
-    { ordinal: 2, resultsFirstSweep: runOptions.resultsFirstSweep !== false, deferOpenGroupSelectionToAi: runOptions.deferOpenGroupSelectionToAi },
-    { ordinal: 3, resultsFirstSweep: false, deferOpenGroupSelectionToAi: false },
-  ];
+  const expectedGroups = Math.max(2, Math.min(3, Number(runOptions.expectedPersonGroups || 2)));
+  const ordinals = Array.from({ length: expectedGroups }, (_, index) => index + 1);
+  const timed = async (stage, targetRows, fn) => {
+    const startedAt = Date.now();
+    const result = await fn();
+    return {
+      ...result,
+      pipelineStage: stage,
+      pipelineTargetRows: Array.isArray(targetRows) ? targetRows : [],
+      pipelineElapsedMs: Date.now() - startedAt,
+    };
+  };
+  const unresolvedRowsFor = (result, ordinal) => [...new Set([
+    ...(result?.stats?.leftoverQueue || []),
+    ...(result?.stats?.contactabilityExhaustedTargets || []),
+  ].filter((item) => {
+    const itemOrdinal = Number(item?.groupOrdinal || 0) || null;
+    return !itemOrdinal || itemOrdinal === ordinal;
+  }).map((item) => Number(item?.rowNumber)).filter(Number.isInteger))].sort((a, b) => a - b);
 
-  for (const phase of definitions) {
-    const result = await base.run(request, {
-      ...runOptions,
-      contactPhaseOrdinal: phase.ordinal,
-      targetOrdinals: [phase.ordinal],
-      resultsFirstSweep: phase.resultsFirstSweep,
-      deferOpenGroupSelectionToAi: phase.deferOpenGroupSelectionToAi,
-    });
-    phases.push(result);
-    if (result?.stats?.haltedEarly) break;
+  // Exam strategy: write every easy answer first. This pass performs one cheap
+  // targeted discovery per company and a small hydration budget for both POCs,
+  // then stops without launching a deep waterfall on any individual row.
+  const fast = await timed('fast-all', [], () => base.run(request, {
+    ...runOptions,
+    contactPhaseOrdinal: null,
+    targetOrdinals: ordinals,
+    resultsFirstSweep: true,
+    deferDeterministicRecheck: true,
+    deferOpenGroupSelectionToAi: false,
+    candidateHydrationConcurrency: 3,
+    phoneSettlementPolls: Number(runOptions.fastPhoneSettlementPolls ?? 0),
+  }));
+  phases.push(fast);
+
+  if (!fast?.stats?.haltedEarly) {
+    // Deep revision is strictly ordered: unresolved POC-1 from top to bottom,
+    // then unresolved POC-2. Each pass re-reads the live sheet and reuses the
+    // shared discovery/hydration cache created by the fast pass.
+    for (const ordinal of ordinals) {
+      const targetRows = unresolvedRowsFor(fast, ordinal);
+      if (!targetRows.length) continue;
+      const deep = await timed(`deep-poc-${ordinal}`, targetRows, () => base.run(request, {
+        ...runOptions,
+        contactPhaseOrdinal: ordinal,
+        targetOrdinals: [ordinal],
+        targetRows,
+        recheckPass: true,
+        resultsFirstSweep: false,
+        deferDeterministicRecheck: true,
+        deferOpenGroupSelectionToAi: false,
+        candidateHydrationConcurrency: 3,
+      }));
+      phases.push(deep);
+      if (deep?.stats?.haltedEarly) break;
+    }
   }
 
   return mergePocPhaseResults(phases);
@@ -1053,7 +1117,7 @@ function formatDetailedResult(result) {
       : [];
   const phaseText = phaseSummaries.length
     ? ` POC-phase pipeline: ${phaseSummaries.map((phase) =>
-        `${phase.label || `POC-${phase.ordinal}`}: ${phase.cellsChanged || 0} cells / ${phase.rowsChanged || 0} rows changed, ${phase.newPeopleSelected || 0} new people, ${phase.existingGroupsRepaired || 0} repairs, ${phase.unfilledOpenGroups || 0} unfilled${phase.haltedEarly ? ' [HALTED]' : ''}`
+        `${phase.stage || phase.label || `POC-${phase.ordinal}`}: ${phase.cellsChanged || 0} cells / ${phase.rowsChanged || 0} rows changed, ${phase.newPeopleSelected || 0} new people, ${phase.existingGroupsRepaired || 0} repairs, ${phase.unfilledOpenGroups || 0} unfilled, ${(Number(phase.elapsedMs || 0) / 1000).toFixed(1)}s${phase.haltedEarly ? ' [HALTED]' : ''}`
       ).join(' | ')}.`
     : '';
   const primary = `${basePrimary}${phaseText}`;

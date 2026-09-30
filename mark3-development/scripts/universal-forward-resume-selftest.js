@@ -25,6 +25,8 @@ try {
   assert.equal(controlPlane.isRetryUnresolved('backfill unresolved rows'), true);
   assert.equal(linkedinOperator.isContinueSearchRequest('resume enrichment'), false);
   assert.equal(linkedinOperator.isContinueSearchRequest('continue enrichment'), false);
+  assert.equal(require('../core/universal-spreadsheet-domain-controller').parseForwardResumeRequested('resume enrichment'), false);
+  assert.equal(require('../core/universal-spreadsheet-domain-controller').parseForwardResumeRequested('continue enrichment from the next unprocessed row'), true);
 
   const url = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit?gid=1229007269#gid=1229007269';
   const incident = commandControl.claim([
