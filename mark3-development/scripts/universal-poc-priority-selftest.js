@@ -11,25 +11,7 @@ const apollo = require('../core/apollo-enrichment');
 const companyContext = { company: 'Example Technologies Pvt Ltd', domain: 'example.com' };
 const existing = { names: new Set(['anchor person']), linkedins: new Set() };
 
-const partialDecisionMaker = base.chooseVerifiedPartialCandidate([
-  {
-    person: { identityVerified: true, name: 'Global Director', title: 'Director', email: 'director@example.com', location: 'London' },
-    writePlan: { allowed: true, writes: [{ field: 'name', value: 'Global Director — Director' }] },
-    index: 0,
-  },
-  {
-    person: { identityVerified: true, name: 'India Talent Lead', title: 'Talent Acquisition Lead', location: 'Bengaluru, India' },
-    writePlan: { allowed: true, writes: [{ field: 'name', value: 'India Talent Lead — Talent Acquisition Lead' }] },
-    index: 1,
-  },
-  {
-    person: { identityVerified: false, name: 'Unverified India Head', title: 'Head HR', location: 'Mumbai, India' },
-    writePlan: { allowed: true, writes: [{ field: 'name', value: 'Unverified India Head — Head HR' }] },
-    index: 2,
-  },
-]);
-assert.equal(partialDecisionMaker.person.name, 'India Talent Lead', 'verified partial fallback must preserve India preference after all bounded phone checks fail');
-assert.equal(base.chooseVerifiedPartialCandidate([{ person: { identityVerified: false, title: 'Director' }, writePlan: { allowed: true, writes: [{}] } }]), null, 'partial fallback must never write an unverified identity');
+assert.equal(apollo.decisionPriority('Engineering Manager'), 4, 'any other manager must remain a last-resort phone-qualified decision-maker fallback');
 
 const cachedPeers = base.cachedVerifiedPeopleForCompany(companyContext, { people: {
   'https://www.linkedin.com/in/cached-director': {
@@ -336,10 +318,11 @@ assert.match(operatorSource, /Fast sweep deferred deeper deterministic discovery
 assert.match(operatorSource, /const poc2Reason = result\.reason/);
 assert.match(operatorSource, /'poc2-verification-unresolved' : 'poc2-no-candidates'/);
 assert.match(operatorSource, /contactability-top3-exhausted/);
-assert.match(controllerSource, /still writes the best safely identity- and employer-verified decision-maker name/);
-assert.match(enrichmentDiagnosticsSource, /Keep the verified name, designation and available work email/);
-assert.doesNotMatch(controllerSource, /a no-phone POC remains unresolved/);
-assert.doesNotMatch(enrichmentDiagnosticsSource, /Leave the slot blank for this run/);
+assert.match(controllerSource, /A usable phone is mandatory for every newly selected POC/);
+assert.match(controllerSource, /founder\/co-founder\/director\/owner/);
+assert.match(controllerSource, /then other managers/);
+assert.match(enrichmentDiagnosticsSource, /without finding another safely verified person with a usable phone/);
+assert.doesNotMatch(controllerSource, /still writes the best safely identity/);
 assert.match(operatorSource, /companyBrandFromDomain/);
 assert.match(operatorSource, /adaptiveBroadCandidateLimit/);
 assert.match(operatorSource, /APOLLO_ADAPTIVE_BROAD_SEARCH_FAILED/);

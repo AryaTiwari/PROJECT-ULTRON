@@ -45,7 +45,9 @@ const candidates = [
 const shortlist = operator.preferredContactShortlist(candidates, { context: {} }, companyContext, {
   names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set(),
 }, { contactabilityCandidateLimit: 99 });
-assert.equal(shortlist.length, 3);
+assert.equal(operator.phoneQualifiedCandidateLimit({}), 8);
+assert.equal(operator.phoneQualifiedCandidateLimit({ contactabilityCandidateLimit: 99 }), 10);
+assert.equal(shortlist.length, 4);
 
 assert.equal(typeof operator.pendingPhoneRowsForSource, 'function');
 assert.equal(typeof targeted.enforceIndianPhoneCompanyGate, 'function');
@@ -63,4 +65,4 @@ assert.doesNotMatch(targetedSource, /deleteDimension/);
 const reportSource = fs.readFileSync(require.resolve('../core/universal-run-report'), 'utf8');
 assert.match(reportSource, /i\.rowNumber.*i\.target.*i\.problem/);
 
-console.log('Indian POC phone policy self-test passed: automatic two-POC defaults, explicit +91 contact gating, POC-1/POC-2 scope, India-first ranking, mature POC-2 rescue preservation, bounded three-person shortlist, pending-callback preservation, and the invariant that contactability failures never clear or remove company rows are protected.');
+console.log('Indian POC phone policy self-test passed: automatic two-POC defaults, hard phone qualification, POC-1/POC-2 scope, India-first ranking, broader bounded decision-maker fallback, pending-callback preservation, and the invariant that contactability failures never clear or remove company rows are protected.');

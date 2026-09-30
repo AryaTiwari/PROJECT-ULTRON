@@ -102,7 +102,7 @@ const contactabilityCandidates = [
     linkedinUrl: 'https://www.linkedin.com/in/foreign-recruiter/',
   },
   {
-    id: 'fourth-perfect-but-forbidden',
+    id: 'fourth-phone-qualified-fallback',
     name: 'Fourth Candidate',
     title: 'Technical Recruiter',
     hasDirectPhone: 'Yes',
@@ -124,10 +124,36 @@ const shortlist = operator.preferredContactShortlist(
   { context: {} },
   { company: 'Acme Systems', domain: 'acme.com' },
   { names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set() },
-  { contactabilityCandidateLimit: 3 },
+  { contactabilityCandidateLimit: 8 },
 );
-assert.equal(shortlist.length, 3, 'contactability review must never exceed three preferred people');
-assert.equal(shortlist.some((person) => person.id === 'fourth-perfect-but-forbidden'), false, 'fourth candidate must never enter the contactability budget');
+assert.equal(shortlist.length, 4, 'bounded contactability must continue beyond the old three-person ceiling');
+assert.equal(shortlist.some((person) => person.id === 'fourth-phone-qualified-fallback'), true, 'later same-company decision-makers must remain eligible when earlier candidates lack phones');
+
+const roleDiverseShortlist = operator.preferredContactShortlist(
+  [
+    ...Array.from({ length: 9 }, (_, index) => ({
+      id: `director-${index + 1}`,
+      name: `Director ${index + 1}`,
+      title: 'Director',
+      organizationName: 'Acme Systems',
+      organizationDomain: 'acme.com',
+    })),
+    {
+      id: 'recruiter-with-phone-signal',
+      name: 'Recruiter With Phone',
+      title: 'Technical Recruiter',
+      hasDirectPhone: 'Yes',
+      organizationName: 'Acme Systems',
+      organizationDomain: 'acme.com',
+    },
+  ],
+  { context: {} },
+  { company: 'Acme Systems', domain: 'acme.com' },
+  { names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set() },
+  { contactabilityCandidateLimit: 8 },
+);
+assert.equal(roleDiverseShortlist.length, 8, 'the shared phone-qualified shortlist must remain bounded');
+assert.equal(roleDiverseShortlist.some((person) => person.id === 'recruiter-with-phone-signal'), true, 'free Apollo phone-availability signals and role diversity must prevent founder/director saturation from hiding a contactable recruiter');
 
 assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210', email: 'hr@acme.com' }), 4);
 assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210' }), 3);
@@ -281,25 +307,26 @@ assert.match(
   /ULTRON_M3_UNIVERSAL_PRIMARY_POC1_HYDRATION_ATTEMPTS \|\| 3/,
   'POC-1 fast sweep must try multiple verified candidates before leaving the slot unresolved',
 );
-assert.match(operatorSource, /contactabilityCandidateLimit:\s*3/);
-assert.match(operatorSource, /top3-contactability/);
-assert.match(operatorSource, /verified-partial-after-phone-exhaustion/);
-assert.match(operatorSource, /chooseVerifiedPartialCandidate/);
+assert.match(operatorSource, /ULTRON_M3_PHONE_QUALIFIED_CANDIDATE_LIMIT/);
+assert.match(operatorSource, /phone-qualified-contactability/);
+assert.match(operatorSource, /phone-required-candidate-exhausted/);
+assert.doesNotMatch(operatorSource, /verified-partial-after-phone-exhaustion/);
+assert.doesNotMatch(operatorSource, /chooseVerifiedPartialCandidate/);
 assert.doesNotMatch(operatorSource, /empty-poc-left-blank-no-phone/);
 assert.doesNotMatch(operatorSource, /top3-first-preferred-fallback/);
 assert.match(operatorSource, /selectContactableReplacement/);
-assert.match(operatorSource, /slice\(0, 2\)/, 'existing POC plus at most two replacement candidates must preserve the three-person budget');
+assert.match(operatorSource, /remainingBudget = Math\.max\(1, phoneQualifiedCandidateLimit\(options\) - 1\)/, 'existing no-phone POCs must continue through the bounded replacement shortlist');
 assert.match(operatorSource, /replaced-no-phone-poc/);
 assert.match(liveGuardSource, /missing-phone-contactability/);
 assert.match(liveGuardSource, /change\.allowReplace === true/);
 assert.match(operatorSource, /settleVerifiedPhoneForSelection/);
 assert.match(operatorSource, /ULTRON_M3_TOP3_PHONE_SETTLEMENT_POLLS/);
-assert.match(operatorSource, /contactabilityEvidenceCache/, 'the same top-3 person evidence must be reused across POC slots');
+assert.match(operatorSource, /contactabilityEvidenceCache/, 'the same bounded person evidence must be reused across POC slots');
 assert.match(operatorSource, /candidatePhoneSettlementCachedTerminal/, 'terminal no-phone results must not be polled again');
 assert.match(operatorSource, /pollWebhookResult/);
 assert.match(operatorSource, /pollPhoneRequest/);
 assert.match(aiBatchSource, /settleVerifiedPhoneForSelection/, 'bounded AI rescue must settle an already-started phone reveal before planner write verification');
-assert.match(aiBatchSource, /contactabilityExhaustedTargets/, 'AI rescue must not spend provider calls on a target already exhausted by deterministic top-3 contactability');
+assert.match(aiBatchSource, /contactabilityExhaustedTargets/, 'AI rescue must not spend provider calls on a target already exhausted by deterministic phone qualification');
 assert.doesNotMatch(plannerSource, /new-poc-requires-phone/, 'generic planner must preserve the working-baseline write boundary');
 
 (async () => {
@@ -376,7 +403,7 @@ assert.doesNotMatch(plannerSource, /new-poc-requires-phone/, 'generic planner mu
   assert.equal(exhaustedStats.contactabilityExhaustedTargets.length, 1);
   assert.equal(exhaustedStats.contactabilityExhaustedTargets[0].key, '13:1');
 
-  console.log('Top-3 phone settlement self-test passed: callback results are reused, bounded pending reveals are checked, and only real phones become eligible.');
+  console.log('Bounded phone settlement self-test passed: callback results are reused, pending reveals are checked, and only real phones become eligible.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

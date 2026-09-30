@@ -73,8 +73,8 @@ const ISSUE_CATALOG = Object.freeze({
     severity: 'BLOCKER',
     blocking: true,
     retryable: false,
-    message: 'A preferred POC was identity- and employer-verified, but none of the bounded top-three candidates returned an actual usable phone.',
-    nextAction: 'Keep the verified name, designation and available work email; leave only the unavailable phone blank and retry that phone only when provider data changes.',
+    message: 'The bounded same-company decision-maker shortlist was exhausted without finding another safely verified person with a usable phone.',
+    nextAction: 'Keep the company row unchanged. Retry only when Apollo has new phone data or the company has new verified decision-makers.',
   },
   'existing-contact-repair-unresolved': {
     code: 'EXISTING_CONTACT_REPAIR_UNRESOLVED',
