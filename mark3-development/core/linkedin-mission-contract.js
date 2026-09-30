@@ -1,4 +1,5 @@
 const leadIntent = require('./linkedin-lead-intent');
+const indiaPolicy = require('./india-preference-policy');
 
 function uniq(values = []) {
   const seen = new Set();
@@ -110,8 +111,8 @@ function compile(text, legacy = {}, options = {}) {
     || legacy.missionContract?.hard?.locations
     || (legacy.location ? [legacy.location] : [])
   );
-  const locations = explicitLocations.length ? explicitLocations : legacyLocations;
-  const preferredLocations = explicitLocations.length
+  let locations = explicitLocations.length ? explicitLocations : legacyLocations;
+  let preferredLocations = explicitLocations.length
     ? locations.slice()
     : uniq(
       (legacy.preferredLocations && legacy.preferredLocations.length ? legacy.preferredLocations : null)
@@ -130,6 +131,15 @@ function compile(text, legacy = {}, options = {}) {
     });
   }
 
+  const entityMode = legacy.entityMode || 'company';
+  if (entityMode === 'company' && !locations.length && !preferredLocations.length) {
+    const policy = indiaPolicy.companyResearch(text, '', 'company');
+    if (policy.preferIndia) {
+      locations = ['India'];
+      preferredLocations = ['India'];
+    }
+  }
+
   const mentionsWorkType = /\b(?:remote|hybrid|on[- ]?site|onsite|in[- ]?office|work\s*type|workplace)\b/i.test(String(text || ''));
   let wt;
   if (mentionsWorkType) {
@@ -145,7 +155,7 @@ function compile(text, legacy = {}, options = {}) {
   const targetSpec = target(text, legacy);
   return {
     version: 1,
-    entityMode: legacy.entityMode || 'company',
+    entityMode,
     topic: legacy.topic || null,
     target: targetSpec,
     hard: {
