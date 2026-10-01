@@ -140,7 +140,7 @@ const samples = [...new Map(positions.map((index) => uniqueOwners[index]).filter
 const directOutcomes = [];
 if (ready.apiKeyReady) for (const item of samples) {
   try {
-    const result = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0 });
+    const result = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0, expectedPersonId: item.apolloPersonId });
     const returnedPeople = result.payload?.webhook_result?.people || [];
     const returnedIds = Array.isArray(returnedPeople)
       ? returnedPeople.map((person) => String(person?.id || '')).filter(Boolean)
