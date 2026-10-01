@@ -2817,6 +2817,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   });
 
   const checked = [];
+  const pendingChecked = [];
   const evidenceCache = options.contactabilityEvidenceCache instanceof Map
     ? options.contactabilityEvidenceCache
     : null;
@@ -2902,6 +2903,15 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
         tier: contactabilityTier(person),
       };
       if (entry.tier > 0) checked.push(entry);
+      else if (
+        ['pending', 'waterfall_pending'].includes(text(person.phoneStatus))
+        && text(person.apolloPersonId || person.id)
+        && writePlan.writes.length
+      ) {
+        // Apollo accepted this verified person's phone reveal but has not
+        // settled it yet. Preserve one exact owner, not an anonymous callback.
+        pendingChecked.push(entry);
+      }
     }
 
     // Stop before another provider wave once the strongest possible +91/email
@@ -2912,6 +2922,38 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
 
   if (!selected || selected.tier <= 0) {
+    // All bounded immediate-phone alternatives were checked first. A verified
+    // person with a still-pending Apollo reveal is different from a terminal
+    // no-phone candidate. Stage only the highest-ranked pending owner, plus
+    // safely verified email, so the paid callback can settle the phone later.
+    // This never invents a phone or replaces an existing different identity.
+    const pendingOwner = pendingChecked.sort((a, b) =>
+      candidateIndiaPriority(b.person) - candidateIndiaPriority(a.person)
+      || apollo.decisionPriority(a.person.title || '') - apollo.decisionPriority(b.person.title || '')
+      || a.index - b.index
+    )[0] || null;
+    if (pendingOwner) {
+      queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, pendingOwner.person);
+      claimed.add(pendingOwner.rawKey);
+      rememberCandidate(existing, pendingOwner.person);
+      stats.pendingPocIdentityStaged = Number(stats.pendingPocIdentityStaged || 0) + 1;
+      stats.selectionAudit.push({
+        groupId: target.group.id,
+        ordinal,
+        strategy: 'verified-owner-awaiting-apollo-phone',
+        apolloPersonId: text(pendingOwner.person.apolloPersonId || pendingOwner.person.id),
+        phoneAvailable: false,
+        phonePending: true,
+        fields: pendingOwner.writePlan.writes.map((write) => write.field),
+      });
+      return {
+        writes: pendingOwner.writePlan.writes,
+        filled: false,
+        pending: true,
+        selected: pendingOwner.person,
+        reason: 'phone-pending',
+      };
+    }
     stats.emptyPocNoPhoneRejected = Number(stats.emptyPocNoPhoneRejected || 0) + 1;
     markContactabilityExhausted(
       stats,
