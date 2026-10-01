@@ -230,13 +230,14 @@ assert.match(operatorSource, /persistBackgroundPhoneAssignments/);
 assert.match(operatorSource, /loadBackgroundPhoneAssignments/);
 assert.match(operatorSource, /resumedPhoneAssignments/);
 
-// Native Apollo reveal/webhook is the production phone path. The custom
-// poll-only phone waterfall is retained only as an explicit experimental/legacy
-// compatibility path so already-paid request IDs remain resumable.
+// Assert executable delivery semantics, not a mutable explanatory sentence.
+// Native Apollo direct poll-only is the default. The separate custom phone
+// waterfall remains opt-in and previously paid receipts stay resumable.
 assert.match(apolloSource, /run_waterfall_phone', 'false'/);
 assert.match(apolloSource, /reveal_phone_number', needPhone \? 'true' : 'false'/);
+assert.match(apolloSource, /ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only'/);
+assert.match(apolloSource, /url\.searchParams\.set\('poll_only', 'true'\)/);
 assert.match(contactQualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
-assert.match(contactQualitySource, /Native Apollo reveal \+ webhook settlement is the production default/);
 assert.match(contactQualitySource, /async function improveVerifiedPhone/);
 assert.match(contactQualitySource, /async function pollPhoneRequest/);
 assert.match(contactQualitySource, /function pendingPhoneWaterfallRequestId/);
