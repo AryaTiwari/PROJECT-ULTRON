@@ -1,7 +1,11 @@
 import { modelMetrics, modelRouteStates } from "./db.mjs";
 const env = name => String(process.env[name] || "").trim();
+const freeLlmKey=()=>env("FREELLMAPI_API_KEY")||env("FREELLMAPI_KEY")||env("FREE_LLM_API_KEY");
 
 const routes = [
+  { id:"freellm-general", role:"cognition", provider:"FreeLLMAPI", model:env("FREELLMAPI_MODEL")||"auto", baseScore:118, transport:"local-openai-compatible", endpoint:"http://127.0.0.1:3001/v1" },
+  { id:"freellm-fast", role:"classification", provider:"FreeLLMAPI", model:env("FREELLMAPI_FAST_MODEL")||env("FREELLMAPI_MODEL")||"auto", baseScore:120, transport:"local-openai-compatible", endpoint:"http://127.0.0.1:3001/v1" },
+  { id:"freellm-reasoning", role:"reflection", provider:"FreeLLMAPI", model:env("FREELLMAPI_REASONING_MODEL")||env("FREELLMAPI_MODEL")||"auto", baseScore:116, transport:"local-openai-compatible", endpoint:"http://127.0.0.1:3001/v1" },
   { id:"cognition-primary", role:"cognition", provider:env("ULTRON_M4_COGNITION_PROVIDER"), model:env("ULTRON_M4_COGNITION_MODEL"), baseScore:100 },
   { id:"worker-fast", role:"worker", provider:env("ULTRON_M4_WORKER_PROVIDER"), model:env("ULTRON_M4_WORKER_MODEL"), baseScore:94 },
   { id:"verifier-independent", role:"verifier", provider:env("ULTRON_M4_VERIFIER_PROVIDER"), model:env("ULTRON_M4_VERIFIER_MODEL"), baseScore:96 },
@@ -10,6 +14,7 @@ const routes = [
 ];
 
 function configured(route) {
+  if(route.transport==="local-openai-compatible")return Boolean(freeLlmKey());
   return route.id === "hermes-default" || Boolean(route.provider && route.model);
 }
 function isCooling(state) {
@@ -34,7 +39,7 @@ function maps() {
 }
 export function rankModels(role="cognition", exclude=[]) {
   const {metrics,states}=maps(), blocked=new Set(exclude);
-  return routes.filter(r=>!blocked.has(r.id)&&(r.role===role||r.role==="*")&&configured(r))
+  return routes.filter(r=>r.transport!=="local-openai-compatible"&&!blocked.has(r.id)&&(r.role===role||r.role==="*")&&configured(r))
     .map(r=>({...r,state:states.get(r.id)||null,score:score(r,metrics.get(r.id),states.get(r.id))}))
     .filter(r=>Number.isFinite(r.score))
     .sort((a,b)=>b.score-a.score);
@@ -56,7 +61,7 @@ export function fabricStatus() {
   const {metrics,states}=maps();
   return routes.map(r=>{
     const state=states.get(r.id)||null;
-    return {id:r.id,role:r.role,configured:configured(r),provider:r.provider||null,model:r.model||null,
+    return {id:r.id,role:r.role,configured:configured(r),provider:r.provider||null,model:r.model||null,transport:r.transport||"hermes",endpoint:r.endpoint||null,
       cooling:isCooling(state),score:Number.isFinite(score(r,metrics.get(r.id),state))?Number(score(r,metrics.get(r.id),state).toFixed(2)):null,
       metrics:metrics.get(r.id)||null,state};
   });

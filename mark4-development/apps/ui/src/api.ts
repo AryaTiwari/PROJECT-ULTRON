@@ -60,7 +60,11 @@ export const api = {
   telemetry: (type: string, data: Record<string, unknown> = {}) => request("/api/telemetry", { method: "POST", body: JSON.stringify({ type, data }) }),
   integrations: () => request("/api/integrations"),
   integrationAction: (id: string, action: string, data: Record<string, unknown> = {}) => request("/api/integrations/" + encodeURIComponent(id) + "/action", { method: "POST", body: JSON.stringify({ action, ...data }) }),
-  missionParameter: (id: string, data: Record<string, unknown>) => request("/api/missions/" + encodeURIComponent(id) + "/parameters", { method: "POST", body: JSON.stringify(data) })
+  missionParameter: (id: string, data: Record<string, unknown>) => request("/api/missions/" + encodeURIComponent(id) + "/parameters", { method: "POST", body: JSON.stringify(data) }),
+  intelligence: () => request("/api/intelligence"),
+  reflex: () => request("/api/reflex"),
+  skills: () => request("/api/skills"),
+  patternAction: (id: string, action: string, value?: unknown) => request("/api/patterns/" + encodeURIComponent(id) + "/action", { method: "POST", body: JSON.stringify({ action, value }) })
 };
 
 function parseBlock(block: string) {
@@ -104,7 +108,7 @@ export type LiveConnection = (() => void) & { retry: () => void };
 
 export function liveEvents(onEvent: (type: string, data: any) => void, onStatus?: (state: "online"|"recovering"|"offline") => void): LiveConnection {
   let source: EventSource | null = null, stopped = false, attempt = 0, timer = 0;
-  const known = ["connected","request.received","model.selected","model.route_failed","skill.selected","run.started","run.settled","run.failed","tool.started","tool.completed","subagent.start","subagent.complete","assistant.delta","assistant.completed","message.started","run.completed","run.cancelled","run.interrupted","tool.progress","tool.failed","approval.request","approval.required","approval.granted","operation.selected","target.resolved","auth.checking","auth.ready","apollo.search.started","apollo.search.page","apollo.search.completed","contact.company.processed","qualification.completed","deduplication.completed","selection.completed","sheet.write.started","sheet.write.completed","verification.completed","mission.blocked","mission.resumed","model.route_failed","memory.loaded","evidence.recorded","mission.started","mission.updated","mission.completed","artifact.created","voice.listening","voice.transcribing","voice.transcribed","voice.speaking","voice.idle","screen.shared","screen.stopped","screen.permission_denied","error","done"];
+  const known = ["connected","request.received","model.selected","model.route_failed","skill.selected","parameters.compiled","parameter.missing","pattern.observed","pattern.confirmed","pattern.corrected","pattern.disabled","pattern.forgotten","purpose.linked","run.started","run.settled","run.failed","tool.started","tool.completed","subagent.start","subagent.complete","assistant.delta","assistant.completed","message.started","run.completed","run.cancelled","run.interrupted","tool.progress","tool.failed","approval.request","approval.required","approval.granted","operation.selected","target.resolved","auth.checking","auth.ready","apollo.search.started","apollo.search.page","apollo.search.completed","contact.company.processed","qualification.completed","deduplication.completed","selection.completed","sheet.write.started","sheet.write.completed","verification.completed","mission.blocked","mission.resumed","memory.loaded","evidence.recorded","mission.started","mission.updated","mission.completed","artifact.created","voice.listening","voice.transcribing","voice.transcribed","voice.speaking","voice.idle","screen.shared","screen.stopped","screen.permission_denied","error","done"];
   const connect = () => {
     if (stopped || source) return;
     source = new EventSource(GATEWAY_URL + "/api/live");

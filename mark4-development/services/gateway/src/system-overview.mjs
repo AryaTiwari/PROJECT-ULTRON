@@ -3,6 +3,9 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { mark4Root, repoRoot } from "./config.mjs";
 import { normalizeOutput } from "./attention.mjs";
+import { listSkillContracts,publicSkillContract } from "./skill-contracts.mjs";
+import { intelligenceSnapshot } from "./intelligence-engine.mjs";
+import { reflexStatus } from "./local-reflex-engine.mjs";
 
 function git(args){return execFileSync("git",args,{cwd:repoRoot,encoding:"utf8",windowsHide:true,timeout:3500,maxBuffer:1024*1024}).trim();}
 function safeGit(args,fallback=""){try{return git(args);}catch{return fallback;}}
@@ -26,5 +29,6 @@ export function systemOverview({missions=[],health={},modelFabric=[],integration
   const routes=Array.isArray(modelFabric)?modelFabric:[];
   const artifacts=rows.flatMap(m=>asArtifacts(m?.artifacts).map((artifact,index)=>normalizeOutput({...(artifact&&typeof artifact==="object"?artifact:{value:artifact}),index},m))).slice(0,100);
   const readyRoutes=routes.filter(x=>x?.configured&&!x?.cooling).length;
-  return{generatedAt:new Date().toISOString(),workspace:workspaceState(),skills:skillRegistry(),memory:memoryState(),purpose:{name:"ULTRON Mark 4",statement:"A local-first personal operating intelligence that turns verified intent into observable, recoverable work.",source:"Mark 4 product architecture"},outputs:artifacts,artifacts,integrations,services:[{id:"gateway",label:"Mark 4 Gateway",status:"online",detail:"Local API and event hub"},{id:"hermes",label:"Hermes cognition",status:health?.ok?"online":"unavailable",detail:health?.ok?"Session and tool runtime connected":String(health?.error||"Runtime health check failed")},{id:"model-fabric",label:"Model broker",status:readyRoutes?"ready":"degraded",detail:`${readyRoutes} routes ready`} ]};
+  const intelligence=intelligenceSnapshot(),structuredSkills=listSkillContracts().map(publicSkillContract),reflexRaw=reflexStatus(),reflex={...reflexRaw,name:reflexRaw.engine,contractCount:structuredSkills.length,cachedVectors:structuredSkills.length,estimatedVectorMemoryMb:reflexRaw.memoryImpactMb};
+  return{generatedAt:new Date().toISOString(),workspace:workspaceState(),skills:structuredSkills,legacySkillInstructions:skillRegistry().length,memory:{...memoryState(),structuredCount:intelligence.memory.length},intelligence,purpose:{name:"ULTRON Mark 4",statement:"A local-first personal operating intelligence that turns verified intent into observable, recoverable work.",source:"Mark 4 product architecture",...intelligence.purpose},reflex,outputs:artifacts,artifacts,integrations,services:[{id:"gateway",label:"Mark 4 Gateway",status:"online",detail:"Local API and event hub"},{id:"hermes",label:"Hermes cognition",status:health?.ok?"online":"unavailable",detail:health?.ok?"Session and tool runtime connected":String(health?.error||"Runtime health check failed")},{id:"local-reflex",label:"Local Reflex Engine",status:"ready",detail:`In-process hashed retrieval · ${reflex.dimensions} dimensions · no model process`},{id:"model-fabric",label:"Model broker",status:readyRoutes?"ready":"degraded",detail:`${readyRoutes} routes ready`} ]};
 }

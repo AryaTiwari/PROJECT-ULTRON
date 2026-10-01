@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, uiDist, runtimeRoot } from "./config.mjs";
 import { hermes } from "./hermes.mjs";
-import { createMission,getMission,listMissions,updateMission,addEvidence,listEvidence,addEvent,listEvents,recordModelMetric,recordBranch,getBranch,renameBranch,listBranches,upsertLead,getLead,listLeads,leadStats,upsertCreator,getCreator,listCreators,creatorStats } from "./db.mjs";
+import { createMission,getMission,listMissions,updateMission,addEvidence,listEvidence,addEvent,listEvents,recordModelMetric,recordBranch,getBranch,renameBranch,listBranches,upsertLead,getLead,listLeads,leadStats,upsertCreator,getCreator,listCreators,creatorStats,getMissionInvocation } from "./db.mjs";
 import { rankModels,fabricStatus,classifyModelError } from "./model-fabric.mjs";
 import { subscribe,publish } from "./event-hub.mjs";
 import { unwrapList, unwrapSession } from "./hermes-contract.mjs";
@@ -15,6 +15,10 @@ import { createApolloContactMissionRunner } from "./apollo-contact-mission.mjs";
 import { systemOverview } from "./system-overview.mjs";
 import { listIntegrations,integrationAction,setRuntimeIntegrationState } from "./integrations.mjs";
 import { visibleMissions,attentionFor } from "./attention.mjs";
+import { resolveSkillRequest,continueInvocation,persistInvocation,safeModelPayload } from "./skill-runtime.mjs";
+import { listSkillContracts,publicSkillContract } from "./skill-contracts.mjs";
+import { intelligenceSnapshot,setPatternState,observe,recordCorrection,searchMemory,linkPurpose,recordWorkflow,remember } from "./intelligence-engine.mjs";
+import { reflexStatus } from "./local-reflex-engine.mjs";
 import { setGoogleWorkspaceAuthEventSink } from "../../capability-host/src/workspace.mjs";
 
 setGoogleWorkspaceAuthEventSink((type,data)=>publish(type,data));
@@ -71,7 +75,7 @@ function runtimeStatus(health,modelFabric=fabricStatus()){
   return{ok:true,status:hermesReady&&modelReady?"online":"degraded",gateway:{ok:true,host:config.host,port:config.port},hermes:{ok:hermesReady,status:Number(health?.status||0),error:health?.error||null},model:{ok:modelReady,readyRoutes:routes.filter(route=>route?.configured&&!route?.cooling).length},checkedAt:new Date().toISOString()};
 }
 function createMissionObserved(input){const mission=createMission(input);publish("mission.started",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state});return mission;}
-function updateMissionObserved(id,patch){const mission=updateMission(id,patch);if(mission)publish(mission.status==="completed"?"mission.completed":"mission.updated",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state,nextAction:mission.nextAction});return mission;}
+function updateMissionObserved(id,patch){const previous=getMission(id),mission=updateMission(id,patch);if(mission){publish(mission.status==="completed"?"mission.completed":"mission.updated",{missionId:mission.id,objective:mission.objective,status:mission.status,state:mission.state,nextAction:mission.nextAction});if(mission.status==="completed"&&previous?.status!=="completed"){const invocation=getMissionInvocation(id),skillIds=invocation?.plan?.map(step=>step.skillId).filter(Boolean)||[invocation?.skillId].filter(Boolean);if(skillIds.length){const result=recordWorkflow({name:`Completed ${skillIds.join(" → ")}`,skillIds,scope:mission.projectId?"PROJECT":"GLOBAL",projectId:mission.projectId||null,missionId:mission.id});remember({kind:"mission_outcome",scope:mission.projectId?"PROJECT":"GLOBAL",projectId:mission.projectId||null,summary:`Verified mission completed with ${skillIds.join(" → ")}`,payload:{skillIds,status:"completed"},sourceRef:mission.id,confidence:.72});publish("pattern.observed",{missionId:mission.id,patternId:result.pattern.id,confidence:result.pattern.confidence,status:result.pattern.status});}}}return mission;}
 function addEvidenceObserved(input){const evidence=addEvidence(input);publish("evidence.recorded",{missionId:input.missionId,kind:evidence.kind,source:evidence.source,verified:evidence.verified});return evidence;}
 const nativeMissions=createApolloCompanyMissionRunner({db:{createMission,getMission,updateMission,addEvent},publish});
 const nativeContacts=createApolloContactMissionRunner({db:{createMission,getMission,updateMission,addEvent,listLeads,upsertLead,getLead},publish});
@@ -92,6 +96,34 @@ async function routeChat(req,res,sessionId,input){
     if(result?.requestId)return nativeChatResponse(res,{...result,operation:"apollo-contact-enrichment"});
     return nativeText(res,{runId:activeMission.id,text:result?.mission?.nextAction||"Parameter saved. The same mission is continuing.",data:{missionId:activeMission.id}});
   }
+  const activeInvocation=activeMission?getMissionInvocation(activeMission.id):null;
+  if(activeMission?.state?.attentionState==="MISSING_PARAMETER"&&activeInvocation){
+    const continued=continueInvocation(activeInvocation,text,{sessionId,projectId:activeMission.projectId||null});
+    const saved=persistInvocation({...continued.invocation,missionId:activeMission.id});
+    if(saved.executionState==="waiting_input"){
+      updateMissionObserved(activeMission.id,{status:"blocked",state:{attentionState:"MISSING_PARAMETER",pendingParameter:{keys:saved.missingParameters||continued.invocation.missingParameters,prompt:continued.question},skillInvocation:safeModelPayload(saved)},nextAction:continued.question});
+      return nativeText(res,{runId:activeMission.id,text:continued.question||"I still need one value to continue this mission.",data:{missionId:activeMission.id,attentionState:"MISSING_PARAMETER"}});
+    }
+    updateMissionObserved(activeMission.id,{status:"active",state:{attentionState:null,pendingParameter:null,skillInvocation:safeModelPayload(saved)},blockers:[],nextAction:"Continue the saved skill invocation."});
+    publish("parameters.compiled",{sessionId,missionId:activeMission.id,invocationId:saved.invocationId,skillId:saved.skillId,parameters:safeModelPayload(saved).parameterEvidence});
+    if(saved.skillId==="apollo.company.discovery"){
+      const p=saved.parameters,intent={owned:true,domain:"apollo-company-discovery",operation:"apollo-company-discovery",confidence:1,source:"skill-runtime",compiler:"skill-contract",originalRequest:activeMission.originalRequest||text,targetCount:p.targetCount,country:p.country,companyConcepts:p.companyConcepts,employeeMin:p.employeeMin,employeeMax:p.employeeMax,sourceProvider:"apollo",sheet:{spreadsheetId:p.spreadsheetId||null,sheetId:p.sheetId??null,worksheet:p.worksheet||null},filters:{geography:p.country||[],employeeMin:p.employeeMin,employeeMax:p.employeeMax,concepts:p.companyConcepts||[]},contactEnrichment:false,skillInvocation:safeModelPayload(saved)};
+      const result=await nativeMissions.start({sessionId,intent,missionId:activeMission.id});return nativeChatResponse(res,result);
+    }
+    input={...input,missionId:activeMission.id,skillInvocation:safeModelPayload(saved),input:`Continue the saved ${saved.skillId} invocation with these validated parameters: ${JSON.stringify(saved.parameters)}`};
+    return proxyChat(req,res,sessionId,input);
+  }
+  const resolution=resolveSkillRequest(text,{...context,sessionId,missionId:activeMission?.id||null,projectId:activeMission?.projectId||null,activeInvocation});
+  if(resolution.matched){
+    publish("skill.selected",{sessionId,missionId:activeMission?.id||null,invocationId:resolution.invocation.invocationId,skillId:resolution.contract.id,skill:resolution.contract.name,confidence:resolution.invocation.selection.confidence,source:resolution.invocation.selection.source});
+    publish("parameters.compiled",{sessionId,missionId:activeMission?.id||null,invocationId:resolution.invocation.invocationId,skillId:resolution.contract.id,parameters:safeModelPayload(resolution.invocation).parameterEvidence,missing:resolution.invocation.missingParameters});
+    if(resolution.invocation.missingParameters.length&&resolution.contract.id!=="apollo.contact.enrichment"){
+      const mission=createMissionObserved({objective:text,originalRequest:text,status:"blocked",state:{nativeOperation:"skill-plan",attentionState:"MISSING_PARAMETER",pendingParameter:{keys:resolution.invocation.missingParameters,prompt:resolution.question},skillInvocation:safeModelPayload(resolution.invocation),progress:{currentStage:"PARAMETERS",completed:0,total:resolution.invocation.plan.length,stages:resolution.invocation.plan.map((step,index)=>({id:step.skillId,label:publicSkillContract(step.skillId)?.name||step.skillId,status:index===0?"blocked":"pending"}))}},constraints:{skillId:resolution.contract.id},completionCriteria:{verified:true},relatedSessions:[sessionId],nextAction:resolution.question});
+      persistInvocation({...resolution.invocation,missionId:mission.id});
+      publish("parameter.missing",{sessionId,missionId:mission.id,invocationId:resolution.invocation.invocationId,skillId:resolution.contract.id,missing:resolution.invocation.missingParameters});
+      return nativeText(res,{runId:mission.id,text:resolution.question,data:{missionId:mission.id,attentionState:"MISSING_PARAMETER",pendingParameter:{keys:resolution.invocation.missingParameters,prompt:resolution.question}}});
+    }
+  }
   const intent=compileCommand(text,context);
   if(intent.domain==="mission-control"){
     const m=getMission(intent.missionId);if(!m)return nativeText(res,{runId:intent.missionId,text:"That mission is no longer available.",event:"run.failed"});
@@ -109,7 +141,7 @@ async function routeChat(req,res,sessionId,input){
     res.write("event: assistant.delta\ndata: "+JSON.stringify({delta:"Resumed "+intent.missionId+" from its saved contact checkpoint.",native:true})+"\n\n");return res.end();
   }
   if(intent.domain==="apollo-contact-enrichment"){
-    publish("request.received",{sessionId,native:true});const result=await nativeContacts.start({sessionId,intent});result.operation="apollo-contact-enrichment";return nativeChatResponse(res,result);
+    publish("request.received",{sessionId,native:true});intent.skillInvocation=resolution.matched?safeModelPayload(resolution.invocation):null;const result=await nativeContacts.start({sessionId,intent});if(resolution.matched)persistInvocation({...resolution.invocation,missionId:result.runId});result.operation="apollo-contact-enrichment";return nativeChatResponse(res,result);
   }
   if(intent.domain==="apollo-company-discovery"&&intent.operation==="resume"){
     publish("request.received",{sessionId,characters:String(input?.input||"").length,native:true});
@@ -117,8 +149,9 @@ async function routeChat(req,res,sessionId,input){
   }
   if(intent.domain==="apollo-company-discovery"&&intent.operation==="apollo-company-discovery"){
     publish("request.received",{sessionId,characters:String(input?.input||"").length,native:true});
-    const result=await nativeMissions.start({sessionId,intent});return nativeChatResponse(res,result);
+    intent.skillInvocation=resolution.matched?safeModelPayload(resolution.invocation):null;const result=await nativeMissions.start({sessionId,intent});if(resolution.matched)persistInvocation({...resolution.invocation,missionId:result.runId});return nativeChatResponse(res,result);
   }
+  if(resolution.matched){persistInvocation(resolution.invocation);input={...input,skillInvocation:safeModelPayload(resolution.invocation),role:resolution.contract.id==="pattern.reflect"?"reflection":input.role};}
   return proxyChat(req,res,sessionId,input);
 }
 function skillForTool(data={}){
@@ -259,6 +292,14 @@ const server=http.createServer(async(req,res)=>{
       if(sessionError){runtime.status="degraded";runtime.hermes={...runtime.hermes,ok:false,error:sessionError};}
       return json(res,200,{ok:true,runtime,health,sessions,missions,attention:attentionFor(missions,integrations),integrations,leadStats:leadStats(),creatorStats:creatorStats(),modelFabric,overview:systemOverview({missions,health,modelFabric,integrations})});
     }    if(req.method==="GET"&&url.pathname==="/api/system-overview"){const health=await hermes.health().catch(()=>({ok:false})),missions=visibleMissions(listMissions()),modelFabric=fabricStatus(),integrations=await listIntegrations();return json(res,200,systemOverview({missions,health,modelFabric,integrations}));}
+    if(req.method==="GET"&&url.pathname==="/api/skills")return json(res,200,{items:listSkillContracts().map(publicSkillContract),reflex:reflexStatus()});
+    if(req.method==="GET"&&url.pathname==="/api/intelligence")return json(res,200,intelligenceSnapshot({projectId:url.searchParams.get("projectId")||null}));
+    if(req.method==="GET"&&url.pathname==="/api/reflex")return json(res,200,reflexStatus());
+    if(p[0]==="api"&&p[1]==="patterns"&&p[2]&&p[3]==="action"&&req.method==="POST"){const input=await body(req,20000);return json(res,200,setPatternState(p[2],String(input.action||""),input.value));}
+    if(req.method==="POST"&&url.pathname==="/api/intelligence/observe"){const input=await body(req,50000);return json(res,201,observe(input));}
+    if(req.method==="POST"&&url.pathname==="/api/intelligence/correct"){const input=await body(req,50000);return json(res,200,recordCorrection(input));}
+    if(req.method==="POST"&&url.pathname==="/api/intelligence/purpose"){const input=await body(req,50000);return json(res,201,linkPurpose(input));}
+    if(req.method==="GET"&&url.pathname==="/api/memory/search")return json(res,200,{items:searchMemory(url.searchParams.get("q")||"",{projectId:url.searchParams.get("projectId")||null,limit:url.searchParams.get("limit")||5})});
     if(req.method==="GET"&&url.pathname==="/api/sessions")return json(res,200,decorateSessions(await hermes.sessions(url.searchParams.toString())));
     if(req.method==="POST"&&url.pathname==="/api/sessions")return json(res,201,unwrapSession(await hermes.createSession(await body(req))));
     if(p[0]==="api"&&p[1]==="sessions"&&p[2]&&req.method==="GET"&&p[3]==="messages")return json(res,200,unwrapList(await hermes.messages(p[2])));

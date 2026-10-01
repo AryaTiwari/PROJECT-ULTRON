@@ -90,6 +90,8 @@ export interface ModelRoute {
   score?: number | null;
   metrics?: Record<string, unknown> | null;
   state?: Record<string, unknown> | null;
+  transport?: string | null;
+  endpoint?: string | null;
 }
 
 
@@ -101,7 +103,16 @@ export interface SkillDescriptor {
   path?: string;
   available: boolean;
   category?: string; triggers?: string[]; inputs?: string[]; outputs?: string[]; approvalRequired?: boolean; owner?: string;
+  description?: string; requiredParameters?: string[]; optionalParameters?: string[];
+  parameters?: Record<string,{type:string;ownership:string;required?:boolean;default?:unknown}>;
+  approvalClass?: string; costClass?: string; authentication?: string[]; sideEffect?: string;
+  executor?: string; verifier?: string; recovery?: {mode?:string;maxAutomaticRetries?:number};
+  compatibleUpstreamOutputs?: string[]; compatibleDownstreamInputs?: string[];
 }
+
+export interface IntelligencePattern {id:string;type:string;scope:string;projectId?:string|null;subject:string;description:string;value:unknown;confidence:number;evidenceCount:number;status:string;updatedAt:string;}
+export interface IntelligenceSnapshot {patterns:IntelligencePattern[];purpose:{nodes:Array<Record<string,unknown>>;edges:Array<Record<string,unknown>>};memory:Array<Record<string,unknown>>;policy:Record<string,unknown>;}
+export interface ReflexStatus {name:string;mode:string;dimensions:number;contractCount:number;cachedVectors:number;estimatedVectorMemoryMb:number;externalProcess:boolean;modelLoaded:boolean;metrics:Record<string,number>;}
 
 export interface WorkspaceState {
   available: boolean;
@@ -123,12 +134,15 @@ export interface SystemOverview {
   generatedAt: string;
   workspace: WorkspaceState;
   skills: SkillDescriptor[];
-  memory: { available:boolean; source?:string; excerpt?:string; updatedAt?:string };
+  memory: { available:boolean; source?:string; excerpt?:string; updatedAt?:string; structuredCount?:number };
   purpose: { name:string; statement:string; source:string };
   outputs: Array<Record<string, unknown>>;
   artifacts: Array<Record<string, unknown>>;
   services: Array<{ id:string; label:string; status:string; detail:string }>;
   integrations?: IntegrationDescriptor[];
+  intelligence?: IntelligenceSnapshot;
+  reflex?: ReflexStatus;
+  legacySkillInstructions?: number;
 }
 export interface AttachmentRef {
   id: string;

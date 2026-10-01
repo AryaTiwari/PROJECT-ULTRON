@@ -128,6 +128,52 @@ CREATE INDEX IF NOT EXISTS idx_creator_registry_status ON creator_registry(quali
 CREATE INDEX IF NOT EXISTS idx_creator_registry_niche ON creator_registry(niche);
 `);
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS skill_invocations (
+  id TEXT PRIMARY KEY, mission_id TEXT, skill_id TEXT NOT NULL, state TEXT NOT NULL,
+  parameters_json TEXT NOT NULL DEFAULT '{}', evidence_json TEXT NOT NULL DEFAULT '{}',
+  context_json TEXT NOT NULL DEFAULT '{}', approval_json TEXT NOT NULL DEFAULT '{}',
+  auth_json TEXT NOT NULL DEFAULT '{}', plan_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_invocations_mission ON skill_invocations(mission_id,updated_at);
+CREATE TABLE IF NOT EXISTS intelligence_observations (
+  id TEXT PRIMARY KEY, evidence_class TEXT NOT NULL, scope TEXT NOT NULL, project_id TEXT,
+  kind TEXT NOT NULL, subject TEXT NOT NULL, value_json TEXT NOT NULL DEFAULT '{}',
+  weight REAL NOT NULL, mission_id TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_observations_subject ON intelligence_observations(scope,project_id,kind,subject,created_at);
+CREATE TABLE IF NOT EXISTS intelligence_patterns (
+  id TEXT PRIMARY KEY, type TEXT NOT NULL, scope TEXT NOT NULL, project_id TEXT,
+  subject TEXT NOT NULL, description TEXT NOT NULL, value_json TEXT NOT NULL DEFAULT '{}',
+  confidence REAL NOT NULL, evidence_count INTEGER NOT NULL, positive_evidence INTEGER NOT NULL,
+  negative_evidence INTEGER NOT NULL, status TEXT NOT NULL, decay_policy TEXT NOT NULL,
+  created_at TEXT NOT NULL, last_observed_at TEXT NOT NULL, last_confirmed_at TEXT, updated_at TEXT NOT NULL,
+  UNIQUE(scope,project_id,type,subject)
+);
+CREATE INDEX IF NOT EXISTS idx_patterns_active ON intelligence_patterns(status,scope,project_id,confidence);
+CREATE TABLE IF NOT EXISTS pattern_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, pattern_id TEXT NOT NULL, action TEXT NOT NULL,
+  previous_confidence REAL, next_confidence REAL, evidence_id TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS purpose_nodes (
+  id TEXT PRIMARY KEY, type TEXT NOT NULL, scope TEXT NOT NULL, project_id TEXT,
+  label TEXT NOT NULL, description TEXT, confidence REAL NOT NULL, status TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS purpose_edges (
+  id TEXT PRIMARY KEY, source_id TEXT NOT NULL, relation TEXT NOT NULL, target_id TEXT NOT NULL,
+  confidence REAL NOT NULL, evidence_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(source_id,relation,target_id)
+);
+CREATE TABLE IF NOT EXISTS semantic_memory (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, scope TEXT NOT NULL, project_id TEXT,
+  summary TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', source_ref TEXT,
+  confidence REAL NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_scope ON semantic_memory(scope,project_id,kind,updated_at);
+`);
+
 function ensureColumn(table, column, type) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -628,3 +674,29 @@ export function creatorStats(target=null) {
   const numericTarget=target===null||target===undefined||target===""?null:Math.max(0,Math.round(Number(target)||0));
   return{...counts,contacted,target:numericTarget,remaining:numericTarget===null?null:Math.max(0,numericTarget-counts.qualified),workflowStages:CREATOR_RESEARCH_STAGES};
 }
+
+export function saveSkillInvocation(input={}) {
+  const at=now(),id=String(input.invocationId||input.id||`invocation-${crypto.randomUUID()}`);
+  const storedContext={...(input.context||{}),__runtime:{missingParameters:input.missingParameters||[],validationErrors:input.validationErrors||[]}};
+  db.prepare(`INSERT INTO skill_invocations(id,mission_id,skill_id,state,parameters_json,evidence_json,context_json,approval_json,auth_json,plan_json,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET mission_id=excluded.mission_id,skill_id=excluded.skill_id,state=excluded.state,
+    parameters_json=excluded.parameters_json,evidence_json=excluded.evidence_json,context_json=excluded.context_json,approval_json=excluded.approval_json,
+    auth_json=excluded.auth_json,plan_json=excluded.plan_json,updated_at=excluded.updated_at`)
+    .run(id,input.missionId||null,String(input.skillId),String(input.executionState||input.state||"compiled"),JSON.stringify(input.parameters||{}),JSON.stringify(input.parameterEvidence||{}),JSON.stringify(storedContext),JSON.stringify(input.approvalState||{}),JSON.stringify(input.authState||{}),JSON.stringify(input.plan||[]),input.createdAt||at,at);
+  return getSkillInvocation(id);
+}
+export function getSkillInvocation(id){const row=db.prepare("SELECT * FROM skill_invocations WHERE id=?").get(String(id));if(!row)return null;const storedContext=parse(row.context_json),runtime=storedContext.__runtime||{};delete storedContext.__runtime;return{invocationId:row.id,missionId:row.mission_id,skillId:row.skill_id,executionState:row.state,parameters:parse(row.parameters_json),parameterEvidence:parse(row.evidence_json),missingParameters:runtime.missingParameters||[],validationErrors:runtime.validationErrors||[],context:storedContext,approvalState:parse(row.approval_json),authState:parse(row.auth_json),plan:parse(row.plan_json,[]),createdAt:row.created_at,updatedAt:row.updated_at};}
+export function getMissionInvocation(missionId){const row=db.prepare("SELECT id FROM skill_invocations WHERE mission_id=? ORDER BY updated_at DESC LIMIT 1").get(String(missionId));return row?getSkillInvocation(row.id):null;}
+
+export function addObservation(input={}){const at=now(),row={id:input.id||`observation-${crypto.randomUUID()}`,evidenceClass:String(input.evidenceClass||"OBSERVED_PATTERN"),scope:String(input.scope||"GLOBAL"),projectId:input.projectId||null,kind:String(input.kind||"preference"),subject:String(input.subject||"").trim(),value:input.value??{},weight:Math.max(-1,Math.min(1,Number(input.weight??.25))),missionId:input.missionId||null,createdAt:at};if(!row.subject)throw new Error("OBSERVATION_SUBJECT_REQUIRED");db.prepare("INSERT INTO intelligence_observations(id,evidence_class,scope,project_id,kind,subject,value_json,weight,mission_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run(row.id,row.evidenceClass,row.scope,row.projectId,row.kind,row.subject,JSON.stringify(row.value),row.weight,row.missionId,row.createdAt);return row;}
+export function listObservations({scope=null,projectId=null,kind=null,subject=null,limit=200}={}){const where=[],args=[];if(scope){where.push("scope=?");args.push(scope)}if(projectId!==null){where.push("project_id IS ?");args.push(projectId)}if(kind){where.push("kind=?");args.push(kind)}if(subject){where.push("subject=?");args.push(subject)}args.push(Math.max(1,Math.min(1000,Number(limit)||200)));return db.prepare(`SELECT * FROM intelligence_observations${where.length?" WHERE "+where.join(" AND "):""} ORDER BY created_at DESC LIMIT ?`).all(...args).map(row=>({id:row.id,evidenceClass:row.evidence_class,scope:row.scope,projectId:row.project_id,kind:row.kind,subject:row.subject,value:parse(row.value_json),weight:Number(row.weight),missionId:row.mission_id,createdAt:row.created_at}));}
+export function upsertPattern(input={}){const at=now(),current=db.prepare("SELECT * FROM intelligence_patterns WHERE scope=? AND project_id IS ? AND type=? AND subject=?").get(input.scope||"GLOBAL",input.projectId||null,input.type||"preference",input.subject);const next={id:current?.id||input.id||`pattern-${crypto.randomUUID()}`,type:String(input.type||"preference"),scope:String(input.scope||"GLOBAL"),projectId:input.projectId||null,subject:String(input.subject),description:String(input.description||input.subject),value:input.value??(current?parse(current.value_json):{}),confidence:Math.max(0,Math.min(1,Number(input.confidence??current?.confidence??0))),evidenceCount:Number(input.evidenceCount??current?.evidence_count??0),positiveEvidence:Number(input.positiveEvidence??current?.positive_evidence??0),negativeEvidence:Number(input.negativeEvidence??current?.negative_evidence??0),status:String(input.status||current?.status||"tentative"),decayPolicy:String(input.decayPolicy||current?.decay_policy||"time_and_contradiction"),createdAt:current?.created_at||at,lastObservedAt:input.lastObservedAt||at,lastConfirmedAt:input.lastConfirmedAt??current?.last_confirmed_at??null,updatedAt:at};db.prepare(`INSERT INTO intelligence_patterns(id,type,scope,project_id,subject,description,value_json,confidence,evidence_count,positive_evidence,negative_evidence,status,decay_policy,created_at,last_observed_at,last_confirmed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(scope,project_id,type,subject) DO UPDATE SET description=excluded.description,value_json=excluded.value_json,confidence=excluded.confidence,evidence_count=excluded.evidence_count,positive_evidence=excluded.positive_evidence,negative_evidence=excluded.negative_evidence,status=excluded.status,decay_policy=excluded.decay_policy,last_observed_at=excluded.last_observed_at,last_confirmed_at=excluded.last_confirmed_at,updated_at=excluded.updated_at`).run(next.id,next.type,next.scope,next.projectId,next.subject,next.description,JSON.stringify(next.value),next.confidence,next.evidenceCount,next.positiveEvidence,next.negativeEvidence,next.status,next.decayPolicy,next.createdAt,next.lastObservedAt,next.lastConfirmedAt,next.updatedAt);db.prepare("INSERT INTO pattern_history(pattern_id,action,previous_confidence,next_confidence,evidence_id,created_at) VALUES(?,?,?,?,?,?)").run(next.id,input.action||"updated",current?.confidence??null,next.confidence,input.evidenceId||null,at);return getPattern(next.id);}
+export function getPattern(id){const row=db.prepare("SELECT * FROM intelligence_patterns WHERE id=?").get(String(id));return row?{id:row.id,type:row.type,scope:row.scope,projectId:row.project_id,subject:row.subject,description:row.description,value:parse(row.value_json),confidence:Number(row.confidence),evidenceCount:Number(row.evidence_count),positiveEvidence:Number(row.positive_evidence),negativeEvidence:Number(row.negative_evidence),status:row.status,decayPolicy:row.decay_policy,createdAt:row.created_at,lastObservedAt:row.last_observed_at,lastConfirmedAt:row.last_confirmed_at,updatedAt:row.updated_at}:null;}
+export function listPatterns({scope=null,projectId=null,type=null,status=null,limit=100}={}){const where=[],args=[];if(scope){where.push("scope=?");args.push(scope)}if(projectId!==null){where.push("project_id IS ?");args.push(projectId)}if(type){where.push("type=?");args.push(type)}if(status){where.push("status=?");args.push(status)}args.push(Math.max(1,Math.min(500,Number(limit)||100)));return db.prepare(`SELECT id FROM intelligence_patterns${where.length?" WHERE "+where.join(" AND "):""} ORDER BY confidence DESC,updated_at DESC LIMIT ?`).all(...args).map(row=>getPattern(row.id));}
+export function deletePattern(id){const info=db.prepare("DELETE FROM intelligence_patterns WHERE id=?").run(String(id));return Number(info.changes||0)>0;}
+export function savePurposeNode(input={}){const at=now(),id=String(input.id||`purpose-${crypto.randomUUID()}`);db.prepare(`INSERT INTO purpose_nodes(id,type,scope,project_id,label,description,confidence,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET type=excluded.type,scope=excluded.scope,project_id=excluded.project_id,label=excluded.label,description=excluded.description,confidence=excluded.confidence,status=excluded.status,updated_at=excluded.updated_at`).run(id,input.type||"goal",input.scope||"GLOBAL",input.projectId||null,String(input.label),input.description||null,Math.max(0,Math.min(1,Number(input.confidence??.5))),input.status||"active",input.createdAt||at,at);return getPurposeNode(id);}
+export function getPurposeNode(id){const row=db.prepare("SELECT * FROM purpose_nodes WHERE id=?").get(String(id));return row?{id:row.id,type:row.type,scope:row.scope,projectId:row.project_id,label:row.label,description:row.description,confidence:Number(row.confidence),status:row.status,createdAt:row.created_at,updatedAt:row.updated_at}:null;}
+export function savePurposeEdge(input={}){const at=now(),id=String(input.id||`purpose-edge-${crypto.randomUUID()}`);db.prepare(`INSERT INTO purpose_edges(id,source_id,relation,target_id,confidence,evidence_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source_id,relation,target_id) DO UPDATE SET confidence=excluded.confidence,evidence_json=excluded.evidence_json,updated_at=excluded.updated_at`).run(id,String(input.sourceId),String(input.relation),String(input.targetId),Math.max(0,Math.min(1,Number(input.confidence??.5))),JSON.stringify(input.evidence||{}),input.createdAt||at,at);return{id,sourceId:input.sourceId,relation:input.relation,targetId:input.targetId,confidence:Number(input.confidence??.5),evidence:input.evidence||{},updatedAt:at};}
+export function listPurpose({projectId=null,limit=100}={}){const nodes=db.prepare("SELECT * FROM purpose_nodes WHERE project_id IS ? OR (project_id IS NULL AND ? IS NULL) ORDER BY updated_at DESC LIMIT ?").all(projectId,projectId,Math.max(1,Math.min(500,Number(limit)||100))).map(row=>getPurposeNode(row.id));const ids=new Set(nodes.map(x=>x.id));const edges=db.prepare("SELECT * FROM purpose_edges ORDER BY updated_at DESC LIMIT ?").all(Math.max(1,Math.min(1000,Number(limit)*3||300))).filter(x=>ids.has(x.source_id)||ids.has(x.target_id)).map(row=>({id:row.id,sourceId:row.source_id,relation:row.relation,targetId:row.target_id,confidence:Number(row.confidence),evidence:parse(row.evidence_json),createdAt:row.created_at,updatedAt:row.updated_at}));return{nodes,edges};}
+export function saveMemory(input={}){const at=now(),id=String(input.id||`memory-${crypto.randomUUID()}`);db.prepare(`INSERT INTO semantic_memory(id,kind,scope,project_id,summary,payload_json,source_ref,confidence,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,scope=excluded.scope,project_id=excluded.project_id,summary=excluded.summary,payload_json=excluded.payload_json,source_ref=excluded.source_ref,confidence=excluded.confidence,updated_at=excluded.updated_at`).run(id,input.kind||"lesson",input.scope||"GLOBAL",input.projectId||null,String(input.summary),JSON.stringify(input.payload||{}),input.sourceRef||null,Math.max(0,Math.min(1,Number(input.confidence??.5))),input.createdAt||at,at);return{id,kind:input.kind||"lesson",scope:input.scope||"GLOBAL",projectId:input.projectId||null,summary:String(input.summary),payload:input.payload||{},sourceRef:input.sourceRef||null,confidence:Number(input.confidence??.5),createdAt:input.createdAt||at,updatedAt:at};}
+export function listMemory({projectId=null,kind=null,limit=100}={}){const where=["(project_id IS ? OR scope='GLOBAL')"],args=[projectId];if(kind){where.push("kind=?");args.push(kind)}args.push(Math.max(1,Math.min(500,Number(limit)||100)));return db.prepare(`SELECT * FROM semantic_memory WHERE ${where.join(" AND ")} ORDER BY updated_at DESC LIMIT ?`).all(...args).map(row=>({id:row.id,kind:row.kind,scope:row.scope,projectId:row.project_id,summary:row.summary,payload:parse(row.payload_json),sourceRef:row.source_ref,confidence:Number(row.confidence),createdAt:row.created_at,updatedAt:row.updated_at}));}
