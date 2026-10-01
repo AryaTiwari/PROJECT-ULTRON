@@ -137,7 +137,8 @@ assert.equal(inferredCompanyLed.personGroups[0].fields.linkedin, undefined,
 assert.equal(inferredCompanyLed.companyGroups[0].fields.linkedin.index, 2);
 const companyPlan = planner.planRow(companyLedRows[1], inferredCompanyLed);
 assert.equal(companyPlan.anchor.type, 'company');
-assert.equal(companyPlan.anchor.group.kind, 'company');
+assert.ok(['company', 'company-anchor'].includes(companyPlan.anchor.group.kind),
+  'a recovered company anchor is still company evidence, never a POC-1 person');
 assert.ok(require('../core/universal-sheet-enrichment-operator').candidateFillTargets(companyPlan)
   .some((item) => item.group.ordinal === 1), 'empty D:F must enter POC-1 discovery');
 
