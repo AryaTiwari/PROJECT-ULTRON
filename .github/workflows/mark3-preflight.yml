@@ -40,6 +40,12 @@ jobs:
       - name: Run enrichment hard safety contract
         working-directory: mark3-development
         run: npm run check:enrichment-safety
+      - name: Install FFmpeg for real Reel render acceptance
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
       - name: Run comprehensive former-startup regression suite
         working-directory: mark3-development
         run: npm run check:startup-suite
@@ -55,12 +61,6 @@ jobs:
       - name: Run agentic three-POC enrichment regression
         working-directory: mark3-development
         run: npm run check:three-poc
-      - name: Install FFmpeg for real Reel render acceptance
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          ffmpeg -version
-          ffprobe -version
       - name: Render full 30-second Elevate visual acceptance Reel
         working-directory: mark3-development
         run: node --env-file=../.env scripts/reel-visual-acceptance.js
