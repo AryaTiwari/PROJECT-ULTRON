@@ -117,6 +117,30 @@ assert.deepEqual(
 );
 
 
+// Regression: a company LinkedIn column before POC-1 must not become POC-1's
+// personal LinkedIn. This was the root cause of a real 42-company worksheet
+// enriching G:I while leaving much of D:F untouched.
+const schemaTools = require('../core/universal-sheet-schema');
+const planner = require('../core/universal-enrichment-planner');
+const companyLedRows = [
+  ['Company Name','Roles','Linkedin','1st Poc','Email','Phone','2nd POC','Email','Phone','Call Outcome','Remarks'],
+  ['Acme One','Tech','https://www.linkedin.com/company/acme-one/','','','','Existing Recruiter','recruiter@acme-one.in','','',''],
+  ['Acme Two','Tech','https://www.linkedin.com/company/acme-two/','','','','Other Recruiter','recruiter@acme-two.in','','',''],
+  ['Acme Three','Tech','Open on LinkedIn','','','','Third Recruiter','recruiter@acme-three.in','','',''],
+];
+const inferredCompanyLed = schemaTools.inferSchema(companyLedRows);
+assert.equal(inferredCompanyLed.personGroups.length, 2, 'retain both real person groups');
+assert.equal(inferredCompanyLed.companyGroups.length, 1, 'company name and its link must share one entity');
+assert.equal(inferredCompanyLed.personGroups[0].fields.name.index, 3);
+assert.equal(inferredCompanyLed.personGroups[0].fields.linkedin, undefined,
+  'column C is company evidence, not a POC-1 identity');
+assert.equal(inferredCompanyLed.companyGroups[0].fields.linkedin.index, 2);
+const companyPlan = planner.planRow(companyLedRows[1], inferredCompanyLed);
+assert.equal(companyPlan.anchor.type, 'company');
+assert.equal(companyPlan.anchor.group.kind, 'company');
+assert.ok(require('../core/universal-sheet-enrichment-operator').candidateFillTargets(companyPlan)
+  .some((item) => item.group.ordinal === 1), 'empty D:F must enter POC-1 discovery');
+
 assert.equal(controller.parseContactPhaseOrdinal('Fill POC-1 only in Arya 2'), 1);
 assert.equal(controller.parseContactPhaseOrdinal('Only second POC for this sheet'), 2);
 assert.equal(controller.parseContactPhaseOrdinal('3rd POC only'), 3);
