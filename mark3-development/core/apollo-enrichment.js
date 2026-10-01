@@ -269,7 +269,7 @@ async function pollWebhookResult(requestId, options = {}) {
       (response.status === 404 && code === 'request_id_unknown')
       || (response.status === 410 && code === 'request_id_expired')
       || (response.status === 400 && code === 'invalid_request_id')
-    ) return { state: 'terminal', phone: null, payload: data };
+    ) return { state: 'terminal', terminalReason: code, phone: null, payload: data };
 
     const error = new Error(
       data?.error || data?.error_message || data?.message || `Apollo phone-result polling failed (${response.status}).`
