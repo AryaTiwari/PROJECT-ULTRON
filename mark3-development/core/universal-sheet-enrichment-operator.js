@@ -2683,17 +2683,27 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
     if (callbackAfter) return recordResolved(callbackAfter);
 
     const state = text(outcome?.state).toLowerCase();
-    if (state === 'pending' || person.phoneStatus === 'pending' || person.phoneStatus === 'waterfall_pending') {
-      stats.candidatePhoneSettlementPending = Number(stats.candidatePhoneSettlementPending || 0) + 1;
-      return person;
-    }
-    if (['not_found', 'terminal', 'unavailable'].includes(state)) {
+    // A terminal/unknown/invalid result overrides the earlier synchronous
+    // "pending" match status. Previously the pending flag won this branch and
+    // ULTRON staged new POC names/emails for already-dead phone request IDs.
+    if (state === 'not_found') {
       stats.candidatePhoneSettlementNotFound = Number(stats.candidatePhoneSettlementNotFound || 0) + 1;
       return { ...person, phone: null, phoneStatus: 'not_found' };
     }
+    if (['terminal', 'unavailable', 'delivery_failed', 'owner_mismatch', 'owner_unverified', 'error'].includes(state)) {
+      stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
+      return { ...person, phone: null, phoneStatus: 'unavailable',
+        phoneSettlementFailure: state, phoneSettlementReason: text(outcome?.terminalReason) };
+    }
+    if (state === 'pending' || (!outcome
+      && ['pending','waterfall_pending'].includes(text(person.phoneStatus))
+      && (text(person.phoneRequestId) || text(person.phoneWaterfallRequestId)))) {
+      stats.candidatePhoneSettlementPending = Number(stats.candidatePhoneSettlementPending || 0) + 1;
+      return person;
+    }
 
     stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
-    return person;
+    return { ...person, phone: null, phoneStatus: 'unavailable' };
   } catch (error) {
     throwSystemic(error);
     stats.candidatePhoneSettlementErrors = Number(stats.candidatePhoneSettlementErrors || 0) + 1;
