@@ -216,8 +216,8 @@ assert.match(controllerSource, /employer verification remains mandatory whenever
 assert.match(controllerSource, /results-first waterfall: targeted Apollo -> bounded broad Apollo -> brand\/domain variants -> authenticated read-only LinkedIn/);
 assert.match(controllerSource, /pragmatic same-company HR\/talent\/staffing\/placement\/people\/leadership fallback/);
 assert.match(controllerSource, /FINAL verified POC whose phone is still blank/);
-assert.match(controllerSource, /Apollo native phone reveal with webhook settlement as the production default/);
-assert.match(controllerSource, /custom poll_only phone waterfall is experimental\/legacy-only/);
+assert.match(controllerSource, /Apollo native phone reveal with direct poll-only result settlement as the production default/);
+assert.match(controllerSource, /custom poll_only phone waterfall remains experimental\/legacy-only/);
 assert.match(controllerSource, /never buys phone enrichment for discovery-only candidates/);
 assert.match(controllerSource, /unresolved POC-3 also receives deep deterministic recheck and bounded AI rescue/);
 assert.match(controllerSource, /Gemini is preferred for unresolved row\/company context, Groq for candidate assignment, and NVIDIA for optional independent review/);
