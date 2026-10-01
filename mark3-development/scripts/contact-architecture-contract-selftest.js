@@ -103,7 +103,13 @@ assert.match(apolloFetch, /APOLLO_NETWORK_FETCH_FAILED/);
 assert.match(rescue, /candidateFillTargets\(plan\)/);
 assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
 assert.match(spreadsheetController, /Apollo native phone reveal with direct poll-only result settlement as the production default/);
-assert.match(spreadsheetController, /custom poll_only phone waterfall is experimental\/legacy-only/);
+// Distinguish the LEGACY custom phone waterfall from Apollo's NEW native
+// poll_only delivery; the production text deliberately uses "remains".
+assert.match(spreadsheetController, /custom poll_only phone waterfall remains experimental\/legacy-only/i);
+assert.match(apollo, /ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only'/,
+  'native Apollo direct polling must remain the production delivery default');
+assert.match(apollo, /url\.searchParams\.set\('poll_only', 'true'\)/,
+  'the native phone request must use Apollo polling when webhook mode is not selected');
 
 assert.match(errorVocabulary, /function humanTitleFor/);
 assert.match(errorVocabulary, /if \(t === 'RATE_LIMIT'\) return \`\$\{label\} rate limit reached\`/);
