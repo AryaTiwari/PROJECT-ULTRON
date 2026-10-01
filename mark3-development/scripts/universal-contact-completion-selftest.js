@@ -100,13 +100,25 @@ assert.equal(
   'phone waterfall parser must also accept direct person phone_numbers',
 );
 
+const idlessQueue = [];
+operator.queuePendingPhone(
+  { pendingPhoneQueue: idlessQueue },
+  7,
+  existing.group,
+  existing.snapshot,
+  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending', phone: '' },
+);
+assert.equal(idlessQueue.length, 0,
+  'a person ID without an authentic phone request ID must not become a phantom pending callback');
+
 const queue = [];
 operator.queuePendingPhone(
   { pendingPhoneQueue: queue },
   7,
   existing.group,
   existing.snapshot,
-  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending', phone: '' },
+  { id: 'apollo-hemanth', name: 'Hemanth Raj',
+    phoneStatus: 'pending', phoneRequestId: '1039995589705121974', phone: '' },
 );
 assert.equal(queue.length, 1, 'verified Apollo person with pending phone must enter end-of-run phone sync');
 assert.equal(queue[0].rowNumber, 7);
@@ -155,7 +167,8 @@ operator.queuePendingPhone(
   7,
   existing.group,
   existing.snapshot,
-  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending', phone: '' },
+  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending',
+    phoneRequestId: '1039995589705121974', phone: '' },
 );
 assert.equal(queue.length, 1, 'same person/cell phone request must not be queued twice');
 
@@ -165,7 +178,8 @@ operator.queuePendingPhone(
   7,
   existing.group,
   completedSnapshot,
-  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending', phone: '' },
+  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending',
+    phoneRequestId: '1039995589705121974', phone: '' },
 );
 assert.equal(queue.length, 1, 'already-populated phone cell must never be queued for overwrite');
 
@@ -269,21 +283,32 @@ sheets.batchValues=async(id,ranges)=>Promise.all(ranges.map(range=>sheets.values
     assert.equal(
       apollo.pendingPhoneRequestFresh({
         phoneStatus: 'pending',
+        phoneRequestId: '1039995589705121974',
         phoneRequestedAt: new Date().toISOString(),
       }),
       true,
-      'fresh Apollo pending phone request should be reused briefly',
+      'valid pending phone receipt remains reusable without repurchasing',
     );
     assert.equal(
       apollo.pendingPhoneRequestFresh({
         phoneStatus: 'pending',
-        phoneRequestedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+        phoneRequestedAt: new Date().toISOString(),
       }),
       false,
-      'stale Apollo pending phone request must become eligible for reveal retry',
+      'fresh timestamp without a paid reveal receipt cannot certify a pending phone',
+    );
+    assert.equal(
+      apollo.pendingPhoneRequestFresh({
+        phoneStatus: 'pending',
+        phoneRequestId: '1039995589705121974',
+        phoneRequestedAt: new Date(Date.now() - 31 * 86400000).toISOString(),
+      }),
+      false,
+      'expired Apollo receipt is not reusable and must not be silently repurchased',
     );
     apollo.fetchPhoneResults = async () => [{ apollo_person_id: 'apollo-hemanth', phone: '+919876543210' }];
     apollo.pollWebhookResult = async (requestId) => {
+      if (requestId === '1039995589705121974') return { state: 'pending', phone: null };
       assert.equal(requestId, '1039995589705121975');
       return { state: 'found', phone: '+919123456789' };
     };
