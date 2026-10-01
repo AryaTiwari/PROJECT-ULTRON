@@ -208,6 +208,27 @@ assert.equal(
 
 
 const operator = require('../core/universal-sheet-enrichment-operator');
+
+// The lower half of the user's real workbook writes sectors/categories on a
+// second line of Company Name. Never send that descriptive line as the employer
+// to Apollo, and never modify the source worksheet cell to achieve matching.
+for (const [cell,expected] of [
+  ['Crusoe\\nAI compute','Crusoe'],
+  ['Bharat Housing Network\\nFintech','Bharat Housing Network'],
+  ['Impulse Space\\nSpacetech','Impulse Space'],
+  ['Plain Employer','Plain Employer'],
+]) {
+  const input=cell.replace(/\\n/g,'\n');
+  assert.equal(operator.sheetCompanyIdentity(input),expected);
+  assert.equal(operator.companyFromCompanyAnchor({
+    snapshot:{values:{company:input,linkedin:'https://www.linkedin.com/company/example/'}},
+  }).company,expected);
+  assert.equal(operator.inferHiringCompanyFromEvidence({
+    context:{company:input},
+  },[]).company,expected);
+  assert.equal(input,cell.replace(/\\n/g,'\n'),'source company cell remains unchanged');
+}
+
 const identitySnapshot = {
   values: {
     name: 'Ashraf Saggaf — Director of Talent & Culture',
