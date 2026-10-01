@@ -256,7 +256,8 @@ function completedPhonePoll(data = {}, expectedPersonId = '') {
 function phoneRevealState(needPhone, immediatePhone, data = {}) {
   if (!needPhone) return null;
   if (validPhone(immediatePhone)) return 'found';
-  if (String(data?.phone_enrichment?.status || '').toLowerCase() === 'skipped') return 'unavailable';
+  const status = String(data?.phone_enrichment?.status || data?.status || '').toLowerCase();
+  if (['skipped', 'failed', 'rejected', 'error'].includes(status)) return 'unavailable';
   return String(data?.__requestId || '').trim() ? 'pending' : 'unavailable';
 }
 
@@ -827,13 +828,23 @@ async function apiCallUncached(linkedinUrl, { needPhone }) {
   url.searchParams.set('run_waterfall_phone', 'false');
   url.searchParams.set('reveal_phone_number', needPhone ? 'true' : 'false');
   if (needPhone) {
-    const callback = webhookUrl();
-    if (!callback) {
-      const error = new Error('Apollo phone enrichment needs APOLLO_WEBHOOK_URL and APOLLO_WEBHOOK_SECRET.');
-      error.code = 'APOLLO_WEBHOOK_NOT_CONFIGURED';
-      throw error;
+    // Default to Apollo's officially supported poll-only delivery. This avoids
+    // the shared worker's bounded /results list: every individual reveal has
+    // one provider request_id which can be polled at zero additional credits.
+    // Apollo rejects poll_only=true when webhook_url is supplied, so these
+    // modes must be mutually exclusive.
+    const deliveryMode = setting('ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only').toLowerCase();
+    if (deliveryMode === 'webhook') {
+      const callback = webhookUrl();
+      if (!callback) {
+        const error = new Error('Webhook phone delivery needs APOLLO_WEBHOOK_URL and APOLLO_WEBHOOK_SECRET.');
+        error.code = 'APOLLO_WEBHOOK_NOT_CONFIGURED';
+        throw error;
+      }
+      url.searchParams.set('webhook_url', callback);
+    } else {
+      url.searchParams.set('poll_only', 'true');
     }
-    url.searchParams.set('webhook_url', callback);
   }
 
   let lastError;
