@@ -110,6 +110,15 @@ assert.deepEqual(
   [3],
   'do not repeat paid POC-2 discovery while exact callbacks are pending',
 );
+const missingEmailWhilePhonePending = [{
+  rowNumber: 5,
+  row: ['Example D','','','Known POC-1','one@example.com','+919876543210',
+    'Known POC-2','',''],
+}];
+assert.deepEqual(targeted.livePocGapRows(
+  missingEmailWhilePhonePending, liveSchema, 2, {}, new Set(['5:2'])
+),[5],'a pending POC-2 phone does not freeze independent work-email completion');
+
 assert.deepEqual(
   targeted.livePocGapRows(liveRowPlans, liveSchema, 1, { targetRows: [4] }, pendingForPoc2Only),
   [4],
@@ -149,6 +158,28 @@ const genericCompanyLinkSchema = schemaTools.inferSchema(genericCompanyLinkRows)
 assert.equal(genericCompanyLinkSchema.personGroups[0].fields.linkedin, undefined,
   'plain hyperlink labels before POC-1 must also remain company-owned');
 assert.equal(genericCompanyLinkSchema.companyGroups[0].fields.linkedin.index, 2);
+
+// Same semantic POC task, but phone/email are reordered and a notes column
+// sits between groups. Never hardcode D:F, G:I or infer group from cell values.
+const reorderedRows = [
+  ['Organization','Roles','Company LinkedIn','First Contact','Telephone',
+    'Work Email','Comments','Second Contact','Mobile','Business Email'],
+  ['Aster Systems','Tech','https://www.linkedin.com/company/aster-systems/',
+    '', '', '', 'Priority account','Recruiter Example','','recruiter@aster.example'],
+  ['Nova Systems','Tech','https://www.linkedin.com/company/nova-systems/',
+    'Lead Example','', 'lead@nova.example','Note','','',''],
+];
+const reorderedSchema = schemaTools.inferSchema(reorderedRows);
+assert.equal(reorderedSchema.personGroups.length,2,'two semantic POC groups survive reordered fields');
+assert.equal(reorderedSchema.personGroups[0].fields.phone.index,4);
+assert.equal(reorderedSchema.personGroups[0].fields.email.index,5);
+assert.equal(reorderedSchema.personGroups[1].fields.phone.index,8);
+assert.equal(reorderedSchema.personGroups[1].fields.email.index,9);
+assert.deepEqual(targeted.livePocGapRows(
+  reorderedRows.slice(1).map((row,i)=>({rowNumber:i+2,row})),
+  reorderedSchema, 2, {},new Set()
+),[2,3],'dynamic schema discovers both POC-2 gaps despite reordered fields');
+
 assert.ok(require('../core/universal-sheet-enrichment-operator').candidateFillTargets(
   planner.planRow(genericCompanyLinkRows[1], genericCompanyLinkSchema)
 ).some((item) => item.group.ordinal === 1),
