@@ -37,7 +37,15 @@ assert.equal(apollo.requestIdFromRaw('{"request_id":-1039995589705121900}', {req
 assert.equal(apollo.requestIdFromRaw(
   '{"request_id":123,"phone_enrichment":{"status":"pending","request_id":"-1039995589705121900"}}',
   {request_id:123,phone_enrichment:{status:'pending',request_id:-1039995589705121900}},
-),'-1039995589705121900','prefer exact native phone receipt over unrelated top-level request');
+),'123','Apollo result polling uses the TOP-LEVEL request ID, never nested vendor IDs');
+assert.equal(apollo.requestIdFromRaw(
+  '{"phone_enrichment":{"request_id":"987654321"},"person":{"id":"example"},"request_id":-1039995589705121900}',
+  {request_id:-1039995589705121900}
+),'-1039995589705121900','nested ID before top-level ID must not corrupt 64-bit polling receipt');
+assert.equal(apollo.requestIdFromRaw(
+  '{"phone_enrichment":{"request_id":"987654321"},"person":{"id":"example"}}',
+  {phone_enrichment:{request_id:'987654321'}}
+),'','nested-only enrichment ID is not a pollable native receipt');
 
 
 assert.equal(apollo.phoneRevealState(true, null, {__requestId:'-1039995589705121900'}), 'pending');
