@@ -40,6 +40,9 @@ jobs:
       - name: Run enrichment hard safety contract
         working-directory: mark3-development
         run: npm run check:enrichment-safety
+      - name: Run comprehensive former-startup regression suite
+        working-directory: mark3-development
+        run: npm run check:startup-suite
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight
