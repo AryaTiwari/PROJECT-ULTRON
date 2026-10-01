@@ -23,7 +23,7 @@ let webhookAddress = { configured: Boolean(apollo.setting('APOLLO_WEBHOOK_URL'))
 try {
   const u = new URL(apollo.setting('APOLLO_WEBHOOK_URL'));
   webhookAddress.publicHttps = u.protocol === 'https:'
-    && !/^(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)$/i.test(u.hostname);
+    && !/^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/i.test(u.hostname);
 } catch {}
 const report = {
   mode: 'READ_ONLY_NO_NEW_APOLLO_REVEALS',
