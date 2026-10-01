@@ -102,7 +102,7 @@ assert.match(control, /Universal spreadsheet approval re-entry stopped safely/);
 assert.match(apolloFetch, /APOLLO_NETWORK_FETCH_FAILED/);
 assert.match(rescue, /candidateFillTargets\(plan\)/);
 assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
-assert.match(spreadsheetController, /Apollo native phone reveal with webhook settlement as the production default/);
+assert.match(spreadsheetController, /Apollo native phone reveal with direct poll-only result settlement as the production default/);
 assert.match(spreadsheetController, /custom poll_only phone waterfall is experimental\/legacy-only/);
 
 assert.match(errorVocabulary, /function humanTitleFor/);
