@@ -3338,6 +3338,7 @@ function freshStats() {
     replacementCandidateChecks: 0,
     emptyPocNoPhoneRejected: 0,
     contactabilityExhaustedTargets: [],
+    pendingPocIdentityStaged: 0,
     candidatePhoneSettlementAttempts: 0,
     candidatePhoneSettlementFound: 0,
     candidatePhoneSettlementPending: 0,
@@ -4032,7 +4033,16 @@ async function run(request = {}, options = {}) {
   // with the full deterministic waterfall. AI/last-resort sees only residue after
   // this pass, never a row that merely failed the cheap first attempt.
   if (options.resultsFirstSweep && !options.deferDeterministicRecheck && !options.recheckPass && !stats.haltedEarly) {
+    const pendingOwnerTargets = new Set(pendingPhoneQueue.map((item) =>
+      `${Number(item.rowNumber)}:${Number(item.groupOrdinal)}`
+    ));
     const leftoverRows = [...new Set((stats.leftoverQueue || [])
+      // A paid reveal is already awaiting an exactly verified new POC owner.
+      // Do not run the same Apollo waterfall again merely because the phone
+      // callback has not arrived within the first pass.
+      .filter((item) => !pendingOwnerTargets.has(
+        `${Number(item.rowNumber)}:${Number(item.groupOrdinal)}`
+      ))
       .map((item) => Number(item.rowNumber))
       .filter(Number.isInteger))];
 
@@ -4113,7 +4123,7 @@ function formatResult(result) {
     status,
     `Schema: header row ${schema.headerRowNumber || '?'}, ${groups} POC group${groups === 1 ? '' : 's'}, ${companies} company group${companies === 1 ? '' : 's'}, confidence ${Number(schema.confidence || 0).toFixed(2)}.`,
     `Progress: processed ${Number(s.rowsProcessed || 0)}/${Number(s.rowsSeen || 0)} rows; changed ${Number(s.cellsChanged || 0)} cells across ${Number(s.rowsChanged || 0)} rows; selected ${Number(s.newPeopleSelected || 0)} phone-qualified new people; repaired ${Number(s.existingGroupsRepaired || 0)} existing POCs.`,
-    `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
+    `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations. Verified new owners staged pending phone: ${Number(s.pendingPocIdentityStaged || 0)}. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
     `LinkedIn fallback: ${Number(s.linkedinFallbackCompanyProfiles || 0)} company profiles, ${Number(s.linkedinFallbackCompanyUrns || 0)} company URNs, ${Number(s.linkedinFallbackProfilesFound || 0)} profile refs, ${Number(s.linkedinFallbackVerifiedCandidates || 0)} Apollo-verified candidates.`,
     `Results-first: ${deferred.count} rows deferred from the fast sweep; deterministic recheck ${s.deterministicRecheckAttempted ? 'ran' : 'not needed'}.`,
     issueParts.length ? `Remaining: ${issueParts.join('; ')}.` : 'Remaining: no bounded deterministic blockers recorded.',
