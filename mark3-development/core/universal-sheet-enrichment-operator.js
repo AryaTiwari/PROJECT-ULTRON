@@ -613,6 +613,23 @@ async function syncBackgroundEmailAssignments(){
   for(const source of sources.values()) await syncPendingEmailAssignments(source,[],freshStats(),{emailWaterfallSyncPolls:0});
 }
 
+// An individual Apollo people/match phone receipt must never be owned by
+// different Apollo persons. Old corrupted persisted receipts are preserved for
+// diagnosis, but cannot authorize staging a new POC or a contact-cell write.
+function phoneReceiptOwnershipConflict(requestId, personId, options = {}) {
+  const receipt = text(requestId);
+  const person = text(personId);
+  if (!receipt || !person) return false;
+  loadBackgroundPhoneAssignments();
+  return [
+    ...backgroundPhoneAssignments.values(),
+    ...(Array.isArray(options.pendingPhoneQueue) ? options.pendingPhoneQueue : []),
+  ].some((item) => item.phoneMode !== 'waterfall'
+    && text(item.phoneRequestId) === receipt
+    && text(item.apolloPersonId)
+    && text(item.apolloPersonId) !== person);
+}
+
 function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   // Every verified person passes this point, so capture paid pending email
   // waterfall ownership before phone-specific early returns.
@@ -629,7 +646,10 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   // otherwise this becomes an immortal phantom pending phone lookup.
   const isNativePending = phoneStatus === 'pending' && Boolean(phoneRequestId);
   const isWaterfallPending = phoneStatus === 'waterfall_pending' && Boolean(phoneWaterfallRequestId);
-  if (!apolloPersonId || text(person?.phone) || (!isNativePending && !isWaterfallPending)) return;
+  if (!apolloPersonId || text(person?.phone) || (!isNativePending && !isWaterfallPending)) return false;
+  if (isNativePending && phoneReceiptOwnershipConflict(phoneRequestId, apolloPersonId, options)) {
+    return false;
+  }
 
   const key = `${rowNumber}|${group.fields.phone.index}`;
   const item = {
@@ -649,6 +669,7 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   const existingIndex = queue.findIndex((entry) => entry.key === key);
   if (existingIndex >= 0) queue[existingIndex] = item;
   else queue.push(item);
+  return true;
 }
 
 function phoneSyncPolls(options = {}) {
@@ -2967,9 +2988,17 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       };
       if (entry.tier > 0) checked.push(entry);
       else if (
-        ['pending', 'waterfall_pending'].includes(text(person.phoneStatus))
-        && text(person.apolloPersonId || person.id)
+        text(person.apolloPersonId || person.id)
         && writePlan.writes.length
+        && (
+          (text(person.phoneStatus) === 'pending'
+            && text(person.phoneRequestId)
+            && !phoneReceiptOwnershipConflict(
+              person.phoneRequestId, person.apolloPersonId || person.id, options
+            ))
+          || (text(person.phoneStatus) === 'waterfall_pending'
+            && text(person.phoneWaterfallRequestId))
+        )
       ) {
         // Apollo accepted this verified person's phone reveal but has not
         // settled it yet. Preserve one exact owner, not an anonymous callback.
@@ -2995,8 +3024,9 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       || apollo.decisionPriority(a.person.title || '') - apollo.decisionPriority(b.person.title || '')
       || a.index - b.index
     )[0] || null;
-    if (pendingOwner) {
-      queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, pendingOwner.person);
+    if (pendingOwner && queuePendingPhone(
+      options, Number(options.rowNumber), target.group, target.snapshot, pendingOwner.person
+    )) {
       claimed.add(pendingOwner.rawKey);
       rememberCandidate(existing, pendingOwner.person);
       stats.pendingPocIdentityStaged = Number(stats.pendingPocIdentityStaged || 0) + 1;
@@ -4209,6 +4239,7 @@ module.exports = {
   syncPendingEmailAssignments,
   syncBackgroundEmailAssignments,
   queuePendingPhone,
+  phoneReceiptOwnershipConflict,
   registerBackgroundPhoneAssignments,
   syncBackgroundPhoneAssignments,
   startBackgroundPhoneWatcher,
