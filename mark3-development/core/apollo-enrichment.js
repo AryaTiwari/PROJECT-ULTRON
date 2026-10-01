@@ -220,8 +220,32 @@ function phoneFromWebhookPayload(payload) {
 }
 
 // The zero-credit webhook_result endpoint wraps the native phone payload.
-function completedPhonePoll(data = {}) {
-  const phone = phoneFromWebhookPayload(data);
+function completedPhonePoll(data = {}, expectedPersonId = '') {
+  // Never turn a shared/stale request receipt into a phone for the wrong POC.
+  // Apollo's native polling envelope may contain multiple people. If Apollo
+  // exposes person IDs, a result must belong to the exact queued owner.
+  const ownerId = String(expectedPersonId || '').trim();
+  const people = Array.isArray(data?.webhook_result?.people)
+    ? data.webhook_result.people
+    : (Array.isArray(data?.people) ? data.people : []);
+  let selectedPayload = data;
+  if (ownerId && people.length) {
+    const named = people.filter((person) =>
+      String(person?.id || person?.apollo_person_id || person?.person_id || '').trim()
+    );
+    if (named.length) {
+      const owner = named.find((person) =>
+        String(person?.id || person?.apollo_person_id || person?.person_id || '').trim() === ownerId
+      );
+      if (!owner) return { state: 'owner_mismatch', phone: null, payload: data };
+      selectedPayload = owner;
+    } else {
+      // The envelope contains multiple people with no ID. An arbitrary first
+      // phone cannot establish exact POC ownership.
+      return { state: 'owner_unverified', phone: null, payload: data };
+    }
+  }
+  const phone = phoneFromWebhookPayload(selectedPayload);
   if (phone) return { state: 'found', phone, payload: data };
   const status = String(data?.webhook_status || '').toLowerCase();
   if (['in_progress', 'pending'].includes(status)) return { state: 'pending', phone: null, payload: data };
@@ -254,7 +278,7 @@ async function pollWebhookResult(requestId, options = {}) {
     try { data = raw ? JSON.parse(raw) : {}; } catch {}
 
     if (response.ok) {
-      return completedPhonePoll(data);
+      return completedPhonePoll(data, options.expectedPersonId);
     }
 
     const code = String(data?.error_code || data?.code || '').toLowerCase();
