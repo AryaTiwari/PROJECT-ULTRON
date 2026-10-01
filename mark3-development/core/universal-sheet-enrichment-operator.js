@@ -724,6 +724,11 @@ function pendingPhoneTargetsForSource(spreadsheetId, sheetName) {
   return new Set([...backgroundPhoneAssignments.values()]
     .filter((item) => item.spreadsheetId === spreadsheetId && item.sheetName === sheetName)
     .filter((item) => Number.isInteger(Number(item.rowNumber)) && Number.isInteger(Number(item.groupOrdinal)))
+    // A receipt reused by multiple Apollo people is not a valid owned pending
+    // phone. Let an explicitly approved rerun repair that exact POC rather than
+    // freezing its missing phone forever; preserve the old record for audit.
+    .filter((item) => item.phoneMode === 'waterfall'
+      || !phoneReceiptOwnershipConflict(item.phoneRequestId, item.apolloPersonId))
     .map((item) => contactabilityTargetKey(item.rowNumber, item.groupOrdinal)));
 }
 
@@ -767,10 +772,15 @@ async function syncBackgroundPhoneAssignments() {
   const handledIds = new Set();
   const now = Date.now();
   const directBatchLimit = phoneDirectBatchLimit({ backgroundFirstPendingContacts: true }, items.length);
-  const directPollKeys = new Set(webhookItems
-    .filter(([, item]) => item.phoneRequestId && Number(item.nextDirectPollAt || 0) <= now)
-    .slice(0, directBatchLimit)
-    .map(([key]) => key));
+  // Poll-only native reveals are tracked by exact person-owned request IDs.
+  // Duplicated historical receipts (observed during the phone incident) must
+  // not monopolize the direct polling budget or yield another POC's number.
+  const uniquePollable = webhookItems.filter(([, item]) =>
+    item.phoneRequestId
+    && !phoneReceiptOwnershipConflict(item.phoneRequestId, item.apolloPersonId)
+    && Number(item.nextDirectPollAt || 0) <= now);
+  const directPollKeys = new Set([...new Map(uniquePollable.map(([key, item]) =>
+    [String(item.phoneRequestId), key])).values()].slice(0, directBatchLimit));
   let directQuotaLimited = false;
 
   for (const [key, item] of items) {
