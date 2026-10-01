@@ -41,6 +41,13 @@ function headerRoleScores(header,signature={}){
   if(/^(?:role|title|designation|position|seniority|function|department)$/.test(h))scores.role+=46;
   if(/^(?:name|person|contact|lead|candidate)$/.test(h))scores.name+=38;
   if (/\b(?:poc|decision maker|recruiter)\b/.test(h) && !/\b(?:phone|mobile|email|mail|linkedin|profile|role|title|designation|number|no)\b/.test(h)) scores.name+=48;
+  // A numbered/ordinal "First Contact" or "Contact 2" identifies the person
+  // group. Do not classify ambiguous bare "Contact" as a name, and never
+  // override a more explicit contact-data field ("Contact Phone 2", etc.).
+  if (slotHint(h) && /\b(?:contact|person|lead)\b/.test(h)
+    && !/\b(?:phone|mobile|email|mail|linkedin|profile|role|title|designation|number|no)\b/.test(h)) {
+    scores.name+=55;
+  }
   if(/^(?:phone|mobile|telephone|cell|whatsapp)$/.test(h))scores.phone+=50;
   if(/^(?:email|mail|e mail)$/.test(h))scores.email+=52;
   if(/^(?:profile|profile url)$/.test(h))scores.linkedin_person+=65;
