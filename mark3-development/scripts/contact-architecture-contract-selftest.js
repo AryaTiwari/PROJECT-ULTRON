@@ -37,6 +37,10 @@ const bannedTestContracts = [
     reason: 'webhook is no longer native Apollo phone delivery default',
   },
   {
+    needle: 'webhook settlement is the production default',
+    reason: 'legacy native-webhook-first claim; native Apollo poll-only is the default',
+  },
+  {
     needle: 'custom poll_only phone waterfall is experimental',
     reason: 'retired exact prose; native poll_only is production while the custom legacy waterfall remains opt-in',
   },
