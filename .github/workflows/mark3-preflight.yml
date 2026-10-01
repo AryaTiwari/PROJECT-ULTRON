@@ -49,6 +49,9 @@ jobs:
       - name: Run comprehensive former-startup regression suite
         working-directory: mark3-development
         run: npm run check:startup-suite
+      - name: Boot actual Mark 3 npm start and check HTTP readiness
+        working-directory: mark3-development
+        run: npm run check:startup-http
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight
