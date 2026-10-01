@@ -30,6 +30,11 @@ assert.equal(apollo.completedPhonePoll({webhook_status:'failed'}).state, 'delive
 assert.equal(apollo.completedPhonePoll({webhook_status:'success', webhook_result:{people:[]}}).state,'not_found');
 assert.equal(apollo.requestIdFromRaw('{"request_id":-1039995589705121900}', {request_id:-1039995589705121900}),
   '-1039995589705121900', 'signed 64-bit request IDs must retain original digits');
+assert.equal(apollo.requestIdFromRaw(
+  '{"request_id":123,"phone_enrichment":{"status":"pending","request_id":"-1039995589705121900"}}',
+  {request_id:123,phone_enrichment:{status:'pending',request_id:-1039995589705121900}},
+),'-1039995589705121900','prefer exact native phone receipt over unrelated top-level request');
+
 
 assert.equal(apollo.phoneRevealState(true, null, {__requestId:'-1039995589705121900'}), 'pending');
 assert.equal(apollo.phoneRevealState(true, null, {__requestId:''}), 'unavailable',
