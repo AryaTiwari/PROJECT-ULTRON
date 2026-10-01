@@ -781,7 +781,7 @@ async function syncBackgroundPhoneAssignments() {
         terminal = true;
       } else if (item.phoneRequestId && directPollKeys.has(key) && !directQuotaLimited) {
         try {
-          const direct = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0 });
+          const direct = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0, expectedPersonId: item.apolloPersonId });
           phone = apollo.validPhone(direct?.phone);
           const directState = text(direct?.state);
           terminal = ['found', 'not_found'].includes(directState);
@@ -979,6 +979,7 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
         result: await apollo.pollWebhookResult(item.phoneRequestId, {
           polls: directPolls,
           maxWaitMs: waitMs,
+          expectedPersonId: item.apolloPersonId,
         }),
       })
     );
@@ -2632,6 +2633,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       outcome = await pollNativePhone(person.phoneRequestId, {
         polls,
         maxWaitMs: waitMs,
+        expectedPersonId: apolloPersonId,
       });
     } else if (text(person.phoneWaterfallRequestId)) {
       const quality = require('./apollo-three-poc-quality');
