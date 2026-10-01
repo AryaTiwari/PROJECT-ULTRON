@@ -31,6 +31,7 @@
     "universal-enrichment-benchmark-contract.json",
     "core/universal-enrichment-cache.js",
     "scripts/universal-enrichment-failure-matrix-selftest.js",
-    "scripts/universal-aryatry-semantic-selftest.js"
+    "scripts/universal-aryatry-semantic-selftest.js",
+    "scripts/universal-pending-poc-settlement-selftest.js"
   ]
 }
