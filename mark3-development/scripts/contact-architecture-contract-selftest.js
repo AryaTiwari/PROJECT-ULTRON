@@ -29,6 +29,17 @@ const bannedTestContracts = [
     needle: 'final verified POCs use one bounded poll-only phone waterfall instead of duplicate native+waterfall spend',
     reason: 'old poll-only phone architecture',
   },
+  // Cross-suite contract migration guard. Startup imports many selftests
+  // indirectly; catch retired phone-delivery assertions in ALL selftests
+  // rather than discovering one after another during npm start.
+  {
+    needle: 'Apollo native phone reveal with webhook settlement as the production default',
+    reason: 'webhook is no longer native Apollo phone delivery default',
+  },
+  {
+    needle: 'custom poll_only phone waterfall is experimental',
+    reason: 'retired exact prose; native poll_only is production while the custom legacy waterfall remains opt-in',
+  },
   {
     needle: "run_waterfall_phone', 'true'",
     reason: 'custom phone waterfall must not be asserted as the production default',
