@@ -75,7 +75,7 @@ const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'u
 const humanErrorTest = fs.readFileSync(path.join(__dirname, 'human-error-vocabulary-selftest.js'), 'utf8');
 
 assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
-assert.match(quality, /Native Apollo reveal \+ webhook settlement is the production default/);
+assert.match(quality, /Native Apollo reveal with direct poll-only result settlement is the default/);
 assert.match(quality, /resultsFirstResolveDecisionMaker/);
 assert.match(quality, /resultsFirstResolvePersonProfile/);
 assert.match(quality, /carryLegacyPhoneRequest/);
