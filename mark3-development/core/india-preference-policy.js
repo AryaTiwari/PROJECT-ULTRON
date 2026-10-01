@@ -13,7 +13,10 @@ function normalized(value) { return text(value).toLowerCase().replace(/[^a-z0-9+
 function isIndiaLocation(value) {
   const v = normalized(value);
   if (!v) return false;
-  return INDIA_LOCATIONS.some((item) => v === item || v.includes(item));
+  // Match whole normalized location tokens, not substrings. "Indiana" and
+  // "Indianapolis" are not India, and cannot satisfy a hard India gate.
+  const padded = ` ${v} `;
+  return INDIA_LOCATIONS.some((item) => padded.includes(` ${item} `));
 }
 
 function explicitGlobalScope(query) {
