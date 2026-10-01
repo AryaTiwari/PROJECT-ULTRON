@@ -115,18 +115,11 @@ function isFresh(record) {
 
 function pendingPhoneRequestFresh(record) {
   if (record?.phoneStatus !== 'pending') return false;
-  // A person ID is NOT proof that Apollo started a phone reveal.
-  if (record.phoneRequestId) {
-    const requestedAt = Date.parse(record?.phoneRequestedAt || record?.checkedAt || '');
-    return Number.isFinite(requestedAt) && Date.now() - requestedAt < 30 * 86400000;
-  }
+  // A person ID or recent timestamp is NOT proof Apollo accepted a reveal.
+  // Native pending must have a documented, zero-credit-pollable request ID.
+  if (!record.phoneRequestId) return false;
   const requestedAt = Date.parse(record?.phoneRequestedAt || record?.checkedAt || '');
-  if (!Number.isFinite(requestedAt)) return false;
-  const retryMinutes = Math.max(
-    1,
-    Math.min(60, numericSetting('ULTRON_M3_APOLLO_PENDING_PHONE_RETRY_MINUTES', 3)),
-  );
-  return Date.now() - requestedAt < retryMinutes * 60_000;
+  return Number.isFinite(requestedAt) && Date.now() - requestedAt < 30 * 86400000;
 }
 
 function satisfies(record, { needEmail, needPhone }) {
