@@ -113,10 +113,9 @@ assert.match(control, /Universal spreadsheet approval re-entry stopped safely/);
 assert.match(apolloFetch, /APOLLO_NETWORK_FETCH_FAILED/);
 assert.match(rescue, /candidateFillTargets\(plan\)/);
 assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
-assert.match(spreadsheetController, /Apollo native phone reveal with direct poll-only result settlement as the production default/);
-// Distinguish the LEGACY custom phone waterfall from Apollo's NEW native
-// poll_only delivery; the production text deliberately uses "remains".
-assert.match(spreadsheetController, /custom poll_only phone waterfall remains experimental\/legacy-only/i);
+// Validate actual transport/opt-in behavior, never mutable user-facing prose.
+assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/,
+  'legacy custom waterfall is disabled by default');
 assert.match(apollo, /ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only'/,
   'native Apollo direct polling must remain the production delivery default');
 assert.match(apollo, /url\.searchParams\.set\('poll_only', 'true'\)/,
