@@ -65,6 +65,13 @@ assert.equal(apollo.phoneRevealState(true, null, {__requestId:'123',phone_enrich
   'unavailable','a skipped native reveal will not generate a new webhook');
 assert.equal(apollo.phoneRevealState(true, '+919876543210', {}), 'found');
 assert.equal(apollo.pendingPhoneRequestFresh({phoneStatus:'pending',apolloPersonId:'person-only'}),false);
+assert.equal(apollo.sharedNativePhoneReceipt(
+  {apolloPersonId:'person-A',phoneRequestId:'same-native-receipt'},
+  {people:{
+    personA:{apolloPersonId:'person-A',phoneRequestId:'same-native-receipt'},
+    personB:{apolloPersonId:'person-B',phoneRequestId:'same-native-receipt'},
+  }}
+),true,'one individual Apollo phone receipt cannot certify two different people');
 assert.equal(apollo.pendingPhoneRequestFresh({
   phoneStatus:'pending',apolloPersonId:'p',phoneRequestId:'-1039995589705121900',
   phoneRequestedAt:new Date().toISOString(),
