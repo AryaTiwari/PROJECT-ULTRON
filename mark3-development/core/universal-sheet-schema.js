@@ -99,7 +99,10 @@ function assignCompanyGroups(columns,claimed=new Set()){const seeds=columns.filt
     // Attach an immediately following company /company/ URL to an existing
     // company-name group instead of inventing a second company entity.
     if(seed.role==='linkedin_company'){
-      const preceding=[...groups].reverse().find((g)=>g.fields.company&&(g.seedIndex??-1)<seed.index&&!g.fields.linkedin);
+      const preceding=[...groups].reverse().find((g)=>
+        g.fields.company && (g.seedIndex??-1)<seed.index
+        && seed.index-(g.seedIndex??-1)<=3 && !g.fields.linkedin
+      );
       if(preceding){putField(preceding,'linkedin',seed);continue;}
     }
     const g=makeGroup('company',seed.slotHint||groups.length+1,seed);
