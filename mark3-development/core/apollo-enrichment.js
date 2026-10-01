@@ -113,11 +113,22 @@ function isFresh(record) {
   return Number.isFinite(checked) && Date.now() - checked < cacheDays(record) * 86400000;
 }
 
+function sharedNativePhoneReceipt(record, cache = null) {
+  const receipt = String(record?.phoneRequestId || '').trim();
+  const personId = String(record?.apolloPersonId || '').trim();
+  if (!receipt || !personId) return false;
+  const people = Object.values((cache || readCache())?.people || {});
+  return people.some((person) =>
+    String(person?.phoneRequestId || '').trim() === receipt
+    && String(person?.apolloPersonId || '').trim()
+    && String(person.apolloPersonId).trim() !== personId);
+}
+
 function pendingPhoneRequestFresh(record) {
   if (record?.phoneStatus !== 'pending') return false;
-  // A person ID or recent timestamp is NOT proof Apollo accepted a reveal.
-  // Native pending must have a documented, zero-credit-pollable request ID.
-  if (!record.phoneRequestId) return false;
+  // A person ID or timestamp is NOT proof Apollo accepted a reveal. Moreover,
+  // one individual people/match receipt must not be reused across persons.
+  if (!record.phoneRequestId || sharedNativePhoneReceipt(record)) return false;
   const requestedAt = Date.parse(record?.phoneRequestedAt || record?.checkedAt || '');
   return Number.isFinite(requestedAt) && Date.now() - requestedAt < 30 * 86400000;
 }
@@ -1399,6 +1410,7 @@ module.exports = {
   completedPhonePoll,
   phoneRevealState,
   pendingPhoneRequestFresh,
+  sharedNativePhoneReceipt,
   searchCompanyPeopleBroad,
   candidateEmployerContext,
   hydratedEmployerMatchesCandidate,
