@@ -206,9 +206,9 @@ function requestIdFromRaw(raw, parsed = {}) {
   // Native phone_enrichment.request_id is the pollable receipt when present.
   // Preserve its exact signed-int64 text before JSON.parse loses precision.
   const text = String(raw || '');
-  const native = text.match(/"phone_enrichment"\\s*:\\s*\\{[^{}]*?"request_id"\\s*:\\s*"?(-?\\d+)"?/i);
+  const native = text.match(/"phone_enrichment"\s*:\s*\{[^{}]*?"request_id"\s*:\s*"?(-?\d+)"?/i);
   if (native?.[1]) return native[1];
-  const top = text.match(/"request_id"\\s*:\\s*"?(-?\\d+)"?/i);
+  const top = text.match(/"request_id"\s*:\s*"?(-?\d+)"?/i);
   if (top?.[1]) return top[1];
   if (parsed?.phone_enrichment?.request_id != null) return String(parsed.phone_enrichment.request_id);
   if (parsed?.request_id != null) return String(parsed.request_id);
