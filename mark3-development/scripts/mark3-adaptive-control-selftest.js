@@ -35,6 +35,26 @@ const universalController=require('../core/universal-spreadsheet-domain-controll
   assert.equal(exactSchema.personGroups.length,2);
   assert.equal((exactSchema.continuityRecoveries||[]).length,0);
   assert.equal(require('../core/universal-schema-safety').assess(exactSchema).safe,true);
+  const liveShapedHeaders=[...headers,'Outcome'];
+  const liveShapedRows=[
+    liveShapedHeaders,
+    ['Source Person A','ID: https://www.linkedin.com/in/source-person-a/',
+      'Verified POC A — Director','+919800000001','','Verified POC B — HR Head','+919800000002','',''],
+    ['Source Person B','ID: https://www.linkedin.com/in/source-person-b/',
+      'Verified POC C — Recruiter','+919800000003','poc.c@example.com','','','',''],
+    ['Source Person C','ID: https://www.linkedin.com/in/source-person-c/','','','','','','',''],
+  ];
+  const liveSchema=schemaTools.inferSchema(liveShapedRows,{expectedPersonGroups:2});
+  assert.equal(require('../core/universal-schema-safety').assess(liveSchema).safe,true,
+    'populated two-POC sheets with an Outcome column must remain schema-safe');
+  const headerSummary=engine.schemaSummary(liveSchema);
+  const diagnosticHeaders=require('../core/universal-enrichment-self-healer').schemaDiagnostic(headerSummary);
+  assert.equal(diagnosticHeaders.mappedColumns.some(item=>item.column===3&&/poc/i.test(item.header)),true,
+    'schema clarification must expose actual header coordinates, not an empty column map');
+  assert.equal(diagnosticHeaders.mappedColumns.some(item=>item.column===9&&item.role==='status'),true,
+    'Outcome header may be reported for clarification, but is not a POC destination');
+  assert.equal(JSON.stringify(diagnosticHeaders).includes('poc.c@example.com'),false,
+    'diagnostics must never expose personal row-level contact values');
 
   const mixedRows=[headers,row,['Example India','https://www.linkedin.com/company/example-india/','','','','','','']];
   const mixedAnalysis=engine.analyzeSheet(mixedRows,{schema:{expectedPersonGroups:2}});
@@ -93,6 +113,9 @@ const universalController=require('../core/universal-spreadsheet-domain-controll
   assert.equal(indiaPolicy.companyResearch('find 20 SaaS companies on Apollo','','organization').geography,'India');
   assert.equal(indiaPolicy.companyResearch('find 20 SaaS companies in Singapore on Apollo','Singapore','organization').preferIndia,false);
   assert.equal(indiaPolicy.companyResearch('remove location filter and find 20 companies','','organization').preferIndia,false,'explicit no-location instruction must override the India default');
+  assert.equal(indiaPolicy.isIndiaLocation('Mumbai, Maharashtra, India'),true);
+  assert.equal(indiaPolicy.isIndiaLocation('Indiana, United States'),false,'US state Indiana must never satisfy India preference');
+  assert.equal(indiaPolicy.isIndiaLocation('Indianapolis, Indiana'),false,'Indianapolis must not be mistaken for India');
 
   const apolloIndia=apolloCompiler.compile('find 20 SaaS companies on Apollo');
   assert.equal(apolloIndia.geography,'India');
@@ -106,6 +129,23 @@ const universalController=require('../core/universal-spreadsheet-domain-controll
     {id:'in',name:'India SaaS',linkedin_url:'https://linkedin.com/company/india-saas',country:'India',estimated_num_employees:100,keywords:['saas','software']},
   ],apolloIndia);
   assert.equal(ranked[0].id,'in','India-first company policy must rank Indian company first');
+  assert.deepEqual(ranked.map(item=>item.id),['in'],
+    'hard India company missions must not return known foreign candidates as filler');
+  const locationQualified=apolloRanker.rankOrganizations([
+    {id:'indiana',name:'Indiana SaaS',linkedin_url:'https://linkedin.com/company/indiana-saas',
+      country:'United States',state:'Indiana',estimated_num_employees:100,keywords:['saas','software']},
+    {id:'unverified',name:'Unknown SaaS',linkedin_url:'https://linkedin.com/company/unknown-saas',
+      estimated_num_employees:100,keywords:['saas','software']},
+    {id:'provider-verified',name:'Provider Verified SaaS',linkedin_url:'https://linkedin.com/company/provider-verified-saas',
+      estimated_num_employees:100,keywords:['saas','software'],__apolloLocationFilter:'India'},
+  ],apolloIndia);
+  assert.deepEqual(locationQualified.map(item=>item.id),['provider-verified'],
+    'locationless companies require Apollo India-filter provenance when India is a hard gate');
+  const foreignOverride=apolloRanker.rankOrganizations([
+    {id:'singapore',name:'Singapore SaaS',linkedin_url:'https://linkedin.com/company/singapore-saas',
+      country:'Singapore',estimated_num_employees:100,keywords:['saas','software']},
+  ],apolloSingapore);
+  assert.equal(foreignOverride[0]?.id,'singapore','explicit Singapore research must override the India default');
 
   const ir={
     entityMode:'company',targetMode:'additional',targetValue:20,topic:'SaaS',hiringRequired:false,
