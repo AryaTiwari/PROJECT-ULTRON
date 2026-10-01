@@ -625,7 +625,9 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   const phoneStatus = text(person?.phoneStatus);
   const phoneWaterfallRequestId = text(person?.phoneWaterfallRequestId);
   const phoneRequestId = text(person?.phoneRequestId);
-  const isNativePending = phoneStatus === 'pending';
+  // A person ID alone cannot be polled. Apollo must confirm a request ID;
+  // otherwise this becomes an immortal phantom pending phone lookup.
+  const isNativePending = phoneStatus === 'pending' && Boolean(phoneRequestId);
   const isWaterfallPending = phoneStatus === 'waterfall_pending' && Boolean(phoneWaterfallRequestId);
   if (!apolloPersonId || text(person?.phone) || (!isNativePending && !isWaterfallPending)) return;
 
