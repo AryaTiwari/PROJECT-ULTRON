@@ -41,6 +41,16 @@ assert.equal(apollo.requestIdFromRaw(
 
 
 assert.equal(apollo.phoneRevealState(true, null, {__requestId:'-1039995589705121900'}), 'pending');
+assert.equal(apollo.phoneRevealState(true, null, {
+  __requestId:'-1039995589705121900',phone_enrichment:{status:'failed'},
+}), 'unavailable','provider-rejected reveal must not stage a POC despite generic request ID');
+const source=fs.readFileSync(path.join(__dirname,'../core/apollo-enrichment.js'),'utf8');
+assert.match(source,/ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only'/,
+  'native phone reveal should default to independent Apollo result polling');
+assert.match(source,/url.searchParams.set\('poll_only', 'true'\)/,
+  'poll-only mode must use documented phone result receipt');
+assert.match(source,/if \(deliveryMode === 'webhook'\)[\s\S]*?else \{\s*url.searchParams.set\('poll_only'/,
+  'Apollo must never receive webhook_url and poll_only together');
 assert.equal(apollo.phoneRevealState(true, null, {__requestId:''}), 'unavailable',
   'a matched person without a reveal receipt is not pending');
 assert.equal(apollo.phoneRevealState(true, null, {__requestId:'123',phone_enrichment:{status:'skipped'}}),
