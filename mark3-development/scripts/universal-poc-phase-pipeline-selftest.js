@@ -83,6 +83,40 @@ assert.deepEqual(merged.stats.pocPhaseSummaries.map((item) => item.ordinal), [1,
 assert.equal(merged.stats.contactPhaseLabel, 'FAST ALL -> DEEP POC-1 -> DEEP POC-2');
 assert.equal(merged.stats.unfilledOpenGroups, 4);
 
+// Regression: company-led D:F / G:I layout must not lose a blank POC-1
+// merely because POC-2 already has a verified name/email and a pending phone.
+// These are synthetic rows; no Apollo calls or Google Sheet writes occur here.
+const liveSchema = { personGroups: [
+  { id: 'poc-1', kind: 'person', ordinal: 1, fields: {
+    name: { index: 3 }, email: { index: 4 }, phone: { index: 5 },
+  }},
+  { id: 'poc-2', kind: 'person', ordinal: 2, fields: {
+    name: { index: 6 }, email: { index: 7 }, phone: { index: 8 },
+  }},
+]};
+const liveRowPlans = [
+  { rowNumber: 2, row: ['Example A','','','','','','Verified POC-2','two@example.com',''] },
+  { rowNumber: 3, row: ['Example B','','','Verified POC-1','one@example.com','+919876543210','','',''] },
+  { rowNumber: 4, row: ['Example C','','','','','','Another POC-2','second@example.com',''] },
+];
+const pendingForPoc2Only = new Set(['2:2','4:2']);
+assert.deepEqual(
+  targeted.livePocGapRows(liveRowPlans, liveSchema, 1, {}, pendingForPoc2Only),
+  [2, 4],
+  'pending POC-2 ownership must not mask the blank POC-1 in the same company row',
+);
+assert.deepEqual(
+  targeted.livePocGapRows(liveRowPlans, liveSchema, 2, {}, pendingForPoc2Only),
+  [3],
+  'do not repeat paid POC-2 discovery while exact callbacks are pending',
+);
+assert.deepEqual(
+  targeted.livePocGapRows(liveRowPlans, liveSchema, 1, { targetRows: [4] }, pendingForPoc2Only),
+  [4],
+  'explicit row scope must remain authoritative',
+);
+
+
 assert.equal(controller.parseContactPhaseOrdinal('Fill POC-1 only in Arya 2'), 1);
 assert.equal(controller.parseContactPhaseOrdinal('Only second POC for this sheet'), 2);
 assert.equal(controller.parseContactPhaseOrdinal('3rd POC only'), 3);
