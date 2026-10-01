@@ -29,12 +29,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install FFmpeg for real Reel render acceptance
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          ffmpeg -version
-          ffprobe -version
       - name: Create non-secret test environment
         run: cp .env.example .env
       - name: Install Mark 3 dependencies
@@ -46,6 +40,18 @@ jobs:
       - name: Run enrichment hard safety contract
         working-directory: mark3-development
         run: npm run check:enrichment-safety
+      - name: Install FFmpeg for real Reel render acceptance
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
+      - name: Run comprehensive former-startup regression suite
+        working-directory: mark3-development
+        run: npm run check:startup-suite
+      - name: Boot actual Mark 3 npm start and check HTTP readiness
+        working-directory: mark3-development
+        run: npm run check:startup-http
       - name: Run Mark 3 preflight
         working-directory: mark3-development
         run: npm run preflight

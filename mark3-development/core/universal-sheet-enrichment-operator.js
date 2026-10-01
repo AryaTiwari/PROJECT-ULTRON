@@ -200,6 +200,14 @@ const FREE_EMAIL_DOMAINS = new Set([
   'icloud.com','me.com','proton.me','protonmail.com','aol.com','rediffmail.com',
 ]);
 
+// Company Name cells may contain a second-line sector/category description
+// (e.g. "Crusoe\nAI compute"). Use the identity line for Apollo employer
+// matching while leaving the actual worksheet cell and evidence unchanged.
+function sheetCompanyIdentity(value) {
+  const lines = String(value ?? '').split(/\r?\n/).map((part) => part.trim()).filter(Boolean);
+  return lines[0] || '';
+}
+
 function cleanedCompanyEvidence(value) {
   return text(value)
     .replace(/^[\s:–—-]+|[\s:–—-]+$/g, '')
@@ -224,7 +232,11 @@ function firstBusinessEmailDomain(value) {
 }
 
 function inferHiringCompanyFromEvidence(plan, row = []) {
-  if (text(plan.context?.company)) return {company:text(plan.context.company),domain:websiteDomain(plan.context.website),source:'sheet-company',anchorPerson:null};
+  if (text(plan.context?.company)) return {
+    company: sheetCompanyIdentity(plan.context.company),
+    domain: websiteDomain(plan.context.website),
+    source: 'sheet-company', anchorPerson: null,
+  };
   const evidence = contextEvidenceText(plan);
   if (!evidence) return null;
 
@@ -344,7 +356,7 @@ function anchorNeedsHydration(plan = {}, evidence = {}, destinationGroup = null)
 
 function companyFromCompanyAnchor(anchor) {
   const values = anchor?.snapshot?.values || {};
-  const company = text(values.company || values.name);
+  const company = sheetCompanyIdentity(values.company || values.name);
   const domain = websiteDomain(values.website || '');
   return company ? {
     company,
@@ -358,12 +370,12 @@ function companyFromCompanyAnchor(anchor) {
 
 function nearestCompanyIdentity(plan) {
   const values = plan.anchor?.snapshot?.values || {};
-  if (values.company) return text(values.company);
+  if (values.company) return sheetCompanyIdentity(values.company);
   for (const item of plan.groups?.existing || []) {
-    const company = text(item.snapshot?.values?.company);
+    const company = sheetCompanyIdentity(item.snapshot?.values?.company);
     if (company) return company;
   }
-  return text(plan.context?.company || '');
+  return sheetCompanyIdentity(plan.context?.company || '');
 }
 
 async function resolvePersonAnchor(plan, row, options = {}) {
@@ -613,6 +625,23 @@ async function syncBackgroundEmailAssignments(){
   for(const source of sources.values()) await syncPendingEmailAssignments(source,[],freshStats(),{emailWaterfallSyncPolls:0});
 }
 
+// An individual Apollo people/match phone receipt must never be owned by
+// different Apollo persons. Old corrupted persisted receipts are preserved for
+// diagnosis, but cannot authorize staging a new POC or a contact-cell write.
+function phoneReceiptOwnershipConflict(requestId, personId, options = {}) {
+  const receipt = text(requestId);
+  const person = text(personId);
+  if (!receipt || !person) return false;
+  loadBackgroundPhoneAssignments();
+  return [
+    ...backgroundPhoneAssignments.values(),
+    ...(Array.isArray(options.pendingPhoneQueue) ? options.pendingPhoneQueue : []),
+  ].some((item) => item.phoneMode !== 'waterfall'
+    && text(item.phoneRequestId) === receipt
+    && text(item.apolloPersonId)
+    && text(item.apolloPersonId) !== person);
+}
+
 function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   // Every verified person passes this point, so capture paid pending email
   // waterfall ownership before phone-specific early returns.
@@ -625,9 +654,14 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   const phoneStatus = text(person?.phoneStatus);
   const phoneWaterfallRequestId = text(person?.phoneWaterfallRequestId);
   const phoneRequestId = text(person?.phoneRequestId);
-  const isNativePending = phoneStatus === 'pending';
+  // A person ID alone cannot be polled. Apollo must confirm a request ID;
+  // otherwise this becomes an immortal phantom pending phone lookup.
+  const isNativePending = phoneStatus === 'pending' && Boolean(phoneRequestId);
   const isWaterfallPending = phoneStatus === 'waterfall_pending' && Boolean(phoneWaterfallRequestId);
-  if (!apolloPersonId || text(person?.phone) || (!isNativePending && !isWaterfallPending)) return;
+  if (!apolloPersonId || text(person?.phone) || (!isNativePending && !isWaterfallPending)) return false;
+  if (isNativePending && phoneReceiptOwnershipConflict(phoneRequestId, apolloPersonId, options)) {
+    return false;
+  }
 
   const key = `${rowNumber}|${group.fields.phone.index}`;
   const item = {
@@ -647,6 +681,7 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   const existingIndex = queue.findIndex((entry) => entry.key === key);
   if (existingIndex >= 0) queue[existingIndex] = item;
   else queue.push(item);
+  return true;
 }
 
 function phoneSyncPolls(options = {}) {
@@ -694,6 +729,21 @@ function pendingPhoneRowsForSource(spreadsheetId, sheetName) {
     .filter(Number.isInteger));
 }
 
+// Keep phone ownership group-specific: a pending POC-2 must not prevent POC-1
+// enrichment on the same company row, and must not be purchased a second time.
+function pendingPhoneTargetsForSource(spreadsheetId, sheetName) {
+  loadBackgroundPhoneAssignments();
+  return new Set([...backgroundPhoneAssignments.values()]
+    .filter((item) => item.spreadsheetId === spreadsheetId && item.sheetName === sheetName)
+    .filter((item) => Number.isInteger(Number(item.rowNumber)) && Number.isInteger(Number(item.groupOrdinal)))
+    // A receipt reused by multiple Apollo people is not a valid owned pending
+    // phone. Let an explicitly approved rerun repair that exact POC rather than
+    // freezing its missing phone forever; preserve the old record for audit.
+    .filter((item) => item.phoneMode === 'waterfall'
+      || !phoneReceiptOwnershipConflict(item.phoneRequestId, item.apolloPersonId))
+    .map((item) => contactabilityTargetKey(item.rowNumber, item.groupOrdinal)));
+}
+
 function registerBackgroundPhoneAssignments(source, items = []) {
   for (const item of items) {
     if (!item?.apolloPersonId) continue;
@@ -734,10 +784,15 @@ async function syncBackgroundPhoneAssignments() {
   const handledIds = new Set();
   const now = Date.now();
   const directBatchLimit = phoneDirectBatchLimit({ backgroundFirstPendingContacts: true }, items.length);
-  const directPollKeys = new Set(webhookItems
-    .filter(([, item]) => item.phoneRequestId && Number(item.nextDirectPollAt || 0) <= now)
-    .slice(0, directBatchLimit)
-    .map(([key]) => key));
+  // Poll-only native reveals are tracked by exact person-owned request IDs.
+  // Duplicated historical receipts (observed during the phone incident) must
+  // not monopolize the direct polling budget or yield another POC's number.
+  const uniquePollable = webhookItems.filter(([, item]) =>
+    item.phoneRequestId
+    && !phoneReceiptOwnershipConflict(item.phoneRequestId, item.apolloPersonId)
+    && Number(item.nextDirectPollAt || 0) <= now);
+  const directPollKeys = new Set([...new Map(uniquePollable.map(([key, item]) =>
+    [String(item.phoneRequestId), key])).values()].slice(0, directBatchLimit));
   let directQuotaLimited = false;
 
   for (const [key, item] of items) {
@@ -769,7 +824,7 @@ async function syncBackgroundPhoneAssignments() {
         terminal = true;
       } else if (item.phoneRequestId && directPollKeys.has(key) && !directQuotaLimited) {
         try {
-          const direct = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0 });
+          const direct = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0, expectedPersonId: item.apolloPersonId });
           phone = apollo.validPhone(direct?.phone);
           const directState = text(direct?.state);
           terminal = ['found', 'not_found'].includes(directState);
@@ -967,6 +1022,7 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
         result: await apollo.pollWebhookResult(item.phoneRequestId, {
           polls: directPolls,
           maxWaitMs: waitMs,
+          expectedPersonId: item.apolloPersonId,
         }),
       })
     );
@@ -1249,6 +1305,15 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
 
     const needEmail = Boolean(group.fields.email && !apollo.validEmail(snapshot.values.email || ''));
     const needPhone = Boolean(group.fields.phone && !apollo.validPhone(snapshot.values.phone || ''));
+    const existingPhonePending = needPhone
+      && options.pendingPhoneTargets instanceof Set
+      && options.pendingPhoneTargets.has(contactabilityTargetKey(options.rowNumber, group.ordinal));
+    // A paid request already owns this exact row and POC. Do not reveal/replace
+    // the same phone again while its durable callback is still outstanding.
+    if (existingPhonePending && !needEmail && !needsEmbeddedDesignationRepair(item)) {
+      stats.existingPhoneAwaitingCallback = Number(stats.existingPhoneAwaitingCallback || 0) + 1;
+      continue;
+    }
     const verificationContext = existingPersonVerificationContext(item, companyContext);
     let resolved = null;
     let verificationPath = '';
@@ -1259,14 +1324,14 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     try {
       if (snapshot.linkedinKind === 'linkedin_person') {
         verificationPath = 'exact-linkedin';
-        resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone });
+        resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone: needPhone && !existingPhonePending });
       } else if (snapshot.values.email && firstBusinessEmailDomain(snapshot.values.email)) {
         verificationPath = 'apollo-business-email';
         resolved = await apollo.resolvePersonByBusinessEmail(
           snapshot.values.email,
           verificationContext.company,
           verificationContext.domain,
-          { needEmail: true, needPhone },
+          { needEmail: true, needPhone: needPhone && !existingPhonePending },
         );
       } else if (snapshot.values.name && (verificationContext.company || verificationContext.domain)) {
         verificationPath = 'apollo-name-company';
@@ -1274,7 +1339,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
           existingContactSearchName(snapshot.values.name),
           verificationContext.company,
           verificationContext.domain,
-          { needEmail, needPhone },
+          { needEmail, needPhone: needPhone && !existingPhonePending },
         );
       }
     } catch (error) {
@@ -1306,12 +1371,30 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       }
     }
 
+    const newlyPendingPhone = directVerified && needPhone
+      && !apollo.validPhone(resolved?.phone || '')
+      && ['pending', 'waterfall_pending'].includes(text(resolved?.phoneStatus))
+      && Boolean(text(resolved?.apolloPersonId || resolved?.id))
+      && (text(resolved?.phoneStatus) === 'pending' || Boolean(text(resolved?.phoneWaterfallRequestId)));
+    if (newlyPendingPhone) {
+      // Register ownership before considering replacements. A verified, paid
+      // callback is an outstanding result, not evidence of phone exhaustion.
+      queuePendingPhone(options, Number(options.rowNumber), group, snapshot, resolved);
+    }
+
     // Contactability now outranks identity preservation for non-anchor POC slots.
     // If the existing person still has no actual usable phone, replace the WHOLE
     // POC group with a different verified same-company person from the shared
     // bounded phone-qualified shortlist. +91/email policy is inherited from
     // contactabilityTier(), and a distinct replacement is mandatory.
-    if (needPhone && !apollo.validPhone(resolved?.phone || '')) {
+    if (
+      options.allowVerifiedExistingPocReplacement === true
+      && needPhone && !existingPhonePending && !newlyPendingPhone
+      && !apollo.validPhone(resolved?.phone || '')
+    ) {
+      // Existing named contacts may have been manually entered by the owner.
+      // Replacement requires separate explicit permission, never ordinary
+      // "resume enrichment" or a provider failure. Complete records are untouched.
       const replacement = await selectContactableReplacement(item, plan, companyContext, stats, {
         ...options,
         row,
@@ -2593,6 +2676,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       outcome = await pollNativePhone(person.phoneRequestId, {
         polls,
         maxWaitMs: waitMs,
+        expectedPersonId: apolloPersonId,
       });
     } else if (text(person.phoneWaterfallRequestId)) {
       const quality = require('./apollo-three-poc-quality');
@@ -2611,17 +2695,27 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
     if (callbackAfter) return recordResolved(callbackAfter);
 
     const state = text(outcome?.state).toLowerCase();
-    if (state === 'pending' || person.phoneStatus === 'pending' || person.phoneStatus === 'waterfall_pending') {
-      stats.candidatePhoneSettlementPending = Number(stats.candidatePhoneSettlementPending || 0) + 1;
-      return person;
-    }
-    if (['not_found', 'terminal', 'unavailable'].includes(state)) {
+    // A terminal/unknown/invalid result overrides the earlier synchronous
+    // "pending" match status. Previously the pending flag won this branch and
+    // ULTRON staged new POC names/emails for already-dead phone request IDs.
+    if (state === 'not_found') {
       stats.candidatePhoneSettlementNotFound = Number(stats.candidatePhoneSettlementNotFound || 0) + 1;
       return { ...person, phone: null, phoneStatus: 'not_found' };
     }
+    if (['terminal', 'unavailable', 'delivery_failed', 'owner_mismatch', 'owner_unverified', 'error'].includes(state)) {
+      stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
+      return { ...person, phone: null, phoneStatus: 'unavailable',
+        phoneSettlementFailure: state, phoneSettlementReason: text(outcome?.terminalReason) };
+    }
+    if (state === 'pending' || (!outcome
+      && ['pending','waterfall_pending'].includes(text(person.phoneStatus))
+      && (text(person.phoneRequestId) || text(person.phoneWaterfallRequestId)))) {
+      stats.candidatePhoneSettlementPending = Number(stats.candidatePhoneSettlementPending || 0) + 1;
+      return person;
+    }
 
     stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
-    return person;
+    return { ...person, phone: null, phoneStatus: 'unavailable' };
   } catch (error) {
     throwSystemic(error);
     stats.candidatePhoneSettlementErrors = Number(stats.candidatePhoneSettlementErrors || 0) + 1;
@@ -2926,9 +3020,17 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       };
       if (entry.tier > 0) checked.push(entry);
       else if (
-        ['pending', 'waterfall_pending'].includes(text(person.phoneStatus))
-        && text(person.apolloPersonId || person.id)
+        text(person.apolloPersonId || person.id)
         && writePlan.writes.length
+        && (
+          (text(person.phoneStatus) === 'pending'
+            && text(person.phoneRequestId)
+            && !phoneReceiptOwnershipConflict(
+              person.phoneRequestId, person.apolloPersonId || person.id, options
+            ))
+          || (text(person.phoneStatus) === 'waterfall_pending'
+            && text(person.phoneWaterfallRequestId))
+        )
       ) {
         // Apollo accepted this verified person's phone reveal but has not
         // settled it yet. Preserve one exact owner, not an anonymous callback.
@@ -2954,8 +3056,9 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       || apollo.decisionPriority(a.person.title || '') - apollo.decisionPriority(b.person.title || '')
       || a.index - b.index
     )[0] || null;
-    if (pendingOwner) {
-      queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, pendingOwner.person);
+    if (pendingOwner && queuePendingPhone(
+      options, Number(options.rowNumber), target.group, target.snapshot, pendingOwner.person
+    )) {
       claimed.add(pendingOwner.rawKey);
       rememberCandidate(existing, pendingOwner.person);
       stats.pendingPocIdentityStaged = Number(stats.pendingPocIdentityStaged || 0) + 1;
@@ -3587,7 +3690,10 @@ async function run(request = {}, options = {}) {
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const pendingPhoneQueue = [];
   const pendingEmailQueue = emailStore.forSource(source);
-  const runOptions = { ...options, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue };
+  const runOptions = {
+    ...options, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue,
+    pendingPhoneTargets: pendingPhoneTargetsForSource(source.spreadsheetId, source.sheetName),
+  };
   const targetRows = Array.isArray(options.targetRows)
     ? new Set(options.targetRows.map((value) => Number(value)).filter(Number.isInteger))
     : null;
@@ -4140,6 +4246,7 @@ module.exports = {
   foldedSheetTitle,
   selectUniversalSheetTargets,
   companyFromCompanyAnchor,
+  sheetCompanyIdentity,
   inferHiringCompanyFromEvidence,
   preferredHiringCompanyContext,
   anchorNameTokens,
@@ -4165,12 +4272,14 @@ module.exports = {
   syncPendingEmailAssignments,
   syncBackgroundEmailAssignments,
   queuePendingPhone,
+  phoneReceiptOwnershipConflict,
   registerBackgroundPhoneAssignments,
   syncBackgroundPhoneAssignments,
   startBackgroundPhoneWatcher,
   loadBackgroundPhoneAssignments,
   persistBackgroundPhoneAssignments,
   pendingPhoneRowsForSource,
+  pendingPhoneTargetsForSource,
   candidateIndiaPriority,
   backgroundPhoneStatus,
   syncPendingPhoneAssignments,

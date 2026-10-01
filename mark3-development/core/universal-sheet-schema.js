@@ -41,6 +41,13 @@ function headerRoleScores(header,signature={}){
   if(/^(?:role|title|designation|position|seniority|function|department)$/.test(h))scores.role+=46;
   if(/^(?:name|person|contact|lead|candidate)$/.test(h))scores.name+=38;
   if (/\b(?:poc|decision maker|recruiter)\b/.test(h) && !/\b(?:phone|mobile|email|mail|linkedin|profile|role|title|designation|number|no)\b/.test(h)) scores.name+=48;
+  // A numbered/ordinal "First Contact" or "Contact 2" identifies the person
+  // group. Do not classify ambiguous bare "Contact" as a name, and never
+  // override a more explicit contact-data field ("Contact Phone 2", etc.).
+  if (slotHint(h) && /\b(?:contact|person|lead)\b/.test(h)
+    && !/\b(?:phone|mobile|email|mail|linkedin|profile|role|title|designation|number|no)\b/.test(h)) {
+    scores.name+=55;
+  }
   if(/^(?:phone|mobile|telephone|cell|whatsapp)$/.test(h))scores.phone+=50;
   if(/^(?:email|mail|e mail)$/.test(h))scores.email+=52;
   if(/^(?:profile|profile url)$/.test(h))scores.linkedin_person+=65;
@@ -78,12 +85,36 @@ function assignPersonGroups(columns){
   // Explicit slot hints still create as many link-only groups as the sheet defines.
   if(!seedGroups.length){const unscoped=columns.filter((c)=>['linkedin_person','phone','email','role'].includes(c.role)&&!c.slotHint);if(unscoped.length){const seed=unscoped[0],group=makeGroup('person',1,seed);if(!groups.includes(group))groups.push(group);seedGroups.push({seed,group});}}
   const ordered=seedGroups.sort((a,b)=>a.seed.index-b.seed.index);
-  for(const c of columns){if(used.has(c.index))continue;const f=canonicalPersonField(c.role);if(!f||c.role==='company')continue;if(c.slotHint&&explicit.has(c.slotHint)){putField(explicit.get(c.slotHint),f,c);used.add(c.index);continue;}if(!ordered.length)continue;let target=ordered[0].group;for(const item of ordered){if(item.seed.index<=c.index)target=item.group;else break;}putField(target,f,c);used.add(c.index);}
+  for(const c of columns){if(used.has(c.index))continue;const f=canonicalPersonField(c.role);if(!f||c.role==='company')continue;if(c.slotHint&&explicit.has(c.slotHint)){putField(explicit.get(c.slotHint),f,c);used.add(c.index);continue;}if(!ordered.length)continue;
+    // A company-level LinkedIn column before the first POC name (e.g. A=Company,
+    // C=LinkedIn, D:F=POC-1) belongs to the company, not the first person.
+    // Assigning it to POC-1 made a blank D:F look like a company anchor and
+    // excluded POC-1 from new-contact discovery entirely.
+    const companyPrecedesLink=columns.some((seed)=>seed.index<c.index&&companySeed(seed));
+    const prePocCompanyLink=c.index<ordered[0].seed.index
+      &&(c.role==='linkedin'||c.role==='linkedin_company')
+      &&companyPrecedesLink
+      &&Number(c.signature?.linkedinPerson||0)<0.25;
+    if(prePocCompanyLink)continue;
+    let target=ordered[0].group;for(const item of ordered){if(item.seed.index<=c.index)target=item.group;else break;}putField(target,f,c);used.add(c.index);}
   const ordinals=new Set(groups.map((g)=>g.ordinal).filter(Boolean)),first=groups.find((g)=>g.seedIndex!=null&&!columns[g.seedIndex]?.slotHint&&g.ordinal!==1);if(!ordinals.has(1)&&first)first.ordinal=1;
   for(const g of groups){const values=Object.values(g.fields),identity=Number(Boolean(g.fields.name))+Number(Boolean(g.fields.linkedin)),contacts=Number(Boolean(g.fields.phone))+Number(Boolean(g.fields.email));g.confidence=Math.min(1,.22+identity*.28+contacts*.12+Math.min(.18,values.reduce((s,v)=>s+v.confidence,0)/Math.max(1,values.length)*.18));}
   return groups.filter((g)=>Object.keys(g.fields).length).sort((a,b)=>(a.ordinal||999)-(b.ordinal||999)||(a.seedIndex??999)-(b.seedIndex??999));
 }
-function assignCompanyGroups(columns,claimed=new Set()){const seeds=columns.filter((c)=>companySeed(c)&&!claimed.has(c.index)).sort((a,b)=>a.index-b.index);if(!seeds.length)return[];const groups=[];for(const seed of seeds){if(groups.some((g)=>Object.values(g.fields).some((f)=>f.index===seed.index)))continue;const g=makeGroup('company',seed.slotHint||groups.length+1,seed);putField(g,canonicalCompanyField(seed.role),seed);groups.push(g);}for(const c of columns){if(claimed.has(c.index))continue;const f=canonicalCompanyField(c.role);if(!f||c.role==='name'||!groups.length)continue;if(groups.some((g)=>Object.values(g.fields).some((v)=>v.index===c.index)))continue;let target=groups[0];for(const g of groups){if((g.seedIndex??-1)<=c.index)target=g;else break;}putField(target,f,c);}for(const g of groups)g.confidence=Math.min(1,.45+Object.keys(g.fields).length*.12);return groups;}
+function assignCompanyGroups(columns,claimed=new Set()){const seeds=columns.filter((c)=>companySeed(c)&&!claimed.has(c.index)).sort((a,b)=>a.index-b.index);if(!seeds.length)return[];const groups=[];for(const seed of seeds){
+    if(groups.some((g)=>Object.values(g.fields).some((f)=>f.index===seed.index)))continue;
+    // Attach an immediately following company /company/ URL to an existing
+    // company-name group instead of inventing a second company entity.
+    if(seed.role==='linkedin_company'){
+      const preceding=[...groups].reverse().find((g)=>
+        g.fields.company && (g.seedIndex??-1)<seed.index
+        && seed.index-(g.seedIndex??-1)<=3 && !g.fields.linkedin
+      );
+      if(preceding){putField(preceding,'linkedin',seed);continue;}
+    }
+    const g=makeGroup('company',seed.slotHint||groups.length+1,seed);
+    putField(g,canonicalCompanyField(seed.role),seed);groups.push(g);
+  }for(const c of columns){if(claimed.has(c.index))continue;const f=canonicalCompanyField(c.role);if(!f||c.role==='name'||!groups.length)continue;if(groups.some((g)=>Object.values(g.fields).some((v)=>v.index===c.index)))continue;let target=groups[0];for(const g of groups){if((g.seedIndex??-1)<=c.index)target=g;else break;}putField(target,f,c);}for(const g of groups)g.confidence=Math.min(1,.45+Object.keys(g.fields).length*.12);return groups;}
 function dedicatedProviderColumn(column){return /^(?:apollo)(?:\s|$)/.test(String(column?.normalizedHeader||''));}
 function inferSchema(rows,options={}){
   const header=detectHeaderRow(rows,options);

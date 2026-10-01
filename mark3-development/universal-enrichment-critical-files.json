@@ -32,6 +32,10 @@
     "core/universal-enrichment-cache.js",
     "scripts/universal-enrichment-failure-matrix-selftest.js",
     "scripts/universal-aryatry-semantic-selftest.js",
-    "scripts/universal-pending-poc-settlement-selftest.js"
+    "scripts/universal-pending-poc-settlement-selftest.js",
+    "core/universal-sheet-schema.js",
+    "scripts/universal-poc-phase-pipeline-selftest.js",
+    "scripts/apollo-phone-delivery-selftest.js",
+    "scripts/apollo-phone-delivery-doctor.js"
   ]
 }

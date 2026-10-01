@@ -48,7 +48,17 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
 if (pkg.version !== '3.0.0-beta.22') throw new Error(`Unexpected Mark 3 package version: ${pkg.version}`);
 const startScript = String(pkg?.scripts?.start||'');
 if (/start-unified\.mjs/i.test(startScript)) throw new Error('Mark 3 start must not launch Mark 2.');
-if (!/start-transport\.mjs/.test(startScript) || !/multimodal-selftest\.js/.test(startScript)) throw new Error('Mark 3 start must validate multimodal runtime and use transport selector.');
+// Startup must validate syntax/runtime invariants and use the transport selector;
+// exhaustive multimodal regression belongs to the separately enforced CI suite.
+if (!/start-transport\.mjs/.test(startScript) || !/scripts\/preflight\.js/.test(startScript) || !/server\.js/.test(startScript)) {
+  throw new Error('Mark 3 start must run preflight and use the transport selector before the server.');
+}
+const fullStartupTests = String(pkg?.scripts?.['check:startup-suite'] || '');
+if (!/multimodal-selftest\.js/.test(fullStartupTests)
+  || !/three-poc-internal-inference-selftest\.js/.test(fullStartupTests)
+  || !/contact-architecture-contract-selftest\.js/.test(fullStartupTests)) {
+  throw new Error('Mark 3 full CI suite must retain multimodal and contact/enrichment regressions.');
+}
 
 const mark3Launcher = fs.readFileSync(path.join(root,'scripts','start-mark3.mjs'),'utf8');
 // Mentions of source dev mode in error messages/diagnostics are allowed. Only reject an actual
