@@ -141,6 +141,19 @@ assert.equal(companyPlan.anchor.group.kind, 'company');
 assert.ok(require('../core/universal-sheet-enrichment-operator').candidateFillTargets(companyPlan)
   .some((item) => item.group.ordinal === 1), 'empty D:F must enter POC-1 discovery');
 
+const genericCompanyLinkRows = companyLedRows.map((row, index) =>
+  index ? row.map((value, column) => column === 2 ? 'Open on LinkedIn' : value) : [...row]
+);
+const genericCompanyLinkSchema = schemaTools.inferSchema(genericCompanyLinkRows);
+assert.equal(genericCompanyLinkSchema.personGroups[0].fields.linkedin, undefined,
+  'plain hyperlink labels before POC-1 must also remain company-owned');
+assert.equal(genericCompanyLinkSchema.companyGroups[0].fields.linkedin.index, 2);
+assert.ok(require('../core/universal-sheet-enrichment-operator').candidateFillTargets(
+  planner.planRow(genericCompanyLinkRows[1], genericCompanyLinkSchema)
+).some((item) => item.group.ordinal === 1),
+'POC-1 remains discoverable even when Google does not expose the rich hyperlink URL');
+
+
 assert.equal(controller.parseContactPhaseOrdinal('Fill POC-1 only in Arya 2'), 1);
 assert.equal(controller.parseContactPhaseOrdinal('Only second POC for this sheet'), 2);
 assert.equal(controller.parseContactPhaseOrdinal('3rd POC only'), 3);
