@@ -200,6 +200,14 @@ const FREE_EMAIL_DOMAINS = new Set([
   'icloud.com','me.com','proton.me','protonmail.com','aol.com','rediffmail.com',
 ]);
 
+// Company Name cells may contain a second-line sector/category description
+// (e.g. "Crusoe\nAI compute"). Use the identity line for Apollo employer
+// matching while leaving the actual worksheet cell and evidence unchanged.
+function sheetCompanyIdentity(value) {
+  const lines = String(value ?? '').split(/\r?\n/).map((part) => part.trim()).filter(Boolean);
+  return lines[0] || '';
+}
+
 function cleanedCompanyEvidence(value) {
   return text(value)
     .replace(/^[\s:–—-]+|[\s:–—-]+$/g, '')
@@ -224,7 +232,11 @@ function firstBusinessEmailDomain(value) {
 }
 
 function inferHiringCompanyFromEvidence(plan, row = []) {
-  if (text(plan.context?.company)) return {company:text(plan.context.company),domain:websiteDomain(plan.context.website),source:'sheet-company',anchorPerson:null};
+  if (text(plan.context?.company)) return {
+    company: sheetCompanyIdentity(plan.context.company),
+    domain: websiteDomain(plan.context.website),
+    source: 'sheet-company', anchorPerson: null,
+  };
   const evidence = contextEvidenceText(plan);
   if (!evidence) return null;
 
@@ -344,7 +356,7 @@ function anchorNeedsHydration(plan = {}, evidence = {}, destinationGroup = null)
 
 function companyFromCompanyAnchor(anchor) {
   const values = anchor?.snapshot?.values || {};
-  const company = text(values.company || values.name);
+  const company = sheetCompanyIdentity(values.company || values.name);
   const domain = websiteDomain(values.website || '');
   return company ? {
     company,
@@ -358,12 +370,12 @@ function companyFromCompanyAnchor(anchor) {
 
 function nearestCompanyIdentity(plan) {
   const values = plan.anchor?.snapshot?.values || {};
-  if (values.company) return text(values.company);
+  if (values.company) return sheetCompanyIdentity(values.company);
   for (const item of plan.groups?.existing || []) {
-    const company = text(item.snapshot?.values?.company);
+    const company = sheetCompanyIdentity(item.snapshot?.values?.company);
     if (company) return company;
   }
-  return text(plan.context?.company || '');
+  return sheetCompanyIdentity(plan.context?.company || '');
 }
 
 async function resolvePersonAnchor(plan, row, options = {}) {
@@ -4234,6 +4246,7 @@ module.exports = {
   foldedSheetTitle,
   selectUniversalSheetTargets,
   companyFromCompanyAnchor,
+  sheetCompanyIdentity,
   inferHiringCompanyFromEvidence,
   preferredHiringCompanyContext,
   anchorNameTokens,
