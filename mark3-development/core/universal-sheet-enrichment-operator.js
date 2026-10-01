@@ -2502,6 +2502,28 @@ function manualPriorityCandidates(candidates = [], companyContext = {}, existing
     .map((item) => item.candidate);
 }
 
+const callbackResultSnapshots = new WeakMap();
+async function readSharedPhoneResults(fetchResults, options = {}) {
+  if (typeof fetchResults !== 'function') return [];
+  const context = runContext.current();
+  if (!context || options.forceFresh === true) return fetchResults();
+  const previous = callbackResultSnapshots.get(context);
+  if (previous && previous.expiresAt > Date.now()) return previous.promise;
+  // One webhook /results snapshot is valid for 1.2 seconds across simultaneous
+  // candidate hydration waves. This read is not a paid reveal. The durable
+  // background watcher remains responsible for later callback arrivals.
+  const entry = {
+    expiresAt: Date.now() + 1200,
+    promise: Promise.resolve().then(fetchResults),
+  };
+  callbackResultSnapshots.set(context, entry);
+  try { return await entry.promise; }
+  catch (error) {
+    if (callbackResultSnapshots.get(context) === entry) callbackResultSnapshots.delete(context);
+    throw error;
+  }
+}
+
 async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
   if (!person?.identityVerified) return person;
 
@@ -2547,7 +2569,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       ? options.fetchPhoneResults
       : apollo.fetchPhoneResults;
     try {
-      const results = await fetchResults();
+      const results = await readSharedPhoneResults(fetchResults);
       const hit = (Array.isArray(results) ? results : []).find((item) =>
         text(item?.apollo_person_id || item?.apolloPersonId || item?.person_id) === apolloPersonId
       );
@@ -4170,6 +4192,7 @@ module.exports = {
   cachedVerifiedPeopleForCompany,
   manualPriorityCandidates,
   settleVerifiedPhoneForSelection,
+  readSharedPhoneResults,
   contactabilityTargetKey,
   markContactabilityExhausted,
   contactabilityTier,
