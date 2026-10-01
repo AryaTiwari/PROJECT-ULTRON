@@ -57,8 +57,33 @@ const report = {
     previousOwnershipErrors: matches.filter((item) => /owner|identity|conflict|column|company/i.test(item.lastError || '')).length,
   },
   callbackStore: { checked: false, success: false },
+  cacheCrossCheck: { checked: false },
   directResult: { checked: false },
 };
+try {
+  const cache = apollo.readCache();
+  const cachedByPerson = new Map();
+  for (const person of Object.values(cache?.people || {})) {
+    const id = String(person?.apolloPersonId || '');
+    if (id && !cachedByPerson.has(id)) cachedByPerson.set(id, person);
+  }
+  const matched = matches.map((item) => ({ item, person: cachedByPerson.get(String(item.apolloPersonId || '')) }))
+    .filter((entry) => entry.person);
+  report.cacheCrossCheck = {
+    checked: true,
+    pendingOwnersInCache: matched.length,
+    matchingRequestReceipts: matched.filter(({item,person}) =>
+      String(item.phoneRequestId || '') === String(person.phoneRequestId || '')).length,
+    differingRequestReceipts: matched.filter(({item,person}) =>
+      Boolean(item.phoneRequestId && person.phoneRequestId)
+      && String(item.phoneRequestId) !== String(person.phoneRequestId)).length,
+    cachedVerifiedPhoneAvailable: matched.filter(({person}) => Boolean(apollo.validPhone(person.phone))).length,
+    cachedPhantomPending: matched.filter(({person}) =>
+      person.phoneStatus === 'pending' && !person.phoneRequestId).length,
+  };
+} catch {
+  report.cacheCrossCheck = {checked:false,error:'CACHE_CROSS_CHECK_UNAVAILABLE'};
+}
 try {
   const results = await apollo.fetchPhoneResults(); // Worker GET /results only.
   const ids = new Set(matches.map((item) => String(item.apolloPersonId || '')));
