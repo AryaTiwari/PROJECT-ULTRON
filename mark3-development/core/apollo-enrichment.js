@@ -91,11 +91,13 @@ function cacheDays(record) {
   // Positive data is expensive to reveal again, especially mobile numbers. Keep it
   // much longer than negatives. Pending/ambiguous records are intentionally short-lived
   // so quality does not get frozen merely to save credits.
+  // Short pending/unavailable lifetimes outrank positive email cache.
+  // An email must not hide a never-issued phone request for 180 days.
+  if (record?.phoneStatus === 'pending' || record?.phoneStatus === 'unavailable') {
+    return numericSetting('ULTRON_M3_APOLLO_PENDING_CACHE_DAYS', 1);
+  }
   if (record?.phoneStatus === 'found' || record?.phone || record?.email) {
     return numericSetting('ULTRON_M3_APOLLO_POSITIVE_CACHE_DAYS', 180);
-  }
-  if (record?.phoneStatus === 'pending') {
-    return numericSetting('ULTRON_M3_APOLLO_PENDING_CACHE_DAYS', 1);
   }
   if (record?.ambiguous) {
     return numericSetting('ULTRON_M3_APOLLO_AMBIGUOUS_CACHE_DAYS', 7);
@@ -113,7 +115,11 @@ function isFresh(record) {
 
 function pendingPhoneRequestFresh(record) {
   if (record?.phoneStatus !== 'pending') return false;
-  if (record.phoneRequestId || record.apolloPersonId) return true;
+  // A person ID is NOT proof that Apollo started a phone reveal.
+  if (record.phoneRequestId) {
+    const requestedAt = Date.parse(record?.phoneRequestedAt || record?.checkedAt || '');
+    return Number.isFinite(requestedAt) && Date.now() - requestedAt < 30 * 86400000;
+  }
   const requestedAt = Date.parse(record?.phoneRequestedAt || record?.checkedAt || '');
   if (!Number.isFinite(requestedAt)) return false;
   const retryMinutes = Math.max(
@@ -129,7 +135,7 @@ function satisfies(record, { needEmail, needPhone }) {
   if (needEmail && !record.emailKnown) return false;
   if (needEmail && record.email != null && !validEmail(record.email)) return false;
   if (needPhone) {
-    if (!['found', 'not_found', 'pending'].includes(record.phoneStatus)) return false;
+    if (!['found', 'not_found', 'pending', 'unavailable'].includes(record.phoneStatus)) return false;
     if (record.phoneStatus === 'found' && !validPhone(record.phone)) return false;
     if (record.phoneStatus === 'pending' && !pendingPhoneRequestFresh(record)) return false;
   }
@@ -214,6 +220,23 @@ function phoneFromWebhookPayload(payload) {
   return preferredPhoneFromPayload(payload);
 }
 
+// The zero-credit webhook_result endpoint wraps the native phone payload.
+function completedPhonePoll(data = {}) {
+  const phone = phoneFromWebhookPayload(data);
+  if (phone) return { state: 'found', phone, payload: data };
+  const status = String(data?.webhook_status || '').toLowerCase();
+  if (['in_progress', 'pending'].includes(status)) return { state: 'pending', phone: null, payload: data };
+  if (status === 'failed') return { state: 'delivery_failed', phone: null, payload: data };
+  return { state: 'not_found', phone: null, payload: data };
+}
+
+function phoneRevealState(needPhone, immediatePhone, data = {}) {
+  if (!needPhone) return null;
+  if (validPhone(immediatePhone)) return 'found';
+  if (String(data?.phone_enrichment?.status || '').toLowerCase() === 'skipped') return 'unavailable';
+  return String(data?.__requestId || '').trim() ? 'pending' : 'unavailable';
+}
+
 async function pollWebhookResult(requestId, options = {}) {
   const apiKey = setting('APOLLO_API_KEY');
   const id = String(requestId || '').trim();
@@ -232,8 +255,7 @@ async function pollWebhookResult(requestId, options = {}) {
     try { data = raw ? JSON.parse(raw) : {}; } catch {}
 
     if (response.ok) {
-      const phone = phoneFromWebhookPayload(data);
-      return { state: phone ? 'found' : 'not_found', phone, payload: data };
+      return completedPhonePoll(data);
     }
 
     const code = String(data?.error_code || data?.code || '').toLowerCase();
@@ -357,7 +379,7 @@ function preferredPhoneFromPayload(payload) {
     for (const key of ['sanitized_number','sanitized_phone','raw_number','phone_number','phone','number']) {
       if (value[key] != null) add(value[key], localHint);
     }
-    for (const key of ['phone_numbers','vendors','person','contact','people','matches','waterfall','data']) {
+    for (const key of ['webhook_result','result','results','phone_numbers','vendors','person','contact','people','matches','waterfall','data']) {
       if (value[key] != null) visit(value[key], localHint);
     }
   };
@@ -748,7 +770,7 @@ function matchDecision(requestedLinkedIn, data) {
 async function apiCall(linkedinUrl, { needPhone }) {
   if(needPhone){
     const query=typeof linkedinUrl==='object'?linkedinUrl:{linkedin_url:linkedinUrl};
-    const saved=Object.entries(readCache().people).find(([url,person])=>person.phoneStatus==='pending'&&person.apolloPersonId&&(
+    const saved=Object.entries(readCache().people).find(([url,person])=>person.phoneStatus==='pending'&&pendingPhoneRequestFresh(person)&&person.apolloPersonId&&(
       (query.id&&String(query.id)===String(person.apolloPersonId)) ||
       (query.linkedin_url&&normalizeLinkedIn(query.linkedin_url)===normalizeLinkedIn(url)) ||
       (query.email&&validEmail(person.email)?.toLowerCase()===String(query.email).toLowerCase()) ||
@@ -939,7 +961,7 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
     ? hostname(candidate.organizationDomain || domain || '')
     : organization.organizationDomain;
   const immediatePhone = preferredPhoneFromPayload(person);
-  const phoneStatus = needPhone ? (immediatePhone ? 'found' : 'pending') : null;
+  const phoneStatus = phoneRevealState(needPhone, immediatePhone, data);
   const record = {
     name: String(person.name || [person.first_name, person.last_name].filter(Boolean).join(' ') || candidate.name || '').trim(),
     title: String(person.title || candidate.title || '').trim(),
@@ -962,7 +984,7 @@ async function resolveDecisionMaker(candidate, company, domain, options = {}) {
     returnedLinkedIn: linkedinUrl,
     checkedAt: new Date().toISOString(),
     phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
-    phoneRequestId: needPhone && !immediatePhone ? String(data.__requestId || '') : null,
+    phoneRequestId: phoneRevealState(needPhone, immediatePhone, data) === 'pending' ? String(data.__requestId || '') : null,
     identityVerified: true,
   };
   if (linkedinUrl) {
@@ -1031,11 +1053,11 @@ async function resolvePersonByBusinessEmail(email, company = '', domain = '', op
     emailKnown: true,
     email: returnedEmail || cleanEmail,
     phone: immediatePhone,
-    phoneStatus: needPhone ? (immediatePhone ? 'found' : 'pending') : null,
+    phoneStatus: phoneRevealState(needPhone, immediatePhone, data),
     returnedLinkedIn: linkedinUrl,
     checkedAt: new Date().toISOString(),
     phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
-    phoneRequestId: needPhone && !immediatePhone ? String(data.__requestId || '') : null,
+    phoneRequestId: phoneRevealState(needPhone, immediatePhone, data) === 'pending' ? String(data.__requestId || '') : null,
     identityVerified: true,
     matchConfidence: confidence || null,
     verifiedBy: 'business-email',
@@ -1115,11 +1137,11 @@ async function resolvePersonByNameCompany(name, company, domain, options = {}) {
     emailKnown: needEmail,
     email: needEmail ? validEmail(person.email) : null,
     phone: immediatePhone,
-    phoneStatus: needPhone ? (immediatePhone ? 'found' : 'pending') : null,
+    phoneStatus: phoneRevealState(needPhone, immediatePhone, data),
     returnedLinkedIn: linkedinUrl,
     checkedAt: new Date().toISOString(),
     phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : null,
-    phoneRequestId: needPhone && !immediatePhone ? String(data.__requestId || '') : null,
+    phoneRequestId: phoneRevealState(needPhone, immediatePhone, data) === 'pending' ? String(data.__requestId || '') : null,
     identityVerified: true,
     matchConfidence: confidence || null,
   };
@@ -1190,13 +1212,13 @@ async function enrich(input, options = {}) {
       organizationDomain: organization.organizationDomain || previous.organizationDomain || '',
       emailKnown: needEmail ? true : Boolean(previous.emailKnown),
       email: needEmail ? validEmail(person.email) : (previous.email ?? null),
-      phoneStatus: needPhone ? (immediatePhone ? 'found' : 'pending') : (previous.phoneStatus || null),
-      phone: needPhone ? null : (previous.phone ?? null),
+      phoneStatus: needPhone ? phoneRevealState(needPhone, immediatePhone, data) : (previous.phoneStatus || null),
+      phone: needPhone ? immediatePhone : (previous.phone ?? null),
       matchConfidence: decision.confidence || '',
       returnedLinkedIn: decision.returnedLinkedIn || null,
       checkedAt: new Date().toISOString(),
       phoneRequestedAt: needPhone && !immediatePhone ? new Date().toISOString() : (previous.phoneRequestedAt || null),
-      phoneRequestId: needPhone && !immediatePhone ? String(data.__requestId || '') : (previous.phoneRequestId || null),
+      phoneRequestId: needPhone ? (phoneRevealState(needPhone, immediatePhone, data) === 'pending' ? String(data.__requestId || '') : null) : (previous.phoneRequestId || null),
     };
   }
 
@@ -1340,6 +1362,9 @@ module.exports = {
   requestIdFromRaw,
   phoneFromWebhookPayload,
   pollWebhookResult,
+  completedPhonePoll,
+  phoneRevealState,
+  pendingPhoneRequestFresh,
   searchCompanyPeopleBroad,
   candidateEmployerContext,
   hydratedEmployerMatchesCandidate,
