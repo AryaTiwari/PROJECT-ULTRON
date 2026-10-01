@@ -216,8 +216,18 @@ assert.match(controllerSource, /employer verification remains mandatory whenever
 assert.match(controllerSource, /results-first waterfall: targeted Apollo -> bounded broad Apollo -> brand\/domain variants -> authenticated read-only LinkedIn/);
 assert.match(controllerSource, /pragmatic same-company HR\/talent\/staffing\/placement\/people\/leadership fallback/);
 assert.match(controllerSource, /FINAL verified POC whose phone is still blank/);
-assert.match(controllerSource, /Apollo native phone reveal with direct poll-only result settlement as the production default/);
-assert.match(controllerSource, /custom poll_only phone waterfall remains experimental\/legacy-only/);
+// Phone transport is governed by executable Apollo flags, not mutable
+// approval-summary prose. A wording change must not prevent ULTRON startup.
+const apolloSource = fs.readFileSync(path.join(root, 'apollo-enrichment.js'), 'utf8');
+const qualitySource = fs.readFileSync(path.join(root, 'apollo-three-poc-quality.js'), 'utf8');
+assert.match(apolloSource, /ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only'/,
+  'Apollo native reveal defaults to poll-only delivery');
+assert.match(apolloSource, /url\.searchParams\.set\('reveal_phone_number', needPhone \? 'true' : 'false'\)/,
+  'phone revelation follows needPhone rather than buying discovery-only reveals');
+assert.match(apolloSource, /url\.searchParams\.set\('poll_only', 'true'\)/,
+  'native phone delivery uses provider result polling');
+assert.match(qualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/,
+  'the custom legacy waterfall remains opt-in');
 assert.match(controllerSource, /never buys phone enrichment for discovery-only candidates/);
 assert.match(controllerSource, /unresolved POC-3 also receives deep deterministic recheck and bounded AI rescue/);
 assert.match(controllerSource, /Gemini is preferred for unresolved row\/company context, Groq for candidate assignment, and NVIDIA for optional independent review/);
