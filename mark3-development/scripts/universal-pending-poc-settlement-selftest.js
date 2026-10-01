@@ -111,6 +111,31 @@ const context = require('../core/universal-run-context');
       );
       assert.deepEqual(awaitingWrites, [], 'pending POC must remain unchanged');
       assert.equal(awaitingStats.existingPhoneAwaitingCallback, 1);
+
+      // Even without pending callback state, an exact existing/manual identity
+      // is immutable by default. A missing phone cannot authorize swapping it.
+      let exactChecks = 0;
+      apollo.resolvePersonByNameCompany = async () => {
+        exactChecks++;
+        return { identityVerified:true, name:'Existing Recruiter',
+          title:'Talent Acquisition Head', organizationName:'Example India Hiring',
+          email:'existing@example.in', phone:null, phoneStatus:'not_found' };
+      };
+      const protectedStats = operator.freshStats();
+      const protectedWrites = await operator.repairExistingGroups(
+        ['Example India Hiring','Tech','','','','',namedPoc2.snapshot.values.name,
+          namedPoc2.snapshot.values.email,''],
+        {groups:{partial:[namedPoc2],existing:[namedPoc2]}},
+        {company:'Example India Hiring',domain:''},protectedStats,
+        {rowNumber:2,candidatePool:[{
+          id:'different',name:'Different Recruiter',title:'HR Director',
+          phone:'+919999999999',organizationName:'Example India Hiring',
+        }],allowVerifiedExistingPocReplacement:false}
+      );
+      assert.equal(exactChecks,1,'only the exact existing identity may be checked');
+      assert.ok(!protectedWrites.some((write)=>write.field==='name' || write.field==='phone'),
+        'do not overwrite an existing manually entered POC with another candidate');
+      assert.equal(protectedStats.existingGroupsReplaced || 0,0);
     } finally {
       apollo.resolvePersonByNameCompany = originalByName;
     }
