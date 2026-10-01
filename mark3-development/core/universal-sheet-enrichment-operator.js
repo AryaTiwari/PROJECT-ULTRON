@@ -694,6 +694,16 @@ function pendingPhoneRowsForSource(spreadsheetId, sheetName) {
     .filter(Number.isInteger));
 }
 
+// Keep phone ownership group-specific: a pending POC-2 must not prevent POC-1
+// enrichment on the same company row, and must not be purchased a second time.
+function pendingPhoneTargetsForSource(spreadsheetId, sheetName) {
+  loadBackgroundPhoneAssignments();
+  return new Set([...backgroundPhoneAssignments.values()]
+    .filter((item) => item.spreadsheetId === spreadsheetId && item.sheetName === sheetName)
+    .filter((item) => Number.isInteger(Number(item.rowNumber)) && Number.isInteger(Number(item.groupOrdinal)))
+    .map((item) => contactabilityTargetKey(item.rowNumber, item.groupOrdinal)));
+}
+
 function registerBackgroundPhoneAssignments(source, items = []) {
   for (const item of items) {
     if (!item?.apolloPersonId) continue;
@@ -1249,6 +1259,15 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
 
     const needEmail = Boolean(group.fields.email && !apollo.validEmail(snapshot.values.email || ''));
     const needPhone = Boolean(group.fields.phone && !apollo.validPhone(snapshot.values.phone || ''));
+    const existingPhonePending = needPhone
+      && options.pendingPhoneTargets instanceof Set
+      && options.pendingPhoneTargets.has(contactabilityTargetKey(options.rowNumber, group.ordinal));
+    // A paid request already owns this exact row and POC. Do not reveal/replace
+    // the same phone again while its durable callback is still outstanding.
+    if (existingPhonePending && !needEmail && !needsEmbeddedDesignationRepair(item)) {
+      stats.existingPhoneAwaitingCallback = Number(stats.existingPhoneAwaitingCallback || 0) + 1;
+      continue;
+    }
     const verificationContext = existingPersonVerificationContext(item, companyContext);
     let resolved = null;
     let verificationPath = '';
@@ -1259,14 +1278,14 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     try {
       if (snapshot.linkedinKind === 'linkedin_person') {
         verificationPath = 'exact-linkedin';
-        resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone });
+        resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone: needPhone && !existingPhonePending });
       } else if (snapshot.values.email && firstBusinessEmailDomain(snapshot.values.email)) {
         verificationPath = 'apollo-business-email';
         resolved = await apollo.resolvePersonByBusinessEmail(
           snapshot.values.email,
           verificationContext.company,
           verificationContext.domain,
-          { needEmail: true, needPhone },
+          { needEmail: true, needPhone: needPhone && !existingPhonePending },
         );
       } else if (snapshot.values.name && (verificationContext.company || verificationContext.domain)) {
         verificationPath = 'apollo-name-company';
@@ -1274,7 +1293,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
           existingContactSearchName(snapshot.values.name),
           verificationContext.company,
           verificationContext.domain,
-          { needEmail, needPhone },
+          { needEmail, needPhone: needPhone && !existingPhonePending },
         );
       }
     } catch (error) {
@@ -1306,12 +1325,23 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       }
     }
 
+    const newlyPendingPhone = directVerified && needPhone
+      && !apollo.validPhone(resolved?.phone || '')
+      && ['pending', 'waterfall_pending'].includes(text(resolved?.phoneStatus))
+      && Boolean(text(resolved?.apolloPersonId || resolved?.id))
+      && (text(resolved?.phoneStatus) === 'pending' || Boolean(text(resolved?.phoneWaterfallRequestId)));
+    if (newlyPendingPhone) {
+      // Register ownership before considering replacements. A verified, paid
+      // callback is an outstanding result, not evidence of phone exhaustion.
+      queuePendingPhone(options, Number(options.rowNumber), group, snapshot, resolved);
+    }
+
     // Contactability now outranks identity preservation for non-anchor POC slots.
     // If the existing person still has no actual usable phone, replace the WHOLE
     // POC group with a different verified same-company person from the shared
     // bounded phone-qualified shortlist. +91/email policy is inherited from
     // contactabilityTier(), and a distinct replacement is mandatory.
-    if (needPhone && !apollo.validPhone(resolved?.phone || '')) {
+    if (needPhone && !existingPhonePending && !newlyPendingPhone && !apollo.validPhone(resolved?.phone || '')) {
       const replacement = await selectContactableReplacement(item, plan, companyContext, stats, {
         ...options,
         row,
@@ -3587,7 +3617,10 @@ async function run(request = {}, options = {}) {
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const pendingPhoneQueue = [];
   const pendingEmailQueue = emailStore.forSource(source);
-  const runOptions = { ...options, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue };
+  const runOptions = {
+    ...options, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue,
+    pendingPhoneTargets: pendingPhoneTargetsForSource(source.spreadsheetId, source.sheetName),
+  };
   const targetRows = Array.isArray(options.targetRows)
     ? new Set(options.targetRows.map((value) => Number(value)).filter(Number.isInteger))
     : null;
@@ -4171,6 +4204,7 @@ module.exports = {
   loadBackgroundPhoneAssignments,
   persistBackgroundPhoneAssignments,
   pendingPhoneRowsForSource,
+  pendingPhoneTargetsForSource,
   candidateIndiaPriority,
   backgroundPhoneStatus,
   syncPendingPhoneAssignments,
