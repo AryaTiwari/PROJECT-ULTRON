@@ -143,6 +143,20 @@ assert.equal(directQueue.length, 1, 'native Apollo pending phone with request_id
 assert.equal(directQueue[0].phoneMode, 'native');
 assert.equal(directQueue[0].phoneRequestId, '1039995589705121975');
 
+// A reused individual people/match receipt cannot own two different POCs.
+assert.equal(operator.phoneReceiptOwnershipConflict(
+  '1039995589705121975', 'another-apollo-person', {pendingPhoneQueue:directQueue}
+), true, 'different Apollo people cannot share one paid native reveal receipt');
+const collisionQueue = [...directQueue];
+const duplicateAccepted = operator.queuePendingPhone(
+  {pendingPhoneQueue:collisionQueue}, 10, existing.group, existing.snapshot,
+  {id:'another-apollo-person',name:'Different Verified Person',
+   phoneStatus:'pending',phoneRequestId:'1039995589705121975',phone:''}
+);
+assert.equal(duplicateAccepted,false,'reject a phone receipt already owned by another person');
+assert.equal(collisionQueue.length,1,'do not stage a second owner for a duplicate receipt');
+
+
 const waterfallQueue = [];
 operator.queuePendingPhone(
   { pendingPhoneQueue: waterfallQueue },
