@@ -81,6 +81,40 @@ const context = require('../core/universal-run-context');
       assert.equal(requests,2,'later fresh callback reads must remain possible');
     });
 
+    // Existing named POC-2 already has an owned, pending paid phone reveal.
+    // Contact repair must not purchase the same phone or replace the person.
+    const namedPoc2 = {
+      group: { id: 'poc-2', ordinal: 2, kind: 'person', fields: {
+        name: {index:6,header:'2nd POC'},
+        email: {index:7,header:'Email'},
+        phone: {index:8,header:'Phone'},
+      }},
+      isAnchor: false,
+      snapshot: { empty:false, hasIdentity:true, values: {
+        name:'Existing Recruiter — Talent Acquisition Head',
+        email:'existing@example.in', phone:'', linkedin:'',
+      }},
+    };
+    const originalByName = apollo.resolvePersonByNameCompany;
+    apollo.resolvePersonByNameCompany = async () => {
+      throw new Error('Already-pending phone must not trigger another Apollo lookup');
+    };
+    try {
+      const awaitingStats = operator.freshStats();
+      const awaitingWrites = await operator.repairExistingGroups(
+        ['Example India Hiring','Tech','', '', '', '',namedPoc2.snapshot.values.name,
+          namedPoc2.snapshot.values.email,''],
+        { groups: { partial:[namedPoc2], existing:[namedPoc2] } },
+        {company:'Example India Hiring',domain:''},
+        awaitingStats,
+        {rowNumber:2,pendingPhoneTargets:new Set(['2:2'])}
+      );
+      assert.deepEqual(awaitingWrites, [], 'pending POC must remain unchanged');
+      assert.equal(awaitingStats.existingPhoneAwaitingCallback, 1);
+    } finally {
+      apollo.resolvePersonByNameCompany = originalByName;
+    }
+
     console.log('Pending POC settlement regression passed: staged verified owner + email, exact durable callback coordinates, no fabricated phone, terminal no-phone rejection, and one shared callback read across 20 candidates.');
   } finally {
     apollo.resolveDecisionMaker=originalResolve;
