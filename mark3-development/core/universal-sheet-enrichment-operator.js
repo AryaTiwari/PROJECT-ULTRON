@@ -2502,6 +2502,28 @@ function manualPriorityCandidates(candidates = [], companyContext = {}, existing
     .map((item) => item.candidate);
 }
 
+const callbackResultSnapshots = new WeakMap();
+async function readSharedPhoneResults(fetchResults, options = {}) {
+  if (typeof fetchResults !== 'function') return [];
+  const context = runContext.current();
+  if (!context || options.forceFresh === true) return fetchResults();
+  const previous = callbackResultSnapshots.get(context);
+  if (previous && previous.expiresAt > Date.now()) return previous.promise;
+  // One webhook /results snapshot is valid for 1.2 seconds across simultaneous
+  // candidate hydration waves. This read is not a paid reveal. The durable
+  // background watcher remains responsible for later callback arrivals.
+  const entry = {
+    expiresAt: Date.now() + 1200,
+    promise: Promise.resolve().then(fetchResults),
+  };
+  callbackResultSnapshots.set(context, entry);
+  try { return await entry.promise; }
+  catch (error) {
+    if (callbackResultSnapshots.get(context) === entry) callbackResultSnapshots.delete(context);
+    throw error;
+  }
+}
+
 async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
   if (!person?.identityVerified) return person;
 
@@ -2547,7 +2569,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       ? options.fetchPhoneResults
       : apollo.fetchPhoneResults;
     try {
-      const results = await fetchResults();
+      const results = await readSharedPhoneResults(fetchResults);
       const hit = (Array.isArray(results) ? results : []).find((item) =>
         text(item?.apollo_person_id || item?.apolloPersonId || item?.person_id) === apolloPersonId
       );
@@ -2817,6 +2839,7 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   });
 
   const checked = [];
+  const pendingChecked = [];
   const evidenceCache = options.contactabilityEvidenceCache instanceof Map
     ? options.contactabilityEvidenceCache
     : null;
@@ -2902,6 +2925,15 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
         tier: contactabilityTier(person),
       };
       if (entry.tier > 0) checked.push(entry);
+      else if (
+        ['pending', 'waterfall_pending'].includes(text(person.phoneStatus))
+        && text(person.apolloPersonId || person.id)
+        && writePlan.writes.length
+      ) {
+        // Apollo accepted this verified person's phone reveal but has not
+        // settled it yet. Preserve one exact owner, not an anonymous callback.
+        pendingChecked.push(entry);
+      }
     }
 
     // Stop before another provider wave once the strongest possible +91/email
@@ -2912,6 +2944,38 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
 
   if (!selected || selected.tier <= 0) {
+    // All bounded immediate-phone alternatives were checked first. A verified
+    // person with a still-pending Apollo reveal is different from a terminal
+    // no-phone candidate. Stage only the highest-ranked pending owner, plus
+    // safely verified email, so the paid callback can settle the phone later.
+    // This never invents a phone or replaces an existing different identity.
+    const pendingOwner = pendingChecked.sort((a, b) =>
+      candidateIndiaPriority(b.person) - candidateIndiaPriority(a.person)
+      || apollo.decisionPriority(a.person.title || '') - apollo.decisionPriority(b.person.title || '')
+      || a.index - b.index
+    )[0] || null;
+    if (pendingOwner) {
+      queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, pendingOwner.person);
+      claimed.add(pendingOwner.rawKey);
+      rememberCandidate(existing, pendingOwner.person);
+      stats.pendingPocIdentityStaged = Number(stats.pendingPocIdentityStaged || 0) + 1;
+      stats.selectionAudit.push({
+        groupId: target.group.id,
+        ordinal,
+        strategy: 'verified-owner-awaiting-apollo-phone',
+        apolloPersonId: text(pendingOwner.person.apolloPersonId || pendingOwner.person.id),
+        phoneAvailable: false,
+        phonePending: true,
+        fields: pendingOwner.writePlan.writes.map((write) => write.field),
+      });
+      return {
+        writes: pendingOwner.writePlan.writes,
+        filled: false,
+        pending: true,
+        selected: pendingOwner.person,
+        reason: 'phone-pending',
+      };
+    }
     stats.emptyPocNoPhoneRejected = Number(stats.emptyPocNoPhoneRejected || 0) + 1;
     markContactabilityExhausted(
       stats,
@@ -3274,6 +3338,7 @@ function freshStats() {
     replacementCandidateChecks: 0,
     emptyPocNoPhoneRejected: 0,
     contactabilityExhaustedTargets: [],
+    pendingPocIdentityStaged: 0,
     candidatePhoneSettlementAttempts: 0,
     candidatePhoneSettlementFound: 0,
     candidatePhoneSettlementPending: 0,
@@ -3968,7 +4033,16 @@ async function run(request = {}, options = {}) {
   // with the full deterministic waterfall. AI/last-resort sees only residue after
   // this pass, never a row that merely failed the cheap first attempt.
   if (options.resultsFirstSweep && !options.deferDeterministicRecheck && !options.recheckPass && !stats.haltedEarly) {
+    const pendingOwnerTargets = new Set(pendingPhoneQueue.map((item) =>
+      `${Number(item.rowNumber)}:${Number(item.groupOrdinal)}`
+    ));
     const leftoverRows = [...new Set((stats.leftoverQueue || [])
+      // A paid reveal is already awaiting an exactly verified new POC owner.
+      // Do not run the same Apollo waterfall again merely because the phone
+      // callback has not arrived within the first pass.
+      .filter((item) => !pendingOwnerTargets.has(
+        `${Number(item.rowNumber)}:${Number(item.groupOrdinal)}`
+      ))
       .map((item) => Number(item.rowNumber))
       .filter(Number.isInteger))];
 
@@ -4049,7 +4123,7 @@ function formatResult(result) {
     status,
     `Schema: header row ${schema.headerRowNumber || '?'}, ${groups} POC group${groups === 1 ? '' : 's'}, ${companies} company group${companies === 1 ? '' : 's'}, confidence ${Number(schema.confidence || 0).toFixed(2)}.`,
     `Progress: processed ${Number(s.rowsProcessed || 0)}/${Number(s.rowsSeen || 0)} rows; changed ${Number(s.cellsChanged || 0)} cells across ${Number(s.rowsChanged || 0)} rows; selected ${Number(s.newPeopleSelected || 0)} phone-qualified new people; repaired ${Number(s.existingGroupsRepaired || 0)} existing POCs.`,
-    `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
+    `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations. Verified new owners staged pending phone: ${Number(s.pendingPocIdentityStaged || 0)}. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
     `LinkedIn fallback: ${Number(s.linkedinFallbackCompanyProfiles || 0)} company profiles, ${Number(s.linkedinFallbackCompanyUrns || 0)} company URNs, ${Number(s.linkedinFallbackProfilesFound || 0)} profile refs, ${Number(s.linkedinFallbackVerifiedCandidates || 0)} Apollo-verified candidates.`,
     `Results-first: ${deferred.count} rows deferred from the fast sweep; deterministic recheck ${s.deterministicRecheckAttempted ? 'ran' : 'not needed'}.`,
     issueParts.length ? `Remaining: ${issueParts.join('; ')}.` : 'Remaining: no bounded deterministic blockers recorded.',
@@ -4128,6 +4202,7 @@ module.exports = {
   cachedVerifiedPeopleForCompany,
   manualPriorityCandidates,
   settleVerifiedPhoneForSelection,
+  readSharedPhoneResults,
   contactabilityTargetKey,
   markContactabilityExhausted,
   contactabilityTier,
