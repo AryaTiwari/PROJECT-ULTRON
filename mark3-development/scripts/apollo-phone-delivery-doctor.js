@@ -58,7 +58,11 @@ const duplicateReceiptsAcrossPeople = [...byReceipt.values()]
 const report = {
   mode: 'READ_ONLY_NO_NEW_APOLLO_REVEALS',
   target: { spreadsheetMatched: Boolean(targetSpreadsheetId), worksheetMatched: Boolean(targetSheetName) },
-  configured: { apiKey: ready.apiKeyReady, webhookSecret: ready.webhookReady, webhookAddress },
+  configured: {
+    apiKey: ready.apiKeyReady, webhookSecret: ready.webhookReady, webhookAddress,
+    newRevealDeliveryMode: apollo.setting('ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE','poll_only').toLowerCase() === 'webhook'
+      ? 'webhook' : 'poll_only',
+  },
   savedAssignments: {
     total: matches.length,
     native: matches.filter((item) => item.phoneMode !== 'waterfall').length,
@@ -182,8 +186,9 @@ report.recommendation = report.savedAssignments.sharedReceiptsAcrossDifferentPeo
   ? 'Multiple different POCs share a supposedly individual Apollo phone receipt. Treat all affected requests as unsafe for direct auto-settlement; inspect original provider receipts and callback ownership before retrying any paid reveal.'
   : report.savedAssignments.nativeWithoutRequestId
   ? 'Some previously staged native POCs have no Apollo request ID. Do not purchase again automatically; inspect the original reveal receipt or reconcile the callback store.'
-  : !report.configured.webhookAddress.publicHttps || !report.callbackStore.success
-    ? 'Inspect webhook configuration and worker availability. Apollo may be delivering phones without ULTRON receiving them.'
+  : report.configured.newRevealDeliveryMode === 'webhook'
+      && (!report.configured.webhookAddress.publicHttps || !report.callbackStore.success)
+    ? 'Inspect webhook configuration and worker availability. Future poll-only reveals do not require this worker.'
     : report.directResult.usablePhoneResponses
       ? 'Apollo has returned a phone. Reconcile the exact pending row/POC owner before writing; no new paid discovery is needed.'
       : 'No usable number has been confirmed by these limited read-only checks. Do not infer that all pending numbers are unavailable.';
