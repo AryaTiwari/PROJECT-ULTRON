@@ -29,12 +29,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install FFmpeg for real Reel render acceptance
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          ffmpeg -version
-          ffprobe -version
       - name: Create non-secret test environment
         run: cp .env.example .env
       - name: Install Mark 3 dependencies
@@ -58,6 +52,12 @@ jobs:
       - name: Run agentic three-POC enrichment regression
         working-directory: mark3-development
         run: npm run check:three-poc
+      - name: Install FFmpeg for real Reel render acceptance
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
       - name: Render full 30-second Elevate visual acceptance Reel
         working-directory: mark3-development
         run: node --env-file=../.env scripts/reel-visual-acceptance.js
