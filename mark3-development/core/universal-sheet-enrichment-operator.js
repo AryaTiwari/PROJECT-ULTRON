@@ -1341,7 +1341,14 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     // POC group with a different verified same-company person from the shared
     // bounded phone-qualified shortlist. +91/email policy is inherited from
     // contactabilityTier(), and a distinct replacement is mandatory.
-    if (needPhone && !existingPhonePending && !newlyPendingPhone && !apollo.validPhone(resolved?.phone || '')) {
+    if (
+      options.allowVerifiedExistingPocReplacement === true
+      && needPhone && !existingPhonePending && !newlyPendingPhone
+      && !apollo.validPhone(resolved?.phone || '')
+    ) {
+      // Existing named contacts may have been manually entered by the owner.
+      // Replacement requires separate explicit permission, never ordinary
+      // "resume enrichment" or a provider failure. Complete records are untouched.
       const replacement = await selectContactableReplacement(item, plan, companyContext, stats, {
         ...options,
         row,
