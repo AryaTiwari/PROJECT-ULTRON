@@ -44,6 +44,17 @@ function countBy(items, key) {
   }
   return out;
 }
+const nativeOwners = matches.filter((item) => item.phoneMode !== 'waterfall' && item.phoneRequestId);
+const byReceipt = new Map();
+for (const item of nativeOwners) {
+  const requestId = String(item.phoneRequestId);
+  const group = byReceipt.get(requestId) || { count: 0, personIds: new Set() };
+  group.count++;
+  group.personIds.add(String(item.apolloPersonId || ''));
+  byReceipt.set(requestId, group);
+}
+const duplicateReceiptsAcrossPeople = [...byReceipt.values()]
+  .filter((entry) => entry.personIds.size > 1);
 const report = {
   mode: 'READ_ONLY_NO_NEW_APOLLO_REVEALS',
   target: { spreadsheetMatched: Boolean(targetSpreadsheetId), worksheetMatched: Boolean(targetSheetName) },
@@ -54,6 +65,10 @@ const report = {
     waterfall: matches.filter((item) => item.phoneMode === 'waterfall').length,
     nativeWithRequestId: matches.filter((item) => item.phoneMode !== 'waterfall' && item.phoneRequestId).length,
     nativeWithoutRequestId: matches.filter((item) => item.phoneMode !== 'waterfall' && !item.phoneRequestId).length,
+    distinctNativeRequestIds: byReceipt.size,
+    largestRequestIdReuse: Math.max(0, ...[...byReceipt.values()].map((entry) => entry.count)),
+    sharedReceiptsAcrossDifferentPeople: duplicateReceiptsAcrossPeople.length,
+    ownersUsingSharedReceipt: duplicateReceiptsAcrossPeople.reduce((sum, entry) => sum + entry.count, 0),
     previousOwnershipErrors: matches.filter((item) => /owner|identity|conflict|column|company/i.test(item.lastError || '')).length,
   },
   callbackStore: { checked: false, success: false },
@@ -114,9 +129,13 @@ try {
 }
 // Up to three distinct zero-credit GETs, evenly distributed through saved
 // request owners. A single old/invalid request is NOT representative of all 34.
-const eligible = matches.filter((item) => item.phoneMode !== 'waterfall' && item.phoneRequestId);
-const positions = [0, Math.floor((eligible.length - 1) / 2), eligible.length - 1];
-const samples = [...new Map(positions.map((index) => eligible[index]).filter(Boolean)
+const eligible = nativeOwners;
+// Sample from ALL distinct request receipts, not just first/middle/last
+// records. All three positions may accidentally share one bad receipt.
+const uniqueOwners = [...new Map(eligible.map((item) =>
+  [String(item.phoneRequestId), item])).values()];
+const positions = [0, Math.floor((uniqueOwners.length - 1) / 2), uniqueOwners.length - 1];
+const samples = [...new Map(positions.map((index) => uniqueOwners[index]).filter(Boolean)
   .map((item) => [String(item.phoneRequestId), item])).values()].slice(0, 3);
 const directOutcomes = [];
 if (ready.apiKeyReady) for (const item of samples) {
@@ -159,7 +178,9 @@ report.directResult = {
   deliveryFailures: directOutcomes.filter((item) => item.dispatchFailurePresent).length,
   errors: countBy(directOutcomes.filter((item) => item.errorCode), (item) => item.errorCode),
 };
-report.recommendation = report.savedAssignments.nativeWithoutRequestId
+report.recommendation = report.savedAssignments.sharedReceiptsAcrossDifferentPeople
+  ? 'Multiple different POCs share a supposedly individual Apollo phone receipt. Treat all affected requests as unsafe for direct auto-settlement; inspect original provider receipts and callback ownership before retrying any paid reveal.'
+  : report.savedAssignments.nativeWithoutRequestId
   ? 'Some previously staged native POCs have no Apollo request ID. Do not purchase again automatically; inspect the original reveal receipt or reconcile the callback store.'
   : !report.configured.webhookAddress.publicHttps || !report.callbackStore.success
     ? 'Inspect webhook configuration and worker availability. Apollo may be delivering phones without ULTRON receiving them.'
