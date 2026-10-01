@@ -40,11 +40,21 @@ function normalizeOrganization(o, mission = {}) {
   return { raw: o, id: text(o.id || o.organization_id), name: name(o), domain: domain(website(o)), website: website(o), linkedinUrl: linkedin(o), companyLink: linkedin(o) || website(o), employees: employeeCount(o), industry: text(o.industry), location: locationText(o), description: text(o.short_description || o.description), indiaPriority: indiaPolicy.companyIndiaPriority(o), score: scoreOrganization(o, mission), key: organizationKey(o) };
 }
 function explicitSizePass(o, mission = {}) { const r = mission.employeeRange || {}; if (!r.explicit && !r.hard) return true; const n = employeeCount(o); if (n == null) return Boolean(o.__apolloEmployeeRangeVerified); return (r.min == null || n >= r.min) && (r.max == null || n <= r.max); }
+function hardIndiaPass(o, mission = {}) {
+  if (mission.indiaCompanyPolicy?.hardIndia !== true) return true;
+  // A known foreign location cannot be accepted just because it happens to
+  // score highly on topic/employee count. Missing location is acceptable only
+  // when the returned organization carries the India-filtered Apollo query
+  // provenance from this approved discovery run.
+  const location = indiaPolicy.companyLocationEvidence(o);
+  if (location) return indiaPolicy.companyIndiaPriority(o) > 0;
+  return indiaPolicy.isIndiaLocation(o.__apolloLocationFilter || '');
+}
 function relevancePass(o, mission = {}) { const normalized = o.raw ? o : normalizeOrganization(o, mission); const evidence = words(evidenceText(normalized.raw || o)); const wanted = (mission.expandedKeywords || mission.keywords || []).flatMap((keyword) => [...words(keyword)]); const keywordMatch = !wanted.length || wanted.some((word) => evidence.has(word)); return normalized.name && normalized.companyLink && keywordMatch && normalized.score >= (mission.keywords?.length ? 20 : 5); }
 function rankOrganizations(items = [], mission = {}) {
   const seen = new Set();
   return items.map((o) => normalizeOrganization(o, mission)).filter((o) => {
-    if (!o.key || seen.has(o.key) || !explicitSizePass(o.raw, mission) || !relevancePass(o, mission)) return false;
+    if (!o.key || seen.has(o.key) || !hardIndiaPass(o.raw, mission) || !explicitSizePass(o.raw, mission) || !relevancePass(o, mission)) return false;
     seen.add(o.key); return true;
   }).sort((a, b) => {
     if (mission.indiaCompanyPolicy?.preferIndia) {
@@ -55,4 +65,4 @@ function rankOrganizations(items = [], mission = {}) {
   });
 }
 
-module.exports = { text, domain, employeeCount, linkedin, website, name, locationText, evidenceText, scoreOrganization, organizationKey, normalizeOrganization, explicitSizePass, relevancePass, rankOrganizations };
+module.exports = { text, domain, employeeCount, linkedin, website, name, locationText, evidenceText, scoreOrganization, organizationKey, normalizeOrganization, explicitSizePass, hardIndiaPass, relevancePass, rankOrganizations };
