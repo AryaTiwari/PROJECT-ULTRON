@@ -214,15 +214,40 @@ async function fetchApolloResponse(input, init, options = {}) {
 }
 
 function requestIdFromRaw(raw, parsed = {}) {
-  // Native phone_enrichment.request_id is the pollable receipt when present.
-  // Preserve its exact signed-int64 text before JSON.parse loses precision.
-  const text = String(raw || '');
-  const native = text.match(/"phone_enrichment"\s*:\s*\{[^{}]*?"request_id"\s*:\s*"?(-?\d+)"?/i);
-  if (native?.[1]) return native[1];
-  const top = text.match(/"request_id"\s*:\s*"?(-?\d+)"?/i);
-  if (top?.[1]) return top[1];
-  if (parsed?.phone_enrichment?.request_id != null) return String(parsed.phone_enrichment.request_id);
-  if (parsed?.request_id != null) return String(parsed.request_id);
+  // Apollo documents the TOP-LEVEL request_id as the receipt for the
+  // zero-credit webhook_result endpoint. A nested vendor/phone_enrichment ID
+  // is not interchangeable. Extract raw digits BEFORE JSON.parse can round
+  // signed 64-bit integers beyond Number.MAX_SAFE_INTEGER.
+  const source = String(raw || '');
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  let quoteStart = -1;
+  for (let index = 0; index < source.length; index++) {
+    const character = source[index];
+    if (quoted) {
+      if (escaped) { escaped = false; continue; }
+      if (character === '\\') { escaped = true; continue; }
+      if (character !== '"') continue;
+      quoted = false;
+      if (depth !== 1 || source.slice(quoteStart + 1, index) !== 'request_id') continue;
+      let cursor = index + 1;
+      while (/\s/.test(source[cursor] || '')) cursor++;
+      if (source[cursor] !== ':') continue;
+      cursor++;
+      while (/\s/.test(source[cursor] || '')) cursor++;
+      const match = source.slice(cursor).match(/^"(-?\d+)"|^(-?\d+)/);
+      if (match) return match[1] || match[2];
+      continue;
+    }
+    if (character === '"') { quoted = true; quoteStart = index; continue; }
+    if (character === '{') depth++;
+    else if (character === '}') depth--;
+  }
+  // Only use parsed values when they are safe from JS integer rounding.
+  const fallback = parsed?.request_id;
+  if (typeof fallback === 'string' && /^-?\d+$/.test(fallback)) return fallback;
+  if (typeof fallback === 'number' && Number.isSafeInteger(fallback)) return String(fallback);
   return '';
 }
 
