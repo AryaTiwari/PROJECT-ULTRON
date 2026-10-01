@@ -69,6 +69,41 @@ const context = require('../core/universal-run-context');
     assert.equal(terminalQueue.length,0);
     assert.equal(terminal.reason,'contactability-top3-exhausted');
 
+    // Apollo's terminal request_id_unknown MUST override an earlier "pending"
+    // match response. This was silently staging dozens of names and emails
+    // without any recoverable mobile number.
+    apollo.resolveDecisionMaker=async()=>({...nativePending});
+    const deadPollStats=operator.freshStats();
+    const deadResult=await operator.settleVerifiedPhoneForSelection(
+      {...nativePending},deadPollStats,{
+        ...options([]),
+        pollNativePhone:async()=>({state:'terminal',terminalReason:'request_id_unknown'}),
+      }
+    );
+    assert.equal(deadResult.phoneStatus,'unavailable','expired/unknown receipt is NOT still pending');
+    assert.equal(deadResult.phoneSettlementReason,'request_id_unknown');
+    const deadQueue=[];
+    const deadStaging=await operator.fillManualPriorityGroup(
+      row,plan,companyContext,[candidate],operator.freshStats(),{
+        ...options(deadQueue),
+        pollNativePhone:async()=>({state:'terminal',terminalReason:'request_id_unknown'}),
+      }
+    );
+    assert.equal(deadStaging.writes.length,0,'never write new POC name/email for terminal phone receipt');
+    assert.equal(deadQueue.length,0);
+
+    // An individual native receipt already owned by a different Apollo person
+    // cannot stage a second contact even when its synchronous status says pending.
+    const collidedQueue=[{
+      key:'5|8',rowNumber:5,columnIndex:8,phoneMode:'native',
+      apolloPersonId:'different-person',phoneRequestId:'fixture-phone-request-1',
+    }];
+    const collided=await operator.fillManualPriorityGroup(
+      row,plan,companyContext,[candidate],operator.freshStats(),options(collidedQueue)
+    );
+    assert.equal(collided.writes.length,0,'shared receipt must not manufacture a second POC identity');
+    assert.equal(collidedQueue.length,1,'preserve the original disputed receipt unchanged');
+
     // Concurrent phone settlements must not re-fetch the same /results snapshot
     // once for every candidate. A requested fresh read remains possible.
     await context.run({},async()=>{
