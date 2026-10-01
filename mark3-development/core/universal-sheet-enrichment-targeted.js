@@ -613,13 +613,12 @@ function livePocGapRows(rowPlans = [], schema = {}, ordinal, options = {}, pendi
     if (!rowMatchesTargetSelection(options, rowNumber)) return false;
     const snapshot = planner.groupSnapshot(record.row, group);
     const missingIdentity = !snapshot.hasIdentity;
-    const missingContacts = ['phone', 'email'].some((field) =>
-      group.fields[field] && !text(snapshot.values[field])
-    );
-    if (!missingIdentity && !missingContacts) return false;
-    // Pending phone requests own one specific POC, never the entire company row.
-    // Do not repeat paid hydration/reveal for an already-staged verified owner.
-    if (!missingIdentity && pendingTargets.has(`${rowNumber}:${ordinal}`)) return false;
+    const missingEmail = Boolean(group.fields.email && !text(snapshot.values.email));
+    const missingPhone = Boolean(group.fields.phone && !text(snapshot.values.phone));
+    if (!missingIdentity && !missingPhone && !missingEmail) return false;
+    // An exact pending phone owns the PHONE request, not all gaps in that POC.
+    // Permit verification/fill of a missing email without buying the phone again.
+    if (!missingIdentity && !missingEmail && pendingTargets.has(`${rowNumber}:${ordinal}`)) return false;
     return true;
   }).map((record) => Number(record.rowNumber)).sort((a, b) => a - b);
 }
