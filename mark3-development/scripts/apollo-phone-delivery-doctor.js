@@ -6,6 +6,7 @@ const path = require('path');
 const config = require('../core/config');
 const apollo = require('../core/apollo-enrichment');
 
+async function main() {
 const targetSpreadsheetId = String(process.argv[2] || '').trim();
 const targetSheetName = String(process.argv[3] || '').trim();
 const stateFile = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'pending-phone-assignments.json');
@@ -83,3 +84,9 @@ report.recommendation = report.savedAssignments.nativeWithoutRequestId
       ? 'Apollo has returned a phone. Reconcile the exact pending row/POC owner before writing; no new paid discovery is needed.'
       : 'No usable number has been confirmed by these limited read-only checks. Do not infer that all pending numbers are unavailable.';
 console.log(JSON.stringify(report, null, 2));
+}
+
+main().catch((error) => {
+  console.error(JSON.stringify({mode:'READ_ONLY_NO_NEW_APOLLO_REVEALS',code:String(error?.code || 'PHONE_DOCTOR_FAILED')}));
+  process.exitCode=1;
+});
