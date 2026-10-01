@@ -113,6 +113,14 @@ function schemaSummary(schema) {
     safety: require('./universal-schema-safety').assess(schema),
     headerRowNumber: schema.headerRowNumber,
     confidence: schema.confidence,
+    // Header-only preview for safe schema clarification. Do not include cell
+    // values, contacts or full row plans in public diagnostics.
+    columns: (schema.columns || []).slice(0, 60).map((column) => ({
+      index: column.index,
+      header: String(column.header || '').slice(0, 100),
+      role: column.role || 'unknown',
+      confidence: Number(column.confidence || 0),
+    })),
     personGroups: schema.personGroups.map((group) => ({
       id: group.id,
       ordinal: group.ordinal,
