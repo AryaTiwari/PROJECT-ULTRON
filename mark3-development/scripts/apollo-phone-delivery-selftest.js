@@ -24,6 +24,10 @@ assert.deepEqual(
   {state:'found', phone:'+919876543210'},
   'a completed, zero-credit Apollo poll must yield its nested phone',
 );
+assert.equal(apollo.completedPhonePoll(fixture, 'fictional-123').phone, '+919876543210',
+  'exact Apollo owner receives the direct-polled number');
+assert.equal(apollo.completedPhonePoll(fixture, 'different-person').state, 'owner_mismatch',
+  'a reused request receipt must never assign another person\'s phone to this POC');
 assert.equal(apollo.completedPhonePoll({webhook_status:'in_progress'}).state, 'pending');
 assert.equal(apollo.completedPhonePoll({webhook_status:'failed'}).state, 'delivery_failed',
   'failed webhook delivery must not be misreported as Apollo having no phone');
