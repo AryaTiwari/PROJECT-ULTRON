@@ -312,7 +312,10 @@ assert.match(operatorSource, /markLeftover\(stats, rowNumber, 'requested-poc3-un
 assert.match(operatorSource, /requestedPoc3Deferred/);
 assert.match(approvalSource, /expectedPersonGroups: payload\.expectedPersonGroups \|\| undefined/);
 assert.match(qualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
-assert.match(qualitySource, /Native Apollo reveal \+ webhook settlement is the production default/);
+// Validate transport flags, not wording in quality-module comments.
+const apolloSource = fs.readFileSync(path.join(root, 'apollo-enrichment.js'), 'utf8');
+assert.match(apolloSource, /ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only'/);
+assert.match(apolloSource, /url\.searchParams\.set\('poll_only', 'true'\)/);
 assert.match(operatorSource, /Mandatory POC-2 residue must always enter the deterministic leftover/);
 assert.match(operatorSource, /Fast sweep deferred deeper deterministic discovery\/hydration until all rows are processed/);
 assert.match(operatorSource, /const poc2Reason = result\.reason/);
