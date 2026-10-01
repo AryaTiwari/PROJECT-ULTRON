@@ -96,6 +96,7 @@ const context = require('../core/universal-run-context');
       }},
     };
     const originalByName = apollo.resolvePersonByNameCompany;
+    const originalByEmail = apollo.resolvePersonByBusinessEmail;
     apollo.resolvePersonByNameCompany = async () => {
       throw new Error('Already-pending phone must not trigger another Apollo lookup');
     };
@@ -115,12 +116,17 @@ const context = require('../core/universal-run-context');
       // Even without pending callback state, an exact existing/manual identity
       // is immutable by default. A missing phone cannot authorize swapping it.
       let exactChecks = 0;
-      apollo.resolvePersonByNameCompany = async () => {
+      const exactVerifiedExisting = async () => {
         exactChecks++;
-        return { identityVerified:true, name:'Existing Recruiter',
-          title:'Talent Acquisition Head', organizationName:'Example India Hiring',
+        return { identityVerified:true, noMatch:false, ambiguous:false,
+          name:'Existing Recruiter', title:'Talent Acquisition Head',
+          organizationName:'Example India Hiring',
           email:'existing@example.in', phone:null, phoneStatus:'not_found' };
       };
+      // A populated work email legitimately selects this route before the
+      // name+company fallback. Mock BOTH paths so CI never uses real Apollo.
+      apollo.resolvePersonByNameCompany = exactVerifiedExisting;
+      apollo.resolvePersonByBusinessEmail = exactVerifiedExisting;
       const protectedStats = operator.freshStats();
       const protectedWrites = await operator.repairExistingGroups(
         ['Example India Hiring','Tech','','','','',namedPoc2.snapshot.values.name,
@@ -138,6 +144,7 @@ const context = require('../core/universal-run-context');
       assert.equal(protectedStats.existingGroupsReplaced || 0,0);
     } finally {
       apollo.resolvePersonByNameCompany = originalByName;
+      apollo.resolvePersonByBusinessEmail = originalByEmail;
     }
 
     console.log('Pending POC settlement regression passed: staged verified owner + email, exact durable callback coordinates, no fabricated phone, terminal no-phone rejection, and one shared callback read across 20 candidates.');
