@@ -307,9 +307,13 @@ sheets.batchValues=async(id,ranges)=>Promise.all(ranges.map(range=>sheets.values
       'expired Apollo receipt is not reusable and must not be silently repurchased',
     );
     apollo.fetchPhoneResults = async () => [{ apollo_person_id: 'apollo-hemanth', phone: '+919876543210' }];
-    apollo.pollWebhookResult = async (requestId) => {
-      if (requestId === '1039995589705121974') return { state: 'pending', phone: null };
+    apollo.pollWebhookResult = async (requestId, options) => {
+      if (requestId === '1039995589705121974') {
+        assert.equal(options.expectedPersonId, 'apollo-hemanth');
+        return { state: 'pending', phone: null };
+      }
       assert.equal(requestId, '1039995589705121975');
+      assert.equal(options.expectedPersonId, 'apollo-direct');
       return { state: 'found', phone: '+919123456789' };
     };
     apollo.recordPhoneResult = () => ['https://www.linkedin.com/in/hemanth-test'];
