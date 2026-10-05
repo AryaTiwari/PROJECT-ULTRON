@@ -517,7 +517,22 @@ const COMPANY_DECISION_PRIORITY = Object.freeze([
       'technical recruiter', 'talent acquisition recruiter',
     ]),
   }),
-]);
+  Object.freeze({
+    priority: 4,
+    key: 'hr_ta_associate_coordinator',
+    label: 'HR / Talent Acquisition Associate / Coordinator',
+    titles: Object.freeze([
+      'talent acquisition associate', 'talent acquisition coordinator',
+      'talent acquisition executive', 'recruitment associate',
+      'recruitment coordinator', 'recruitment executive', 'recruiting associate',
+      'recruiting coordinator', 'HR associate', 'HR coordinator', 'HR executive',
+      'human resources associate', 'human resources coordinator',
+      'human resources executive', 'talent acquisition specialist',
+      'recruitment specialist', 'human resources specialist', 'HR specialist',
+      'people operations', 'people ops', 'staffing specialist', 'placement coordinator',
+    ]),
+  }),
+];
 
 function decisionPriority(title, mode = 'general') {
   const value = normalizedWords(title);
@@ -533,7 +548,9 @@ function decisionPriority(title, mode = 'general') {
     || exactManager
   ) return 2;
 
-  if (/\b(?:hr recruiter|human resources recruiter|technical recruiter|talent acquisition recruiter|recruiter|talent acquisition specialist|recruitment specialist|human resources specialist|hr specialist|people operations|people ops|hr business partner|human resources business partner|staffing specialist|placement coordinator)\b/.test(value)) return 3;
+  if (/\b(?:hr recruiter|human resources recruiter|technical recruiter|talent acquisition recruiter|recruiter|hr business partner|human resources business partner)\b/.test(value)) return 3;
+
+  if (/\b(?:talent acquisition associate|talent acquisition coordinator|talent acquisition executive|recruitment associate|recruitment coordinator|recruitment executive|recruiting associate|recruiting coordinator|hr associate|hr coordinator|hr executive|human resources associate|human resources coordinator|human resources executive|talent acquisition specialist|recruitment specialist|human resources specialist|hr specialist|people operations|people ops|staffing specialist|placement coordinator)\b/.test(value)) return 4;
   // Last-resort authority fallback requested for phone-qualified POCs. This is
   // deliberately below founders, HR/TA leaders and recruiters.
   if (/\bmanager\b/.test(value)) return 4;
