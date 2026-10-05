@@ -1,0 +1,39 @@
+name: LinkedIn Link Enricher Regression
+
+on:
+  pull_request:
+    paths:
+      - 'mark3-development/core/linkedin-link-sheet-enricher.js'
+      - 'mark3-development/core/linkedin-link-sheet-domain-controller.js'
+      - 'mark3-development/core/command-control-plane.js'
+      - 'mark3-development/core/universal-sheet-schema.js'
+      - 'mark3-development/core/google-sheets-operator.js'
+      - 'mark3-development/core/universal-linkedin-profile-parser.js'
+      - 'mark3-development/scripts/linkedin-link-sheet-enricher-selftest.js'
+      - 'mark3-development/package.json'
+      - '.github/workflows/linkedin-link-enricher-regression.yml'
+  workflow_dispatch:
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mark3-development
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Mark 3 dependencies
+        run: npm install --ignore-scripts
+      - name: Syntax check isolated path
+        run: |
+          node --check core/linkedin-link-sheet-enricher.js
+          node --check core/linkedin-link-sheet-domain-controller.js
+          node --check core/command-control-plane.js
+          node --check scripts/linkedin-link-sheet-enricher-selftest.js
+      - name: Run isolated LinkedIn link enricher selftest
+        run: npm run check:linkedin-links

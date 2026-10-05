@@ -45,6 +45,22 @@ function isThreePocSpreadsheetRequest(message, options = {}) {
   return action && (explicitThreePoc || slotCount >= 2 || anchoredContract);
 }
 
+
+function isLinkedInSheetLinkEnrichmentRequest(message, options = {}) {
+  const text = normalize(message);
+  if (!text) return false;
+  if (linkedinIntent.isLeadDiscoveryRequest(text)) return false;
+  const source = spreadsheetSourceSignals(text, options);
+  if (!source.hasSource) return false;
+
+  const action = /\b(?:enrich|enrichment|fill|populate|complete|repair|find|discover|source|add|update|backfill)\b/i.test(text);
+  const linkObjective = /\blinkedin\b[\s\S]{0,80}\b(?:links?|urls?|profiles?|profile\s+links?|profile\s+urls?)\b/i.test(text)
+    || /\b(?:links?|urls?)\b[\s\S]{0,60}\blinkedin\b/i.test(text)
+    || /\b(?:company|pocs?|people|persons?|contacts?)\s+(?:linkedin|profile|links?|urls?)\b/i.test(text);
+  const contactDataObjective = /\b(?:phone|mobile|email|e-?mail|numbers?|designation|title|titles?)\b/i.test(text);
+  return action && linkObjective && !contactDataObjective;
+}
+
 function isUniversalSpreadsheetEnrichmentRequest(message, options = {}) {
   const text = normalize(message);
 
@@ -88,6 +104,13 @@ function claim(message, options = {}) {
       controller: 'apollo-lead-domain-controller', generalModelAllowed: false,
       artifactAllowed: false, allowWebFallback: false, yieldTo: null,
       controlCommand: true, readOnlyStatus: true,
+    });
+  }
+  if (isLinkedInSheetLinkEnrichmentRequest(text, options)) {
+    return Object.freeze({
+      domain: 'linkedin-sheet-links', claimed: true, exclusive: true,
+      controller: 'linkedin-link-sheet-domain-controller', generalModelAllowed: false,
+      artifactAllowed: false, allowWebFallback: false, yieldTo: null,
     });
   }
   // Spreadsheet ownership outranks LinkedIn discovery whenever the user supplied
@@ -163,6 +186,7 @@ function invariantCodeForDomain(domain) {
   if (domain === 'three-poc-spreadsheet') return 'THREE_POC_ROUTE_INVARIANT_VIOLATION';
   if (domain === 'spreadsheet-enrichment') return 'SPREADSHEET_ENRICHMENT_ROUTE_INVARIANT_VIOLATION';
   if (domain === 'apollo-lead') return 'APOLLO_LEAD_ROUTE_INVARIANT_VIOLATION';
+  if (domain === 'linkedin-sheet-links') return 'LINKEDIN_SHEET_LINK_ROUTE_INVARIANT_VIOLATION';
   if (domain === 'diagnostic') return 'DIAGNOSTIC_ROUTE_INVARIANT_VIOLATION';
   return 'DOMAIN_ROUTE_INVARIANT_VIOLATION';
 }
@@ -171,7 +195,7 @@ function assertAllowed(kind, { model = '', messages = [] } = {}) {
   const current = scope.getStore();
   if (kind === 'general-model' && current?.internalInferenceDomain && current?.route?.domain === current.internalInferenceDomain) return;
   if (kind === 'direct-model'
-      && ['spreadsheet-enrichment', 'linkedin', 'apollo-lead'].includes(current?.internalInferenceDomain)
+      && ['spreadsheet-enrichment', 'linkedin', 'apollo-lead', 'linkedin-sheet-links'].includes(current?.internalInferenceDomain)
       && current?.route?.domain === current.internalInferenceDomain) return;
   const lastUser = (Array.isArray(messages) ? messages : []).filter(item => item.role === 'user').at(-1)?.content;
   const inferred = !current && !isInternalModelPayload(lastUser) ? claim(typeof lastUser === 'string' ? lastUser : '') : null;
@@ -292,7 +316,7 @@ async function dispatch(message, options = {}) {
   if (process.env.ULTRON_M3_ROUTE_DEBUG === '1') console.log('[Command Control]', JSON.stringify({ route, skillSelection }));
   if (!route.exclusive) return null;
   return scope.run({ route, compiler: false, skillSelection }, async () => {
-    const spreadsheetDomain = ['three-poc-domain-controller', 'universal-spreadsheet-domain-controller'].includes(route.controller);
+    const spreadsheetDomain = ['three-poc-domain-controller', 'universal-spreadsheet-domain-controller', 'linkedin-link-sheet-domain-controller'].includes(route.controller);
     const controller = route.controller === 'universal-spreadsheet-domain-controller'
       ? require('./universal-spreadsheet-domain-controller')
       : route.controller === 'three-poc-domain-controller'
@@ -301,7 +325,9 @@ async function dispatch(message, options = {}) {
           ? require('./apollo-lead-domain-controller')
           : route.controller === 'diagnostic-domain-controller'
             ? require('./diagnostic-domain-controller')
-            : require('./linkedin-domain-controller');
+            : route.controller === 'linkedin-link-sheet-domain-controller'
+              ? require('./linkedin-link-sheet-domain-controller')
+              : require('./linkedin-domain-controller');
     try {
       let result = await controller.handle(resolvedMessage, { ...options, originalMessage, resolvedMessage });
       if (scope.getStore().violation) throw scope.getStore().violation;
@@ -451,6 +477,7 @@ module.exports = {
   spreadsheetSourceSignals,
   isThreePocSpreadsheetRequest,
   isUniversalSpreadsheetEnrichmentRequest,
+  isLinkedInSheetLinkEnrichmentRequest,
   isLocalThreePocWorkbookRequest,
   claim,
   dispatch,
