@@ -34,6 +34,17 @@ assert.equal(operator.contactabilityTier({ phone: '+1 415 555 0123', email: 'hr@
 assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210' }), 3);
 assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210', email: 'hr@example.in' }), 4);
 assert.ok(operator.candidateIndiaPriority({ location: 'Mumbai, Maharashtra, India' }) > operator.candidateIndiaPriority({ location: 'New York, USA' }));
+const indianPhoneSelection = operator.chooseContactabilityCandidate([
+  { person: { name: 'International Founder', title: 'Founder', phone: '+1 212 555 0101', email: '' }, index: 0 },
+  { person: { name: 'Indian Recruiter', title: 'Recruiter', phone: '+91 98765 43210', email: '' }, index: 1 },
+]);
+assert.equal(indianPhoneSelection.person.name, 'Indian Recruiter');
+
+const internationalFallbackSelection = operator.chooseContactabilityCandidate([
+  { person: { name: 'Top International Founder', title: 'Founder', phone: '+1 212 555 0101', email: '' }, index: 4 },
+  { person: { name: 'Indian Recruiter Without India Phone', title: 'Recruiter', phone: '+44 20 7946 0958', email: 'recruiter@example.com' }, index: 0 },
+]);
+assert.equal(internationalFallbackSelection.person.name, 'Top International Founder');
 
 const companyContext = { company: 'Acme', domain: 'acme.in' };
 const candidates = [
