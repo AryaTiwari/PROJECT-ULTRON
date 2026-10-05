@@ -17,7 +17,7 @@ function fakeSheets(changes) {
         column = String.fromCharCode(65 + rem) + column;
         n = Math.floor((n - 1) / 26);
       }
-      return \`'\${sheetName.replace(/'/g, "''")}'!\${column}\${rowNumber}\`;
+      return `'${sheetName.replace(/'/g, "''")}'!${column}${rowNumber}`;
     },
     writeCells: async (_id, items) => {
       changes.push(...items);
@@ -78,7 +78,7 @@ function fakeLinkedIn() {
           }],
         };
       }
-      throw new Error(\`Unexpected LinkedIn tool: \${tool}\`);
+      throw new Error(`Unexpected LinkedIn tool: ${tool}`);
     },
   };
 }
@@ -88,18 +88,18 @@ async function main() {
 
   assert.equal(
     commandControl.isLinkedInSheetLinkEnrichmentRequest(
-      \`Enrich missing company and POC LinkedIn links in \${sheetUrl}\`,
+      `Enrich missing company and POC LinkedIn links in ${sheetUrl}`,
     ),
     true,
   );
   assert.equal(
     commandControl.isLinkedInSheetLinkEnrichmentRequest(
-      \`Enrich POC phone and email data from LinkedIn in \${sheetUrl}\`,
+      `Enrich POC phone and email data from LinkedIn in ${sheetUrl}`,
     ),
     false,
   );
   assert.equal(
-    commandControl.claim(\`Enrich missing company and POC LinkedIn links in \${sheetUrl}\`).domain,
+    commandControl.claim(`Enrich missing company and POC LinkedIn links in ${sheetUrl}`).domain,
     'linkedin-sheet-links',
   );
 
