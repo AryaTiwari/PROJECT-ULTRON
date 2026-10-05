@@ -263,9 +263,26 @@ function compileWithGemini(fn) {
   return scope.run({ ...(current || { route: claim('LinkedIn mission') }), compiler: true }, fn);
 }
 
+function isExplicitPaidApprovalReply(message) {
+  const value = String(message || '').trim();
+  if (!value) return false;
+  const paidTools = require('./paid-tool-approval');
+  return Boolean(
+    paidTools.negative(value) ||
+    paidTools.approvalAttempt(value)
+  );
+}
+
 async function resolveUniversalPaidApproval(message) {
   const paidTools = require('./paid-tool-approval');
   const handler = require('./universal-paid-approval-handler');
+
+  // Pending Apollo approval is a reply-state, not a global command-state. Never
+  // let an unrelated new spreadsheet mission such as "resume enrichment in
+  // <sheet>" get consumed by an old approval record. Genuine approve/deny replies
+  // remain first-class and continue to resolve the pending paid operation.
+  if (!isExplicitPaidApprovalReply(message)) return null;
+
   const pending = paidTools.pending('apollo');
   if (!pending) return null;
 
@@ -510,6 +527,7 @@ module.exports = {
   isUniversalSpreadsheetEnrichmentRequest,
   isLinkedInSheetLinkEnrichmentRequest,
   isLocalThreePocWorkbookRequest,
+  isExplicitPaidApprovalReply,
   claim,
   dispatch,
   resolveUniversalPaidApproval,
