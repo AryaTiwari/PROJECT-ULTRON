@@ -67,15 +67,28 @@ function hasPositiveContactDataObjective(text) {
 function isLinkedInSheetLinkEnrichmentRequest(message, options = {}) {
   const text = normalize(message);
   if (!text) return false;
-  if (linkedinIntent.isLeadDiscoveryRequest(text)) return false;
   const source = spreadsheetSourceSignals(text, options);
   if (!source.hasSource) return false;
 
   const action = /\b(?:enrich|enrichment|fill|populate|complete|repair|find|discover|source|add|update|backfill)\b/i.test(text);
-  const linkObjective = /\blinkedin\b[\s\S]{0,80}\b(?:links?|urls?|profiles?|profile\s+links?|profile\s+urls?)\b/i.test(text)
-    || /\b(?:links?|urls?)\b[\s\S]{0,60}\blinkedin\b/i.test(text)
+  const linkObjective = /\blinkedin\b[\s\S]{0,100}\b(?:links?|urls?|profiles?|profile\s+links?|profile\s+urls?)\b/i.test(text)
+    || /\b(?:links?|urls?)\b[\s\S]{0,80}\blinkedin\b/i.test(text)
     || /\b(?:company|pocs?|people|persons?|contacts?)\s+(?:linkedin|profile|links?|urls?)\b/i.test(text);
+  const explicitIsolatedLinkTask = /\b(?:isolated|dedicated)\s+linkedin[- ]?(?:link|url|profile)(?:\s+enrichment)?\b/i.test(text)
+    || /\blinkedin[- ]?(?:link|url|profile)\s+enrichment\s+pass\b/i.test(text);
   const contactDataObjective = hasPositiveContactDataObjective(text);
+
+  // Explicit sheet-link enrichment is a stronger ownership contract than the
+  // generic LinkedIn lead-discovery classifier. Preservation text may legitimately
+  // contain words such as "phone", "email", or "search", so generic lead intent
+  // must never veto an explicit isolated-link command.
+  if (explicitIsolatedLinkTask) {
+    // The phrase "isolated LinkedIn-link enrichment pass" is an explicit domain
+    // contract. Contextual mentions of designation/phone/email inside verification
+    // and preservation instructions must not demote it into contact enrichment.
+    return action && linkObjective;
+  }
+  if (linkedinIntent.isLeadDiscoveryRequest(text)) return false;
   return action && linkObjective && !contactDataObjective;
 }
 
