@@ -1,0 +1,71 @@
+'use strict';
+
+const assert = require('assert');
+const fs = require('fs');
+const controller = require('../core/universal-spreadsheet-domain-controller');
+const operator = require('../core/universal-sheet-enrichment-operator');
+const targeted = require('../core/universal-sheet-enrichment-targeted');
+const sheets = require('../core/google-sheets-operator');
+
+assert.equal(controller.parseIndianPhonePolicy('Require Indian phone numbers (+91). Reject companies without one.'), true);
+assert.equal(controller.parseIndianPhonePolicy('Only accept India mobile numbers and remove foreign-only companies.'), true);
+assert.equal(controller.parseIndianPhonePolicy('Enrich phone and email columns.'), false);
+assert.equal(controller.parseExpectedPersonGroups('Use POC-1 and POC-2 only.'), 2);
+assert.equal(controller.parseExpectedPersonGroups('Enrich with 1st and 2nd POC.'), 2);
+const previousExpectedGroups = process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS;
+process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS = '3';
+assert.equal(controller.parseExpectedPersonGroups('Enrich with 1st and 2nd POC.'), 2);
+if (previousExpectedGroups == null) delete process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS;
+else process.env.ULTRON_M3_UNIVERSAL_EXPECTED_PERSON_GROUPS = previousExpectedGroups;
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich with 1st and 2nd POC.'), true);
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich POC-1 and POC-2.'), true);
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich two POCs.'), true);
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich POC-2 only.'), false);
+assert.equal(controller.parseAutomaticTwoPocIndianPolicy('Enrich POC-1, POC-2 and POC-3.'), false);
+const automaticSummary = controller.approvalSummary({
+  sheetName: 'Leads',
+  schema: { personGroups: [{}, {}], companyGroups: [], headerRowNumber: 1 },
+  analysis: { stats: { openPersonSlots: 2, partialPersonSlots: 0 } },
+}, { requireIndianPhone: true, indianPhonePolicySource: 'automatic-poc1-poc2-default' });
+assert.match(automaticSummary, /Indian-number preference \(automatic POC-1\/POC-2 default\)/);
+assert.match(automaticSummary, /existing company row is always preserved/);
+
+assert.equal(operator.contactabilityTier({ phone: '+1 415 555 0123', email: 'hr@example.com' }), 2);
+assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210' }), 3);
+assert.equal(operator.contactabilityTier({ phone: '+91 98765 43210', email: 'hr@example.in' }), 4);
+assert.ok(operator.candidateIndiaPriority({ phone: '+91 98765 43210', location: 'London, UK' }) > operator.candidateIndiaPriority({ location: 'Mumbai, Maharashtra, India' }));
+assert.ok(operator.candidateIndiaPriority({ location: 'Mumbai, Maharashtra, India', has_direct_phone: 'Yes' }) > operator.candidateIndiaPriority({ location: 'Mumbai, Maharashtra, India' }));
+assert.ok(operator.candidateIndiaPriority({ phone: '+91 12345 6789', location: 'Mumbai, Maharashtra, India' }) < operator.candidateIndiaPriority({ location: 'Mumbai, Maharashtra, India', has_direct_phone: 'Yes' }));
+assert.ok(operator.candidateIndiaPriority({ location: 'Mumbai, Maharashtra, India' }) > operator.candidateIndiaPriority({ location: 'New York, USA' }));
+
+const companyContext = { company: 'Acme', domain: 'acme.in' };
+const candidates = [
+  { id: '1', name: 'A', title: 'Talent Acquisition Head', organizationName: 'Acme', organizationDomain: 'acme.in', location: 'Mumbai, India', has_direct_phone: true },
+  { id: '2', name: 'B', title: 'HR Manager', organizationName: 'Acme', organizationDomain: 'acme.in', location: 'Pune, India', has_direct_phone: true },
+  { id: '3', name: 'C', title: 'Recruiter', organizationName: 'Acme', organizationDomain: 'acme.in', location: 'Delhi, India', has_direct_phone: true },
+  { id: '4', name: 'D', title: 'Recruiting Specialist', organizationName: 'Acme', organizationDomain: 'acme.in', location: 'Remote', has_direct_phone: true },
+];
+const shortlist = operator.preferredContactShortlist(candidates, { context: {} }, companyContext, {
+  names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set(),
+}, { contactabilityCandidateLimit: 99 });
+assert.equal(operator.phoneQualifiedCandidateLimit({}), 8);
+assert.equal(operator.phoneQualifiedCandidateLimit({ contactabilityCandidateLimit: 99 }), 10);
+assert.equal(shortlist.length, 4);
+
+assert.equal(typeof operator.pendingPhoneRowsForSource, 'function');
+assert.equal(typeof targeted.enforceIndianPhoneCompanyGate, 'function');
+assert.equal(typeof sheets.clearRows, 'function');
+
+const targetedSource = fs.readFileSync(require.resolve('../core/universal-sheet-enrichment-targeted'), 'utf8');
+assert.doesNotMatch(targetedSource, /indian-phone-two-candidate-budget/);
+assert.match(targetedSource, /apollo\.indianPhone/);
+assert.doesNotMatch(targetedSource, /sheets\.clearRows\s*\(/);
+assert.match(targetedSource, /companyRowDeletionAllowed:\s*false/);
+assert.match(targetedSource, /preservedCompanyRows/);
+assert.match(targetedSource, /aiBatchRescue\.run/);
+assert.doesNotMatch(targetedSource, /deleteDimension/);
+
+const reportSource = fs.readFileSync(require.resolve('../core/universal-run-report'), 'utf8');
+assert.match(reportSource, /i\.rowNumber.*i\.target.*i\.problem/);
+
+console.log('Indian POC phone policy self-test passed: automatic two-POC defaults, hard phone qualification, POC-1/POC-2 scope, India-first ranking, broader bounded decision-maker fallback, pending-callback preservation, and the invariant that contactability failures never clear or remove company rows are protected.');
