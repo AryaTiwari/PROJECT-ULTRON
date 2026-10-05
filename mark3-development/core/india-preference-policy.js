@@ -82,6 +82,34 @@ function companyIndiaPriority(company = {}) {
   return isIndiaLocation(companyLocationEvidence(company)) ? 1 : 0;
 }
 
+function strictIndianMobile(value, countryHint = '') {
+  const raw = text(value);
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  const hint = text(countryHint).toLowerCase();
+  const hintedIndia = ['in', 'ind', 'india', '+91', '91'].includes(hint) || /\bindia\b/i.test(hint);
+
+  let national = '';
+  if (digits.length === 12 && digits.startsWith('91')) national = digits.slice(2);
+  else if (hintedIndia && digits.length === 10) national = digits;
+  else if (hintedIndia && digits.length === 11 && digits.startsWith('0')) national = digits.slice(1);
+
+  return /^[6-9]\d{9}$/.test(national) ? `+91${national}` : '';
+}
+
+function directPhoneAvailability(person = {}) {
+  const raw = text(
+    person.hasDirectPhone
+    ?? person.has_direct_phone
+    ?? person.directPhoneAvailability
+    ?? ''
+  ).toLowerCase();
+  if (/^(?:yes|true|available|found|confirmed|1)$/.test(raw)) return 2;
+  if (/\b(?:yes|available|direct phone available)\b/.test(raw)) return 2;
+  if (/\b(?:maybe|request direct dial|possible|potential|likely)\b/.test(raw)) return 1;
+  return 0;
+}
+
 function personIndiaPriority(person = {}) {
   const phone = text(person.phone || person.phone_number || person.mobile_phone);
   const location = [
@@ -90,10 +118,28 @@ function personIndiaPriority(person = {}) {
     person.city,
     person.state,
     person.location,
+    person.raw_address,
+    person.present_raw_address,
     person.organization?.country,
+    person.organization?.state,
+    person.organization?.city,
+    person.organization?.raw_address,
   ].map(text).filter(Boolean).join(' ');
-  if (/^\+91/.test(phone.replace(/\s/g,''))) return 3;
-  if (isIndiaLocation(location)) return 2;
+
+  // A real +91 mobile is the strongest India signal. Do not let a malformed
+  // "+91..." value receive India priority merely because it starts with +91.
+  if (strictIndianMobile(phone, location)) return 4;
+
+  // Apollo People Search does not expose the actual phone before enrichment.
+  // Its has_direct_phone signal is therefore the strongest safe pre-hydration
+  // proxy for an eventual phone on an India-located decision-maker.
+  if (isIndiaLocation(location)) {
+    const availability = directPhoneAvailability(person);
+    if (availability >= 2) return 3;
+    if (availability === 1) return 2;
+    return 1;
+  }
+
   return 0;
 }
 
