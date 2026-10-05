@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const controller = require('../core/universal-spreadsheet-domain-controller');
 const operator = require('../core/universal-sheet-enrichment-operator');
+const apollo = require('../core/apollo-enrichment');
 const targeted = require('../core/universal-sheet-enrichment-targeted');
 const sheets = require('../core/google-sheets-operator');
 
@@ -46,6 +47,29 @@ const internationalFallbackSelection = operator.chooseContactabilityCandidate([
 ]);
 assert.equal(internationalFallbackSelection.person.name, 'Top International Founder');
 
+const indianAssociateBeatsForeignHead = operator.chooseContactabilityCandidate([
+  { person: { name: 'Head Talent International', title: 'Head of Talent Acquisition', phone: '+44 20 7946 0958', email: 'head@example.com' }, index: 0 },
+  { person: { name: 'TA Associate India', title: 'Talent Acquisition Associate', phone: '+91 98765 43210', email: '' }, index: 1 },
+]);
+assert.equal(indianAssociateBeatsForeignHead.person.name, 'TA Associate India');
+
+assert.equal(
+  apollo.decisionPriority('Head of Talent Acquisition'),
+  2,
+  'Head of Talent Acquisition must remain the higher-authority international fallback tier.',
+);
+assert.equal(
+  apollo.decisionPriority('Talent Acquisition Associate'),
+  4,
+  'Talent Acquisition Associate must remain eligible as a lower-level India-first contact.',
+);
+assert.equal(operator.indiaPhoneFirstEnabled({ requireIndianPhone: true }), true);
+assert.equal(operator.indiaPhoneFirstEnabled({ requireIndianPhone: false }), false);
+assert.ok(
+  operator.indiaFirstDecisionMakerTitles().some((title) => /talent acquisition associate/i.test(title)),
+  'India-first Apollo search must include Talent Acquisition Associate.',
+);
+
 const companyContext = { company: 'Acme', domain: 'acme.in' };
 const candidates = [
   { id: '1', name: 'A', title: 'Talent Acquisition Head', organizationName: 'Acme', organizationDomain: 'acme.in', location: 'Mumbai, India', has_direct_phone: true },
@@ -59,6 +83,41 @@ const shortlist = operator.preferredContactShortlist(candidates, { context: {} }
 assert.equal(operator.phoneQualifiedCandidateLimit({}), 8);
 assert.equal(operator.phoneQualifiedCandidateLimit({ contactabilityCandidateLimit: 99 }), 10);
 assert.equal(shortlist.length, 4);
+
+const foreignHeavyCandidates = Array.from({ length: 10 }, (_, index) => ({
+  id: 'foreign-' + index,
+  name: 'Foreign ' + index,
+  title: index === 0 ? 'Head of Talent Acquisition' : 'Recruiter',
+  organizationName: 'Acme',
+  organizationDomain: 'acme.in',
+  location: 'New York, USA',
+  has_direct_phone: true,
+}));
+foreignHeavyCandidates.splice(5, 0, {
+  id: 'india-ta-associate',
+  name: 'India TA Associate',
+  title: 'Talent Acquisition Associate',
+  organizationName: 'Acme',
+  organizationDomain: 'acme.in',
+  location: 'Mumbai, India',
+});
+const strictIndiaShortlist = operator.preferredContactShortlist(
+  foreignHeavyCandidates,
+  { context: {} },
+  companyContext,
+  { names: new Set(), linkedins: new Set(), emails: new Set(), phones: new Set(), ids: new Set() },
+  { requireIndianPhone: true, contactabilityCandidateLimit: 8 },
+);
+assert.equal(
+  strictIndiaShortlist[0].name,
+  'India TA Associate',
+  'A lower-level India-aware candidate must reach hydration before foreign-phone leaders.',
+);
+
+const operatorSource = fs.readFileSync(require.resolve('../core/universal-sheet-enrichment-operator'), 'utf8');
+assert.match(operatorSource, /indiaPrioritySearches/);
+assert.match(operatorSource, /indiaFirstSearch:\s*true/);
+assert.match(operatorSource, /location:\s*text\(options\.location\) \|\| 'India'/);
 
 assert.equal(typeof operator.pendingPhoneRowsForSource, 'function');
 assert.equal(typeof targeted.enforceIndianPhoneCompanyGate, 'function');
