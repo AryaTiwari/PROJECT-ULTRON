@@ -306,6 +306,42 @@ function clonedGroup(group) {
   };
 }
 
+function rawHeaderColumns(source) {
+  const schema = source?.schema || {};
+  const headerRowNumber = Number(schema.headerRowNumber || schema.headerRowIndex + 1 || 1);
+  const headerRow = Array.isArray(source?.rows?.[headerRowNumber - 1])
+    ? source.rows[headerRowNumber - 1]
+    : [];
+  return headerRow.map((header, index) => {
+    const value = text(header);
+    const normalized = value
+      .toLowerCase()
+      .replace(/[_./\\-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const person = /\b(?:poc|person|contact|candidate|decision maker|recruiter|rep(?:resentative)?)\b/i.test(normalized);
+    const name = /\b(?:name|full name)\b/i.test(normalized);
+    const linkedin = /\blinked?in\b|\blinked in\b|\bli profile\b|\bprofile url\b|\bprofile link\b/i.test(normalized);
+    const company = /\b(?:company|organisation|organization|employer|account|business|firm|client)\b/i.test(normalized);
+    const ordinal = normalized.match(/\b(?:poc|person|contact|candidate)\s*[- ]?(\d+)\b/i)?.[1]
+      || normalized.match(/\b(\d+)(?:st|nd|rd|th)\s+(?:poc|person|contact|candidate)\b/i)?.[1]
+      || null;
+    return {
+      index,
+      header: value,
+      normalizedHeader: normalized,
+      role: linkedin ? 'linkedin' : name ? 'name' : company ? 'company' : 'unknown',
+      confidence: 0.99,
+      score: 100,
+      slotHint: ordinal ? Number(ordinal) : null,
+      rawLinkedIn: linkedin,
+      rawPerson: person,
+      rawName: name,
+      rawCompany: company,
+    };
+  });
+}
+
 // The universal schema is intentionally generic, but this isolated operator has a
 // narrower and safer contract: LinkedIn headers are link targets, not arbitrary
 // contact fields. When a sheet changes a header from "POC 1 LinkedIn" to "POC 1
@@ -314,7 +350,19 @@ function clonedGroup(group) {
 // Recover the link topology locally without touching any non-LinkedIn field.
 function repairLinkedInSchema(source) {
   const base = source?.schema || {};
-  const columns = Array.isArray(base.columns) ? base.columns : [];
+  const baseColumns = Array.isArray(base.columns) ? base.columns : [];
+  const rawColumns = rawHeaderColumns(source);
+  const rawLinkedInColumns = rawColumns.filter((column) => column.rawLinkedIn);
+  const columns = rawColumns.length
+    ? rawColumns.map((raw) => {
+        const existing = baseColumns.find((column) => Number(column?.index) === raw.index);
+        return {
+          ...(existing || {}),
+          ...raw,
+          role: raw.rawLinkedIn ? 'linkedin' : (raw.rawName ? 'name' : (raw.rawCompany ? 'company' : (existing?.role || raw.role))),
+        };
+      })
+    : baseColumns;
   if (!columns.length) return base;
 
   const schema = {
@@ -323,6 +371,18 @@ function repairLinkedInSchema(source) {
     companyGroups: Array.isArray(base.companyGroups) ? base.companyGroups.map(clonedGroup).filter(Boolean) : [],
     personGroups: Array.isArray(base.personGroups) ? base.personGroups.map(clonedGroup).filter(Boolean) : [],
   };
+
+  // Generic schema LinkedIn assignments are discarded only when the live header row
+  // gives us explicit LinkedIn columns. Rebuild those assignments from raw headers.
+  // Non-LinkedIn field ownership is left untouched.
+  if (rawLinkedInColumns.length) {
+    for (const group of schema.companyGroups) {
+      if (group?.fields) delete group.fields.linkedin;
+    }
+    for (const group of schema.personGroups) {
+      if (group?.fields) delete group.fields.linkedin;
+    }
+  }
 
   let company = schema.companyGroups.find((group) =>
     schemaField(group, 'company') != null ||
@@ -368,8 +428,10 @@ function repairLinkedInSchema(source) {
           .filter((column) => isLinkedInColumn(column) && column.index < firstPersonSeed.index)
           .sort((a, b) => b.index - a.index)[0]
         : null;
-      const candidate = explicit || positional;
-      if (candidate) company.fields.linkedin = synthField(candidate, candidate.role || 'linkedin_company');
+      const candidate = explicit || positional || rawLinkedInColumns
+        .filter((column) => column.index < (firstPersonSeed?.index ?? Number.POSITIVE_INFINITY))
+        .sort((a, b) => b.index - a.index)[0];
+      if (candidate) company.fields.linkedin = synthField(candidate, 'linkedin_company');
     }
   }
 
@@ -451,7 +513,16 @@ function repairLinkedInSchema(source) {
       )
       .sort((a, b) => a.index - b.index)[0];
 
-    const candidate = explicit || positional || bounded;
+    const candidate = explicit || positional || bounded || rawLinkedInColumns
+      .filter((column) =>
+        !claimedLinkIndexes.has(column.index) &&
+        column.index > nameIndex &&
+        column.index < nextNameIndex
+      )
+      .sort((a, b) => a.index - b.index)[0]
+      || rawLinkedInColumns
+        .filter((column) => !claimedLinkIndexes.has(column.index) && column.index > nameIndex)
+        .sort((a, b) => Math.abs(a.index - nameIndex) - Math.abs(b.index - nameIndex))[0];
     if (!candidate) continue;
 
     group.fields.linkedin = synthField(candidate, candidate.role || 'linkedin');
