@@ -1846,6 +1846,10 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
   if (!queryBrand) return [];
 
   const personUrls = new Set();
+  const linkedinSearchLocation = text(options.location) || (options.indiaFirstSearch ? 'India' : '');
+  const linkedinPeopleKeywords = options.indiaFirstSearch
+    ? 'talent acquisition recruiter human resources HR TA associate coordinator executive recruitment associate recruitment coordinator'
+    : 'recruiter talent acquisition human resources HR founder director owner manager';
   const rowNumber = options.rowNumber !== null && options.rowNumber !== undefined && options.rowNumber !== ''
     && Number.isInteger(Number(options.rowNumber))
     ? Number(options.rowNumber)
@@ -1910,9 +1914,9 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
         if (personUrls.size >= 8) break;
         try {
           const constrained = await linkedinMcp.callTool('search_people', {
-            keywords: 'recruiter talent acquisition human resources HR founder director owner manager',
+            keywords: linkedinPeopleKeywords,
             current_company: urn,
-            ...(options.location ? { location: String(options.location) } : {}),
+            ...(linkedinSearchLocation ? { location: linkedinSearchLocation } : {}),
           });
           stats.linkedinFallbackCurrentCompanySearches = Number(stats.linkedinFallbackCurrentCompanySearches || 0) + 1;
           collectLinkedInPersonUrls(constrained, personUrls);
@@ -1931,7 +1935,7 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
     try {
       const employees = await linkedinMcp.callTool('get_company_employees', {
         company_name: slug,
-        keywords: 'recruiter talent acquisition human resources HR founder director owner manager',
+        keywords: linkedinPeopleKeywords,
       });
       stats.linkedinFallbackEmployeeSearches = Number(stats.linkedinFallbackEmployeeSearches || 0) + 1;
       collectLinkedInPersonUrls(employees, personUrls);
@@ -1954,17 +1958,23 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
 
   // Fallback when LinkedIn does not expose a company slug/people page.
   if (!personUrls.size) {
-    const queries = [
-      `${queryBrand} recruiter`,
-      `${queryBrand} talent acquisition human resources`,
-      `${queryBrand} founder director owner manager`,
-    ];
+    const queries = options.indiaFirstSearch
+      ? [
+          `${queryBrand} talent acquisition recruiter HR`,
+          `${queryBrand} talent acquisition associate coordinator recruitment`,
+          `${queryBrand} human resources recruiter`,
+        ]
+      : [
+          `${queryBrand} recruiter`,
+          `${queryBrand} talent acquisition human resources`,
+          `${queryBrand} founder director owner manager`,
+        ];
     for (const keywords of queries) {
       if (personUrls.size >= 8) break;
       try {
         const result = await linkedinMcp.callTool('search_people', {
           keywords,
-          ...(options.location ? { location: String(options.location) } : {}),
+          ...(linkedinSearchLocation ? { location: linkedinSearchLocation } : {}),
         });
         stats.linkedinFallbackSearches = Number(stats.linkedinFallbackSearches || 0) + 1;
         collectLinkedInPersonUrls(result, personUrls);
@@ -1995,7 +2005,12 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
   for (const linkedinUrl of urls.slice(0, limit)) {
     const candidate = await verifyLinkedInCompanyEmployee(linkedinUrl, companyContext, stats);
     if (!candidate?.id || !candidate?.title) continue;
-    verified.push(candidate);
+    verified.push({
+      ...candidate,
+      ...(options.indiaFirstSearch
+        ? { location: linkedinSearchLocation || 'India', indiaSearchHint: true }
+        : {}),
+    });
   }
 
   stats.linkedinFallbackVerifiedCandidates = Number(stats.linkedinFallbackVerifiedCandidates || 0) + verified.length;
@@ -2365,6 +2380,40 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     }
   }
 
+  // Strict India-first mode gets a dedicated lower-level HR/TA search even when
+  // Apollo already returned enough high-authority people. People Search is zero-credit,
+  // and this is explicitly about finding an Indian-phone-capable contact before any
+  // foreign-phone fallback is allowed.
+  const indiaFirst = indiaPhoneFirstEnabled(options);
+  if (!options.primarySweep && indiaFirst && !hasIndianPhoneSignal(merged)) {
+    const titles = indiaFirstDecisionMakerTitles();
+    if (titles.length) {
+      try {
+        const indiaPriority = await apollo.searchCompanyPeopleBroad({
+          company,
+          domain,
+          location: options.location || 'India',
+          limit: Math.max(priorityLimit, 30),
+          titles,
+        });
+        stats.candidateSearches++;
+        stats.candidatePrioritySearches++;
+        stats.indiaPrioritySearches = Number(stats.indiaPrioritySearches || 0) + 1;
+        const discovered = Array.isArray(indiaPriority?.people) ? indiaPriority.people : [];
+        stats.indiaFirstCandidatesDiscovered = Number(stats.indiaFirstCandidatesDiscovered || 0) + discovered.length;
+        add(discovered);
+      } catch (error) {
+        throwSystemic(error);
+        stats.indiaPrioritySearchFailures = Number(stats.indiaPrioritySearchFailures || 0) + 1;
+        stats.discoveryDiagnostics.push({
+          company: company || domain,
+          code: String(error?.code || 'APOLLO_INDIA_PRIORITY_SEARCH_FAILED'),
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
+    }
+  }
+
   // Results-first primary sweep never cascades down a long waterfall on one row.
   // One targeted search is enough to decide whether this row proceeds now or is
   // queued for the post-sweep deterministic recheck.
@@ -2465,7 +2514,42 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   }
 
   // 6. Authenticated LinkedIn is the final sparse-company identity fallback.
-  if (merged.length < minimumUsefulPool && linkedinZeroResultFallbackEnabled(options)) {
+  // Strict India-first mode may invoke this even when Apollo has a populated
+  // company pool, because a populated foreign-heavy pool is not proof that an
+  // Indian TA/HR contact does not exist.
+  let indiaLinkedInFallbackUsed = false;
+  if (!options.primarySweep && indiaFirst && !hasIndianPhoneSignal(merged) && linkedinZeroResultFallbackEnabled(options)) {
+    try {
+      const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, {
+        ...options,
+        indiaFirstSearch: true,
+        location: text(options.location) || 'India',
+      });
+      stats.indiaLinkedInFallbackRuns = Number(stats.indiaLinkedInFallbackRuns || 0) + 1;
+      indiaLinkedInFallbackUsed = true;
+      stats.indiaFirstCandidatesDiscovered = Number(stats.indiaFirstCandidatesDiscovered || 0) + linkedinPeople.length;
+      add(linkedinPeople);
+    } catch (error) {
+      stats.indiaLinkedInFallbackRuns = Number(stats.indiaLinkedInFallbackRuns || 0) + 1;
+      indiaLinkedInFallbackUsed = true;
+      throwSystemic(error);
+      const typed = typedFailureSummary(error, { stage: error?.stage || 'india-first-authenticated-linkedin' });
+      stats.discoveryDiagnostics.push({
+        rowNumber: options.rowNumber,
+        groupOrdinal: 2,
+        company: company || domain,
+        code: typed.code,
+        subsystem: typed.subsystem,
+        type: typed.type,
+        stage: typed.stage,
+        message: typed.message,
+        hint: typed.hint,
+      });
+      if (linkedinSafetyCapError(error)) throw error;
+    }
+  }
+
+  if (merged.length < minimumUsefulPool && !indiaLinkedInFallbackUsed && linkedinZeroResultFallbackEnabled(options)) {
     try {
       const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, options);
       add(linkedinPeople);
@@ -3460,6 +3544,10 @@ function freshStats() {
     linkedinHydrationRecoveryAttempts: 0,
     linkedinHydrationRecoverySuccesses: 0,
     linkedinHydrationRecoveryFailures: 0,
+    indiaPrioritySearches: 0,
+    indiaPrioritySearchFailures: 0,
+    indiaFirstCandidatesDiscovered: 0,
+    indiaLinkedInFallbackRuns: 0,
     postHydrationDuplicates: 0,
     discoveryDiagnostics: [],
     pendingPhoneRequests: 0,
@@ -4338,6 +4426,9 @@ module.exports = {
   pendingPhoneRowsForSource,
   pendingPhoneTargetsForSource,
   candidateIndiaPriority,
+  indiaPhoneFirstEnabled,
+  indiaFirstDecisionMakerTitles,
+  hasIndianPhoneSignal,
   backgroundPhoneStatus,
   syncPendingPhoneAssignments,
   repairExistingGroups,
