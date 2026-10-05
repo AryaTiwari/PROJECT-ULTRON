@@ -3184,7 +3184,17 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     if (checked.some((entry) => entry.tier === 4)) break;
   }
 
-  const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
+  const indiaFirst = indiaPhoneFirstEnabled(options);
+  const indianChecked = checked.filter((entry) => entry.tier >= 3);
+  // During the results-first sweep, strict India-first mode never spends the
+  // international fallback early. Otherwise a foreign-number Head/Director can
+  // be written before the deep India-specific search has had a chance to find
+  // a lower-level +91 HR/TA contact.
+  const selected = indianChecked.length
+    ? chooseContactabilityCandidate(indianChecked)
+    : (indiaFirst && options.resultsFirstSweep
+      ? null
+      : (checked.length ? chooseContactabilityCandidate(checked) : null));
 
   if (!selected || selected.tier <= 0) {
     // All bounded immediate-phone alternatives were checked first. A verified
@@ -3192,7 +3202,10 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     // no-phone candidate. Stage only the highest-ranked pending owner, plus
     // safely verified email, so the paid callback can settle the phone later.
     // This never invents a phone or replaces an existing different identity.
-    const pendingOwner = pendingChecked.sort((a, b) =>
+    const pendingPool = indiaFirst && options.resultsFirstSweep
+      ? pendingChecked.filter((entry) => candidateIndiaPriority(entry.person) > 0)
+      : pendingChecked;
+    const pendingOwner = pendingPool.sort((a, b) =>
       candidateIndiaPriority(b.person) - candidateIndiaPriority(a.person)
       || apollo.decisionPriority(a.person.title || '') - apollo.decisionPriority(b.person.title || '')
       || a.index - b.index
