@@ -170,6 +170,13 @@ Worksheet: salesforce/oracle/tech`;
     'Plain Worksheet: <name> syntax must preserve the exact worksheet target.',
   );
   assert.equal(
+    universalSheetController.parseSheetName(
+      'resume enrichment in this sheet\\n\\nGoogle Sheet:\\nhttps://docs.google.com/spreadsheets/d/abc123\\n\\nWorksheet: salesforce/oracle/tech',
+    ),
+    'salesforce/oracle/tech',
+    'A standalone Worksheet declaration must beat neighboring Google Sheet URL text.',
+  );
+  assert.equal(
     commandControl.isExplicitPaidApprovalReply('approve Apollo'),
     true,
     'A genuine Apollo approval reply must remain approval-routable.',
