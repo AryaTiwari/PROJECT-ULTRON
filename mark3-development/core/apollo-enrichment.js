@@ -532,7 +532,7 @@ const COMPANY_DECISION_PRIORITY = Object.freeze([
       'people operations', 'people ops', 'staffing specialist', 'placement coordinator',
     ]),
   }),
-];
+]);
 
 function decisionPriority(title, mode = 'general') {
   const value = normalizedWords(title);
