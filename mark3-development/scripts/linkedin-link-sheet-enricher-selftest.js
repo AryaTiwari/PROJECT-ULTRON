@@ -201,6 +201,62 @@ Worksheet: \`salesforce/oracle/tech\``;
   assert.equal(result.stats.companyLinksFilled, 1);
   assert.equal(result.stats.personLinksFilled, 1);
   assert.equal(changes.length, 2);
+  // Incremental-write regression: a fast target must be written while another
+  // provider lookup is still hanging. The old implementation waited for the
+  // complete company phase, making the sheet appear dead for minutes.
+  const incrementalChanges = [];
+  let releaseSlow = null;
+  const slowGate = new Promise((resolve) => { releaseSlow = resolve; });
+  const incrementalRows = [
+    ['Company Name', 'Company LinkedIn', 'POC 1 Name', 'POC 1 LinkedIn'],
+    ['Fast Company', '', '', ''],
+    ['Slow Company', '', '', ''],
+  ];
+  const incrementalSchema = schema.inferSchema(incrementalRows);
+  const incrementalProvider = {
+    calls: [],
+    async callTool(tool, args) {
+      this.calls.push({ tool, args });
+      const company = String(args?.keywords || '');
+      if (tool === 'search_companies') {
+        if (company === 'Slow Company') await slowGate;
+        return { companies: [{
+          name: company,
+          linkedin_url: `https://www.linkedin.com/company/${company.toLowerCase().replace(/\\s+/g, '-')}/`,
+        }] };
+      }
+      if (tool === 'get_company_profile') {
+        const slug = String(args?.company_name || '');
+        const company = slug.replace(/-/g, ' ');
+        return {
+          name: company.replace(/\\b\\w/g, (ch) => ch.toUpperCase()),
+          urn: `urn:li:organization:${slug.length}`,
+        };
+      }
+      throw new Error(`Unexpected incremental LinkedIn tool: ${tool}`);
+    },
+  };
+  const incrementalPromise = linkEnricher.run({
+    spreadsheetId: 'abc123',
+    sheetName: 'salesforce/oracle/tech',
+    rows: incrementalRows.map((row) => row.slice()),
+    schema: incrementalSchema,
+  }, {
+    sheetsApi: fakeSheets(incrementalChanges),
+    linkedinMcp: incrementalProvider,
+    concurrency: 2,
+    providerTimeoutMs: 120000,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.ok(
+    incrementalChanges.some((item) => /fast-company/i.test(item.value)),
+    'Fast verified company link should be written before a slow sibling lookup completes.',
+  );
+  releaseSlow();
+  const incrementalResult = await incrementalPromise;
+  assert.equal(incrementalResult.ok, true);
+  assert.equal(incrementalResult.stats.companyLinksFilled, 2);
+  assert.equal(changes.length, 2);
   assert.ok(changes.some((item) => item.value === 'https://www.linkedin.com/company/acme-technologies/'));
   assert.ok(changes.some((item) => item.value === 'https://www.linkedin.com/in/alice-smith/'));
   assert.equal(changes.some((item) => /bob-jones/i.test(item.value)), false);
