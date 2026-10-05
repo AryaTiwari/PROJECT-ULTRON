@@ -18,7 +18,7 @@ function normalizeLinkedInUrl(value, kind = null) {
   const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   try {
     const url = new URL(candidate);
-    if (!/^(?:www\\.)?linkedin\\.com$/i.test(url.hostname)) return '';
+    if (!/^(?:www\.)?linkedin\.com$/i.test(url.hostname)) return '';
     const parts = url.pathname.split('/').filter(Boolean);
     if (kind === 'company' && String(parts[0] || '').toLowerCase() !== 'company') return '';
     if (kind === 'person' && String(parts[0] || '').toLowerCase() !== 'in') return '';
@@ -50,9 +50,9 @@ function companyKey(value) {
   return canonicalCompanyName(value)
     .toLowerCase()
     .replace(/&/g, ' and ')
-    .replace(/\\b(?:private|pvt|limited|ltd|llp|inc|incorporated|corporation|corp|company|co)\\b/g, ' ')
+    .replace(/\b(?:private|pvt|limited|ltd|llp|inc|incorporated|corporation|corp|company|co)\b/g, ' ')
     .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\\s+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -74,7 +74,7 @@ function nameKey(value) {
   return text(value)
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, ' ')
-    .replace(/\\s+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -130,8 +130,8 @@ function collectLinkedInUrls(value, kind, out = new Set()) {
   if (value == null) return out;
   if (typeof value === 'string') {
     const regex = kind === 'company'
-      ? /(?:https?:\\/\\/)?(?:www\\.)?linkedin\\.com\\/company\\/[A-Za-z0-9%._~-]+\\/?/gi
-      : /(?:https?:\\/\\/)?(?:www\\.)?linkedin\\.com\\/in\\/[A-Za-z0-9%._~-]+\\/?/gi;
+      ? /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/company\/[A-Za-z0-9%._~-]+\/?/gi
+      : /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9%._~-]+\/?/gi;
     for (const match of value.matchAll(regex)) {
       const normalized = normalizeLinkedInUrl(match[0], kind);
       if (normalized) out.add(normalized);
@@ -236,7 +236,7 @@ function companyUrns(value, out = new Set()) {
     return out;
   }
   if (typeof value !== 'object') return out;
-  if (text(value.kind).toLowerCase() === 'company_urn' && /^\\d+$/.test(text(value.value))) {
+  if (text(value.kind).toLowerCase() === 'company_urn' && /^\d+$/.test(text(value.value))) {
     out.add(text(value.value));
   }
   for (const item of Object.values(value)) companyUrns(item, out);
