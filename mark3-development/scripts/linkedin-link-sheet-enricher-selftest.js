@@ -112,6 +112,37 @@ Worksheet: \`salesforce/oracle/tech\``;
     commandControl.claim(exactLinkedInRequest).domain,
     'linkedin-sheet-links',
   );
+  const searchHeavyLinkedInRequest = `ULTRON, run the isolated LinkedIn-link enrichment pass only for the \`salesforce/oracle/tech\` worksheet.
+
+## COMPANY LINKEDIN ENRICHMENT
+- Search for the matching LinkedIn company profile.
+- Verify the company identity before writing.
+
+## POC LINKEDIN ENRICHMENT
+- Search for the matching LinkedIn person profile.
+- Verify the person identity and current company/employer.
+
+## PRESERVATION RULES
+- Never overwrite a populated LinkedIn cell.
+- Do not modify phone numbers, emails, designations, company names, or any other fields.
+- Do not perform Apollo enrichment.
+- No Apollo.
+- Do not run the normal phone/email/POC enrichment flow.
+
+Google Sheet:
+${sheetUrl}
+
+Worksheet: \`salesforce/oracle/tech\``;
+
+  assert.equal(
+    commandControl.isLinkedInSheetLinkEnrichmentRequest(searchHeavyLinkedInRequest),
+    true,
+    'Search-heavy isolated LinkedIn-link prompt must not be reclassified as generic LinkedIn lead discovery.',
+  );
+  assert.equal(
+    commandControl.claim(searchHeavyLinkedInRequest).domain,
+    'linkedin-sheet-links',
+  );
   assert.equal(
     universalSheetController.parseSheetName(exactLinkedInRequest),
     'salesforce/oracle/tech',
