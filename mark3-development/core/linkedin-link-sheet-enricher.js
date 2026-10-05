@@ -259,12 +259,228 @@ function dataRows(source, rowLimit) {
   return output;
 }
 
+function normalizedColumnHeader(column) {
+  return text(column?.normalizedHeader || column?.header)
+    .toLowerCase()
+    .replace(/[_./\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isLinkedInColumn(column) {
+  const h = normalizedColumnHeader(column);
+  return /\blinked?in\b|\blinked in\b|\bli profile\b|\bprofile url\b|\bprofile link\b/i.test(h);
+}
+
+function isCompanyHeader(column) {
+  const h = normalizedColumnHeader(column);
+  return /\b(?:company|organisation|organization|employer|account|business|firm|client)\b/i.test(h);
+}
+
+function isPersonHeader(column) {
+  const h = normalizedColumnHeader(column);
+  return /\b(?:poc|person|contact|candidate|decision maker|recruiter|rep(?:resentative)?)\b/i.test(h);
+}
+
+function isNameHeader(column) {
+  const h = normalizedColumnHeader(column);
+  return /\b(?:name|full name)\b/i.test(h);
+}
+
+function synthField(column, role = null) {
+  if (!column || !Number.isInteger(column.index)) return null;
+  return {
+    index: column.index,
+    header: text(column.header),
+    confidence: Math.max(0.85, Number(column.confidence || 0)),
+    role: role || column.role || 'unknown',
+  };
+}
+
+function clonedGroup(group) {
+  if (!group) return null;
+  return {
+    ...group,
+    fields: { ...(group.fields || {}) },
+    alternates: [...(group.alternates || [])],
+  };
+}
+
+// The universal schema is intentionally generic, but this isolated operator has a
+// narrower and safer contract: LinkedIn headers are link targets, not arbitrary
+// contact fields. When a sheet changes a header from "POC 1 LinkedIn" to "POC 1
+// LinkedIn URL", removes an ordinal, or repeats a generic "LinkedIn" heading, the
+// generic graph can legitimately collapse two person link columns into one.
+// Recover the link topology locally without touching any non-LinkedIn field.
+function repairLinkedInSchema(source) {
+  const base = source?.schema || {};
+  const columns = Array.isArray(base.columns) ? base.columns : [];
+  if (!columns.length) return base;
+
+  const schema = {
+    ...base,
+    columns,
+    companyGroups: Array.isArray(base.companyGroups) ? base.companyGroups.map(clonedGroup).filter(Boolean) : [],
+    personGroups: Array.isArray(base.personGroups) ? base.personGroups.map(clonedGroup).filter(Boolean) : [],
+  };
+
+  let company = schema.companyGroups.find((group) =>
+    schemaField(group, 'company') != null ||
+    schemaField(group, 'name') != null ||
+    schemaField(group, 'linkedin') != null
+  ) || null;
+
+  const companyNameCandidates = columns
+    .filter((column) => !isLinkedInColumn(column) && isCompanyHeader(column) && (isNameHeader(column) || /\bcompany\b/.test(normalizedColumnHeader(column))))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+
+  if (!company && companyNameCandidates.length) {
+    company = {
+      id: 'company-repaired-1',
+      kind: 'company',
+      ordinal: 1,
+      seedIndex: companyNameCandidates[0].index,
+      fields: {},
+      alternates: [],
+      confidence: 0.9,
+    };
+    schema.companyGroups.unshift(company);
+  } else if (company) {
+    company = clonedGroup(company);
+    const slot = schema.companyGroups.findIndex((group) => group.id === company.id);
+    if (slot >= 0) schema.companyGroups[slot] = company;
+  }
+
+  if (company) {
+    if (schemaField(company, 'company') == null && schemaField(company, 'name') == null) {
+      const candidate = companyNameCandidates[0];
+      if (candidate) company.fields.company = synthField(candidate, 'company');
+    }
+    if (schemaField(company, 'linkedin') == null) {
+      const firstPersonSeed = columns
+        .filter((column) => column.role === 'name' && isPersonHeader(column))
+        .sort((a, b) => a.index - b.index)[0];
+      const explicit = columns
+        .filter((column) => isLinkedInColumn(column) && isCompanyHeader(column))
+        .sort((a, b) => a.index - b.index)[0];
+      const positional = firstPersonSeed
+        ? columns
+          .filter((column) => isLinkedInColumn(column) && column.index < firstPersonSeed.index)
+          .sort((a, b) => b.index - a.index)[0]
+        : null;
+      const candidate = explicit || positional;
+      if (candidate) company.fields.linkedin = synthField(candidate, candidate.role || 'linkedin_company');
+    }
+  }
+
+  const claimedLinkIndexes = new Set();
+  const claimedNameIndexes = new Set();
+  for (const group of schema.personGroups) {
+    const nameIndex = schemaField(group, 'name');
+    if (nameIndex != null) claimedNameIndexes.add(nameIndex);
+    const linkIndex = schemaField(group, 'linkedin');
+    if (linkIndex != null) claimedLinkIndexes.add(linkIndex);
+  }
+  const companyLinkIndex = schemaField(company, 'linkedin');
+  if (companyLinkIndex != null) claimedLinkIndexes.add(companyLinkIndex);
+
+  // Recover missing person groups from explicit person-name headers even when the
+  // generic schema failed to create a group.
+  const personNameColumns = columns
+    .filter((column) => isNameHeader(column) && isPersonHeader(column))
+    .sort((a, b) => a.index - b.index);
+  const existingNameIndexes = new Set(schema.personGroups.map((group) => schemaField(group, 'name')).filter((i) => i != null));
+  for (const column of personNameColumns) {
+    if (existingNameIndexes.has(column.index)) continue;
+    const ordinal = Number(column.slotHint || schema.personGroups.length + 1);
+    const group = {
+      id: `person-repaired-${ordinal}-${column.index}`,
+      kind: 'person',
+      ordinal,
+      seedIndex: column.index,
+      fields: { name: synthField(column, 'name') },
+      alternates: [],
+      confidence: 0.86,
+    };
+    schema.personGroups.push(group);
+    existingNameIndexes.add(column.index);
+  }
+
+  schema.personGroups.sort((a, b) =>
+    Number(a?.ordinal || 999) - Number(b?.ordinal || 999) ||
+    (schemaField(a, 'name') ?? 9999) - (schemaField(b, 'name') ?? 9999)
+  );
+
+  const linkColumns = columns
+    .filter((column) => isLinkedInColumn(column))
+    .sort((a, b) => a.index - b.index);
+
+  for (let i = 0; i < schema.personGroups.length; i++) {
+    const group = schema.personGroups[i];
+    if (schemaField(group, 'linkedin') != null) continue;
+
+    const nameIndex = schemaField(group, 'name');
+    if (nameIndex == null) continue;
+
+    const ordinal = Number(group.ordinal || i + 1);
+    const explicit = linkColumns
+      .filter((column) => !claimedLinkIndexes.has(column.index) && Number(column.slotHint || 0) === ordinal)
+      .sort((a, b) => a.index - b.index)[0];
+
+    const nextNameIndex = schema.personGroups
+      .map((candidate) => schemaField(candidate, 'name'))
+      .filter((index) => Number.isInteger(index) && index > nameIndex)
+      .sort((a, b) => a - b)[0] ?? Number.POSITIVE_INFINITY;
+
+    // Prefer the first unclaimed LinkedIn column in this POC's structural block.
+    // This supports repeated generic headings such as "LinkedIn URL" while keeping
+    // the company link and other POC links isolated.
+    const positional = linkColumns
+      .filter((column) =>
+        !claimedLinkIndexes.has(column.index) &&
+        column.index > nameIndex &&
+        column.index < nextNameIndex
+      )
+      .sort((a, b) => a.index - b.index)[0];
+
+    const bounded = linkColumns
+      .filter((column) =>
+        !claimedLinkIndexes.has(column.index) &&
+        column.index > nameIndex &&
+        column.index <= nameIndex + 8
+      )
+      .sort((a, b) => a.index - b.index)[0];
+
+    const candidate = explicit || positional || bounded;
+    if (!candidate) continue;
+
+    group.fields.linkedin = synthField(candidate, candidate.role || 'linkedin');
+    claimedLinkIndexes.add(candidate.index);
+  }
+
+  // Final fallback for sheets whose POC link headers are completely generic and
+  // sit after the person names, one per POC block.
+  const missingGroups = schema.personGroups.filter((group) => schemaField(group, 'name') != null && schemaField(group, 'linkedin') == null);
+  for (const group of missingGroups) {
+    const nameIndex = schemaField(group, 'name');
+    const candidate = linkColumns
+      .filter((column) => !claimedLinkIndexes.has(column.index) && column.index > nameIndex)
+      .sort((a, b) => Math.abs(a.index - nameIndex) - Math.abs(b.index - nameIndex))[0];
+    if (!candidate) continue;
+    group.fields.linkedin = synthField(candidate, candidate.role || 'linkedin');
+    claimedLinkIndexes.add(candidate.index);
+  }
+
+  schema.entityGroups = [...schema.personGroups, ...schema.companyGroups];
+  return schema;
+}
+
 function missingLinkTargets(source, rowLimit) {
-  const schema = source?.schema || {};
+  const schema = repairLinkedInSchema(source);
   const companyGroup = firstCompanyGroup(schema);
   const pGroups = personGroups(schema);
   const targets = [];
-  for (const { rowNumber, row } of dataRows(source, rowLimit)) {
+  for (const { rowNumber, row } of dataRows({ ...source, schema }, rowLimit)) {
     const companyNameColumn = schemaField(companyGroup, 'company') ?? schemaField(companyGroup, 'name');
     const companyLinkColumn = schemaField(companyGroup, 'linkedin');
     if (companyNameColumn != null && companyLinkColumn != null && text(row[companyNameColumn]) && !text(row[companyLinkColumn])) {
@@ -712,7 +928,7 @@ async function run(source, options = {}) {
       if (type === 'company') stats.companyLinksFilled += write.written;
       else stats.personLinksFilled += write.written;
 
-      const match = change.range.match(/!([A-Z]+)(d+)$/i);
+      const match = change.range.match(/!([A-Z]+)(\\d+)$/i);
       if (match) {
         const rowNumber = Number(match[2]);
         const index = (() => {
