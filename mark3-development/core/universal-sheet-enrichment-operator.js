@@ -2302,7 +2302,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     stats.candidateCacheHits++;
     runContext.cacheHit('discovery');
     const cached = cache.get(key) || [];
-    if (options.primarySweep || cached.length >= requiredPool) return cached;
+    if (options.primarySweep || (cached.length >= requiredPool && (!indiaFirst || hasIndianPhoneSignal(cached)))) return cached;
     initialDeepSeed = cached;
   }
   const persisted = durableEnrichmentCache.get('priority-candidate-discovery', key);
@@ -2312,7 +2312,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     runContext.cacheHit('discovery');
     const cached = persisted.value || [];
     cache.set(key, cached);
-    if (options.primarySweep || cached.length >= requiredPool) return cached;
+    if (options.primarySweep || (cached.length >= requiredPool && (!indiaFirst || hasIndianPhoneSignal(cached)))) return cached;
     initialDeepSeed = mergeCandidatePools(initialDeepSeed, cached);
   }
 
@@ -2345,6 +2345,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   const priorityLimit = integer(options.priorityCandidateLimit, 20, 6, 40);
   const broadLimit = integer(options.adaptiveBroadCandidateLimit, 30, 10, 50);
   const minimumUsefulPool = requiredPool;
+  const indiaFirst = indiaPhoneFirstEnabled(options);
 
   // Reuse exact Apollo profiles already verified elsewhere in this workbook or
   // an earlier run. This is especially useful when several rows belong to the
@@ -2384,7 +2385,6 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // Apollo already returned enough high-authority people. People Search is zero-credit,
   // and this is explicitly about finding an Indian-phone-capable contact before any
   // foreign-phone fallback is allowed.
-  const indiaFirst = indiaPhoneFirstEnabled(options);
   if (!options.primarySweep && indiaFirst && !hasIndianPhoneSignal(merged)) {
     const titles = indiaFirstDecisionMakerTitles();
     if (titles.length) {
