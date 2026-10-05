@@ -82,7 +82,12 @@ function isLinkedInSheetLinkEnrichmentRequest(message, options = {}) {
   // generic LinkedIn lead-discovery classifier. Preservation text may legitimately
   // contain words such as "phone", "email", or "search", so generic lead intent
   // must never veto an explicit isolated-link command.
-  if (explicitIsolatedLinkTask) return action && linkObjective && !contactDataObjective;
+  if (explicitIsolatedLinkTask) {
+    // The phrase "isolated LinkedIn-link enrichment pass" is an explicit domain
+    // contract. Contextual mentions of designation/phone/email inside verification
+    // and preservation instructions must not demote it into contact enrichment.
+    return action && linkObjective;
+  }
   if (linkedinIntent.isLeadDiscoveryRequest(text)) return false;
   return action && linkObjective && !contactDataObjective;
 }
