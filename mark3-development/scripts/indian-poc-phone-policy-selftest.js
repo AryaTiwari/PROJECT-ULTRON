@@ -118,6 +118,8 @@ const operatorSource = fs.readFileSync(require.resolve('../core/universal-sheet-
 assert.match(operatorSource, /indiaPrioritySearches/);
 assert.match(operatorSource, /indiaFirstSearch:\s*true/);
 assert.match(operatorSource, /location:\s*text\(options\.location\) \|\| 'India'/);
+assert.match(operatorSource, /indiaFirst && options\.resultsFirstSweep/);
+assert.match(operatorSource, /!indiaFirst \|\| hasIndianPhoneSignal\(cached\)/);
 
 assert.equal(typeof operator.pendingPhoneRowsForSource, 'function');
 assert.equal(typeof targeted.enforceIndianPhoneCompanyGate, 'function');
