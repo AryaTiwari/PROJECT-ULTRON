@@ -26,6 +26,20 @@ function parseSheetName(message) {
   const value = String(message || '');
   // "worksheet" is a first-class synonym for "sheet"/"tab". This matters for
   // prompts such as: Target only the `Arya 2` worksheet.
+  // Prefer a standalone Worksheet/Sheet/Tab declaration. Keep the capture on one
+  // physical line so the sheet URL on a neighboring line can never become the
+  // worksheet name.
+  const explicitLine = value.match(/^\s*(?:worksheet|sheet|tab)\s*[:=\-]\s*["'\`]?([^\n"'\`]{1,120})["'\`]?\s*$/im);
+  if (explicitLine) {
+    const candidate = text(explicitLine[1]).replace(/^[\"'\`]+|[\"'\`]+$/g, '').replace(/[.]+$/, '').trim();
+    if (candidate
+      && !/^(?:only|the|tab|sheet|worksheet)$/i.test(candidate)
+      && !/^https?:\/\//i.test(candidate)
+      && !/docs\.google\.com\/spreadsheets/i.test(candidate)) {
+      return candidate;
+    }
+  }
+
   const linePatterns = [
     // Natural chat phrasing frequently puts the worksheet title in backticks or
     // quotes immediately before the word "worksheet", for example:
