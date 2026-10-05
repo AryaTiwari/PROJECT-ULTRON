@@ -46,6 +46,24 @@ function isThreePocSpreadsheetRequest(message, options = {}) {
 }
 
 
+function hasPositiveContactDataObjective(text) {
+  const contactPattern = /\b(?:phone|mobile|email|e-?mail|numbers?|designation|title|titles?)\b/ig;
+  for (const match of String(text || '').matchAll(contactPattern)) {
+    const index = Number(match.index || 0);
+    const prefix = String(text || '').slice(Math.max(0, index - 100), index);
+    const boundary = Math.max(
+      prefix.lastIndexOf('\n'),
+      prefix.lastIndexOf('.'),
+      prefix.lastIndexOf(';'),
+      prefix.lastIndexOf('!'),
+      prefix.lastIndexOf('?'),
+    );
+    const localPrefix = prefix.slice(boundary + 1);
+    if (!/\b(?:do\s+not|don['’]t|never|without|not|no)\b/i.test(localPrefix)) return true;
+  }
+  return false;
+}
+
 function isLinkedInSheetLinkEnrichmentRequest(message, options = {}) {
   const text = normalize(message);
   if (!text) return false;
@@ -57,7 +75,7 @@ function isLinkedInSheetLinkEnrichmentRequest(message, options = {}) {
   const linkObjective = /\blinkedin\b[\s\S]{0,80}\b(?:links?|urls?|profiles?|profile\s+links?|profile\s+urls?)\b/i.test(text)
     || /\b(?:links?|urls?)\b[\s\S]{0,60}\blinkedin\b/i.test(text)
     || /\b(?:company|pocs?|people|persons?|contacts?)\s+(?:linkedin|profile|links?|urls?)\b/i.test(text);
-  const contactDataObjective = /\b(?:phone|mobile|email|e-?mail|numbers?|designation|title|titles?)\b/i.test(text);
+  const contactDataObjective = hasPositiveContactDataObjective(text);
   return action && linkObjective && !contactDataObjective;
 }
 

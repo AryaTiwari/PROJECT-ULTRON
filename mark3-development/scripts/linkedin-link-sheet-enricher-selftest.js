@@ -4,6 +4,7 @@ const assert = require('assert/strict');
 const schema = require('../core/universal-sheet-schema');
 const linkEnricher = require('../core/linkedin-link-sheet-enricher');
 const commandControl = require('../core/command-control-plane');
+const universalSheetController = require('../core/universal-spreadsheet-domain-controller');
 
 function fakeSheets(changes) {
   return {
@@ -85,6 +86,58 @@ function fakeLinkedIn() {
 
 async function main() {
   const sheetUrl = 'https://docs.google.com/spreadsheets/d/abc123';
+
+  const exactLinkedInRequest = `ULTRON, run the **isolated LinkedIn-link enrichment pass only** for the \`salesforce/oracle/tech\` worksheet.
+
+## PRESERVATION RULES
+
+- Preserve every existing LinkedIn URL.
+- Never overwrite a populated LinkedIn cell.
+- Do not modify phone numbers, emails, designations, company names, or any other fields.
+- Do not perform Apollo enrichment.
+- No Apollo.
+- Do not run the normal phone/email/POC enrichment flow.
+
+Google Sheet:
+${sheetUrl}
+
+Worksheet: \`salesforce/oracle/tech\``;
+
+  assert.equal(
+    commandControl.isLinkedInSheetLinkEnrichmentRequest(exactLinkedInRequest),
+    true,
+    'Exact isolated LinkedIn-link prompt must stay on the dedicated route even when preservation rules mention phone/email/designation.',
+  );
+  assert.equal(
+    commandControl.claim(exactLinkedInRequest).domain,
+    'linkedin-sheet-links',
+  );
+  assert.equal(
+    universalSheetController.parseSheetName(exactLinkedInRequest),
+    'salesforce/oracle/tech',
+  );
+
+  const exactPocRequest = `ULTRON, enrich only the \`salesforce/oracle/tech\` worksheet in this Google Sheet:
+${sheetUrl}
+
+## Scope
+
+Complete **POC-1 and POC-2** with verified:
+- Full name
+- Current designation
+- Work email
+- Phone number
+
+Worksheet: \`salesforce/oracle/tech\``;
+
+  assert.equal(
+    commandControl.claim(exactPocRequest).domain,
+    'spreadsheet-enrichment',
+  );
+  assert.equal(
+    universalSheetController.parseSheetName(exactPocRequest),
+    'salesforce/oracle/tech',
+  );
 
   assert.equal(
     commandControl.isLinkedInSheetLinkEnrichmentRequest(
