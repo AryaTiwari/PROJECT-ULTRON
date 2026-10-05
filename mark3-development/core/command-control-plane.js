@@ -263,9 +263,32 @@ function compileWithGemini(fn) {
   return scope.run({ ...(current || { route: claim('LinkedIn mission') }), compiler: true }, fn);
 }
 
+function isExplicitPaidApprovalReply(message) {
+  const value = String(message || '').trim();
+  if (!value) return false;
+
+  // Keep this predicate local to the control plane. paid-tool-approval intentionally
+  // exposes only its public resolution API, not its internal reply classifiers.
+  const denial = /^(?:no|nope|deny|denied|cancel|don['’]t|do not|skip it|skip)(?:[.!\s]*)$/i.test(value);
+  const approval = /^(?:approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|go\s+ahead|go\s+for\s+it|proceed|use\s+(?:it|apollo)|do\s+it)\b/i.test(value)
+    || /^(?:go\s+for\s+it|go\s+ahead)[\s,;:-]+approve(?:d)?\b/i.test(value);
+
+  // A URL-bearing or sheet-scoped command is not an approval reply, even when
+  // it contains words such as "proceed", "phone", "email", or "resume".
+  if (/https?:\/\/|docs\.google\.com|worksheet|sheet\b/i.test(value)) return false;
+  return denial || approval;
+}
+
 async function resolveUniversalPaidApproval(message) {
   const paidTools = require('./paid-tool-approval');
   const handler = require('./universal-paid-approval-handler');
+
+  // Pending Apollo approval is a reply-state, not a global command-state. Never
+  // let an unrelated new spreadsheet mission such as "resume enrichment in
+  // <sheet>" get consumed by an old approval record. Genuine approve/deny replies
+  // remain first-class and continue to resolve the pending paid operation.
+  if (!isExplicitPaidApprovalReply(message)) return null;
+
   const pending = paidTools.pending('apollo');
   if (!pending) return null;
 
@@ -510,6 +533,7 @@ module.exports = {
   isUniversalSpreadsheetEnrichmentRequest,
   isLinkedInSheetLinkEnrichmentRequest,
   isLocalThreePocWorkbookRequest,
+  isExplicitPaidApprovalReply,
   claim,
   dispatch,
   resolveUniversalPaidApproval,
