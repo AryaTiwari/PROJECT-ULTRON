@@ -2816,15 +2816,37 @@ function chooseContactabilityCandidate(entries = []) {
     ...entry,
     index: Number.isInteger(entry?.index) ? entry.index : index,
     tier: Number.isFinite(Number(entry?.tier))
-      ? Number(entry.tier)
+      ? Number(entry?.tier)
       : contactabilityTier(entry?.person || entry),
   }));
-  const qualified = normalized
-    .filter((entry) => entry.tier > 0)
-    .sort((a, b) => b.tier - a.tier || a.index - b.index);
-  return qualified[0] || null;
-}
+  const qualified = normalized.filter((entry) => entry.tier > 0);
+  if (!qualified.length) return null;
 
+  // Phase 1: keep the hardened India preference. A verified +91 result always
+  // wins over an international result, with email and decision-maker authority
+  // breaking ties inside the Indian-phone tier.
+  const indian = qualified
+    .filter((entry) => entry.tier >= 3)
+    .sort((a, b) =>
+      b.tier - a.tier
+      || apollo.decisionPriority(a.person?.title || a.person?.headline || '') - apollo.decisionPriority(b.person?.title || b.person?.headline || '')
+      || Number(Boolean(apollo.validEmail(b.person?.email || ''))) - Number(Boolean(apollo.validEmail(a.person?.email || '')))
+      || a.index - b.index
+    );
+  if (indian.length) return indian[0];
+
+  // Phase 2: if the bounded decision-maker search produced no Indian number,
+  // deliberately fall back to the previous behavior: choose the highest-
+  // authority POC with any verified usable phone, even when that phone is
+  // international. Do not let an India-location hint alone demote the top POC.
+  return qualified
+    .filter((entry) => entry.tier < 3)
+    .sort((a, b) =>
+      apollo.decisionPriority(a.person?.title || a.person?.headline || '') - apollo.decisionPriority(b.person?.title || b.person?.headline || '')
+      || Number(Boolean(apollo.validEmail(b.person?.email || ''))) - Number(Boolean(apollo.validEmail(a.person?.email || '')))
+      || a.index - b.index
+    )[0] || null;
+}
 async function selectContactableReplacement(item, plan, companyContext, stats, options = {}) {
   if (!item?.snapshot?.hasIdentity || item.isAnchor) return null;
   if (apollo.validPhone(item.snapshot?.values?.phone || '')) return null;
