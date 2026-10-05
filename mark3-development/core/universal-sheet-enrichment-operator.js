@@ -4457,6 +4457,8 @@ module.exports = {
   pendingPhoneRowsForSource,
   pendingPhoneTargetsForSource,
   candidateIndiaPriority,
+  fastUniversalEnrichmentEnabled,
+  deepProviderFallbacksEnabled,
   indiaPhoneFirstEnabled,
   indiaFirstDecisionMakerTitles,
   hasIndianPhoneSignal,
