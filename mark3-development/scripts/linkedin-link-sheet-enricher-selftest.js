@@ -222,14 +222,14 @@ Worksheet: \`salesforce/oracle/tech\``;
         if (company === 'Slow Company') await slowGate;
         return { companies: [{
           name: company,
-          linkedin_url: `https://www.linkedin.com/company/${company.toLowerCase().replace(/\\s+/g, '-')}/`,
+          linkedin_url: `https://www.linkedin.com/company/${company.toLowerCase().replaceAll(' ', '-')}/`,
         }] };
       }
       if (tool === 'get_company_profile') {
         const slug = String(args?.company_name || '');
         const company = slug.replace(/-/g, ' ');
         return {
-          name: company.replace(/\\b\\w/g, (ch) => ch.toUpperCase()),
+          name: company.replace(/\b\w/g, (ch) => ch.toUpperCase()),
           urn: `urn:li:organization:${slug.length}`,
         };
       }
