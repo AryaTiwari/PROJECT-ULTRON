@@ -148,6 +148,33 @@ Worksheet: \`salesforce/oracle/tech\``;
     'salesforce/oracle/tech',
   );
 
+  const explicitSheetResume = `resume enrichment in this sheet fill it with 1st poc and 2nd poc phone and email
+
+Google Sheet:
+${sheetUrl}
+
+Worksheet: salesforce/oracle/tech`;
+  assert.equal(
+    commandControl.isExplicitPaidApprovalReply(explicitSheetResume),
+    false,
+    'A new sheet-resume command must never be treated as an Apollo approval reply.',
+  );
+  assert.equal(
+    commandControl.claim(explicitSheetResume).domain,
+    'spreadsheet-enrichment',
+    'A sheet-scoped resume command must route to universal spreadsheet enrichment.',
+  );
+  assert.equal(
+    universalSheetController.parseSheetName(explicitSheetResume),
+    'salesforce/oracle/tech',
+    'Plain Worksheet: <name> syntax must preserve the exact worksheet target.',
+  );
+  assert.equal(
+    commandControl.isExplicitPaidApprovalReply('approve Apollo'),
+    true,
+    'A genuine Apollo approval reply must remain approval-routable.',
+  );
+
   const exactPocRequest = `ULTRON, enrich only the \`salesforce/oracle/tech\` worksheet in this Google Sheet:
 ${sheetUrl}
 
