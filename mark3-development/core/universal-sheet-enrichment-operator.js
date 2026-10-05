@@ -46,6 +46,18 @@ function candidateIndiaPriority(candidate = {}) {
   return indiaPolicy.personIndiaPriority(candidate);
 }
 
+function fastUniversalEnrichmentEnabled(options = {}) {
+  if (options.fastMode === false) return false;
+  const raw = String(process.env.ULTRON_M3_UNIVERSAL_FAST_MODE ?? '1').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+function deepProviderFallbacksEnabled(options = {}) {
+  if (options.allowDeepProviderFallbacks === true) return true;
+  if (options.allowDeepProviderFallbacks === false) return false;
+  return !fastUniversalEnrichmentEnabled(options);
+}
+
 function indiaPhoneFirstEnabled(options = {}) {
   return options.indiaPhoneFirst !== false && options.requireIndianPhone === true;
 }
@@ -2508,7 +2520,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // 5. Use keyless public indexing before authenticated LinkedIn. It is faster,
   // cached, and does not consume LinkedIn safety budget. Every returned identity
   // still passes exact Apollo person and current-employer verification.
-  if (merged.length < minimumUsefulPool && publicIndexFallbackEnabled(options)) {
+  if (!fastMode && deepFallbacks && merged.length < minimumUsefulPool && publicIndexFallbackEnabled(options)) {
     const publicPeople = await discoverPublicIndexPeople(companyContext, stats, options);
     add(publicPeople);
   }
@@ -2518,7 +2530,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // company pool, because a populated foreign-heavy pool is not proof that an
   // Indian TA/HR contact does not exist.
   let indiaLinkedInFallbackUsed = false;
-  if (!options.primarySweep && indiaFirst && !hasIndianPhoneSignal(merged) && linkedinZeroResultFallbackEnabled(options)) {
+  if (!fastMode && deepFallbacks && !options.primarySweep && indiaFirst && !hasIndianPhoneSignal(merged) && linkedinZeroResultFallbackEnabled(options)) {
     try {
       const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, {
         ...options,
@@ -2549,7 +2561,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     }
   }
 
-  if (merged.length < minimumUsefulPool && !indiaLinkedInFallbackUsed && linkedinZeroResultFallbackEnabled(options)) {
+  if (!fastMode && deepFallbacks && merged.length < minimumUsefulPool && !indiaLinkedInFallbackUsed && linkedinZeroResultFallbackEnabled(options)) {
     try {
       const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, options);
       add(linkedinPeople);
@@ -2719,13 +2731,15 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
   if (immediate) return { ...person, phone: immediate, phoneStatus: 'found' };
 
   const apolloPersonId = text(person.apolloPersonId || person.id);
+  const fastMode = fastUniversalEnrichmentEnabled(options);
   const pollsRaw = Number(
     options.phoneSettlementPolls
-    ?? process.env.ULTRON_M3_TOP3_PHONE_SETTLEMENT_POLLS
-    ?? 2
+    ?? (fastMode ? 0 : (process.env.ULTRON_M3_TOP3_PHONE_SETTLEMENT_POLLS ?? 2))
   );
-  const polls = Number.isFinite(pollsRaw) ? Math.max(0, Math.min(2, Math.floor(pollsRaw))) : 2;
-  const waitMs = Math.max(500, Math.min(3000, Number(options.phoneSettlementWaitMs || 2200)));
+  const polls = Number.isFinite(pollsRaw) ? Math.max(0, Math.min(2, Math.floor(pollsRaw))) : (fastMode ? 0 : 2);
+  const waitMs = fastMode
+    ? Math.max(500, Math.min(1500, Number(options.phoneSettlementWaitMs || 600)))
+    : Math.max(500, Math.min(3000, Number(options.phoneSettlementWaitMs || 2200)));
 
   stats.candidatePhoneSettlementAttempts = Number(stats.candidatePhoneSettlementAttempts || 0) + 1;
 
@@ -3078,9 +3092,10 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   const evidenceCache = options.contactabilityEvidenceCache instanceof Map
     ? options.contactabilityEvidenceCache
     : null;
+  const fastMode = fastUniversalEnrichmentEnabled(options);
   const maxNewHydrations = integer(
     options.maxHydrationAttempts,
-    shortlist.length || 1,
+    fastMode ? Math.min(shortlist.length || 1, 6) : (shortlist.length || 1),
     1,
     phoneQualifiedCandidateLimit(options),
   );
@@ -3098,8 +3113,11 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     work.push({ raw, rawKey, attempt, cached });
   }
 
-  const adaptiveHydration = Number(runContext.current()?.concurrency?.get?.('apolloHydration') || 3);
-  const hydrationConcurrency = Math.max(1, Math.min(3, Number(options.candidateHydrationConcurrency ?? adaptiveHydration) || 1));
+  const adaptiveHydration = Number(runContext.current()?.concurrency?.get?.('apolloHydration') || (fastMode ? 6 : 3));
+  const requestedHydrationConcurrency = Number(options.candidateHydrationConcurrency ?? adaptiveHydration) || 1;
+  const hydrationConcurrency = fastMode
+    ? Math.max(4, Math.min(6, requestedHydrationConcurrency))
+    : Math.max(1, Math.min(3, requestedHydrationConcurrency));
   for (let cursor = 0; cursor < work.length; cursor += hydrationConcurrency) {
     const wave = work.slice(cursor, cursor + hydrationConcurrency);
     stats.candidateHydrationWaves = Number(stats.candidateHydrationWaves || 0) + 1;
@@ -3849,7 +3867,7 @@ async function run(request = {}, options = {}) {
   const pendingPhoneQueue = [];
   const pendingEmailQueue = emailStore.forSource(source);
   const runOptions = {
-    ...options, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue,
+    ...options, fastMode: options.fastMode !== false, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue,
     pendingPhoneTargets: pendingPhoneTargetsForSource(source.spreadsheetId, source.sheetName),
   };
   const targetRows = Array.isArray(options.targetRows)
@@ -3918,7 +3936,7 @@ async function run(request = {}, options = {}) {
       // LinkedIn employer scraping is the slow fallback, never the default. Use it
       // only when neither row evidence nor Apollo's exact anchor profile resolved
       // a usable hiring organization.
-      if (!companyContext?.company && plan.anchor.type === 'person' && !options.resultsFirstSweep) {
+      if (!companyContext?.company && plan.anchor.type === 'person' && !options.resultsFirstSweep && deepProviderFallbacksEnabled(options)) {
         try {
           const linkedinEmployerContext = await resolvePersonAnchor(plan, row, {
             ...options,
