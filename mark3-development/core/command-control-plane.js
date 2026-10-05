@@ -270,8 +270,8 @@ function isExplicitPaidApprovalReply(message) {
   // Keep this predicate local to the control plane. paid-tool-approval intentionally
   // exposes only its public resolution API, not its internal reply classifiers.
   const denial = /^(?:no|nope|deny|denied|cancel|don['’]t|do not|skip it|skip)(?:[.!\s]*)$/i.test(value);
-  const approval = /^(?:approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|go\s+ahead|go\s+for\s+it|proceed|use\s+(?:it|apollo)|do\s+it)\\b/i.test(value)
-    || /^(?:go\s+for\s+it|go\s+ahead)[\\s,;:-]+approve(?:d)?\\b/i.test(value);
+  const approval = /^(?:approve(?:d)?|yes|yep|yeah|ok(?:ay)?|allow\s+it|go\s+ahead|go\s+for\s+it|proceed|use\s+(?:it|apollo)|do\s+it)\b/i.test(value)
+    || /^(?:go\s+for\s+it|go\s+ahead)[\s,;:-]+approve(?:d)?\b/i.test(value);
 
   // A URL-bearing or sheet-scoped command is not an approval reply, even when
   // it contains words such as "proceed", "phone", "email", or "resume".
