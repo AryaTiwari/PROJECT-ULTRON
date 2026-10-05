@@ -15,7 +15,7 @@ function text(value) { return String(value ?? '').trim(); }
 function normalizeLinkedInUrl(value, kind = null) {
   const raw = text(value);
   if (!raw) return '';
-  const candidate = /^https?:\/\//i.test(raw) ? raw : \`https://\${raw}\`;
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   try {
     const url = new URL(candidate);
     if (!/^(?:www\\.)?linkedin\\.com$/i.test(url.hostname)) return '';
@@ -25,7 +25,7 @@ function normalizeLinkedInUrl(value, kind = null) {
     if (!parts.length || (kind === 'company' && parts.length < 2) || (kind === 'person' && parts.length < 2)) return '';
     const prefix = String(parts[0]).toLowerCase();
     if (!['company', 'in'].includes(prefix)) return '';
-    return \`https://www.linkedin.com/\${prefix}/\${decodeURIComponent(parts[1]).trim()}/\`;
+    return `https://www.linkedin.com/${prefix}/${decodeURIComponent(parts[1]).trim()}/`;
   } catch {
     return '';
   }
@@ -363,14 +363,14 @@ async function getVerifiedCompanyContext(companyName, existingUrl, stats, linked
   const records = uniqueRecords(
     [
       ...collectLinkedInRecords(searchPayload, 'company'),
-      ...candidateSlugs.map((slug) => ({ url: \`https://www.linkedin.com/company/\${encodeURIComponent(slug)}/\`, name: expected })),
+      ...candidateSlugs.map((slug) => ({ url: `https://www.linkedin.com/company/${encodeURIComponent(slug)}/`, name: expected })),
     ],
     'company',
   );
 
   if (!records.length && !existingSlug) {
     const derived = companyKey(expected).replace(/ /g, '-');
-    if (derived) records.push({ url: \`https://www.linkedin.com/company/\${derived}/\`, name: expected });
+    if (derived) records.push({ url: `https://www.linkedin.com/company/${derived}/`, name: expected });
   }
 
   for (const record of records.slice(0, 5)) {
@@ -401,9 +401,9 @@ function personSearchQueries(name, role, companyName) {
   const variants = new Set();
   const base = text(name);
   if (!base) return [];
-  if (role) variants.add(\`\${base} \${role}\`);
+  if (role) variants.add(`${base} ${role}`);
   variants.add(base);
-  if (companyName) variants.add(\`\${base} \${companyName}\`);
+  if (companyName) variants.add(`${base} ${companyName}`);
   return [...variants].slice(0, 3);
 }
 
@@ -539,7 +539,7 @@ async function run(source, options = {}) {
   const companyChanges = [];
 
   for (const target of activation.targets.filter((item) => item.type === 'company')) {
-    const key = \`row:\${target.rowNumber}\`;
+    const key = `row:${target.rowNumber}`;
     if (companyContexts.has(key)) continue;
     const existingUrl = companyLinkColumn != null ? text(source.rows[target.rowNumber - 1]?.[companyLinkColumn]) : '';
     const context = await getVerifiedCompanyContext(target.companyName, existingUrl, stats, linkedin);
@@ -566,7 +566,7 @@ async function run(source, options = {}) {
     const row = source.rows[target.rowNumber - 1] || [];
     const companyName = companyNameColumn != null ? canonicalCompanyName(row[companyNameColumn]) : '';
     const existingCompanyLink = companyLinkColumn != null ? text(row[companyLinkColumn]) : '';
-    const contextKey = \`row:\${target.rowNumber}\`;
+    const contextKey = `row:${target.rowNumber}`;
     let companyContext = companyContexts.get(contextKey) || null;
 
     if (!companyContext && companyName) {
