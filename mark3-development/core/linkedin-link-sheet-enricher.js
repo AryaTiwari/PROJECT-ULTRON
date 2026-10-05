@@ -262,29 +262,29 @@ function dataRows(source, rowLimit) {
 function normalizedColumnHeader(column) {
   return text(column?.normalizedHeader || column?.header)
     .toLowerCase()
-    .replace(/[_./\\-]+/g, ' ')
-    .replace(/\\s+/g, ' ')
+    .replace(/[_./\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
 function isLinkedInColumn(column) {
   const h = normalizedColumnHeader(column);
-  return /\\blinked?in\\b|\\blinked in\\b|\\bli profile\\b|\\bprofile url\\b|\\bprofile link\\b/i.test(h);
+  return /\blinked?in\b|\blinked in\b|\bli profile\b|\bprofile url\b|\bprofile link\b/i.test(h);
 }
 
 function isCompanyHeader(column) {
   const h = normalizedColumnHeader(column);
-  return /\\b(?:company|organisation|organization|employer|account|business|firm|client)\\b/i.test(h);
+  return /\b(?:company|organisation|organization|employer|account|business|firm|client)\b/i.test(h);
 }
 
 function isPersonHeader(column) {
   const h = normalizedColumnHeader(column);
-  return /\\b(?:poc|person|contact|candidate|decision maker|recruiter|rep(?:resentative)?)\\b/i.test(h);
+  return /\b(?:poc|person|contact|candidate|decision maker|recruiter|rep(?:resentative)?)\b/i.test(h);
 }
 
 function isNameHeader(column) {
   const h = normalizedColumnHeader(column);
-  return /\\b(?:name|full name)\\b/i.test(h);
+  return /\b(?:name|full name)\b/i.test(h);
 }
 
 function synthField(column, role = null) {
@@ -331,7 +331,7 @@ function repairLinkedInSchema(source) {
   ) || null;
 
   const companyNameCandidates = columns
-    .filter((column) => !isLinkedInColumn(column) && isCompanyHeader(column) && (isNameHeader(column) || /\\bcompany\\b/.test(normalizedColumnHeader(column))))
+    .filter((column) => !isLinkedInColumn(column) && isCompanyHeader(column) && (isNameHeader(column) || /\bcompany\b/.test(normalizedColumnHeader(column))))
     .sort((a, b) => b.score - a.score || a.index - b.index);
 
   if (!company && companyNameCandidates.length) {
