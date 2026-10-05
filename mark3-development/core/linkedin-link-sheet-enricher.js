@@ -495,6 +495,109 @@ function plan(source, rowLimit) {
   };
 }
 
+function numericOption(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+async function withTimeout(promise, timeoutMs, label) {
+  const ms = numericOption(timeoutMs, 25000, 1000, 120000);
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(`${label} timed out after ${ms}ms.`);
+          error.code = 'LINKEDIN_LINK_PROVIDER_TIMEOUT';
+          reject(error);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return [];
+  const limit = Math.max(1, Math.min(list.length, numericOption(concurrency, 4, 1, 8)));
+  const results = new Array(list.length);
+  let next = 0;
+
+  async function runner() {
+    while (true) {
+      const index = next++;
+      if (index >= list.length) return;
+      try {
+        results[index] = { status: 'fulfilled', value: await worker(list[index], index) };
+      } catch (error) {
+        results[index] = { status: 'rejected', reason: error };
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, () => runner()));
+  return results;
+}
+
+async function hydrateRichLinks(source, api = sheetsDefault, options = {}) {
+  const schema = source?.schema || {};
+  const columns = linkedinColumns(schema);
+  if (typeof api.linkedInHyperlinks !== 'function' || !columns.length) return source;
+
+  const timeoutMs = numericOption(
+    options.richLinkTimeoutMs ?? process.env.ULTRON_M3_LINK_RICH_METADATA_TIMEOUT_MS,
+    5000,
+    1000,
+    30000,
+  );
+  const results = await mapWithConcurrency(columns, Math.min(columns.length, 3), async (columnIndex) => (
+    withTimeout(
+      api.linkedInHyperlinks(
+        source.spreadsheetId,
+        source.sheetName,
+        columnIndex,
+        Math.max(source.rows?.length || 0, Number(schema.headerRowNumber || 1)),
+      ),
+      timeoutMs,
+      `Rich LinkedIn metadata read for column ${columnIndex}`,
+    )
+  ));
+
+  for (let i = 0; i < results.length; i++) {
+    const outcome = results[i];
+    if (outcome.status !== 'fulfilled') continue;
+    for (const [rowNumber, link] of outcome.value.entries()) {
+      const rowIndex = rowNumber - 1;
+      if (!source.rows[rowIndex]) source.rows[rowIndex] = [];
+      source.rows[rowIndex][columns[i]] = link;
+    }
+  }
+  return source;
+}
+
+async function safeWriteChanges(source, changes, api = sheetsDefault) {
+  if (!changes.length || typeof api.batchValues !== 'function' || typeof api.writeCells !== 'function') return { written: 0, conflicts: 0 };
+  const ranges = changes.map((change) => change.range);
+  const live = await api.batchValues(source.spreadsheetId, ranges, { formulas: false });
+  const safe = [];
+  let conflicts = 0;
+  for (let i = 0; i < changes.length; i++) {
+    const liveValue = text(live[i]?.[0]?.[0]);
+    if (liveValue) {
+      conflicts++;
+      continue;
+    }
+    safe.push(changes[i]);
+  }
+  if (!safe.length) return { written: 0, conflicts };
+  const result = await api.writeCells(source.spreadsheetId, safe);
+  return { written: Number(result?.updatedCells || safe.length), conflicts };
+}
+
 async function run(source, options = {}) {
   if (!source?.spreadsheetId || !source?.sheetName || !source?.schema || !Array.isArray(source?.rows)) {
     throw Object.assign(new Error('LinkedIn link enricher requires an inspected worksheet source.'), {
@@ -507,7 +610,25 @@ async function run(source, options = {}) {
   const sheets = options.sheetsApi || sheetsDefault;
   const linkedin = options.linkedinMcp || linkedinMcpDefault;
   const rowLimit = options.rowLimit;
-  await hydrateRichLinks(source, sheets);
+  const concurrency = numericOption(
+    options.concurrency ?? process.env.ULTRON_M3_LINK_ENRICHMENT_CONCURRENCY,
+    4,
+    1,
+    8,
+  );
+  const providerTimeoutMs = numericOption(
+    options.providerTimeoutMs ?? process.env.ULTRON_M3_LINK_ENRICHMENT_PROVIDER_TIMEOUT_MS,
+    25000,
+    3000,
+    120000,
+  );
+
+  // Do rich-link hydration as a bounded best-effort operation. It must never
+  // block discovery for minutes, because the normal Values API already gives us
+  // the visible cell contents and safeWriteChanges re-checks the live cell before
+  // every actual mutation.
+  await hydrateRichLinks(source, sheets, { richLinkTimeoutMs: options.richLinkTimeoutMs });
+
   const activation = plan(source, rowLimit);
   const stats = {
     rowsScanned: dataRows(source, rowLimit).length,
@@ -522,9 +643,13 @@ async function run(source, options = {}) {
     companyLinksFilled: 0,
     personLinksFilled: 0,
     providerFailures: 0,
+    providerTimeouts: 0,
     liveConflicts: 0,
     writesAttempted: 0,
     linkedinProviderCalls: 0,
+    companyUnresolvedRows: [],
+    personUnresolvedRows: [],
+    alreadyPopulatedSkipped: 0,
   };
 
   if (!activation.activated) {
@@ -536,33 +661,86 @@ async function run(source, options = {}) {
   const companyLinkColumn = schemaField(companyGroup, 'linkedin');
   const pGroups = personGroups(source.schema);
   const companyContexts = new Map();
-  const companyChanges = [];
+  const companyPromiseCache = new Map();
 
-  for (const target of activation.targets.filter((item) => item.type === 'company')) {
-    const key = `row:${target.rowNumber}`;
-    if (companyContexts.has(key)) continue;
-    const existingUrl = companyLinkColumn != null ? text(source.rows[target.rowNumber - 1]?.[companyLinkColumn]) : '';
-    const context = await getVerifiedCompanyContext(target.companyName, existingUrl, stats, linkedin);
-    if (context) {
-      companyContexts.set(key, context);
-      if (!existingUrl) {
-        companyChanges.push({
-          range: sheets.cellRange(source.sheetName, target.rowNumber, target.columnIndex),
-          value: context.linkedinUrl,
-          source: 'linkedin-link-enricher:verified-company',
-          evidence: { confidence: 0.98, source: 'fastmcp:get_company_profile' },
-        });
+  async function verifyCompanyForTarget(target) {
+    const row = source.rows[target.rowNumber - 1] || [];
+    const existingUrl = companyLinkColumn != null ? text(row[companyLinkColumn]) : '';
+    if (existingUrl) {
+      stats.alreadyPopulatedSkipped++;
+      return { context: null, change: null };
+    }
+
+    const cacheKey = companyKey(target.companyName);
+    let promise = companyPromiseCache.get(cacheKey);
+    if (!promise) {
+      promise = withTimeout(
+        getVerifiedCompanyContext(target.companyName, '', stats, linkedin),
+        providerTimeoutMs,
+        `Company LinkedIn enrichment for "${target.companyName}"`,
+      ).catch((error) => {
+        if (error?.code === 'LINKEDIN_LINK_PROVIDER_TIMEOUT') stats.providerTimeouts++;
+        return null;
+      });
+      companyPromiseCache.set(cacheKey, promise);
+    }
+
+    const context = await promise;
+    if (!context) {
+      stats.companyUnresolvedRows.push(target.rowNumber);
+      return { context: null, change: null };
+    }
+
+    companyContexts.set(`row:${target.rowNumber}`, context);
+    return {
+      context,
+      change: {
+        range: sheets.cellRange(source.sheetName, target.rowNumber, target.columnIndex),
+        value: context.linkedinUrl,
+        source: 'linkedin-link-enricher:verified-company',
+        evidence: { confidence: 0.98, source: 'fastmcp:get_company_profile' },
+      },
+    };
+  }
+
+  async function commitVerifiedChange(change, type) {
+    if (!change) return;
+    stats.writesAttempted++;
+    const write = await safeWriteChanges(source, [change], sheets);
+    stats.liveConflicts += write.conflicts;
+    if (write.written) {
+      if (type === 'company') stats.companyLinksFilled += write.written;
+      else stats.personLinksFilled += write.written;
+
+      const match = change.range.match(/!([A-Z]+)(d+)$/i);
+      if (match) {
+        const rowNumber = Number(match[2]);
+        const index = (() => {
+          let n = 0;
+          for (const ch of match[1].toUpperCase()) n = n * 26 + ch.charCodeAt(0) - 64;
+          return n - 1;
+        })();
+        if (source.rows[rowNumber - 1]) source.rows[rowNumber - 1][index] = change.value;
       }
     }
   }
 
-  stats.writesAttempted += companyChanges.length;
-  const companyWrite = await safeWriteChanges(source, companyChanges, sheets);
-  stats.companyLinksFilled += companyWrite.written;
-  stats.liveConflicts += companyWrite.conflicts;
+  // Company lookups run concurrently and each verified result is written
+  // immediately. A single slow company can no longer hold every earlier result
+  // hostage.
+  const companyTargets = activation.targets.filter((item) => item.type === 'company');
+  await mapWithConcurrency(companyTargets, concurrency, async (target) => {
+    const result = await verifyCompanyForTarget(target);
+    if (result.change) await commitVerifiedChange(result.change, 'company');
+    return result;
+  });
 
-  const personChanges = [];
-  for (const target of activation.targets.filter((item) => item.type === 'person')) {
+  const locationColumn = companyGroup?.fields?.location?.index;
+  const personTargets = activation.targets.filter((item) => item.type === 'person');
+
+  // POC verification also runs concurrently. Each successful profile is written
+  // immediately after the exact person+employer check passes.
+  await mapWithConcurrency(personTargets, concurrency, async (target) => {
     const row = source.rows[target.rowNumber - 1] || [];
     const companyName = companyNameColumn != null ? canonicalCompanyName(row[companyNameColumn]) : '';
     const existingCompanyLink = companyLinkColumn != null ? text(row[companyLinkColumn]) : '';
@@ -570,24 +748,39 @@ async function run(source, options = {}) {
     let companyContext = companyContexts.get(contextKey) || null;
 
     if (!companyContext && companyName) {
-      companyContext = await getVerifiedCompanyContext(companyName, existingCompanyLink, stats, linkedin);
+      const cacheKey = companyKey(companyName);
+      let promise = companyPromiseCache.get(cacheKey);
+      if (!promise) {
+        promise = withTimeout(
+          getVerifiedCompanyContext(companyName, existingCompanyLink, stats, linkedin),
+          providerTimeoutMs,
+          `Company LinkedIn context for "${companyName}"`,
+        ).catch((error) => {
+          if (error?.code === 'LINKEDIN_LINK_PROVIDER_TIMEOUT') stats.providerTimeouts++;
+          return null;
+        });
+        companyPromiseCache.set(cacheKey, promise);
+      }
+      companyContext = await promise;
       if (companyContext) companyContexts.set(contextKey, companyContext);
     }
 
-    // If the company link was just written, keep that verified context in memory.
-    const locationColumn = (companyGroup?.fields?.location?.index);
     const location = locationColumn != null ? text(row[locationColumn]) : '';
-    const verifiedPerson = await getVerifiedPerson(
-      target.name,
-      target.role,
-      companyContext,
-      location,
-      stats,
-      linkedin,
-    );
-    if (!verifiedPerson) continue;
+    const verifiedPerson = await withTimeout(
+      getVerifiedPerson(target.name, target.role, companyContext, location, stats, linkedin),
+      providerTimeoutMs,
+      `POC LinkedIn enrichment for "${target.name}"`,
+    ).catch((error) => {
+      if (error?.code === 'LINKEDIN_LINK_PROVIDER_TIMEOUT') stats.providerTimeouts++;
+      return null;
+    });
 
-    personChanges.push({
+    if (!verifiedPerson) {
+      stats.personUnresolvedRows.push(target.rowNumber);
+      return null;
+    }
+
+    await commitVerifiedChange({
       range: sheets.cellRange(source.sheetName, target.rowNumber, target.columnIndex),
       value: verifiedPerson.url,
       source: 'linkedin-link-enricher:verified-person',
@@ -599,13 +792,9 @@ async function run(source, options = {}) {
         employerVerified: verifiedPerson.employerVerified,
         pocOrdinal: target.ordinal,
       },
-    });
-  }
-
-  stats.writesAttempted += personChanges.length;
-  const personWrite = await safeWriteChanges(source, personChanges, sheets);
-  stats.personLinksFilled += personWrite.written;
-  stats.liveConflicts += personWrite.conflicts;
+    }, 'person');
+    return verifiedPerson;
+  });
 
   return {
     ok: true,
@@ -614,13 +803,14 @@ async function run(source, options = {}) {
     stats,
     plan: activation,
     writes: {
-      company: companyChanges.length,
-      person: personChanges.length,
-      companyWritten: companyWrite.written,
-      personWritten: personWrite.written,
+      company: stats.companyLinksFilled,
+      person: stats.personLinksFilled,
+      companyWritten: stats.companyLinksFilled,
+      personWritten: stats.personLinksFilled,
     },
   };
 }
+
 
 module.exports = {
   normalizeLinkedInUrl,
