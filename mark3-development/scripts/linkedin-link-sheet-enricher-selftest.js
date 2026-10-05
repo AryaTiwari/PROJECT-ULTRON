@@ -255,6 +255,53 @@ Worksheet: \`salesforce/oracle/tech\``;
     schema: inferred,
   });
   assert.equal(plan.activated, true);
+
+  // Regression for the exact production failure: generic schema groups can lose
+  // LinkedIn ownership after a minor header/layout change. The isolated repair layer
+  // must recognize normal regex boundaries (\\b/\\s), recover the link columns,
+  // and expose the actual blank targets instead of declaring a false no-op.
+  const degradedSchema = {
+    headerRowIndex: 0,
+    headerRowNumber: 1,
+    columns: [
+      'Company Name', 'Company LinkedIn URL',
+      'POC 1 Name', 'POC 1 LinkedIn URL',
+      'POC 2 Name', 'POC 2 LinkedIn URL',
+    ].map((header, index) => ({
+      index,
+      header,
+      normalizedHeader: header.toLowerCase(),
+      role: header.includes('Name') ? 'name' : 'unknown',
+      confidence: 0.8,
+      score: 50,
+      slotHint: /(?:POC 1|POC 2)/i.test(header) ? Number(header.match(/POC (\\d+)/i)?.[1]) : null,
+    })),
+    companyGroups: [{
+      id: 'company-1',
+      kind: 'company',
+      ordinal: 1,
+      fields: { company: { index: 0, confidence: 0.9 } },
+    }],
+    personGroups: [
+      { id: 'person-1', kind: 'person', ordinal: 1, fields: { name: { index: 2, confidence: 0.9 } } },
+      { id: 'person-2', kind: 'person', ordinal: 2, fields: { name: { index: 4, confidence: 0.9 } } },
+    ],
+  };
+  const degradedRows = [
+    ['Company Name', 'Company LinkedIn URL', 'POC 1 Name', 'POC 1 LinkedIn URL', 'POC 2 Name', 'POC 2 LinkedIn URL'],
+    ['Acme Technologies', '', 'Alice Smith', '', 'Bob Jones', ''],
+  ];
+  const degradedTargets = linkEnricher.missingLinkTargets({
+    spreadsheetId: 'abc123',
+    sheetName: 'salesforce/oracle/tech',
+    rows: degradedRows,
+    schema: degradedSchema,
+  });
+  assert.deepEqual(
+    degradedTargets.map((target) => [target.type, target.rowNumber, target.columnIndex]),
+    [['company', 2, 1], ['person', 2, 3], ['person', 2, 5]],
+    'Minor LinkedIn header/schema drift must not produce a false no-op.',
+  );
   assert.equal(plan.companyTargets, 1);
   assert.equal(plan.personTargets, 1);
   assert.deepEqual(
