@@ -24,62 +24,54 @@ function text(value) { return String(value == null ? '' : value).trim(); }
 
 function parseSheetName(message) {
   const value = String(message || '');
-  // "worksheet" is a first-class synonym for "sheet"/"tab". This matters for
-  // prompts such as: Target only the `Arya 2` worksheet.
-  // Prefer a standalone Worksheet/Sheet/Tab declaration. Keep the capture on one
-  // physical line so the sheet URL on a neighboring line can never become the
-  // worksheet name.
-  const explicitLine = value.match(/^\s*(?:worksheet|sheet|tab)\s*[:=\-]\s*["'\`]?([^\n"'\`]{1,120})["'\`]?\s*$/im);
-  if (explicitLine) {
-    const candidate = text(explicitLine[1]).replace(/^[\"'\`]+|[\"'\`]+$/g, '').replace(/[.]+$/, '').trim();
-    if (candidate
-      && !/^(?:only|the|tab|sheet|worksheet)$/i.test(candidate)
-      && !/^https?:\/\//i.test(candidate)
-      && !/docs\.google\.com\/spreadsheets/i.test(candidate)) {
-      return candidate;
-    }
-  }
+  if (!value) return '';
 
-  const linePatterns = [
-    // Natural chat phrasing frequently puts the worksheet title in backticks or
-    // quotes immediately before the word "worksheet", for example:
-    // "for the `salesforce/oracle/tech` worksheet". Parse that independently
-    // of line layout so markdown, pasted prompts, and negative-scope sections
-    // cannot make the target disappear.
-    /[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
-    /\b(?:target|use|for|on|in|from|within|using)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
-    /\b(?:tab|sheet|worksheet)\s+(?:named|called)\s+[`"'“”]([^\n`"'“”]{1,120})[`"'“”]/i,
-    /\b(?:worksheet|sheet|tab)\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})[`"'“”]?/i,
-    // Common chat phrasing: "worksheet name - Arya-24 sept" (optionally
-    // followed by another command on the same line). Capture only the actual
-    // worksheet title; do not let "name -" become part of the identifier.
-    /\b(?:worksheet|sheet|tab)\s+name\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120}?)[`"'“”]?(?=\s*(?:(?:\.?\s*)(?:resume|continue|retry|backfill|enrich|run|fill|complete|finish)\b|\.\s*$|\n|$))/im,
-    // Explicit target/use clauses are authoritative and must be evaluated before
-    // loose prose such as "run enrichment on the Google Sheet below". Otherwise
-    // that sentence can be misread as a request for a tab literally named Google.
-    /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/im,
-    /(?:^|\n)\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet|worksheet)\b/im,
-    /(?:^|\n)\s*(?:target|use|sheet|tab|worksheet)\s+(?:only\s+)?(?:tab|sheet|worksheet)?\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})/im,
-    /(?:^|\n)\s*target\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet|worksheet)\s+["'`“”]?([^\n"'`“”]{1,120})/im,
-    /(?:^|\n)\s*(?:worksheet|sheet|tab)\s+["'`“”]?([^\n,.;"'`“”]{1,120})["'`“”]?\s*[.]?$/im,
-    /\b(?:target|use)\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet|worksheet)\s+(?:named\s+)?["'`“”]?([^\n,.;"'`“”]{1,100})/i,
-    // Common production phrasing: "Enrich ... on the \"Arya 2\" worksheet".
-    /\bon\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
-    /\bon\s+(?:only\s+)?(?:the\s+)?([^\n,.;]{1,120}?)\s+(?:tab|sheet|worksheet)\b/i,
-  ];
-  for (const pattern of linePatterns) {
-    const match = value.match(pattern);
-    if (!match) continue;
-    const candidate = text(match[1])
-      .replace(/^[`"'“”]+|[`"'“”]+$/g, '')
-      .replace(/^name\s*[:=\-]\s*/i, '')
+  function cleanCandidate(raw) {
+    const candidate = text(raw)
+      .replace(/^[\x60"'“”]+|[\x60"'“”]+$/g, '')
       .replace(/[.]+$/, '')
       .trim();
-    if (candidate && !/^(?:only|the|tab|sheet|worksheet)$/i.test(candidate)) return candidate;
+    if (!candidate) return '';
+    if (/^(?:only|the|tab|sheet|worksheet)$/i.test(candidate)) return '';
+    if (/^https?:\/\//i.test(candidate)) return '';
+    if (/docs\.google\.com\/spreadsheets/i.test(candidate)) return '';
+    if (/(?:\\n|\r?\n)/.test(candidate)) return '';
+    return candidate;
   }
+
+  // Exact worksheet declarations are authoritative. Support real newlines and
+  // escaped newline sequences produced by transport serialization.
+  const explicitDeclaration = value.match(
+    /(?:^|(?:\r?\n|\\n))\s*(?:worksheet|sheet|tab)\s*[:=\-]\s*[\x60"'“”]?([^\r\n\\\x60"'“”]{1,120})[\x60"'“”]?\s*(?=(?:\r?\n|\\n|$))/im,
+  );
+  const explicitCandidate = cleanCandidate(explicitDeclaration?.[1]);
+  if (explicitCandidate) return explicitCandidate;
+
+  // Natural-language forms such as: for the quoted worksheet title.
+  const quotedPatterns = [
+    /[\x60"'“”]([^\r\n\x60"'“”]{1,120})[\x60"'“”]\s+(?:tab|sheet|worksheet)\b/i,
+    /\b(?:target|use|for|on|in|from|within|using)\s+(?:only\s+)?(?:the\s+)?[\x60"'“”]([^\r\n\x60"'“”]{1,120})[\x60"'“”]\s+(?:tab|sheet|worksheet)\b/i,
+    /\b(?:tab|sheet|worksheet)\s+(?:named|called)\s+[\x60"'“”]([^\r\n\x60"'“”]{1,120})[\x60"'“”]/i,
+  ];
+  for (const pattern of quotedPatterns) {
+    const candidate = cleanCandidate(value.match(pattern)?.[1]);
+    if (candidate) return candidate;
+  }
+
+  // Explicit unquoted target syntax. Keep captures bounded to the current line
+  // or sentence so generic prose cannot swallow a neighboring URL.
+  const unquotedPatterns = [
+    /(?:^|(?:\r?\n|\\n))\s*(?:target|use)\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet|worksheet)\s*[:=\-]\s*[\x60"'“”]?([^\r\n\\,.;\x60"'“”]{1,120})/im,
+    /\b(?:worksheet|sheet|tab)\s+name\s*[:=\-]\s*[\x60"'“”]?([^\r\n\\,.;\x60"'“”]{1,120})/i,
+    /\b(?:target|use)\s+(?:only\s+)?(?:the\s+)?(?:tab|sheet|worksheet)\s+(?:named\s+)?[\x60"'“”]?([^\r\n\\,.;\x60"'“”]{1,120})/i,
+  ];
+  for (const pattern of unquotedPatterns) {
+    const candidate = cleanCandidate(value.match(pattern)?.[1]);
+    if (candidate) return candidate;
+  }
+
   return '';
 }
-
 function parseExpectedPersonGroups(message) {
   const value = requiredPocText(message);
   const found = [];
