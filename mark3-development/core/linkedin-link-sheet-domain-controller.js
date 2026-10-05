@@ -11,7 +11,7 @@ const linkEnricher = require('./linkedin-link-sheet-enricher');
 const runtimeBuild = require('./runtime-build');
 
 function response(ok, body, extra = {}) {
-  const stamped = \`\${String(body || '').trim()}\\n\\n[linkedin-sheet-links · build \${String(runtimeBuild.revision || '').slice(0, 8) || 'unknown'} · src \${runtimeBuild.fingerprint}]\`;
+  const stamped = `${String(body || '').trim()}\\n\\n[linkedin-sheet-links · build ${String(runtimeBuild.revision || '').slice(0, 8) || 'unknown'} · src ${runtimeBuild.fingerprint}]`;
   return {
     ok,
     response: stamped,
@@ -54,7 +54,7 @@ async function handle(message, context = {}) {
     });
   } catch (error) {
     return response(false,
-      \`LinkedIn link enrichment stopped safely during sheet inspection: \${String(error?.message || error)} Nothing was edited.\`,
+      `LinkedIn link enrichment stopped safely during sheet inspection: ${String(error?.message || error)} Nothing was edited.`,
       {
         error: error?.code || 'LINKEDIN_LINK_SHEET_INSPECTION_FAILED',
         errorSubsystem: error?.subsystem || 'GOOGLE_SHEETS',
@@ -93,7 +93,7 @@ async function handle(message, context = {}) {
 
     if (!result.activated) {
       return response(true,
-        \`LinkedIn link enrichment checked worksheet "\${inspection.sheetName}" and found no eligible gaps. A row must contain a company or POC name while its corresponding LinkedIn link is blank. No LinkedIn provider calls and no writes were made.\`,
+        `LinkedIn link enrichment checked worksheet "${inspection.sheetName}" and found no eligible gaps. A row must contain a company or POC name while its corresponding LinkedIn link is blank. No LinkedIn provider calls and no writes were made.`,
         {
           sheetName: inspection.sheetName,
           spreadsheetUrl: sheetUrl,
@@ -105,7 +105,7 @@ async function handle(message, context = {}) {
     }
 
     return response(true,
-      \`LinkedIn link enrichment completed on worksheet "\${inspection.sheetName}". Filled \${result.stats.companyLinksFilled} company LinkedIn link\${result.stats.companyLinksFilled === 1 ? '' : 's'} and \${result.stats.personLinksFilled} POC LinkedIn link\${result.stats.personLinksFilled === 1 ? '' : 's'}. Existing non-blank links were preserved.\`,
+      `LinkedIn link enrichment completed on worksheet "${inspection.sheetName}". Filled ${result.stats.companyLinksFilled} company LinkedIn link${result.stats.companyLinksFilled === 1 ? '' : 's'} and ${result.stats.personLinksFilled} POC LinkedIn link${result.stats.personLinksFilled === 1 ? '' : 's'}. Existing non-blank links were preserved.`,
       {
         sheetName: inspection.sheetName,
         spreadsheetUrl: sheetUrl,
@@ -117,7 +117,7 @@ async function handle(message, context = {}) {
       });
   } catch (error) {
     return response(false,
-      \`LinkedIn link enrichment stopped safely: \${String(error?.message || error)} Existing non-blank LinkedIn cells were never targeted for overwrite.\`,
+      `LinkedIn link enrichment stopped safely: ${String(error?.message || error)} Existing non-blank LinkedIn cells were never targeted for overwrite.`,
       {
         error: error?.code || 'LINKEDIN_LINK_ENRICHER_FAILED',
         errorSubsystem: error?.subsystem || 'LINKEDIN',
