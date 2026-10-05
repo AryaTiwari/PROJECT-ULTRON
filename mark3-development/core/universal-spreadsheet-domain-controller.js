@@ -27,6 +27,15 @@ function parseSheetName(message) {
   // "worksheet" is a first-class synonym for "sheet"/"tab". This matters for
   // prompts such as: Target only the `Arya 2` worksheet.
   const linePatterns = [
+    // Natural chat phrasing frequently puts the worksheet title in backticks or
+    // quotes immediately before the word "worksheet", for example:
+    // "for the `salesforce/oracle/tech` worksheet". Parse that independently
+    // of line layout so markdown, pasted prompts, and negative-scope sections
+    // cannot make the target disappear.
+    /[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
+    /\b(?:target|use|for|on|in|from|within|using)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
+    /\b(?:tab|sheet|worksheet)\s+(?:named|called)\s+[`"'“”]([^\n`"'“”]{1,120})[`"'“”]/i,
+    /\b(?:worksheet|sheet|tab)\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})[`"'“”]?/i,
     // Common chat phrasing: "worksheet name - Arya-24 sept" (optionally
     // followed by another command on the same line). Capture only the actual
     // worksheet title; do not let "name -" become part of the identifier.
