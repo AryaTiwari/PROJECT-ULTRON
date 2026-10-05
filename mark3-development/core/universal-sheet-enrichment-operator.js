@@ -46,6 +46,27 @@ function candidateIndiaPriority(candidate = {}) {
   return indiaPolicy.personIndiaPriority(candidate);
 }
 
+function indiaPhoneFirstEnabled(options = {}) {
+  return options.indiaPhoneFirst !== false && options.requireIndianPhone === true;
+}
+
+function indiaFirstDecisionMakerTitles() {
+  return (apollo.COMPANY_DECISION_PRIORITY || [])
+    .filter((tier) => Number(tier?.priority || 99) >= 3)
+    .flatMap((tier) => Array.isArray(tier?.titles) ? tier.titles : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .filter((value, index, list) =>
+      list.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index
+    )
+    .slice(0, 30);
+}
+
+function hasIndianPhoneSignal(candidates = []) {
+  return (Array.isArray(candidates) ? candidates : [])
+    .some((candidate) => candidateIndiaPriority(candidate) >= 2);
+}
+
 const PHONE_ASSIGNMENTS_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'pending-phone-assignments.json');
 const backgroundPhoneAssignments = new Map();
 let backgroundPhoneWatcher = null;
@@ -2786,18 +2807,29 @@ function preferredContactShortlist(candidates = [], plan = {}, companyContext = 
   const pragmaticPool = pragmaticSameEmployerCandidates(candidates, companyContext, existing);
   const pool = mergeCandidatePools(priorityPool, fallbackRanking, pragmaticPool);
 
-  // One bounded shortlist is shared across every POC slot. Eight candidates is
-  // broad enough to move past founders with unavailable phones into TA/HR,
-  // recruiters and other managers without scanning every company employee.
+  // One bounded shortlist is shared across every POC slot. In strict India-first
+  // mode, India-aware candidates receive reservation priority BEFORE foreign-phone
+  // candidates. This prevents a Head/Director with a foreign number from consuming
+  // the shortlist while a lower-level Indian TA/HR candidate never gets hydrated.
   const limit = phoneQualifiedCandidateLimit(options);
-  const phoneHinted = pool
-    .map((candidate, index) => ({
-      candidate,
-      index,
-      indiaPriority: candidateIndiaPriority(candidate),
-      phonePreference: Number(apollo.phoneAvailabilityPriority(candidate) || 0),
-      rolePriority: Number(apollo.decisionPriority(candidate.title || candidate.headline || '')),
-    }))
+  const indiaFirst = indiaPhoneFirstEnabled(options);
+  const annotated = pool.map((candidate, index) => ({
+    candidate,
+    index,
+    indiaPriority: candidateIndiaPriority(candidate),
+    phonePreference: Number(apollo.phoneAvailabilityPriority(candidate) || 0),
+    rolePriority: Number(apollo.decisionPriority(candidate.title || candidate.headline || '')),
+  }));
+  const indiaAware = annotated
+    .filter((item) => item.indiaPriority > 0)
+    .sort((a, b) =>
+      b.indiaPriority - a.indiaPriority
+      || b.phonePreference - a.phonePreference
+      || a.rolePriority - b.rolePriority
+      || a.index - b.index
+    )
+    .map((item) => item.candidate);
+  const phoneHinted = annotated
     .filter((item) => item.phonePreference > 0)
     .sort((a, b) => b.indiaPriority - a.indiaPriority
       || b.phonePreference - a.phonePreference
@@ -2807,7 +2839,10 @@ function preferredContactShortlist(candidates = [], plan = {}, companyContext = 
   const roleDiversity = [1, 2, 3, 4].flatMap((priority) =>
     pool.filter((candidate) => Number(apollo.decisionPriority(candidate.title || candidate.headline || '')) === priority).slice(0, 2)
   );
-  return mergeCandidatePools(phoneHinted, roleDiversity, pool).slice(0, limit);
+  const ordered = indiaFirst
+    ? mergeCandidatePools(indiaAware, phoneHinted, roleDiversity, pool)
+    : mergeCandidatePools(phoneHinted, roleDiversity, pool);
+  return ordered.slice(0, limit);
 }
 
 
