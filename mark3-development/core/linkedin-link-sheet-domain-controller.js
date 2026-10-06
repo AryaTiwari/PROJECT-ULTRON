@@ -101,6 +101,47 @@ async function handle(message, context = {}) {
           noOp: true,
           stats: result.stats,
           plan: result.plan,
+      });
+    }
+
+    const unresolvedCompanies = result.stats.companyUnresolvedRows?.length || 0;
+    const unresolvedPeople = result.stats.personUnresolvedRows?.length || 0;
+    if (unresolvedCompanies || unresolvedPeople) {
+      const filled = `${result.stats.companyLinksFilled} company LinkedIn link${result.stats.companyLinksFilled === 1 ? '' : 's'} and ${result.stats.personLinksFilled} POC LinkedIn link${result.stats.personLinksFilled === 1 ? '' : 's'}`;
+      const unresolved = [
+        unresolvedCompanies ? `${unresolvedCompanies} company row${unresolvedCompanies === 1 ? '' : 's'}` : '',
+        unresolvedPeople ? `${unresolvedPeople} POC row${unresolvedPeople === 1 ? '' : 's'}` : '',
+      ].filter(Boolean).join(' and ');
+      const unresolvedCount = unresolvedCompanies + unresolvedPeople;
+      const providerStop = result.stats.providerStop;
+      const detail = providerStop?.message
+        ? ` The provider stopped the lookup: ${providerStop.message}`
+        : '';
+      const lookupSummary = Number(result.stats.linkedinProviderCalls || 0) > 0
+        ? ` This run completed ${Number(result.stats.linkedinProviderCallsSucceeded || 0)} of ${Number(result.stats.linkedinProviderCalls || 0)} LinkedIn tool calls; company searches returned ${Number(result.stats.companySearchRecords || 0)} usable company records (${Number(result.stats.companyExactSearchCandidates || 0)} exact-name candidates), with ${Number(result.stats.companyProfileFetches || 0)} company profile checks. Diagnostics: ${Number(result.stats.companyAmbiguousExactSearches || 0)} ambiguous exact-name searches, ${Number(result.stats.companyProfileNameMismatches || 0)} profile-name mismatches, ${Number(result.stats.companyAmbiguousProfilesWithoutName || 0)} ambiguous profiles without a name, ${Number(result.stats.companyProfileCheckFailures || 0)} profile-check failures, and ${Number(result.stats.companyNoNameMatchedCandidates || 0)} searches with no name-matched candidate.`
+        : '';
+      const nextEligibleAt = providerStop?.nextEligibleAt && Number.isFinite(Date.parse(providerStop.nextEligibleAt))
+        ? ` The next safe retry time is ${new Date(providerStop.nextEligibleAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', timeZoneName: 'short' })}.`
+        : '';
+      const nextStep = providerStop?.code && /(?:BURST|HOURLY|DAILY)_CAP|COOLDOWN_ACTIVE/.test(providerStop.code)
+        ? ` Wait for the LinkedIn safety window to reset, then rerun the same request; verified links already written will be skipped.${nextEligibleAt}`
+        : '';
+      return response(true,
+        `LinkedIn link enrichment is incomplete on worksheet "${inspection.sheetName}". Filled ${filled}; ${unresolved} ${unresolvedCount === 1 ? 'remains' : 'remain'} unverified. No guessed URLs were written.${lookupSummary}${detail}${nextStep}`,
+        {
+          partial: true,
+          complete: false,
+          errorCode: 'LINKEDIN_LINKS_UNRESOLVED',
+          providerStop,
+          errorSubsystem: 'LINKEDIN',
+          errorType: 'PARTIAL',
+          sheetName: inspection.sheetName,
+          spreadsheetUrl: sheetUrl,
+          activated: true,
+          stats: result.stats,
+          plan: result.plan,
+          writes: result.writes,
+          apolloCalls: 0,
         });
     }
 

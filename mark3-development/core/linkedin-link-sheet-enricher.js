@@ -31,6 +31,16 @@ function normalizeLinkedInUrl(value, kind = null) {
   }
 }
 
+function normalizeLinkedInReferenceUrl(value, kind = null) {
+  const raw = text(value);
+  if (!raw) return '';
+  const absolute = normalizeLinkedInUrl(raw, kind);
+  if (absolute) return absolute;
+  // MCP search references commonly expose canonical LinkedIn paths only.
+  if (!raw.startsWith('/')) return '';
+  return normalizeLinkedInUrl(`https://www.linkedin.com${raw}`, kind);
+}
+
 function linkedInSlug(url, kind) {
   const normalized = normalizeLinkedInUrl(url, kind);
   if (!normalized) return '';
@@ -151,7 +161,22 @@ function collectLinkedInUrls(value, kind, out = new Set()) {
 function collectLinkedInRecords(value, kind, out = [], seen = new WeakSet(), depth = 0) {
   if (value == null || depth > 8) return out;
   if (typeof value === 'string') {
-    for (const url of collectLinkedInUrls(value, kind)) out.push({ url, name: '', title: '' });
+    const normalizedAnchors = new Set();
+    // Some MCP releases return search results as readable Markdown instead of
+    // structured `references` objects. Preserve the anchor label as the result
+    // identity; treating every URL in rawText as nameless made all such results
+    // fail the company-name check after spending a successful search call.
+    const anchorPattern = /\[([^\]]{1,200})\]\((https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in)\/[^\s)]+)\)/gi;
+    for (const match of value.matchAll(anchorPattern)) {
+      const url = normalizeLinkedInUrl(match[2], kind);
+      if (!url) continue;
+      const name = text(match[1].replace(/[`*_]/g, '').replace(/^\s*(?:\d+[.)]|[-*])\s*/, ''));
+      out.push({ url, name, title: '', ...(kind === 'company' ? { kind: 'company' } : {}) });
+      normalizedAnchors.add(url.toLowerCase());
+    }
+    for (const url of collectLinkedInUrls(value, kind)) {
+      if (!normalizedAnchors.has(url.toLowerCase())) out.push({ url, name: '', title: '' });
+    }
     return out;
   }
   if (Array.isArray(value)) {
@@ -162,7 +187,12 @@ function collectLinkedInRecords(value, kind, out = [], seen = new WeakSet(), dep
   if (seen.has(value)) return out;
   seen.add(value);
 
-  const url = [...collectLinkedInUrls(value, kind)][0] || '';
+  const referenceKind = text(value.kind).toLowerCase();
+  const expectedReferenceKind = kind === 'company' ? 'company' : 'person';
+  const referenceUrl = (!referenceKind || referenceKind === expectedReferenceKind)
+    ? normalizeLinkedInReferenceUrl(value.url || value.uri || value.href, kind)
+    : '';
+  const url = referenceUrl || [...collectLinkedInUrls(value, kind)][0] || '';
   if (url) {
     const name = text(
       value.name ||
@@ -172,10 +202,13 @@ function collectLinkedInRecords(value, kind, out = [], seen = new WeakSet(), dep
       value.companyName ||
       value.organization_name ||
       value.organizationName ||
+      // The production LinkedIn MCP returns search-result identities as
+      // references with { kind, url, text }, rather than `companies` objects.
+      value.text ||
       ([value.first_name, value.last_name].filter(Boolean).join(' ')),
     );
     const title = text(value.title || value.headline || value.job_title || value.jobTitle);
-    out.push({ url, name, title });
+    out.push({ url, name, title, kind: text(value.kind) });
   }
 
   for (const item of Object.values(value)) collectLinkedInRecords(item, kind, out, seen, depth + 1);
@@ -267,18 +300,19 @@ function missingLinkTargets(source, rowLimit) {
   for (const { rowNumber, row } of dataRows(source, rowLimit)) {
     const companyNameColumn = schemaField(companyGroup, 'company') ?? schemaField(companyGroup, 'name');
     const companyLinkColumn = schemaField(companyGroup, 'linkedin');
-    if (companyNameColumn != null && companyLinkColumn != null && text(row[companyNameColumn]) && !text(row[companyLinkColumn])) {
-      targets.push({ type: 'company', rowNumber, columnIndex: companyLinkColumn, companyName: canonicalCompanyName(row[companyNameColumn]) });
+    if (companyNameColumn != null && companyLinkColumn != null && text(row[companyNameColumn]) && !normalizeLinkedInUrl(row[companyLinkColumn], 'company')) {
+      targets.push({ type: 'company', linkKind: 'company', rowNumber, columnIndex: companyLinkColumn, companyName: canonicalCompanyName(row[companyNameColumn]) });
     }
     for (const group of pGroups) {
       const nameColumn = schemaField(group, 'name');
       const linkColumn = schemaField(group, 'linkedin');
       if (nameColumn == null || linkColumn == null) continue;
       const name = text(row[nameColumn]);
-      if (!name || text(row[linkColumn])) continue;
+      if (!name || normalizeLinkedInUrl(row[linkColumn], 'person')) continue;
       const role = text(row[schemaField(group, 'role') ?? -1]);
       targets.push({
         type: 'person',
+        linkKind: 'person',
         ordinal: Number(group.ordinal || 0) || null,
         groupId: group.id,
         rowNumber,
@@ -318,7 +352,7 @@ async function safeWriteChanges(source, changes, api = sheetsDefault) {
   let conflicts = 0;
   for (let i = 0; i < changes.length; i++) {
     const liveValue = text(live[i]?.[0]?.[0]);
-    if (liveValue) {
+    if (normalizeLinkedInUrl(liveValue, changes[i].linkKind || null)) {
       conflicts++;
       continue;
     }
@@ -355,7 +389,7 @@ async function getVerifiedCompanyContext(companyName, existingUrl, stats, linked
     try {
       searchPayload = await searchCompany();
     } catch (error) {
-      stats.providerFailures++;
+      recordProviderFailure(error, stats);
       return null;
     }
   }
@@ -367,20 +401,68 @@ async function getVerifiedCompanyContext(companyName, existingUrl, stats, linked
     ],
     'company',
   );
+  stats.companySearchRecords = Number(stats.companySearchRecords || 0) + records.length;
 
-  if (!records.length && !existingSlug) {
-    const derived = companyKey(expected).replace(/ /g, '-');
-    if (derived) records.push({ url: `https://www.linkedin.com/company/${derived}/`, name: expected });
+  // LinkedIn's company search already returns an identity-labeled canonical
+  // company URL. When there is exactly one result whose normalized legal name
+  // matches the requested company, a second profile fetch adds no identity
+  // evidence and consumes another protected account call. Use the exact search
+  // result directly; retain profile verification for aliases and ambiguity.
+  const exactMatches = records.filter((record) => (
+    (!record.kind || record.kind === 'company')
+    && record.name
+    && companyKey(record.name) === companyKey(expected)
+  ));
+  stats.companyExactSearchCandidates = Number(stats.companyExactSearchCandidates || 0) + exactMatches.length;
+  if (exactMatches.length === 1) {
+    const record = exactMatches[0];
+    const slug = companySlugFromUrl(record.url);
+    if (slug) {
+      stats.companyExactSearchMatches = Number(stats.companyExactSearchMatches || 0) + 1;
+      return {
+        companyName: expected,
+        linkedinUrl: record.url,
+        slug,
+        urn: '',
+        verified: true,
+        verificationMethod: 'unique-exact-company-search-result',
+        profileName: record.name,
+      };
+    }
   }
 
-  for (const record of records.slice(0, 5)) {
+  if (exactMatches.length > 1) {
+    stats.companyAmbiguousExactSearches = Number(stats.companyAmbiguousExactSearches || 0) + 1;
+  }
+  // Keep each company lookup bounded: try the strongest exact-name candidate
+  // first (or the best name-compatible result if there is no exact match), and
+  // never fan one search out into five profile calls. Ambiguous exact results
+  // require an explicit matching name from the profile before any URL is used.
+  const verificationCandidates = exactMatches.length
+    ? exactMatches.slice(0, 1)
+    : records.filter((record) => (!record.kind || record.kind === 'company') && companyMatches(expected, record.name)).slice(0, 1);
+  if (!verificationCandidates.length) {
+    stats.companyNoNameMatchedCandidates = Number(stats.companyNoNameMatchedCandidates || 0) + 1;
+    return null;
+  }
+  for (const record of verificationCandidates) {
     const slug = companySlugFromUrl(record.url);
     if (!slug) continue;
     try {
       stats.companyProfileFetches++;
       const profile = await linkedin.callTool('get_company_profile', { company_name: slug });
       const profileName = companyProfileName(profile);
-      if (!companyMatches(expected, profileName)) continue;
+      // The production MCP profile response contains { url, sections, ... }
+      // and usually has no top-level company name. A matching company search
+      // reference plus a successful fetch of its exact slug verifies identity.
+      if (profileName && !companyMatches(expected, profileName)) {
+        stats.companyProfileNameMismatches = Number(stats.companyProfileNameMismatches || 0) + 1;
+        continue;
+      }
+      if (exactMatches.length > 1 && !profileName) {
+        stats.companyAmbiguousProfilesWithoutName = Number(stats.companyAmbiguousProfilesWithoutName || 0) + 1;
+        continue;
+      }
       const urn = [...companyUrns(profile)][0] || '';
       return {
         companyName: expected,
@@ -390,8 +472,9 @@ async function getVerifiedCompanyContext(companyName, existingUrl, stats, linked
         verified: true,
         profileName,
       };
-    } catch {
-      stats.providerFailures++;
+    } catch (error) {
+      stats.companyProfileCheckFailures = Number(stats.companyProfileCheckFailures || 0) + 1;
+      recordProviderFailure(error, stats);
     }
   }
   return null;
@@ -423,8 +506,8 @@ async function getVerifiedPerson(name, role, companyContext, location, stats, li
       for (const record of records) {
         if (!urls.some((item) => item.url.toLowerCase() === record.url.toLowerCase())) urls.push(record);
       }
-    } catch {
-      stats.providerFailures++;
+    } catch (error) {
+      recordProviderFailure(error, stats);
     }
   };
 
@@ -466,8 +549,8 @@ async function getVerifiedPerson(name, role, companyContext, location, stats, li
         employerName,
         employerVerified,
       });
-    } catch {
-      stats.providerFailures++;
+    } catch (error) {
+      recordProviderFailure(error, stats);
     }
   }
 
@@ -499,6 +582,22 @@ function numericOption(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function recordProviderFailure(error, stats) {
+  stats.providerFailures++;
+  const failure = {
+    code: String(error?.code || 'LINKEDIN_PROVIDER_ERROR'),
+    message: text(error?.message || error || 'LinkedIn provider request failed').slice(0, 240),
+    nextEligibleAt: text(error?.cooldownUntil || error?.nextEligibleAt) || null,
+  };
+  stats.providerErrors ||= [];
+  if (!stats.providerErrors.some((item) => item.code === failure.code && item.message === failure.message)) {
+    stats.providerErrors.push(failure);
+  }
+  if (/^LINKEDIN_(?:BURST|HOURLY|DAILY)_CAP$|^LINKEDIN_COOLDOWN_ACTIVE$|^LINKEDIN_MANUAL_LOCK$/.test(failure.code)) {
+    stats.providerStop ||= failure;
+  }
 }
 
 async function withTimeout(promise, timeoutMs, label) {
@@ -587,7 +686,7 @@ async function safeWriteChanges(source, changes, api = sheetsDefault) {
   let conflicts = 0;
   for (let i = 0; i < changes.length; i++) {
     const liveValue = text(live[i]?.[0]?.[0]);
-    if (liveValue) {
+    if (normalizeLinkedInUrl(liveValue, changes[i].linkKind || null)) {
       conflicts++;
       continue;
     }
@@ -638,18 +737,58 @@ async function run(source, options = {}) {
     personTargets: activation.personTargets,
     companySearches: 0,
     companyProfileFetches: 0,
+    companyExactSearchMatches: 0,
+    companySearchRecords: 0,
+    companyExactSearchCandidates: 0,
+    companyAmbiguousExactSearches: 0,
+    companyNoNameMatchedCandidates: 0,
+    companyProfileNameMismatches: 0,
+    companyAmbiguousProfilesWithoutName: 0,
+    companyProfileCheckFailures: 0,
     personSearches: 0,
     personProfileFetches: 0,
     companyLinksFilled: 0,
     personLinksFilled: 0,
     providerFailures: 0,
+    providerErrors: [],
+    providerStop: null,
     providerTimeouts: 0,
     liveConflicts: 0,
     writesAttempted: 0,
     linkedinProviderCalls: 0,
+    linkedinProviderCallsSucceeded: 0,
     companyUnresolvedRows: [],
     personUnresolvedRows: [],
     alreadyPopulatedSkipped: 0,
+  };
+  let providerQueue = Promise.resolve();
+  const trackedLinkedIn = {
+    callTool(tool, args) {
+      const call = providerQueue.then(async () => {
+        if (stats.providerStop) {
+          const stopped = new Error(stats.providerStop.message);
+          stopped.code = stats.providerStop.code;
+          throw stopped;
+        }
+        stats.linkedinProviderCalls++;
+        try {
+          const value = await linkedin.callTool(tool, args);
+          stats.linkedinProviderCallsSucceeded++;
+          return value;
+        } catch (error) {
+          if (/^LINKEDIN_(?:BURST|HOURLY|DAILY)_CAP$|^LINKEDIN_COOLDOWN_ACTIVE$|^LINKEDIN_MANUAL_LOCK$/.test(String(error?.code || ''))) {
+            stats.providerStop ||= {
+              code: String(error.code),
+              message: text(error.message).slice(0, 240),
+              nextEligibleAt: text(error.cooldownUntil || error.nextEligibleAt) || null,
+            };
+          }
+          throw error;
+        }
+      });
+      providerQueue = call.catch(() => {});
+      return call;
+    },
   };
 
   if (!activation.activated) {
@@ -666,7 +805,7 @@ async function run(source, options = {}) {
   async function verifyCompanyForTarget(target) {
     const row = source.rows[target.rowNumber - 1] || [];
     const existingUrl = companyLinkColumn != null ? text(row[companyLinkColumn]) : '';
-    if (existingUrl) {
+    if (normalizeLinkedInUrl(existingUrl, 'company')) {
       stats.alreadyPopulatedSkipped++;
       return { context: null, change: null };
     }
@@ -675,7 +814,7 @@ async function run(source, options = {}) {
     let promise = companyPromiseCache.get(cacheKey);
     if (!promise) {
       promise = withTimeout(
-        getVerifiedCompanyContext(target.companyName, '', stats, linkedin),
+        getVerifiedCompanyContext(target.companyName, '', stats, trackedLinkedIn),
         providerTimeoutMs,
         `Company LinkedIn enrichment for "${target.companyName}"`,
       ).catch((error) => {
@@ -698,7 +837,13 @@ async function run(source, options = {}) {
         range: sheets.cellRange(source.sheetName, target.rowNumber, target.columnIndex),
         value: context.linkedinUrl,
         source: 'linkedin-link-enricher:verified-company',
-        evidence: { confidence: 0.98, source: 'fastmcp:get_company_profile' },
+        linkKind: 'company',
+        evidence: {
+          confidence: context.verificationMethod === 'unique-exact-company-search-result' ? 0.96 : 0.98,
+          source: context.verificationMethod === 'unique-exact-company-search-result'
+            ? 'fastmcp:search_companies:unique-exact-name'
+            : 'fastmcp:get_company_profile',
+        },
       },
     };
   }
@@ -712,7 +857,7 @@ async function run(source, options = {}) {
       if (type === 'company') stats.companyLinksFilled += write.written;
       else stats.personLinksFilled += write.written;
 
-      const match = change.range.match(/!([A-Z]+)(d+)$/i);
+      const match = change.range.match(/!([A-Z]+)(\d+)$/i);
       if (match) {
         const rowNumber = Number(match[2]);
         const index = (() => {
@@ -752,7 +897,7 @@ async function run(source, options = {}) {
       let promise = companyPromiseCache.get(cacheKey);
       if (!promise) {
         promise = withTimeout(
-          getVerifiedCompanyContext(companyName, existingCompanyLink, stats, linkedin),
+          getVerifiedCompanyContext(companyName, existingCompanyLink, stats, trackedLinkedIn),
           providerTimeoutMs,
           `Company LinkedIn context for "${companyName}"`,
         ).catch((error) => {
@@ -767,7 +912,7 @@ async function run(source, options = {}) {
 
     const location = locationColumn != null ? text(row[locationColumn]) : '';
     const verifiedPerson = await withTimeout(
-      getVerifiedPerson(target.name, target.role, companyContext, location, stats, linkedin),
+      getVerifiedPerson(target.name, target.role, companyContext, location, stats, trackedLinkedIn),
       providerTimeoutMs,
       `POC LinkedIn enrichment for "${target.name}"`,
     ).catch((error) => {
@@ -784,6 +929,7 @@ async function run(source, options = {}) {
       range: sheets.cellRange(source.sheetName, target.rowNumber, target.columnIndex),
       value: verifiedPerson.url,
       source: 'linkedin-link-enricher:verified-person',
+      linkKind: 'person',
       evidence: {
         confidence: verifiedPerson.nameScore,
         source: 'fastmcp:get_person_profile',
