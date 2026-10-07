@@ -129,9 +129,9 @@ async function canonicalApprovedTarget(payload = {}) {
   const rawName = payload.sheetName == null ? '' : String(payload.sheetName);
   if (rawName) {
     const exact = tabs.find((tab) => tab.name === rawName);
-    if (exact) return { sheetName: exact.name, sheetId: exact.sheetId, matchedBy: requestedSheetId === exact.sheetId ? 'sheetId' : 'exact-name' };
+    if (exact) return { sheetName: exact.name, sheetId: exact.sheetId, matchedBy: requestedSheetId === exact.sheetId ? 'sheetId' : 'exact-name', validatedSheetMetadata: { spreadsheetId, meta } };
     const folded = tabs.filter((tab) => tab.name.trim().toLowerCase() === rawName.trim().toLowerCase());
-    if (folded.length === 1) return { sheetName: folded[0].name, sheetId: folded[0].sheetId, matchedBy: requestedSheetId === folded[0].sheetId ? 'sheetId' : 'folded-name' };
+    if (folded.length === 1) return { sheetName: folded[0].name, sheetId: folded[0].sheetId, matchedBy: requestedSheetId === folded[0].sheetId ? 'sheetId' : 'folded-name', validatedSheetMetadata: { spreadsheetId, meta } };
   }
 
   // Stable ids recover a renamed worksheet, but only after an explicitly named
@@ -139,7 +139,7 @@ async function canonicalApprovedTarget(payload = {}) {
   // approval to a different tab.
   if (requestedSheetId != null) {
     const byId = tabs.find((tab) => tab.sheetId === requestedSheetId);
-    if (byId) return { sheetName: byId.name, sheetId: byId.sheetId, matchedBy: 'sheetId' };
+    if (byId) return { sheetName: byId.name, sheetId: byId.sheetId, matchedBy: 'sheetId', validatedSheetMetadata: { spreadsheetId, meta } };
   }
 
   // Some Google/connector metadata responses are incomplete. When no immutable
@@ -155,6 +155,7 @@ async function canonicalApprovedTarget(payload = {}) {
       sheetId: resolved.target.sheetId,
       matchedBy: resolved.targetSource,
       metadataFallback: Boolean(resolved.metadataFallback),
+      validatedSheetMetadata: { spreadsheetId, meta },
     };
   }
 
@@ -218,6 +219,7 @@ async function execute(decision) {
       sheetName: canonicalTarget.sheetName,
       sheetId: canonicalTarget.sheetId,
       explicitNameAuthoritative: true,
+      validatedSheetMetadata: canonicalTarget.validatedSheetMetadata,
     }, {
       apolloApproved: true,
       expectedSchemaFingerprint: payload.schemaFingerprint || undefined,

@@ -367,10 +367,11 @@ async function recoverSession(error) {
   return ensureServer();
 }
 
-async function callTool(tool, args = {}) {
+async function callTool(tool, args = {}, options = {}) {
+  const retryTransient = options?.retryTransient !== false;
   await policy.waitTurn(tool);
   try {
-    const result = await rawCall(tool, args);
+    const result = await rawCall(tool, args, retryTransient);
     policy.recordCall(tool, true);
     return result;
   } catch (error) {
@@ -381,6 +382,21 @@ async function callTool(tool, args = {}) {
     error.linkedinSafety = classification;
 
     if (classification.kind !== 'transient' && !isTransientTransportError(error)) throw error;
+
+    if (!retryTransient) {
+      // The isolated company-link workflow owns its explicit one-backup retry.
+      // Reconnect after a transport failure without silently issuing a second
+      // tool request here, so its attempt count stays deterministic.
+      if (isTransientTransportError(error)) {
+        try {
+          await recoverSession(error);
+          error.sessionRecovered = true;
+        } catch (recoveryError) {
+          error.recoveryError = recoveryError.message;
+        }
+      }
+      throw error;
+    }
 
     // An MCP request timeout may leave a browser operation alive. Restart the
     // owned stdio subprocess, but let the mission controller defer this exact

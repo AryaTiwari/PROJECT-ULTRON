@@ -35,7 +35,7 @@ function parseSheetName(message) {
     /[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
     /\b(?:target|use|for|on|in|from|within|using)\s+(?:only\s+)?(?:the\s+)?[`"'“”]([^\n`"'“”]{1,120})[`"'“”]\s+(?:tab|sheet|worksheet)\b/i,
     /\b(?:tab|sheet|worksheet)\s+(?:named|called)\s+[`"'“”]([^\n`"'“”]{1,120})[`"'“”]/i,
-    /\b(?:worksheet|sheet|tab)\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})[`"'“”]?/i,
+    /(?:^|\n)\s*(?:worksheet|sheet|tab)\s*[:=\-]\s*[`"'“”]?([^\n`"'“”]{1,120})[`"'“”]?/im,
     // Common chat phrasing: "worksheet name - Arya-24 sept" (optionally
     // followed by another command on the same line). Capture only the actual
     // worksheet title; do not let "name -" become part of the identifier.

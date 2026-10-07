@@ -501,23 +501,30 @@ assert.throws(() => policy.assertReadOnlyTool('connect_with_person'), /disabled|
 
 const limits = policy.settings();
 assert.equal(typeof limits.localBudgetBypass, 'boolean');
+assert.equal(limits.localBudgetBypass, true, 'ULTRON local burst/hour/day call ceilings are disabled by default.');
+assert.equal(limits.localQuotaCapsEnabled, false);
 assert.equal(policy.runtimeAllowsTestBypass('C:/app/server.js', ''), false);
 assert.equal(policy.runtimeAllowsTestBypass('C:/app/scripts/linkedin-account-selftest.js', ''), true);
 assert.equal(policy.runtimeAllowsTestBypass('C:/app/server.js', 'test'), true);
 const previousBudgetBypass = process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 const previousRuntimeBudgetBypass = process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
+const previousLocalCallCaps = process.env.ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED;
 process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = '1';
 assert.equal(policy.settings().localBudgetBypass, true);
 delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS = '1';
 assert.equal(policy.settings().localBudgetBypass, true, 'explicit runtime local-budget bypass must work under normal npm start, not only self-test filenames');
-assert.match(String(policy.waitTurn), /localBudgetBypass/, 'waitTurn must short-circuit ULTRON local spacing when runtime bypass is enabled');
+assert.doesNotMatch(String(policy.waitTurn), /if\s*\(check\.limits\.localBudgetBypass\)\s*return/, 'Disabling local call quotas must not disable the minimum request gap.');
 assert.ok(policy.settings().testMissionToolMax >= 120);
 assert.ok(policy.settings().testJobSearchMax >= 20);
 if (previousBudgetBypass == null) delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 else process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = previousBudgetBypass;
 if (previousRuntimeBudgetBypass == null) delete process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
 else process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS = previousRuntimeBudgetBypass;
+process.env.ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED = '1';
+assert.equal(policy.settings().localBudgetBypass, false, 'Local rolling quotas remain available only as an explicit opt-in.');
+if (previousLocalCallCaps == null) delete process.env.ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED;
+else process.env.ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED = previousLocalCallCaps;
 assert.ok(limits.minGapMs >= 2500);
 assert.ok(limits.burstMax <= 12);
 assert.ok(limits.hourlyMax <= 30);
@@ -571,10 +578,12 @@ assert.equal(policy.eventCountsTowardSafety({ errorKind: 'rate-limit' }), true);
 const schedulerNow = Date.parse('2026-09-24T12:00:00+05:30');
 const schedulerRuntimeBypass = process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
 const schedulerTestBypass = process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
+const schedulerLocalCallCaps = process.env.ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED;
 // This assertion validates NORMAL safety scheduling, so isolate it from an
 // emergency runtime override inherited from the shell running this self-test.
 delete process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS;
 delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
+process.env.ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED = '1';
 assert.equal(policy.temporaryDailyOverrideActive(Date.parse('2026-09-24T12:00:00+05:30')), true);
 assert.equal(policy.temporaryDailyOverrideActive(Date.parse('2026-09-25T00:00:01+05:30')), false);
 assert.equal(policy.settings(schedulerNow).dailyCapEnabled, false, 'The authorized one-day India override must be active on 2026-09-24.');
@@ -623,6 +632,8 @@ if (schedulerRuntimeBypass == null) delete process.env.ULTRON_M3_LINKEDIN_LOCAL_
 else process.env.ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS = schedulerRuntimeBypass;
 if (schedulerTestBypass == null) delete process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET;
 else process.env.ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET = schedulerTestBypass;
+if (schedulerLocalCallCaps == null) delete process.env.ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED;
+else process.env.ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED = schedulerLocalCallCaps;
 
 assert.equal(mcp.isTransientTransportError(transientTimeout), true);
 assert.equal(mcp.shouldRetryTransient(transientTimeout), false);

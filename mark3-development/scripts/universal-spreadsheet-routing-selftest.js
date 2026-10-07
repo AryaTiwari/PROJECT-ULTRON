@@ -2,11 +2,28 @@
 
 const assert = require('assert/strict');
 const control = require('../core/command-control-plane');
+const googleSheets = require('../core/google-sheets-operator');
 const targetResolver = require('../core/universal-sheet-target-resolver');
 const spreadsheetController = require('../core/universal-spreadsheet-domain-controller');
 const enrichmentOperator = require('../core/universal-sheet-enrichment-operator');
 
 const url = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit';
+const markdownSheetRequest = `Google Sheet:\n[https://docs.google.com/spreadsheets/d/1XanR7qXEYNwOlZBvwB2p0b4cmtBFdyX-Q5Q5coecWN0](https://docs.google.com/spreadsheets/d/1XanR7qXEYNwOlZBvwB2p0b4cmtBFdyX-Q5Q5coecWN0)\n\nWorksheet: salesforce/oracle/tech\n\nFill every missing company LinkedIn URL`;
+assert.equal(
+  googleSheets.extractSheetUrl(markdownSheetRequest),
+  'https://docs.google.com/spreadsheets/d/1XanR7qXEYNwOlZBvwB2p0b4cmtBFdyX-Q5Q5coecWN0',
+  'Markdown-wrapped Google Sheet URLs must resolve to the destination URL only.',
+);
+assert.equal(
+  spreadsheetController.parseSheetName(markdownSheetRequest),
+  'salesforce/oracle/tech',
+  'A Google Sheet label must not be mistaken for the worksheet declaration.',
+);
+assert.equal(
+  googleSheets.hyperlinkFromCell({ hyperlink: 'https://www.linkedin.com/company/acme-technologies/' }),
+  'https://www.linkedin.com/company/acme-technologies/',
+  'Company LinkedIn hyperlinks must be recovered from their display labels.',
+);
 
 const generic = control.claim(`Enrich missing decision maker contacts, phones and emails in this spreadsheet: ${url}`);
 assert.equal(generic.exclusive, true);
