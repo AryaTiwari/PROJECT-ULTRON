@@ -75,14 +75,18 @@ function settings(now = Date.now()) {
     process.env.ULTRON_M3_LINKEDIN_DAILY_OVERRIDE_DATE || TEMPORARY_DAILY_OVERRIDE_DATE
   ).trim();
   const dailyCapEnabled = !temporaryDailyOverrideActive(now, dailyOverrideDate);
+  const localBudgetBypass = !booleanSetting('ULTRON_M3_LINKEDIN_LOCAL_CALL_CAPS_ENABLED', false)
+    || booleanSetting('ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS', false)
+    || booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false);
 
   return {
     speedProfile,
-    // Explicit operator override. This bypasses ULTRON's own burst/hour/day
-    // counters only. Provider-side 429s, checkpoints, auth locks and cooldowns
-    // remain authoritative and are never bypassed here.
-    localBudgetBypass: booleanSetting('ULTRON_M3_LINKEDIN_LOCAL_BUDGET_BYPASS', false)
-      || booleanSetting('ULTRON_M3_LINKEDIN_TEST_BYPASS_LOCAL_BUDGET', false),
+    // Local rolling call ceilings are disabled by default so worksheet
+    // missions can finish. Set LOCAL_CALL_CAPS_ENABLED=1 to restore them.
+    // LinkedIn's own rate limits, checkpoints, auth locks and cooldowns remain
+    // enforced, and the minimum request gap still applies.
+    localBudgetBypass,
+    localQuotaCapsEnabled: !localBudgetBypass,
     testMissionToolMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_MISSION_TOOL_MAX', 120, 12, 120),
     testJobSearchMax: numberSetting('ULTRON_M3_LINKEDIN_TEST_JOB_SEARCH_MAX', 20, 4, 25),
 
@@ -256,11 +260,13 @@ function preflight(tool) {
     if (counts.burst >= limits.burstMax) {
       const error = new Error(`LinkedIn short-window safety cap reached (${counts.burst}/${limits.burstMax}). Pause before continuing this mission.`);
       error.code = 'LINKEDIN_BURST_CAP';
+      error.cooldownUntil = nextEligibleAt(state);
       throw error;
     }
     if (counts.hourly >= limits.hourlyMax) {
       const error = new Error(`LinkedIn hourly safety cap reached (${counts.hourly}/${limits.hourlyMax}). Wait before another account scrape.`);
       error.code = 'LINKEDIN_HOURLY_CAP';
+      error.cooldownUntil = nextEligibleAt(state, now);
       throw error;
     }
     if (limits.dailyCapEnabled && counts.daily >= limits.dailyMax) {
@@ -278,10 +284,7 @@ function sleep(ms) {
 
 async function waitTurn(tool) {
   const check = preflight(tool);
-  // Emergency/local-budget bypass means exactly that: no ULTRON-side spacing,
-  // burst, hourly, or daily throttle. Real provider cooldown/manual-lock checks
-  // still happen in preflight() before this point.
-  if (check.limits.localBudgetBypass) return check;
+  // Quota ceilings may be disabled, but pacing stays active to avoid bursts.
   const now = Date.now();
   const last = Date.parse(check.state.lastSafetyCallAt || check.state.lastCallAt || '');
   const elapsed = Number.isFinite(last) ? now - last : Infinity;
@@ -299,7 +302,8 @@ function recordCall(tool, ok = true, metadata = {}) {
     tool,
     ok: Boolean(ok),
     countsTowardSafety: true,
-    runtimeTestBypass: Boolean(settings().localBudgetBypass),
+    runtimeTestBypass: runtimeAllowsTestBypass(),
+    localQuotaCapsDisabled: Boolean(settings().localBudgetBypass),
     sourceScript: path.basename(String(process.argv?.[1] || '')),
     ...metadata,
   });
@@ -355,12 +359,13 @@ function nextEligibleAt(state = loadState(), now = Date.now()) {
   }
 
   const limits = settings(now);
-  if (limits.localBudgetBypass) return new Date(now).toISOString();
   const events = (current.events || []).filter(eventCountsTowardSafety).map((event) => Number(event.at || 0)).filter(Number.isFinite).sort((a, b) => a - b);
   const candidates = [now];
 
   const last = Date.parse(current.lastSafetyCallAt || current.lastCallAt || '');
   if (Number.isFinite(last)) candidates.push(last + limits.minGapMs);
+
+  if (limits.localBudgetBypass) return new Date(Math.max(...candidates)).toISOString();
 
   const thresholdExpiry = (windowEvents, limit, windowMs) => {
     if (windowEvents.length < limit) return null;
@@ -410,7 +415,7 @@ function status() {
     dailyOverrideUntil: settings().dailyOverrideUntil,
     eventBreakdown,
     nextEligibleAt: nextEligibleAt(state),
-    overCapBy: {
+    overCapBy: settings().localBudgetBypass ? { burst: 0, hourly: 0, daily: 0 } : {
       burst: Math.max(0, Number(counts.burst || 0) - Number(settings().burstMax || 0) + 1),
       hourly: Math.max(0, Number(counts.hourly || 0) - Number(settings().hourlyMax || 0) + 1),
       daily: settings().dailyCapEnabled
@@ -419,6 +424,7 @@ function status() {
     },
     rateLimitStrikes24h: recentRateLimitStrikes(state),
     localBudgetBypass: Boolean(settings().localBudgetBypass),
+    localQuotaCapsEnabled: !Boolean(settings().localBudgetBypass),
     cooldownUntil: state.cooldownUntil,
     manualLock: state.manualLock,
     readOnlyTools: [...READ_ONLY_TOOLS],

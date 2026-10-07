@@ -44,7 +44,9 @@ for (const event of counted) {
 }
 
 const threshold = status.dailyMax;
-const needToExpire = status.dailyCapEnabled === false ? 0 : Math.max(0, counted.length - threshold + 1);
+const needToExpire = status.localQuotaCapsEnabled === false || status.dailyCapEnabled === false
+  ? 0
+  : Math.max(0, counted.length - threshold + 1);
 const expiryEvent = needToExpire > 0 ? counted[needToExpire - 1] : null;
 
 console.log('LinkedIn Safety Audit');
@@ -52,6 +54,7 @@ console.log('=====================');
 console.log('Now:', new Date(now).toISOString());
 console.log('State file:', status.stateFile);
 console.log('Configured caps:', {
+  localQuotaCapsEnabled: status.localQuotaCapsEnabled,
   burstMax: status.burstMax,
   hourlyMax: status.hourlyMax,
   dailyMax: status.dailyMax,
@@ -96,7 +99,9 @@ for (const [hour, count] of Object.entries(hourlyBuckets)) {
 }
 console.log('');
 console.log('Interpretation:');
-if (status.dailyCapEnabled === false) {
+if (!status.localQuotaCapsEnabled) {
+  console.log('ULTRON local burst/hour/day quotas are disabled. Minimum call spacing, LinkedIn provider rate limits/cooldowns, checkpoints and manual locks remain enforced.');
+} else if (status.dailyCapEnabled === false) {
   console.log(`Daily cap is temporarily disabled for ${status.dailyOverrideDate}; it restores automatically at ${status.dailyOverrideUntil}. Burst, hourly, cooldown and checkpoint protections remain active.`);
 } else if (status.dailyUsed >= status.dailyMax) {
   console.log(

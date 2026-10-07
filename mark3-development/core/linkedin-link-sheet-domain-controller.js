@@ -44,6 +44,9 @@ async function handle(message, context = {}) {
 
   const requestedSheetName = universalSheetController.parseSheetName(original);
   const rowLimit = universalSheetController.configuredRowLimit(original);
+  const companyTask = /\b(?:fill|enrich|find|complete|add|populate|lookup)\b[\s\S]{0,80}\bcompany\b[\s\S]{0,60}\blinkedin\b/i.test(original);
+  const personTask = /\b(?:fill|enrich|find|complete|add|populate|lookup)\b[\s\S]{0,80}\b(?:poc|person|contact)\b[\s\S]{0,60}\blinkedin\b/i.test(original);
+  const companyOnly = companyTask && !personTask;
   let inspection;
 
   try {
@@ -87,6 +90,7 @@ async function handle(message, context = {}) {
   try {
     const result = await linkEnricher.run(source, {
       rowLimit,
+      companyOnly,
       sheetsApi: context.sheetsApi,
       linkedinMcp: context.linkedinMcp,
     });
@@ -117,9 +121,16 @@ async function handle(message, context = {}) {
       const detail = providerStop?.message
         ? ` The provider stopped the lookup: ${providerStop.message}`
         : '';
-      const lookupSummary = Number(result.stats.linkedinProviderCalls || 0) > 0
-        ? ` This run completed ${Number(result.stats.linkedinProviderCallsSucceeded || 0)} of ${Number(result.stats.linkedinProviderCalls || 0)} LinkedIn tool calls; company searches returned ${Number(result.stats.companySearchRecords || 0)} usable company records (${Number(result.stats.companyExactSearchCandidates || 0)} exact-name candidates), with ${Number(result.stats.companyProfileFetches || 0)} company profile checks. Diagnostics: ${Number(result.stats.companyAmbiguousExactSearches || 0)} ambiguous exact-name searches, ${Number(result.stats.companyProfileNameMismatches || 0)} profile-name mismatches, ${Number(result.stats.companyAmbiguousProfilesWithoutName || 0)} ambiguous profiles without a name, ${Number(result.stats.companyProfileCheckFailures || 0)} profile-check failures, and ${Number(result.stats.companyNoNameMatchedCandidates || 0)} searches with no name-matched candidate.`
+      const blockedBeforeSend = Number(result.stats.linkedinProviderCallsBlocked || 0);
+      const unverifiedWrites = Number(result.stats.writeVerificationFailures || 0);
+      const writeVerificationSummary = unverifiedWrites > 0
+        ? ` Google Sheets did not confirm ${unverifiedWrites} attempted cell write${unverifiedWrites === 1 ? '' : 's'} when Mark 3 read the target cells back.`
         : '';
+      const lookupSummary = Number(result.stats.linkedinProviderCalls || 0) > 0
+        ? ` This run completed ${Number(result.stats.linkedinProviderCallsSucceeded || 0)} of ${Number(result.stats.linkedinProviderCalls || 0)} LinkedIn tool calls; it resolved ${Number(result.stats.companyJobDetailLinks || 0)} company links directly from job details and found ${Number(result.stats.companySearchRecords || 0)} company-search records (${Number(result.stats.companyExactSearchCandidates || 0)} exact-name candidates, ${Number(result.stats.companyCompatibleSearchMatches || 0)} unique strong name matches, including ${Number(result.stats.companyRankedExactSearchMatches || 0)} top-ranked exact-name matches). Technical retries: ${Number(result.stats.companyTechnicalRetries || 0)}. Ambiguous searches: ${Number(result.stats.companyAmbiguousExactSearches || 0)} exact-name and ${Number(result.stats.companyAmbiguousSearches || 0)} similar-name.`
+        : blockedBeforeSend > 0
+          ? ` No LinkedIn request was sent: ${blockedBeforeSend} request${blockedBeforeSend === 1 ? ' was' : 's were'} blocked by the local account safety limit before reaching LinkedIn.`
+          : '';
       const nextEligibleAt = providerStop?.nextEligibleAt && Number.isFinite(Date.parse(providerStop.nextEligibleAt))
         ? ` The next safe retry time is ${new Date(providerStop.nextEligibleAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', timeZoneName: 'short' })}.`
         : '';
@@ -127,7 +138,7 @@ async function handle(message, context = {}) {
         ? ` Wait for the LinkedIn safety window to reset, then rerun the same request; verified links already written will be skipped.${nextEligibleAt}`
         : '';
       return response(true,
-        `LinkedIn link enrichment is incomplete on worksheet "${inspection.sheetName}". Filled ${filled}; ${unresolved} ${unresolvedCount === 1 ? 'remains' : 'remain'} unverified. No guessed URLs were written.${lookupSummary}${detail}${nextStep}`,
+        `LinkedIn link enrichment is incomplete on worksheet "${inspection.sheetName}". Filled ${filled}; ${unresolved} ${unresolvedCount === 1 ? 'remains' : 'remain'} unverified. No guessed URLs were written.${writeVerificationSummary}${lookupSummary}${detail}${nextStep}`,
         {
           partial: true,
           complete: false,

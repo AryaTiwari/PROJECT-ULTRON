@@ -14,7 +14,12 @@ function spreadsheetId(input) {
 }
 
 function extractSheetUrl(text) {
-  return String(text || '').match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9_-]+[^\s<>'"`]*/i)?.[0]?.replace(/[),.;!?]+$/, '') || null;
+  const raw = String(text || '').match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/[a-zA-Z0-9_-]+[^\s<>'"`]*/i)?.[0];
+  if (!raw) return null;
+  // Chat clients often wrap a sheet URL as [label](destination). Stop at the
+  // closing Markdown bracket so we never append the destination URL to the
+  // spreadsheet URL passed to the Sheets API.
+  return raw.split(/[\])}]/, 1)[0].replace(/[),.;!?]+$/, '') || null;
 }
 
 function sheetGid(input) {
@@ -379,15 +384,19 @@ async function values(id, range) {
 
 function hyperlinkFromCell(cell) {
   const direct = String(cell?.hyperlink || '').trim();
-  if (looksLinkedInProfile(direct)) return direct;
+  if (looksLinkedInUrl(direct)) return direct;
   const formula = String(cell?.userEnteredValue?.formulaValue || '').trim();
   const match = formula.match(/^=HYPERLINK\(\s*["']([^"']+)["']/i);
-  if (match && looksLinkedInProfile(match[1])) return match[1];
+  if (match && looksLinkedInUrl(match[1])) return match[1];
   for (const run of cell?.textFormatRuns || []) {
     const uri = String(run?.format?.link?.uri || '').trim();
-    if (looksLinkedInProfile(uri)) return uri;
+    if (looksLinkedInUrl(uri)) return uri;
   }
   return null;
+}
+
+function looksLinkedInUrl(value) {
+  return /^https?:\/\/(?:www\.)?linkedin\.com\/(?:in|company)\/[^/?#]+/i.test(String(value || '').trim());
 }
 
 async function linkedInHyperlinks(id, sheetName, columnIndex, lastRow) {
@@ -469,7 +478,11 @@ async function writeCells(id, changes) {
     body: JSON.stringify({ valueInputOption: 'RAW', data, includeValuesInResponse: false }),
   });
   require('./universal-run-context').commit(id, changes);
-  return { updatedCells: Number(result.totalUpdatedCells || data.length), raw: result };
+  const reportedUpdatedCells = Number(result.totalUpdatedCells);
+  return {
+    updatedCells: Number.isFinite(reportedUpdatedCells) ? reportedUpdatedCells : null,
+    raw: result,
+  };
 }
 
 async function clearRows(id, sheetName, rowNumbers = [], lastColumnIndex = 0) {

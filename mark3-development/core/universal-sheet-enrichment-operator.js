@@ -124,12 +124,28 @@ function schemaLinkedInColumns(schema) {
 }
 
 async function patchRichLinkedInLinks(spreadsheetId, sheetName, rows, schema) {
-  for (const columnIndex of schemaLinkedInColumns(schema)) {
-    const links = await sheets.linkedInHyperlinks(spreadsheetId, sheetName, columnIndex, Math.max(rows.length, schema.headerRowNumber));
-    for (const [rowNumber, link] of links.entries()) {
+  const columns = schemaLinkedInColumns(schema);
+  const linksByColumn = new Array(columns.length);
+  let next = 0;
+  // Rich-link reads are only needed to recognize cells whose visible label is
+  // not their LinkedIn URL. Fetch independent columns with a small bound so a
+  // wide sheet does not add one network round-trip per LinkedIn column.
+  await Promise.all(Array.from({ length: Math.min(4, columns.length) }, async () => {
+    while (next < columns.length) {
+      const index = next++;
+      linksByColumn[index] = await sheets.linkedInHyperlinks(
+        spreadsheetId,
+        sheetName,
+        columns[index],
+        Math.max(rows.length, schema.headerRowNumber),
+      );
+    }
+  }));
+  for (let columnIndex = 0; columnIndex < columns.length; columnIndex++) {
+    for (const [rowNumber, link] of linksByColumn[columnIndex].entries()) {
       const rowIndex = rowNumber - 1;
       if (!rows[rowIndex]) rows[rowIndex] = [];
-      rows[rowIndex][columnIndex] = link;
+      rows[rowIndex][columns[columnIndex]] = link;
     }
   }
   return rows;
@@ -180,7 +196,11 @@ function selectUniversalSheetTargets(meta = {}, options = {}) {
 
 async function readUniversalSheet(sheetUrl, options = {}) {
   const spreadsheetId = sheets.spreadsheetId(sheetUrl);
-  const meta = await sheets.metadata(spreadsheetId);
+  const validated = options.validatedSheetMetadata;
+  const meta = validated?.spreadsheetId === spreadsheetId
+    && Array.isArray(validated?.meta?.sheets)
+    ? validated.meta
+    : await sheets.metadata(spreadsheetId);
   const selected = selectUniversalSheetTargets(meta, options);
   const { targets, requestedName, requestedSheetId } = selected;
 
@@ -3436,15 +3456,20 @@ async function applyRecoveredHeaderRepairs(source, stats) {
   stats.headerRepairsPlanned = repairs.length;
   if (!repairs.length) return [];
 
+  const candidates = repairs
+    .filter((repair) => Number.isInteger(repair?.columnIndex) && Number.isInteger(repair?.rowNumber))
+    .map((repair) => ({ repair, range: sheets.cellRange(source.sheetName, repair.rowNumber, repair.columnIndex) }));
+  let currentValues;
+  try {
+    currentValues = await sheets.batchValues(source.spreadsheetId, candidates.map((item) => item.range), { formulas: false });
+  } catch (error) {
+    error.stage = error.stage || 'schema-continuity-header-read';
+    throw error;
+  }
   const changes = [];
-  for (const repair of repairs) {
-    if (!Number.isInteger(repair?.columnIndex) || !Number.isInteger(repair?.rowNumber)) continue;
-    const range = sheets.cellRange(source.sheetName, repair.rowNumber, repair.columnIndex);
-    let current = '';
-    try { current = await sheets.readCell(source.spreadsheetId, range); } catch (error) {
-      error.stage = error.stage || 'schema-continuity-header-read';
-      throw error;
-    }
+  for (let index = 0; index < candidates.length; index++) {
+    const { repair, range } = candidates[index];
+    const current = currentValues?.[index]?.[0]?.[0] ?? '';
     if (!sheets.isBlank(current)) {
       stats.headerRepairsSkippedPopulated++;
       continue;
@@ -3834,19 +3859,12 @@ async function run(request = {}, options = {}) {
   const requestedPoc3 = !phaseOrdinal && requestedPersonGroups >= 3;
 
   if (!internalRecheck) {
-    // Resume Apollo phone callbacks from earlier runs/restarts before doing new
-    // enrichment work. Ownership is persisted by exact sheet/row/column/person id.
+    // Loading exact cell ownership is local and cheap. Remote phone-result
+    // polling can take seconds per receipt, so never hold the new row sweep
+    // behind yesterday's callbacks. The existing durable watcher resumes those
+    // assignments in the background while this run starts Apollo discovery.
     stats.resumedPhoneAssignments = loadBackgroundPhoneAssignments();
-    if (backgroundPhoneAssignments.size) {
-      try {
-        const replay = await syncBackgroundPhoneAssignments();
-        stats.resumedPhoneResolved = Number(replay?.resolved || 0);
-        stats.resumedPhoneCellsFilled = Number(replay?.written || 0);
-        stats.phoneCellsFilled += stats.resumedPhoneCellsFilled;
-        stats.cellsChanged += stats.resumedPhoneCellsFilled;
-      } catch {}
-      if (backgroundPhoneAssignments.size) startBackgroundPhoneWatcher();
-    }
+    if (backgroundPhoneAssignments.size) startBackgroundPhoneWatcher();
 
     // Persist continuity-recovered headers only once, before the primary sweep.
     await applyRecoveredHeaderRepairs(source, stats);

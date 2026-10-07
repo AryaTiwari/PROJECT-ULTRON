@@ -4367,9 +4367,11 @@ function statusText() {
   const safety = s.safety;
   const lock = safety.manualLock ? ` LOCKED: ${safety.manualLock.reason}` : safety.cooldownUntil ? ` Cooldown until ${safety.cooldownUntil}.` : '';
   const apolloReady = apollo.status().apiKeyReady && apollo.status().webhookReady;
-  const testMode = safety.localBudgetBypass ? ' TEMP TEST MODE: local burst/hourly/daily budgets are bypassed; real LinkedIn cooldowns, checkpoints and write-action blocks remain enforced.' : '';
+  const budgetMode = safety.localBudgetBypass
+    ? ' ULTRON local burst/hour/day quotas are disabled; request spacing, LinkedIn provider cooldowns, checkpoints and write-action blocks remain enforced.'
+    : '';
   const mcpStatus = mcp.status();
-  return `LinkedIn Account Research: dedicated LinkedIn-only routing is ready. Primary backend: ${mcpStatus.provider} ${mcpStatus.package} through ${mcpStatus.transport} MCP using ${mcpStatus.sdk}; connected=${mcpStatus.sessionInitialized ? 'yes' : 'no'}, required tools discovered=${mcpStatus.discoveredTools?.length || 0}. Apollo company-head selection/contact enrichment ${apolloReady ? 'ready' : 'needs API key + webhook setup'}. Optional joeyism fallback ${s.joeyism.enabled ? (s.joeyism.sessionReady ? 'enabled and session-ready' : 'enabled but needs manual session setup') : 'disabled'}. Usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour, ${safety.dailyUsed}/${safety.dailyMax} rolling 24 hours${safety.dailyCapEnabled === false ? ' (daily cap temporarily disabled today)' : ''}. Minimum call gap ${Math.round(safety.minGapMs / 1000)}s, deep-profile cap ${safety.deepProfilesPerMission}/mission. LinkedIn write actions are disabled.${testMode}${lock}`;
+  return `LinkedIn Account Research: dedicated LinkedIn-only routing is ready. Primary backend: ${mcpStatus.provider} ${mcpStatus.package} through ${mcpStatus.transport} MCP using ${mcpStatus.sdk}; connected=${mcpStatus.sessionInitialized ? 'yes' : 'no'}, required tools discovered=${mcpStatus.discoveredTools?.length || 0}. Apollo company-head selection/contact enrichment ${apolloReady ? 'ready' : 'needs API key + webhook setup'}. Optional joeyism fallback ${s.joeyism.enabled ? (s.joeyism.sessionReady ? 'enabled and session-ready' : 'enabled but needs manual session setup') : 'disabled'}. Usage: ${safety.hourlyUsed}/${safety.hourlyMax} this hour, ${safety.dailyUsed}/${safety.dailyMax} rolling 24 hours${safety.localQuotaCapsEnabled ? '' : ' (usage tracked; ULTRON call quotas disabled)'}. Minimum call gap ${Math.round(safety.minGapMs / 1000)}s, deep-profile cap ${safety.deepProfilesPerMission}/mission. LinkedIn write actions are disabled.${budgetMode}${lock}`;
 }
 
 function formatMission(mission) {

@@ -7,10 +7,11 @@ const commandControl = require('../core/command-control-plane');
 const universalSheetController = require('../core/universal-spreadsheet-domain-controller');
 const linkedInSheetController = require('../core/linkedin-link-sheet-domain-controller');
 
-function fakeSheets(changes, liveValues = []) {
+function fakeSheets(changes, liveValues = [], options = {}) {
+  const persisted = new Map();
   return {
     linkedInHyperlinks: async () => new Map(),
-    batchValues: async (_id, ranges) => ranges.map((_, index) => [liveValues[index] || '']),
+    batchValues: async (_id, ranges) => ranges.map((range, index) => [[persisted.has(range) ? persisted.get(range) : (liveValues[index] || '')]]),
     cellRange: (sheetName, rowNumber, columnIndex) => {
       let n = Number(columnIndex) + 1;
       let column = '';
@@ -23,7 +24,11 @@ function fakeSheets(changes, liveValues = []) {
     },
     writeCells: async (_id, items) => {
       changes.push(...items);
-      return { updatedCells: items.length };
+      options.onWrite?.(items);
+      if (options.persistWrites !== false) {
+        for (const item of items) persisted.set(item.range, item.value);
+      }
+      return { updatedCells: options.reportedUpdatedCells ?? items.length };
     },
   };
 }
@@ -276,19 +281,17 @@ Worksheet: \`salesforce/oracle/tech\``;
           { kind: 'company', url: '/company/acme-three/', text: 'Acme Corporation' },
           { kind: 'company', url: '/company/acme-four/', text: 'Acme Holdings' },
         ] } };
-        if (tool === 'get_company_profile') return {
-          name: 'Acme Labs', url: 'https://www.linkedin.com/company/acme-one/',
-        };
+        if (tool === 'get_company_profile') throw new Error('Ambiguous exact result should not require a profile call.');
         throw new Error(`Unexpected ambiguous LinkedIn tool: ${tool}`);
       },
     },
   });
-  assert.equal(ambiguousResult.stats.companyLinksFilled, 0, 'Reject ambiguous exact-name pages when profile identity does not confirm the requested company.');
-  assert.equal(ambiguousResult.stats.companyProfileFetches, 1, 'Bound ambiguous company verification to one profile call.');
+  assert.equal(ambiguousResult.stats.companyLinksFilled, 1, 'Use LinkedIn’s top-ranked exact-name company result when profile search labels are ambiguous.');
+  assert.equal(ambiguousResult.stats.companyProfileFetches, 0, 'Do not spend another tool call hydrating a top-ranked exact-name result.');
   assert.equal(ambiguousResult.stats.companyAmbiguousExactSearches, 1);
-  assert.equal(ambiguousProfileCalls.filter((call) => call.tool === 'get_company_profile').length, 1);
-  assert.equal(ambiguousResult.stats.companyProfileNameMismatches, 1);
-  assert.equal(ambiguousProfileChanges.length, 0, 'Do not guess between duplicate exact-name LinkedIn pages.');
+  assert.equal(ambiguousResult.stats.companyRankedExactSearchMatches, 1);
+  assert.equal(ambiguousProfileCalls.filter((call) => call.tool === 'get_company_profile').length, 0);
+  assert.equal(ambiguousProfileChanges[0]?.value, 'https://www.linkedin.com/company/acme-one/', 'Keep the provider’s top-ranked LinkedIn profile URL.');
 
   const exactSearchCalls = [];
   const exactSearchChanges = [];
@@ -321,6 +324,180 @@ Worksheet: \`salesforce/oracle/tech\``;
   assert.equal(exactSearchCalls.length, 1);
   assert.equal(exactSearchChanges[0]?.value, 'https://www.linkedin.com/company/example-holdings/');
 
+  const compatibleRows = [['Company Name', 'Company LinkedIn'], ['Acme Technologies Cloud', '']];
+  const compatibleChanges = [];
+  const compatibleResult = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: compatibleRows, schema: schema.inferSchema(compatibleRows),
+  }, {
+    sheetsApi: fakeSheets(compatibleChanges),
+    linkedinMcp: {
+      async callTool(tool) {
+        assert.equal(tool, 'search_companies');
+        return { companies: [{ name: 'Acme Technologies Cloud Services', linkedin_url: 'https://www.linkedin.com/company/acme-cloud-services/' }] };
+      },
+    },
+  });
+  assert.equal(compatibleResult.stats.companyCompatibleSearchMatches, 1, 'Accept one strong unique company-name match from the first search without profile fan-out.');
+  assert.equal(compatibleResult.stats.companyLinksFilled, 1);
+
+  const technicalRetryChanges = [];
+  const technicalRetryCalls = [];
+  const technicalRetryResult = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: [['Company Name', 'Company LinkedIn'], ['Retry Systems', '']],
+    schema: schema.inferSchema([['Company Name', 'Company LinkedIn'], ['Retry Systems', '']]),
+  }, {
+    sheetsApi: fakeSheets(technicalRetryChanges),
+    linkedinMcp: {
+      async callTool(tool, args, options) {
+        technicalRetryCalls.push({ tool, args });
+        assert.equal(options.retryTransient, false, 'The enricher owns the single technical backup so the MCP client cannot silently add retries.');
+        if (technicalRetryCalls.length === 1) throw Object.assign(new Error('socket reset'), { code: 'ECONNRESET' });
+        return { companies: [{ name: 'Retry Systems', linkedin_url: 'https://www.linkedin.com/company/retry-systems/' }] };
+      },
+    },
+  });
+  assert.equal(technicalRetryCalls.length, 2, 'Use exactly one backup call after a technical transport failure.');
+  assert.equal(technicalRetryResult.stats.companyTechnicalRetries, 1);
+  assert.equal(technicalRetryResult.stats.companyLinksFilled, 1);
+
+  const jobDetailChanges = [];
+  const jobDetailCalls = [];
+  const jobDetailRows = [
+    ['Company Name', 'Company LinkedIn', 'Job URL', 'Job Details'],
+    ['', '', 'https://www.linkedin.com/jobs/view/90001234/', ''],
+  ];
+  const jobDetailResult = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: jobDetailRows, schema: schema.inferSchema(jobDetailRows),
+  }, {
+    sheetsApi: fakeSheets(jobDetailChanges),
+    linkedinMcp: {
+      async callTool(tool, args) {
+        jobDetailCalls.push({ tool, args });
+        assert.equal(tool, 'get_job_details');
+        assert.equal(args.job_id, '90001234');
+        return { job: { company: { kind: 'company', name: 'Acme Technologies', url: 'https://www.linkedin.com/company/acme-technologies/' } } };
+      },
+    },
+  });
+  assert.equal(jobDetailResult.stats.companyLinksFilled, 1, 'Use the company URL attached to a LinkedIn job when the company-name cell is blank.');
+  assert.equal(jobDetailResult.stats.companyJobDetailLinks, 1);
+  assert.equal(jobDetailCalls.length, 1, 'A verified job-detail company link needs no follow-up search.');
+  assert.equal(jobDetailChanges[0]?.value, 'https://www.linkedin.com/company/acme-technologies/');
+
+  const jobTextChanges = [];
+  const jobTextRows = [
+    ['Company Name', 'Company LinkedIn', 'Job Details'],
+    ['', '', 'Join Acme Technologies as a Principal Solutions Architect.'],
+  ];
+  let jobTextQuery = '';
+  const jobTextResult = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: jobTextRows, schema: schema.inferSchema(jobTextRows),
+  }, {
+    sheetsApi: fakeSheets(jobTextChanges),
+    linkedinMcp: {
+      async callTool(tool, args) {
+        assert.equal(tool, 'search_companies');
+        jobTextQuery = args.keywords;
+        return { companies: [{ name: 'Acme Technologies', linkedin_url: 'https://www.linkedin.com/company/acme-technologies/' }] };
+      },
+    },
+  });
+  assert.equal(jobTextQuery, 'Acme Technologies', 'Extract the company named in job details when the company-name cell is blank.');
+  assert.equal(jobTextResult.stats.companyLinksFilled, 1);
+
+  const postRows = [
+    ['Company Name', 'Company LinkedIn', 'Post Details'],
+    ['', '', 'Salesforce is hiring an enterprise account executive in Mumbai.'],
+  ];
+  let postQuery = '';
+  const postResult = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: postRows, schema: schema.inferSchema(postRows),
+  }, {
+    sheetsApi: fakeSheets([]),
+    linkedinMcp: {
+      async callTool(tool, args) {
+        assert.equal(tool, 'search_companies');
+        postQuery = args.keywords;
+        return { companies: [{ name: 'Salesforce', linkedin_url: 'https://www.linkedin.com/company/salesforce/' }] };
+      },
+    },
+  });
+  assert.equal(postQuery, 'Salesforce', 'Extract the company mentioned in a hiring post.');
+  assert.equal(postResult.stats.companyLinksFilled, 1);
+
+  let logicalFailureAttempts = 0;
+  const logicalFailure = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: [['Company Name', 'Company LinkedIn'], ['No Match Inc', '']],
+    schema: schema.inferSchema([['Company Name', 'Company LinkedIn'], ['No Match Inc', '']]),
+  }, {
+    sheetsApi: fakeSheets([]),
+    linkedinMcp: {
+      async callTool() {
+        logicalFailureAttempts++;
+        throw Object.assign(new Error('No matching company record'), { code: 'LINKEDIN_MCP_TOOL_ERROR' });
+      },
+    },
+  });
+  assert.equal(logicalFailureAttempts, 1, 'Do not retry a search miss or ordinary provider error as a technical backup.');
+  assert.equal(logicalFailure.stats.companyTechnicalRetries, 0);
+
+  const parallelRows = [['Company Name', 'Company LinkedIn'], ...Array.from({ length: 6 }, (_, index) => [`Batch Company ${index + 1}`, ''])];
+  let activeCompanySearches = 0;
+  let maxCompanySearches = 0;
+  let sheetWriteBatches = 0;
+  const parallelChanges = [];
+  const parallelResult = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: parallelRows, schema: schema.inferSchema(parallelRows),
+  }, {
+    sheetsApi: fakeSheets(parallelChanges, [], { onWrite: () => { sheetWriteBatches++; } }),
+    linkedinMcp: {
+      async callTool(tool, args) {
+        assert.equal(tool, 'search_companies');
+        activeCompanySearches++;
+        maxCompanySearches = Math.max(maxCompanySearches, activeCompanySearches);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        activeCompanySearches--;
+        const name = String(args.keywords);
+        return { companies: [{ name, linkedin_url: `https://www.linkedin.com/company/${name.toLowerCase().replaceAll(' ', '-')}/` }] };
+      },
+    },
+    concurrency: 4,
+  });
+  assert.equal(parallelResult.stats.companyLinksFilled, 6, 'Resolve all fixture companies in the same enrichment run.');
+  assert.ok(maxCompanySearches > 1, 'Independent company lookups should no longer serialize behind one provider call.');
+  assert.equal(sheetWriteBatches, 1, 'Verified company links should be persisted as one batch for this fixture.');
+  assert.equal(parallelChanges.length, 6);
+
+  const readbackConfirmedChanges = [];
+  const readbackConfirmedRows = [['Company Name', 'Company LinkedIn'], ['Acme Technologies', '']];
+  const readbackConfirmed = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: readbackConfirmedRows.map((row) => row.slice()), schema: schema.inferSchema(readbackConfirmedRows),
+  }, {
+    sheetsApi: fakeSheets(readbackConfirmedChanges, [], { reportedUpdatedCells: 0 }),
+    linkedinMcp: fakeLinkedIn(),
+  });
+  assert.equal(readbackConfirmed.stats.companyLinksFilled, 1, 'Count a cell only when the exact LinkedIn URL is present on a read-back, even if the API count is zero.');
+
+  const readbackMissingChanges = [];
+  const readbackMissing = await linkEnricher.run({
+    spreadsheetId: 'abc123', sheetName: 'salesforce/oracle/tech',
+    rows: readbackConfirmedRows.map((row) => row.slice()), schema: schema.inferSchema(readbackConfirmedRows),
+  }, {
+    sheetsApi: fakeSheets(readbackMissingChanges, [], { persistWrites: false, reportedUpdatedCells: 2 }),
+    linkedinMcp: fakeLinkedIn(),
+  });
+  assert.equal(readbackMissing.stats.companyLinksFilled, 0, 'Do not trust an API count when the target cell does not contain the URL afterward.');
+  assert.equal(readbackMissing.stats.writeVerificationFailures, 1);
+  assert.deepEqual(readbackMissing.stats.companyUnresolvedRows, [2]);
+
   const cappedCalls = [];
   const cappedRows = [
     ['Company Name', 'Company LinkedIn'],
@@ -340,24 +517,36 @@ Worksheet: \`salesforce/oracle/tech\``;
         throw error;
       },
     },
+    concurrency: 1,
   });
   assert.equal(cappedResult.stats.providerStop.code, 'LINKEDIN_HOURLY_CAP');
   assert.equal(cappedResult.stats.providerStop.nextEligibleAt, '2026-10-06T08:15:00.000Z', 'Keep the provider safety window reset time for the user-facing result.');
   assert.equal(cappedCalls.length, 1, 'Stop queued provider calls immediately after a safety cap is reached.');
-  assert.equal(cappedResult.stats.linkedinProviderCalls, 1);
+  assert.equal(cappedResult.stats.linkedinProviderCalls, 0, 'A local safety-cap rejection is not counted as a request sent to LinkedIn.');
+  assert.equal(cappedResult.stats.linkedinProviderCallsBlocked, 3, 'The local safety rejection and remaining rows are reported as blocked before reaching LinkedIn.');
 
   const originalInspect = universalSheetController.inspect;
   const originalRun = linkEnricher.run;
+  let capturedCompanyOnly = false;
+  const companyOnlyRequest = `Google Sheet: ${sheetUrl}
+Worksheet: salesforce/oracle/tech
+Fill every missing company LinkedIn URL
+Do not use Apollo.
+Do not run phone/email enrichment.`;
   try {
     universalSheetController.inspect = async () => ({
       spreadsheetId: 'abc123', spreadsheetTitle: 'Test', sheetName: 'salesforce/oracle/tech', sheetId: 1,
       rows: labeledRows.map((row) => row.slice()),
       analysis: { schema: labeledSchema },
     });
-    linkEnricher.run = async () => ({
+    linkEnricher.run = async (_source, options) => {
+      capturedCompanyOnly = options.companyOnly;
+      return ({
       activated: true,
       stats: {
         companyLinksFilled: 0, personLinksFilled: 0,
+        linkedinProviderCalls: 0, linkedinProviderCallsBlocked: 1,
+        writeVerificationFailures: 1,
         companyUnresolvedRows: [2], personUnresolvedRows: [],
         providerStop: {
           code: 'LINKEDIN_HOURLY_CAP',
@@ -367,13 +556,17 @@ Worksheet: \`salesforce/oracle/tech\``;
       },
       plan: { activated: true, companyTargets: 1, targets: [] },
       writes: { company: 0, person: 0 },
-    });
-    const partial = await linkedInSheetController.handle(exactLinkedInRequest, { originalMessage: exactLinkedInRequest });
+      });
+    };
+    const partial = await linkedInSheetController.handle(companyOnlyRequest, { originalMessage: companyOnlyRequest });
     assert.equal(partial.ok, true, 'A partial result should be returned as an explanation instead of a generic dispatcher error.');
     assert.equal(partial.partial, true);
     assert.equal(partial.errorCode, 'LINKEDIN_LINKS_UNRESOLVED');
+    assert.equal(capturedCompanyOnly, true, 'A company-URL-only command must not run POC LinkedIn lookups.');
     assert.match(partial.response, /1 company row remains unverified/);
     assert.match(partial.response, /hourly safety cap reached/);
+    assert.match(partial.response, /No LinkedIn request was sent/);
+    assert.match(partial.response, /Google Sheets did not confirm 1 attempted cell write/);
     assert.match(partial.response, /rerun the same request/);
     assert.match(partial.response, /next safe retry time is .*ist/i);
   } finally {
@@ -397,10 +590,11 @@ Worksheet: \`salesforce/oracle/tech\``;
   assert.equal(result.stats.companyLinksFilled, 1);
   assert.equal(result.stats.personLinksFilled, 1);
   assert.equal(changes.length, 2);
-  // Incremental-write regression: a fast target must be written while another
-  // provider lookup is still hanging. The old implementation waited for the
-  // complete company phase, making the sheet appear dead for minutes.
+  // Incremental batch regression: a fast target must be written while another
+  // provider lookup is still hanging, but successful cells are grouped into a
+  // sheet batch instead of issuing three Sheets API calls per cell.
   const incrementalChanges = [];
+  let incrementalWriteBatches = 0;
   let releaseSlow = null;
   const slowGate = new Promise((resolve) => { releaseSlow = resolve; });
   const incrementalRows = [
@@ -438,10 +632,11 @@ Worksheet: \`salesforce/oracle/tech\``;
     rows: incrementalRows.map((row) => row.slice()),
     schema: incrementalSchema,
   }, {
-    sheetsApi: fakeSheets(incrementalChanges),
+    sheetsApi: fakeSheets(incrementalChanges, [], { onWrite: () => { incrementalWriteBatches++; } }),
     linkedinMcp: incrementalProvider,
     concurrency: 1,
     providerTimeoutMs: 120000,
+    companyWriteBatchWaitMs: 20,
   });
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.ok(
@@ -452,6 +647,7 @@ Worksheet: \`salesforce/oracle/tech\``;
   const incrementalResult = await incrementalPromise;
   assert.equal(incrementalResult.ok, true);
   assert.equal(incrementalResult.stats.companyLinksFilled, 2);
+  assert.equal(incrementalWriteBatches, 2, 'A slow row should not hold the fast result; each verified batch remains bounded.');
   assert.equal(changes.length, 2);
   assert.ok(changes.some((item) => item.value === 'https://www.linkedin.com/company/acme-technologies/'));
   assert.ok(changes.some((item) => item.value === 'https://www.linkedin.com/in/alice-smith/'));
