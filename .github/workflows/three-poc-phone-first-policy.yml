@@ -27,8 +27,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: mark3-development/package-lock.json
       - name: Install Mark 3 dependencies
         working-directory: mark3-development
         run: npm ci
