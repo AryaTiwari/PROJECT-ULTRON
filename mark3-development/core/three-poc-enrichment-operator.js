@@ -9,6 +9,8 @@ const apollo = require('./apollo-enrichment');
 const modelRouter = require('./model-router');
 
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'three-poc-enrichment', 'jobs.json');
+const PHONE_POLICY_VERSION = 'india-phone-first-5-attempts-v1';
+const DEFAULT_PHONE_POLICY_MODE = 'india-first-5-attempts';
 let watcherTimer = null;
 let watcherRemaining = 0;
 
@@ -135,6 +137,35 @@ function saveState(state) {
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
   state.jobs = (state.jobs || []).slice(-20);
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+function currentPhonePolicy(options = {}) {
+  const mode = String(options.phonePolicyMode || process.env.ULTRON_M3_PHONE_POLICY_MODE || DEFAULT_PHONE_POLICY_MODE)
+    .trim().toLowerCase();
+  return { version: PHONE_POLICY_VERSION, mode };
+}
+
+function recordStageLatency(stats, stage, startedAt) {
+  const duration = Math.max(0, Date.now() - startedAt);
+  if (!stats.stageLatencyMs) stats.stageLatencyMs = {};
+  const bucket = stats.stageLatencyMs[stage] || (stats.stageLatencyMs[stage] = { count: 0, total: 0, max: 0, samples: [] });
+  bucket.count++;
+  bucket.total += duration;
+  bucket.max = Math.max(bucket.max, duration);
+  bucket.samples.push(duration);
+  if (bucket.samples.length > 1000) bucket.samples.shift();
+  return duration;
+}
+
+function summarizeStageLatency(stats) {
+  for (const bucket of Object.values(stats.stageLatencyMs || {})) {
+    const sorted = [...bucket.samples].sort((a, b) => a - b);
+    const percentile = (p) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)] : 0;
+    bucket.p50 = percentile(0.5);
+    bucket.p95 = percentile(0.95);
+    bucket.average = bucket.count ? Math.round(bucket.total / bucket.count) : 0;
+    delete bucket.samples;
+  }
 }
 
 function normalizeHeader(value) {
@@ -983,8 +1014,11 @@ async function enrichWorkbook(source, options = {}) {
     createdLinkedInColumns[sheet.sheetName] = await ensurePocLinkedInColumns(source, sheet);
   }
 
+  const phonePolicy = currentPhonePolicy(options);
   const job = {
     id: `three-poc-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+    phonePolicyVersion: phonePolicy.version,
+    phonePolicyMode: phonePolicy.mode,
     source,
     provider,
     requestedSheetName: String(options.sheetName || '').trim() || null,
@@ -1057,6 +1091,9 @@ async function enrichWorkbook(source, options = {}) {
     matchedExistingPocSlots: 0,
     updatedCells: 0,
     agentModels: new Set(),
+    phonePolicyVersion: phonePolicy.version,
+    phonePolicyMode: phonePolicy.mode,
+    stageLatencyMs: {},
   };
 
   const rowLimit = Math.max(1, Math.min(500, Number(options.rowLimit || process.env.ULTRON_M3_THREE_POC_ROW_LIMIT || 500)));
@@ -1072,7 +1109,8 @@ async function enrichWorkbook(source, options = {}) {
   ];
 
   const candidatePoolFor = async (companyContext) => {
-    const key = String(companyContext.domain || companyContext.company || '').trim().toLowerCase();
+    const stageStartedAt = Date.now();
+    const key = `${phonePolicy.version}:${phonePolicy.mode}:${String(companyContext.domain || companyContext.company || '').trim().toLowerCase()}`;
     if (key && candidatePoolCache.has(key)) {
       stats.candidatePoolCacheHits++;
       return candidatePoolCache.get(key);
@@ -1100,6 +1138,7 @@ async function enrichWorkbook(source, options = {}) {
       });
     }
     if (key) candidatePoolCache.set(key, pool);
+    recordStageLatency(stats, 'candidateSearch', stageStartedAt);
     return pool;
   };
 
@@ -1203,6 +1242,7 @@ async function enrichWorkbook(source, options = {}) {
 
             let selected = { ranking: [], model: null, provider: null };
             let selectorFailed = false;
+            const selectorStartedAt = Date.now();
             try {
               stats.omniRouteSelectorCalls++;
               selected = await selectorAgent(context, companyContext, reasoningCandidates, {
@@ -1217,10 +1257,13 @@ async function enrichWorkbook(source, options = {}) {
             } catch {
               selectorFailed = true;
             }
-            if (selectorFailed || !selected.ranking.length) stats.selectorEmptyOrFailedRows++;
+            recordStageLatency(stats, 'selector', selectorStartedAt);
+            recordStageLatency(stats, 'selector', selectorStartedAt);
+        if (selectorFailed || !selected.ranking.length) stats.selectorEmptyOrFailedRows++;
 
             let finalRanking = selected.ranking.slice(0, Math.max(openSlots.length * 3, 4));
             if (reviewerRequired(selected.ranking, openSlots.length)) {
+              const reviewerStartedAt = Date.now();
               try {
                 stats.omniRouteReviewerCalls++;
                 const reviewed = await reviewerAgent(context, companyContext, reasoningCandidates, selected.ranking, {
@@ -1240,7 +1283,9 @@ async function enrichWorkbook(source, options = {}) {
                     ...selected.ranking.filter((item) => !reviewedKeys.has(item.candidateKey)),
                   ].slice(0, Math.max(openSlots.length * 3, 4));
                 }
-              } catch {}
+              } catch {} finally {
+                recordStageLatency(stats, 'reviewer', reviewerStartedAt);
+              }
             }
 
             const rankedPeople = selectedPeople(reasoningCandidates, finalRanking, Math.min(6, Math.max(openSlots.length * 3, 4)));
@@ -1251,6 +1296,7 @@ async function enrichWorkbook(source, options = {}) {
                 const person = rankedPeople[rankedIndex++];
                 if (!person) continue;
                 stats.candidateHydrations++;
+                const hydrationStartedAt = Date.now();
                 try {
                   const enrichedPerson = await enrichSelectedPerson(person, {}, {
                     company: companyContext.company,
@@ -1268,6 +1314,8 @@ async function enrichWorkbook(source, options = {}) {
                 } catch {
                   stats.candidateHydrationFailures++;
                   stats.candidateHydrationFallbacks++;
+                } finally {
+                  recordStageLatency(stats, 'candidateHydration', hydrationStartedAt);
                 }
               }
             }
@@ -1275,7 +1323,9 @@ async function enrichWorkbook(source, options = {}) {
 
           const changes = anchoredRowChanges(sheet.sheetName, rowNumber, layout, anchor, slotPeople, lockedSlots, row);
           const counts = anchoredChangeCounts(changes, sheet.sheetName, rowNumber, layout);
+          const writeStartedAt = Date.now();
           const written = changes.length ? await writeSourceCells(source, changes) : { updatedCells: 0 };
+          recordStageLatency(stats, 'sheetWrite', writeStartedAt);
           const writtenPeople = [anchor, ...slotPeople.filter(Boolean)];
           stats.updatedCells += written.updatedCells || 0;
           stats.contactsWritten += slotPeople.filter(Boolean).length;
@@ -1338,6 +1388,7 @@ async function enrichWorkbook(source, options = {}) {
         const requestedSlotCount = explicitSlots.length;
         let selected = { ranking: [], model: null, provider: null };
         let selectorFailed = false;
+        const selectorStartedAt = Date.now();
         try {
           stats.omniRouteSelectorCalls++;
           selected = await selectorAgent(context, companyContext, reasoningCandidates, { count: requestedSlotCount });
@@ -1349,10 +1400,12 @@ async function enrichWorkbook(source, options = {}) {
         } catch {
           selectorFailed = true;
         }
+        recordStageLatency(stats, 'selector', selectorStartedAt);
         if (selectorFailed || !selected.ranking.length) stats.selectorEmptyOrFailedRows++;
 
         let finalRanking = selected.ranking.slice(0, 8);
         if (reviewerRequired(selected.ranking, requestedSlotCount)) {
+          const reviewerStartedAt = Date.now();
           try {
             stats.omniRouteReviewerCalls++;
             const reviewed = await reviewerAgent(context, companyContext, reasoningCandidates, selected.ranking, { count: requestedSlotCount });
@@ -1365,7 +1418,9 @@ async function enrichWorkbook(source, options = {}) {
               if (!selected.ranking.length) stats.reviewerRescuedRows++;
               finalRanking = reviewed.ranking;
             }
-          } catch {}
+          } catch {} finally {
+            recordStageLatency(stats, 'reviewer', reviewerStartedAt);
+          }
         }
 
         if (!finalRanking.length) {
@@ -1383,6 +1438,7 @@ async function enrichWorkbook(source, options = {}) {
         for (const person of people) {
           if (enriched.length >= requestedSlotCount) break;
           stats.candidateHydrations++;
+          const hydrationStartedAt = Date.now();
           try {
             const hydrated = await enrichSelectedPerson(person, {}, { company: companyContext.company, domain: companyContext.domain });
             if (!hasVerifiedPocIdentity(hydrated)) {
@@ -1394,6 +1450,8 @@ async function enrichWorkbook(source, options = {}) {
           } catch {
             stats.candidateHydrationFailures++;
             stats.candidateHydrationFallbacks++;
+          } finally {
+            recordStageLatency(stats, 'candidateHydration', hydrationStartedAt);
           }
         }
         if (!enriched.length) {
@@ -1401,7 +1459,9 @@ async function enrichWorkbook(source, options = {}) {
           continue;
         }
         const changes = rowChanges(sheet.sheetName, rowNumber, layout, enriched, row);
+        const writeStartedAt = Date.now();
         const written = await writeSourceCells(source, changes);
+        recordStageLatency(stats, 'sheetWrite', writeStartedAt);
         stats.updatedCells += written.updatedCells || 0;
         stats.contactsWritten += enriched.length;
         stats.emailsWritten += enriched.filter((person) => person.email).length;
@@ -1439,6 +1499,8 @@ async function enrichWorkbook(source, options = {}) {
   }
 
   stats.agentModels = [...stats.agentModels];
+  summarizeStageLatency(stats);
+  job.stats = stats;
   job.status = stats.rowLimitReached
     ? 'partial_safe_cap'
     : (stats.failedRows ? 'completed_with_errors' : (stats.pendingPhones ? 'waiting_for_phone_webhooks' : 'completed'));
@@ -1478,6 +1540,12 @@ async function resumeCappedJob(options = {}) {
   if (options.jobId && String(options.jobId) !== String(previous.id)) {
     const error = new Error('The approved POC resume checkpoint no longer matches the latest resumable job. Nothing was executed.');
     error.code = 'THREE_POC_RESUME_CHECKPOINT_MISMATCH';
+    throw error;
+  }
+  const requestedPolicy = currentPhonePolicy(options);
+  if (previous.phonePolicyVersion !== requestedPolicy.version || previous.phonePolicyMode !== requestedPolicy.mode) {
+    const error = new Error('The saved POC mission uses a different or legacy phone-selection policy. Resume is blocked to prevent stale policy/cache results from bypassing the current India-first requirement. Start a new explicitly approved run after reviewing the checkpoint.');
+    error.code = 'THREE_POC_RESUME_POLICY_MISMATCH';
     throw error;
   }
 
@@ -1531,14 +1599,21 @@ function formatResult(result) {
   const anchoredWrites = result.anchoredRows
     ? ` Actual anchored writes: POC-1 F/G = ${result.poc1PhonesWritten || 0} phone, ${result.poc1EmailsWritten || 0} email; POC-2 H/I/J = ${result.poc2NamesWritten || 0} name/designation, ${result.poc2PhonesWritten || 0} phone, ${result.poc2EmailsWritten || 0} email; POC-3 K/L/M = ${result.poc3NamesWritten || 0} name/designation, ${result.poc3PhonesWritten || 0} phone, ${result.poc3EmailsWritten || 0} email. Existing POC slots repaired/upgraded: ${result.existingPocSlotsRepaired || 0}.`
     : '';
+  const latencySummary = Object.entries(result.stageLatencyMs || {})
+    .map(([stage, timing]) => `${stage} p50/p95/avg/max=${Number(timing.p50 || 0)}/${Number(timing.p95 || 0)}/${Number(timing.average || 0)}/${Number(timing.max || 0)}ms (n=${Number(timing.count || 0)})`)
+    .join('; ');
+  const latencyText = latencySummary ? ` Stage latency: ${latencySummary}.` : '';
   const cap = result.rowLimitReached
     ? ` Safety cap reached after ${result.scannedRows} rows; ${result.remainingEligibleRows || 0} eligible row${Number(result.remainingEligibleRows || 0) === 1 ? '' : 's'} remain, checkpointed at row ${result.nextRowNumber}. Use “resume POC enrichment” and approve the new Apollo run to continue from that checkpoint; earlier rows will not be replayed.`
     : '';
-  return `Agentic ${result.maxPocSlots || 3}-POC enrichment ${result.rowLimitReached ? 'chunk finished' : 'finished'}. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${pending}${unresolved}${cap}`;
+  return `Agentic ${result.maxPocSlots || 3}-POC enrichment ${result.rowLimitReached ? 'chunk finished' : 'finished'}. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${latencyText}${pending}${unresolved}${cap}`;
 }
 
 module.exports = {
   STATE_FILE,
+  currentPhonePolicy,
+  recordStageLatency,
+  summarizeStageLatency,
   detectThreePocLayout,
   selectCompatibleSheets,
   writeSourceCells,
