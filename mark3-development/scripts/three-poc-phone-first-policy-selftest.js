@@ -42,4 +42,58 @@ assert.match(operatorSource, /stats\.indiaPhoneSearchAttempts/);
 assert.match(operatorSource, /stats\.internationalFallbackSearches/);
 assert.match(apolloSource, /country_name:\s*String\(person\?\.country_name/);
 
-console.log('Three-POC phone-first policy selftest: PASS');
+(async () => {
+  const calls = [];
+  const stats = {};
+  const globalFallback = await policy.discoverCandidates({
+    company: 'Northstar Labs',
+    domain: 'northstar.example',
+    limit: 20,
+    hiringCandidateTitles: ['founder', 'director'],
+    stats,
+    searchCompanyPeopleBroad: async (args) => {
+      calls.push(args);
+      if (args.location === 'India') {
+        return { people: [{ id: `india-${calls.length}`, name: `India Candidate ${calls.length}`, location: 'Mumbai, India', has_direct_phone: 'Maybe' }] };
+      }
+      return { people: [{ id: 'global-founder', name: 'Global Founder', title: 'Founder', phone: '+1 415 555 0100' }] };
+    },
+  });
+  assert.equal(calls.filter((call) => call.location === 'India').length, 5);
+  assert.equal(calls.length, 6, 'international fallback must happen only after all five India searches');
+  assert.equal(calls.slice(0, 5).every((call) => call.location === 'India'), true);
+  assert.equal(calls.slice(0, 5).every((call) => Array.isArray(call.titles) && call.titles.length > 0), true);
+  assert.equal(new Set(calls.slice(0, 5).map((call) => call.titles.join('|'))).size, 5);
+  assert.equal(calls[5].location, undefined, 'international fallback must remove the India location constraint');
+  assert.equal(globalFallback.indiaSearchAttempts, 5);
+  assert.equal(globalFallback.internationalFallbackUsed, true);
+  assert.equal(stats.indiaPhoneSearchAttempts, 5);
+  assert.equal(stats.internationalFallbackSearches, 1);
+  assert.equal(globalFallback.people.some((person) => person.id === 'global-founder'), true);
+
+  const earlyCalls = [];
+  const earlyStats = {};
+  const earlyStop = await policy.discoverCandidates({
+    company: 'Northstar Labs',
+    domain: 'northstar.example',
+    stats: earlyStats,
+    searchCompanyPeopleBroad: async (args) => {
+      earlyCalls.push(args);
+      if (args.titles.includes('talent acquisition')) {
+        return { people: [{ id: 'india-verified', name: 'India Decision Maker', location: 'Mumbai, India', phone: '+91 9876543210' }] };
+      }
+      return { people: [{ id: 'india-other', name: 'India Other', location: 'Bengaluru, India', has_direct_phone: 'Maybe' }] };
+    },
+  });
+  assert.equal(earlyCalls.length, 2, 'bounded parallel batch should finish, then stop after verified +91 is found');
+  assert.equal(earlyCalls.every((call) => call.location === 'India'), true);
+  assert.equal(earlyStop.verifiedIndianPhoneFound, true);
+  assert.equal(earlyStop.internationalFallbackUsed, false);
+  assert.equal(earlyStats.internationalFallbackSearches || 0, 0);
+  assert.equal(earlyStats.verifiedIndianPhoneCandidates, 1);
+
+  console.log('Three-POC phone-first policy selftest: PASS (five-search fallback gate, early verified +91 stop, ranking, cache policy wiring)');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
