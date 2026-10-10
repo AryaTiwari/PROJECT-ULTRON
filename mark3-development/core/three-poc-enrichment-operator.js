@@ -1100,80 +1100,17 @@ async function enrichWorkbook(source, options = {}) {
       return candidatePoolCache.get(key);
     }
     const limit = Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40)));
-    const indiaPools = [];
-    let attemptsCompleted = 0;
-    let verifiedIndianPhoneFound = false;
-
-    // Five distinct India-focused discovery attempts are required before the
-    // international fallback is eligible. Run in bounded pairs for latency,
-    // then stop early only if search results actually contain a valid +91 mobile.
-    const searchPlan = phoneFirstPolicy.INDIA_SEARCH_ATTEMPTS;
-    for (let index = 0; index < searchPlan.length; index += 2) {
-      const batch = searchPlan.slice(index, index + 2);
-      const results = await Promise.all(batch.map(async (attempt) => {
-        stats.candidateSearchCalls++;
-        try {
-          const result = await apollo.searchCompanyPeopleBroad({
-            company: companyContext.company,
-            domain: companyContext.domain,
-            location: 'India',
-            limit,
-            titles: attempt.titles,
-          });
-          attemptsCompleted++;
-          return result;
-        } catch {
-          stats.candidateSearchFallbacks++;
-          attemptsCompleted++;
-          return null;
-        }
-      }));
-      for (const result of results) if (result?.people?.length) indiaPools.push(result.people);
-      const candidates = phoneFirstPolicy.mergeCandidates(indiaPools);
-      const verifiedIndianPhones = candidates.filter((person) =>
-        Boolean(phoneFirstPolicy.strictIndianMobile(person.phone || person.phone_number || person.mobile_phone, person.location || person.country || ''))
-      );
-      verifiedIndianPhoneFound = verifiedIndianPhones.length > 0;
-      stats.verifiedIndianPhoneCandidates += verifiedIndianPhones.length;
-      if (verifiedIndianPhoneFound) break;
-    }
-    stats.indiaPhoneSearchAttempts += attemptsCompleted;
-
-    let people = phoneFirstPolicy.mergeCandidates(indiaPools);
-    let internationalFallbackUsed = false;
-    if (phoneFirstPolicy.canUseInternationalFallback(attemptsCompleted, verifiedIndianPhoneFound)) {
-      // No qualifying +91 number surfaced in the five India-focused searches.
-      // Only now widen discovery, preserving India/direct-dial priority in ranking.
-      internationalFallbackUsed = true;
-      stats.internationalFallbackSearches++;
-      stats.candidateSearchCalls++;
-      try {
-        const globalPool = await apollo.searchCompanyPeopleBroad({
-          company: companyContext.company,
-          domain: companyContext.domain,
-          limit,
-          titles: hiringCandidateTitles,
-        });
-        people = phoneFirstPolicy.mergeCandidates([people, globalPool.people || []]);
-      } catch {
-        stats.candidateSearchFallbacks++;
-      }
-    }
-
-    const pool = {
-      ok: true,
+    const pool = await phoneFirstPolicy.discoverCandidates({
+      searchCompanyPeopleBroad: apollo.searchCompanyPeopleBroad,
       company: companyContext.company,
       domain: companyContext.domain,
-      people,
-      candidatesChecked: people.length,
-      indiaSearchAttempts: attemptsCompleted,
-      internationalFallbackUsed,
-      verifiedIndianPhoneFound,
-    };
+      limit,
+      hiringCandidateTitles,
+      stats,
+    });
     if (key) candidatePoolCache.set(key, pool);
     return pool;
   };
-
   for (const sheet of compatible) {
     const layout = sheet.layout;
     const requestedStart = Math.max(layout.headerRowIndex + 2, Number(options.startRowNumber || 0) || (layout.headerRowIndex + 2));
