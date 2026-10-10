@@ -1611,6 +1611,9 @@ function formatResult(result) {
 
 module.exports = {
   STATE_FILE,
+  currentPhonePolicy,
+  recordStageLatency,
+  summarizeStageLatency,
   detectThreePocLayout,
   selectCompatibleSheets,
   writeSourceCells,
