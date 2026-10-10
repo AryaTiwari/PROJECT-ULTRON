@@ -73,6 +73,89 @@ function canUseInternationalFallback(attemptsCompleted, hasVerifiedIndianPhone) 
   return !hasVerifiedIndianPhone && Number(attemptsCompleted) >= INDIA_SEARCH_ATTEMPTS.length;
 }
 
+async function discoverCandidates({
+  searchCompanyPeopleBroad,
+  company,
+  domain = '',
+  limit = 40,
+  hiringCandidateTitles = [],
+  stats = {},
+} = {}) {
+  if (typeof searchCompanyPeopleBroad !== 'function') {
+    throw new TypeError('searchCompanyPeopleBroad must be a function');
+  }
+  const indiaPools = [];
+  let attemptsCompleted = 0;
+  let verifiedIndianPhoneFound = false;
+
+  // Distinct search intents, executed in bounded pairs. Only a verified +91
+  // number in provider results may stop the India search early.
+  for (let index = 0; index < INDIA_SEARCH_ATTEMPTS.length; index += 2) {
+    const batch = INDIA_SEARCH_ATTEMPTS.slice(index, index + 2);
+    const results = await Promise.all(batch.map(async (attempt) => {
+      stats.candidateSearchCalls = Number(stats.candidateSearchCalls || 0) + 1;
+      try {
+        const result = await searchCompanyPeopleBroad({
+          company,
+          domain,
+          location: 'India',
+          limit,
+          titles: attempt.titles,
+        });
+        attemptsCompleted++;
+        return result;
+      } catch {
+        stats.candidateSearchFallbacks = Number(stats.candidateSearchFallbacks || 0) + 1;
+        attemptsCompleted++;
+        return null;
+      }
+    }));
+    for (const result of results) if (result?.people?.length) indiaPools.push(result.people);
+    const candidates = mergeCandidates(indiaPools);
+    const verifiedIndianPhones = candidates.filter((person) =>
+      Boolean(strictIndianMobile(person.phone || person.phone_number || person.mobile_phone, locationEvidence(person)))
+    );
+    verifiedIndianPhoneFound = verifiedIndianPhones.length > 0;
+    if (verifiedIndianPhoneFound) {
+      stats.verifiedIndianPhoneCandidates = Number(stats.verifiedIndianPhoneCandidates || 0) + verifiedIndianPhones.length;
+      break;
+    }
+  }
+
+  stats.indiaPhoneSearchAttempts = Number(stats.indiaPhoneSearchAttempts || 0) + attemptsCompleted;
+  let people = mergeCandidates(indiaPools);
+  let internationalFallbackUsed = false;
+  if (canUseInternationalFallback(attemptsCompleted, verifiedIndianPhoneFound)) {
+    // No qualifying +91 mobile surfaced after the five distinct India-focused
+    // attempts. Only now widen discovery to the unfiltered international pool.
+    internationalFallbackUsed = true;
+    stats.internationalFallbackSearches = Number(stats.internationalFallbackSearches || 0) + 1;
+    stats.candidateSearchCalls = Number(stats.candidateSearchCalls || 0) + 1;
+    try {
+      const globalPool = await searchCompanyPeopleBroad({
+        company,
+        domain,
+        limit,
+        titles: hiringCandidateTitles,
+      });
+      people = mergeCandidates([people, globalPool.people || []]);
+    } catch {
+      stats.candidateSearchFallbacks = Number(stats.candidateSearchFallbacks || 0) + 1;
+    }
+  }
+
+  return {
+    ok: true,
+    company,
+    domain,
+    people,
+    candidatesChecked: people.length,
+    indiaSearchAttempts: attemptsCompleted,
+    internationalFallbackUsed,
+    verifiedIndianPhoneFound,
+  };
+}
+
 module.exports = {
   PHONE_FIRST_POLICY_VERSION,
   INDIA_SEARCH_ATTEMPTS,
@@ -81,4 +164,5 @@ module.exports = {
   phonePriority,
   mergeCandidates,
   canUseInternationalFallback,
+  discoverCandidates,
 };
