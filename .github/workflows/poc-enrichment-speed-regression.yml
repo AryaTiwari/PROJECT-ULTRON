@@ -5,6 +5,7 @@ on:
     paths:
       - 'mark3-development/core/universal-sheet-enrichment-operator.js'
       - 'mark3-development/core/three-poc-enrichment-operator.js'
+      - 'mark3-development/scripts/three-poc-observability-selftest.js'
       - 'mark3-development/scripts/three-poc-enrichment-selftest.js'
       - 'mark3-development/scripts/three-poc-internal-inference-selftest.js'
       - 'mark3-development/scripts/poc-speed-mode-selftest.js'
@@ -33,6 +34,8 @@ jobs:
           node --check core/three-poc-enrichment-operator.js
       - name: Run POC speed regression
         run: npm run check:poc-speed
+      - name: Run 3-POC observability selftest
+        run: node scripts/three-poc-observability-selftest.js
       - name: Run 3-POC enrichment selftest
         run: node scripts/three-poc-enrichment-selftest.js
       - name: Run 3-POC internal inference selftest
