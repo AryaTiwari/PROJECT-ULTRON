@@ -33,7 +33,7 @@ jobs:
           node --check core/three-poc-enrichment-operator.js
       - name: Run POC speed regression
         run: npm run check:poc-speed
-      - name: Run 3-POC enrichment regressions
-        run: |
-          node --env-file=../.env scripts/three-poc-enrichment-selftest.js
-          node --env-file=../.env scripts/three-poc-internal-inference-selftest.js
+      - name: Run 3-POC enrichment selftest
+        run: node --env-file=../.env scripts/three-poc-enrichment-selftest.js
+      - name: Run 3-POC internal inference selftest
+        run: node --env-file=../.env scripts/three-poc-internal-inference-selftest.js
