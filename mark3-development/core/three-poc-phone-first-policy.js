@@ -43,9 +43,17 @@ function directPhoneAvailable(person = {}) {
 function phonePriority(person = {}) {
   if (strictIndianMobile(person.phone || person.phone_number || person.mobile_phone, locationEvidence(person))) return 4;
   if (isIndiaLocated(person) && directPhoneAvailable(person)) return 3;
-  if (isIndiaLocated(person)) return 2;
-  if (text(person.phone || person.phone_number || person.mobile_phone)) return 1;
+  if (strictInternationalPhone(person.phone || person.phone_number || person.mobile_phone)) return 2;
+  if (directPhoneAvailable(person)) return 2;
+  if (isIndiaLocated(person)) return 1;
   return 0;
+}
+
+function strictInternationalPhone(value) {
+  const raw = text(value);
+  if (!raw || strictIndianMobile(raw)) return false;
+  const digits = raw.replace(/\\D/g, '');
+  return digits.length >= 7 && digits.length <= 15;
 }
 
 function mergeCandidates(groups) {
