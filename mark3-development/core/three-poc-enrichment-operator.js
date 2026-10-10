@@ -10,6 +10,7 @@ const modelRouter = require('./model-router');
 const phoneFirstPolicy = require('./three-poc-phone-first-policy');
 
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'three-poc-enrichment', 'jobs.json');
+const PHONE_POLICY_MODE = 'india-first-5-attempts';
 let watcherTimer = null;
 let watcherRemaining = 0;
 
@@ -1001,6 +1002,8 @@ async function enrichWorkbook(source, options = {}) {
 
   const job = {
     id: `three-poc-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+    phonePolicyVersion: phoneFirstPolicy.PHONE_FIRST_POLICY_VERSION,
+    phonePolicyMode: PHONE_POLICY_MODE,
     source,
     provider,
     requestedSheetName: String(options.sheetName || '').trim() || null,
@@ -1037,6 +1040,9 @@ async function enrichWorkbook(source, options = {}) {
     candidatesSeen: 0,
     candidateSearchCalls: 0,
     candidateSearchFallbacks: 0,
+    indiaPhoneSearchAttempts: 0,
+    verifiedIndianPhoneCandidates: 0,
+    internationalFallbackSearches: 0,
     candidatePoolCacheHits: 0,
     candidateHydrations: 0,
     candidateHydrationFailures: 0,
@@ -1129,13 +1135,16 @@ async function enrichWorkbook(source, options = {}) {
       );
       if (verifiedIndianPhoneFound) break;
     }
+    stats.indiaPhoneSearchAttempts += attemptsCompleted;
 
     let people = phoneFirstPolicy.mergeCandidates(indiaPools);
+    if (verifiedIndianPhoneFound) stats.verifiedIndianPhoneCandidates++;
     let internationalFallbackUsed = false;
     if (phoneFirstPolicy.canUseInternationalFallback(attemptsCompleted, verifiedIndianPhoneFound)) {
       // No qualifying +91 number surfaced in the five India-focused searches.
       // Only now widen discovery, preserving India/direct-dial priority in ranking.
       internationalFallbackUsed = true;
+      stats.internationalFallbackSearches++;
       stats.candidateSearchCalls++;
       try {
         const globalPool = await apollo.searchCompanyPeopleBroad({
@@ -1539,6 +1548,11 @@ async function resumeCappedJob(options = {}) {
   if (options.jobId && String(options.jobId) !== String(previous.id)) {
     const error = new Error('The approved POC resume checkpoint no longer matches the latest resumable job. Nothing was executed.');
     error.code = 'THREE_POC_RESUME_CHECKPOINT_MISMATCH';
+    throw error;
+  }
+  if (previous.phonePolicyVersion !== phoneFirstPolicy.PHONE_FIRST_POLICY_VERSION || previous.phonePolicyMode !== PHONE_POLICY_MODE) {
+    const error = new Error('The saved POC mission uses a legacy or conflicting phone-selection policy. Resume is blocked to prevent stale policy results from bypassing India-first selection. Review the checkpoint and start a newly approved run.');
+    error.code = 'THREE_POC_RESUME_POLICY_MISMATCH';
     throw error;
   }
 
