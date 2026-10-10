@@ -29,6 +29,7 @@ const rowSelection = require('./universal-row-selection');
 const targetResolver = require('./universal-sheet-target-resolver');
 const indiaPolicy = require('./india-preference-policy');
 const personAnchorPolicy = require('./person-anchor-enrichment-policy');
+const INDIA_PHONE_POLICY_VERSION = 'india-phone-first-5-attempts-v1';
 
 function text(value) { return String(value ?? '').trim(); }
 function throwSystemic(error) {
@@ -1557,7 +1558,8 @@ function companyPriorityCandidate(candidate = {}) {
 }
 
 async function discoverCompanyPeople(companyContext, cache, stats, options = {}) {
-  const key = `${ranker.companyKey(companyContext.company)}|${ranker.hostname(companyContext.domain)}|${ranker.normalize(options.location || '')}`;
+  const policyKey = indiaPhoneFirstEnabled(options) ? INDIA_PHONE_POLICY_VERSION : 'general';
+  const key = `${policyKey}|${ranker.companyKey(companyContext.company)}|${ranker.hostname(companyContext.domain)}|${ranker.normalize(options.location || '')}`;
   if (cache.has(key)) { stats.candidateCacheHits++; runContext.cacheHit('discovery'); return cache.get(key); }
   const persisted = durableEnrichmentCache.get('candidate-discovery', key);
   if (persisted.hit) { stats.candidateCacheHits++; stats.persistentCandidateCacheHits = Number(stats.persistentCandidateCacheHits || 0) + 1; runContext.cacheHit('discovery'); cache.set(key, persisted.value || []); return persisted.value || []; }
@@ -2296,7 +2298,8 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     2,
     8,
   );
-  const key = `priority-fast-v3|${discoveryMode}|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
+  const policyKey = indiaPhoneFirstEnabled(options) ? INDIA_PHONE_POLICY_VERSION : 'general';
+  const key = `priority-fast-v4|${policyKey}|${discoveryMode}|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
   let initialDeepSeed = [];
   if (cache.has(key)) {
     stats.candidateCacheHits++;
@@ -2325,7 +2328,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   add(initialDeepSeed);
   let reusedSweep = false;
   if (!options.primarySweep) {
-    const sweepKey = `priority-fast-v3|sweep|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
+    const sweepKey = `priority-fast-v4|${policyKey}|sweep|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
     if (cache.has(sweepKey)) {
       add(cache.get(sweepKey) || []);
       reusedSweep = true;
