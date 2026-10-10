@@ -27,9 +27,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install Mark 3 dependencies
-        working-directory: mark3-development
-        run: npm ci
       - name: Syntax-check POC phone policy
         working-directory: mark3-development
         run: |
