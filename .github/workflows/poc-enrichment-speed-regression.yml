@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'mark3-development/core/universal-sheet-enrichment-operator.js'
+      - 'mark3-development/core/three-poc-enrichment-operator.js'
+      - 'mark3-development/scripts/three-poc-enrichment-selftest.js'
+      - 'mark3-development/scripts/three-poc-internal-inference-selftest.js'
       - 'mark3-development/scripts/poc-speed-mode-selftest.js'
       - 'mark3-development/package.json'
       - '.github/workflows/poc-enrichment-speed-regression.yml'
@@ -24,7 +27,13 @@ jobs:
           node-version: 20
       - name: Install Mark 3 dependencies
         run: npm install --ignore-scripts
-      - name: Syntax check POC operator
-        run: node --check core/universal-sheet-enrichment-operator.js
+      - name: Syntax check POC operators
+        run: |
+          node --check core/universal-sheet-enrichment-operator.js
+          node --check core/three-poc-enrichment-operator.js
       - name: Run POC speed regression
         run: npm run check:poc-speed
+      - name: Run 3-POC enrichment regressions
+        run: |
+          node --env-file=../.env scripts/three-poc-enrichment-selftest.js
+          node --env-file=../.env scripts/three-poc-internal-inference-selftest.js
