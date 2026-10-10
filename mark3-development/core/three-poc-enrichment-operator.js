@@ -1242,6 +1242,7 @@ async function enrichWorkbook(source, options = {}) {
 
             let selected = { ranking: [], model: null, provider: null };
             let selectorFailed = false;
+            const selectorStartedAt = Date.now();
             try {
               stats.omniRouteSelectorCalls++;
               selected = await selectorAgent(context, companyContext, reasoningCandidates, {
@@ -1256,7 +1257,9 @@ async function enrichWorkbook(source, options = {}) {
             } catch {
               selectorFailed = true;
             }
-            if (selectorFailed || !selected.ranking.length) stats.selectorEmptyOrFailedRows++;
+            recordStageLatency(stats, 'selector', selectorStartedAt);
+            recordStageLatency(stats, 'selector', selectorStartedAt);
+        if (selectorFailed || !selected.ranking.length) stats.selectorEmptyOrFailedRows++;
 
             let finalRanking = selected.ranking.slice(0, Math.max(openSlots.length * 3, 4));
             if (reviewerRequired(selected.ranking, openSlots.length)) {
@@ -1290,6 +1293,7 @@ async function enrichWorkbook(source, options = {}) {
                 const person = rankedPeople[rankedIndex++];
                 if (!person) continue;
                 stats.candidateHydrations++;
+                const hydrationStartedAt = Date.now();
                 try {
                   const enrichedPerson = await enrichSelectedPerson(person, {}, {
                     company: companyContext.company,
@@ -1307,6 +1311,8 @@ async function enrichWorkbook(source, options = {}) {
                 } catch {
                   stats.candidateHydrationFailures++;
                   stats.candidateHydrationFallbacks++;
+                } finally {
+                  recordStageLatency(stats, 'candidateHydration', hydrationStartedAt);
                 }
               }
             }
@@ -1314,7 +1320,9 @@ async function enrichWorkbook(source, options = {}) {
 
           const changes = anchoredRowChanges(sheet.sheetName, rowNumber, layout, anchor, slotPeople, lockedSlots, row);
           const counts = anchoredChangeCounts(changes, sheet.sheetName, rowNumber, layout);
+          const writeStartedAt = Date.now();
           const written = changes.length ? await writeSourceCells(source, changes) : { updatedCells: 0 };
+          recordStageLatency(stats, 'sheetWrite', writeStartedAt);
           const writtenPeople = [anchor, ...slotPeople.filter(Boolean)];
           stats.updatedCells += written.updatedCells || 0;
           stats.contactsWritten += slotPeople.filter(Boolean).length;
@@ -1377,6 +1385,7 @@ async function enrichWorkbook(source, options = {}) {
         const requestedSlotCount = explicitSlots.length;
         let selected = { ranking: [], model: null, provider: null };
         let selectorFailed = false;
+        const selectorStartedAt = Date.now();
         try {
           stats.omniRouteSelectorCalls++;
           selected = await selectorAgent(context, companyContext, reasoningCandidates, { count: requestedSlotCount });
@@ -1388,6 +1397,7 @@ async function enrichWorkbook(source, options = {}) {
         } catch {
           selectorFailed = true;
         }
+        recordStageLatency(stats, 'selector', selectorStartedAt);
         if (selectorFailed || !selected.ranking.length) stats.selectorEmptyOrFailedRows++;
 
         let finalRanking = selected.ranking.slice(0, 8);
@@ -1422,6 +1432,7 @@ async function enrichWorkbook(source, options = {}) {
         for (const person of people) {
           if (enriched.length >= requestedSlotCount) break;
           stats.candidateHydrations++;
+          const hydrationStartedAt = Date.now();
           try {
             const hydrated = await enrichSelectedPerson(person, {}, { company: companyContext.company, domain: companyContext.domain });
             if (!hasVerifiedPocIdentity(hydrated)) {
@@ -1433,6 +1444,8 @@ async function enrichWorkbook(source, options = {}) {
           } catch {
             stats.candidateHydrationFailures++;
             stats.candidateHydrationFallbacks++;
+          } finally {
+            recordStageLatency(stats, 'candidateHydration', hydrationStartedAt);
           }
         }
         if (!enriched.length) {
@@ -1440,7 +1453,9 @@ async function enrichWorkbook(source, options = {}) {
           continue;
         }
         const changes = rowChanges(sheet.sheetName, rowNumber, layout, enriched, row);
+        const writeStartedAt = Date.now();
         const written = await writeSourceCells(source, changes);
+        recordStageLatency(stats, 'sheetWrite', writeStartedAt);
         stats.updatedCells += written.updatedCells || 0;
         stats.contactsWritten += enriched.length;
         stats.emailsWritten += enriched.filter((person) => person.email).length;
