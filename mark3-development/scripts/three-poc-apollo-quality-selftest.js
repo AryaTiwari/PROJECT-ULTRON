@@ -80,7 +80,7 @@ assert.match(source, /resolvePersonByNameCompany = async function resultsFirstRe
 assert.match(source, /resolvePersonByBusinessEmail = async function resultsFirstResolvePersonByBusinessEmail/);
 assert.match(source, /resolvePersonProfile = async function resultsFirstResolvePersonProfile/);
 assert.match(source, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
-assert.match(source, /Native Apollo reveal \+ webhook settlement is the production default/);
+assert.match(source, /Native Apollo reveal with direct poll-only result settlement is the default/);
 assert.match(source, /function pendingPhoneWaterfallRequestId/);
 assert.match(source, /function carryLegacyPhoneRequest/);
 assert.match(source, /const pendingWasCarried = Boolean/);

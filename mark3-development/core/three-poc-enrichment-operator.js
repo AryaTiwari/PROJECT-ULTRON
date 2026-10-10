@@ -7,8 +7,10 @@ const googleSheets = require('./google-sheets-operator');
 const fileVault = require('./file-vault');
 const apollo = require('./apollo-enrichment');
 const modelRouter = require('./model-router');
+const phoneFirstPolicy = require('./three-poc-phone-first-policy');
 
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'three-poc-enrichment', 'jobs.json');
+const PHONE_POLICY_MODE = 'india-first-5-attempts';
 let watcherTimer = null;
 let watcherRemaining = 0;
 
@@ -405,6 +407,13 @@ function candidateView(person, index) {
     departments: person.departments || [],
     functions: person.functions || [],
     location: person.location || '',
+    country: person.country || '',
+    country_name: person.country_name || '',
+    city: person.city || '',
+    state: person.state || '',
+    phone: person.phone || person.phone_number || person.mobile_phone || '',
+    hasDirectPhone: person.hasDirectPhone ?? person.has_direct_phone ?? null,
+    directPhoneAvailability: person.directPhoneAvailability ?? null,
     linkedinUrl: person.linkedinUrl || '',
     organizationName: person.organizationName || '',
     organizationDomain: person.organizationDomain || '',
@@ -430,6 +439,9 @@ function localHiringScore(candidate, context = {}) {
   if (/sap/.test(hiringContext) && /sap/.test(combined)) score += 28;
   if (String(candidate?.seniority || '').match(/owner|founder|c[_-]?suite|vp|head|director|manager/i)) score += 12;
   if (title) score += 4;
+  // Phone-first policy dominates title-only ranking: verified +91 first,
+  // then India-located direct-dial candidates, then other callable contacts.
+  score += phoneFirstPolicy.phonePriority(candidate) * 100;
   return score;
 }
 
@@ -448,6 +460,11 @@ function preRankCandidates(candidates, context = {}, limit = 10) {
     seen.add(key);
     chosen.push(entry.candidate);
   };
+
+  // Keep contacts with a credible phone path at the front of the shortlist;
+  // otherwise category diversity can accidentally put a no-phone recruiter
+  // ahead of a verified +91 number or a direct-dial international fallback.
+  for (const entry of ranked.filter((item) => phoneFirstPolicy.phonePriority(item.candidate) >= 2)) add(entry);
 
   // Keep category diversity so OmniRoute still makes the contextual decision.
   const categoryPatterns = [
@@ -985,6 +1002,8 @@ async function enrichWorkbook(source, options = {}) {
 
   const job = {
     id: `three-poc-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+    phonePolicyVersion: phoneFirstPolicy.PHONE_FIRST_POLICY_VERSION,
+    phonePolicyMode: PHONE_POLICY_MODE,
     source,
     provider,
     requestedSheetName: String(options.sheetName || '').trim() || null,
@@ -1021,6 +1040,9 @@ async function enrichWorkbook(source, options = {}) {
     candidatesSeen: 0,
     candidateSearchCalls: 0,
     candidateSearchFallbacks: 0,
+    indiaPhoneSearchAttempts: 0,
+    verifiedIndianPhoneCandidates: 0,
+    internationalFallbackSearches: 0,
     candidatePoolCacheHits: 0,
     candidateHydrations: 0,
     candidateHydrationFailures: 0,
@@ -1072,37 +1094,23 @@ async function enrichWorkbook(source, options = {}) {
   ];
 
   const candidatePoolFor = async (companyContext) => {
-    const key = String(companyContext.domain || companyContext.company || '').trim().toLowerCase();
+    const key = `${phoneFirstPolicy.PHONE_FIRST_POLICY_VERSION}:${String(companyContext.domain || companyContext.company || '').trim().toLowerCase()}`;
     if (key && candidatePoolCache.has(key)) {
       stats.candidatePoolCacheHits++;
       return candidatePoolCache.get(key);
     }
-    stats.candidateSearchCalls++;
-    let pool = null;
-    try {
-      pool = await apollo.searchCompanyPeopleBroad({
-        company: companyContext.company,
-        domain: companyContext.domain,
-        limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
-        titles: hiringCandidateTitles,
-      });
-    } catch {
-      stats.candidateSearchFallbacks++;
-    }
-    // Smaller firms sometimes expose no HR/recruiting titles. Fall back to a broad
-    // employer search and let the selector reason from company/hiring context.
-    if (!pool || (pool.people || []).length < 2) {
-      if (pool) stats.candidateSearchFallbacks++;
-      pool = await apollo.searchCompanyPeopleBroad({
-        company: companyContext.company,
-        domain: companyContext.domain,
-        limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
-      });
-    }
+    const limit = Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40)));
+    const pool = await phoneFirstPolicy.discoverCandidates({
+      searchCompanyPeopleBroad: apollo.searchCompanyPeopleBroad,
+      company: companyContext.company,
+      domain: companyContext.domain,
+      limit,
+      hiringCandidateTitles,
+      stats,
+    });
     if (key) candidatePoolCache.set(key, pool);
     return pool;
   };
-
   for (const sheet of compatible) {
     const layout = sheet.layout;
     const requestedStart = Math.max(layout.headerRowIndex + 2, Number(options.startRowNumber || 0) || (layout.headerRowIndex + 2));
@@ -1480,6 +1488,11 @@ async function resumeCappedJob(options = {}) {
     error.code = 'THREE_POC_RESUME_CHECKPOINT_MISMATCH';
     throw error;
   }
+  if (previous.phonePolicyVersion !== phoneFirstPolicy.PHONE_FIRST_POLICY_VERSION || previous.phonePolicyMode !== PHONE_POLICY_MODE) {
+    const error = new Error('The saved POC mission uses a legacy or conflicting phone-selection policy. Resume is blocked to prevent stale policy results from bypassing India-first selection. Review the checkpoint and start a newly approved run.');
+    error.code = 'THREE_POC_RESUME_POLICY_MISMATCH';
+    throw error;
+  }
 
   const markCheckpoint = (status, patch = {}) => {
     const state = loadState();
@@ -1527,7 +1540,7 @@ function formatResult(result) {
   const anchored = result.anchoredRows
     ? ` Anchored-format rows: ${result.anchoredRows}; preserved ${result.preservedExistingPocSlots || 0} already-populated/unsafe-to-reassign POC slot${Number(result.preservedExistingPocSlots || 0) === 1 ? '' : 's'}; safely verified ${result.matchedExistingPocSlots || 0} existing POC identit${Number(result.matchedExistingPocSlots || 0) === 1 ? 'y' : 'ies'}; skipped ${result.skippedNonPersonAnchorRows || 0} company/unknown LinkedIn anchor row${Number(result.skippedNonPersonAnchorRows || 0) === 1 ? '' : 's'} without changing them.`
     : '';
-  const discovery = ` Candidate discovery: ${result.candidatesSeen || 0} usable Apollo ID candidates from ${result.candidateSearchCalls || 0} employer search call${Number(result.candidateSearchCalls || 0) === 1 ? '' : 's'} (${result.candidatePoolCacheHits || 0} employer-pool cache hits, ${result.candidateSearchFallbacks || 0} broad fallback searches); hydrated ${result.candidateHydrations || 0} selected candidate${Number(result.candidateHydrations || 0) === 1 ? '' : 's'} by exact Apollo ID, with ${result.candidateHydrationFailures || 0} hydration failure${Number(result.candidateHydrationFailures || 0) === 1 ? '' : 's'} and ${result.candidateHydrationFallbacks || 0} fallback attempt${Number(result.candidateHydrationFallbacks || 0) === 1 ? '' : 's'}; selector empty/failed rows ${result.selectorEmptyOrFailedRows || 0}, reviewer rescues ${result.reviewerRescuedRows || 0}. Heavy reasoning used OmniRoute-only: ${result.omniRouteSelectorCalls || 0} selector call${Number(result.omniRouteSelectorCalls || 0) === 1 ? '' : 's'}, ${result.omniRouteReviewerCalls || 0} reviewer call${Number(result.omniRouteReviewerCalls || 0) === 1 ? '' : 's'}, ${result.personalModelFallbacks || 0} personal-API fallback${Number(result.personalModelFallbacks || 0) === 1 ? '' : 's'}; ${result.locallyPrerankedCandidates || 0} locally pre-ranked candidate rows were sent in compact form. Existing-POC exact name+employer verification failures: ${result.existingPocVerificationFailures || 0}/${result.existingPocVerificationAttempts || 0}.`;
+  const discovery = ` Candidate discovery: ${result.candidatesSeen || 0} usable Apollo ID candidates from ${result.candidateSearchCalls || 0} employer search call${Number(result.candidateSearchCalls || 0) === 1 ? '' : 's'} (${result.candidatePoolCacheHits || 0} employer-pool cache hits, ${result.candidateSearchFallbacks || 0} failed/fallback searches); India-focused phone searches ${result.indiaPhoneSearchAttempts || 0}, verified +91 candidates ${result.verifiedIndianPhoneCandidates || 0}, international fallback searches ${result.internationalFallbackSearches || 0}; hydrated ${result.candidateHydrations || 0} selected candidate${Number(result.candidateHydrations || 0) === 1 ? '' : 's'} by exact Apollo ID, with ${result.candidateHydrationFailures || 0} hydration failure${Number(result.candidateHydrationFailures || 0) === 1 ? '' : 's'} and ${result.candidateHydrationFallbacks || 0} fallback attempt${Number(result.candidateHydrationFallbacks || 0) === 1 ? '' : 's'}; selector empty/failed rows ${result.selectorEmptyOrFailedRows || 0}, reviewer rescues ${result.reviewerRescuedRows || 0}. Heavy reasoning used OmniRoute-only: ${result.omniRouteSelectorCalls || 0} selector call${Number(result.omniRouteSelectorCalls || 0) === 1 ? '' : 's'}, ${result.omniRouteReviewerCalls || 0} reviewer call${Number(result.omniRouteReviewerCalls || 0) === 1 ? '' : 's'}, ${result.personalModelFallbacks || 0} personal-API fallback${Number(result.personalModelFallbacks || 0) === 1 ? '' : 's'}; ${result.locallyPrerankedCandidates || 0} locally pre-ranked candidate rows were sent in compact form. Existing-POC exact name+employer verification failures: ${result.existingPocVerificationFailures || 0}/${result.existingPocVerificationAttempts || 0}.`;
   const anchoredWrites = result.anchoredRows
     ? ` Actual anchored writes: POC-1 F/G = ${result.poc1PhonesWritten || 0} phone, ${result.poc1EmailsWritten || 0} email; POC-2 H/I/J = ${result.poc2NamesWritten || 0} name/designation, ${result.poc2PhonesWritten || 0} phone, ${result.poc2EmailsWritten || 0} email; POC-3 K/L/M = ${result.poc3NamesWritten || 0} name/designation, ${result.poc3PhonesWritten || 0} phone, ${result.poc3EmailsWritten || 0} email. Existing POC slots repaired/upgraded: ${result.existingPocSlotsRepaired || 0}.`
     : '';

@@ -1,0 +1,38 @@
+name: Three-POC Phone-First Policy Regression
+
+on:
+  pull_request:
+    paths:
+      - 'mark3-development/core/three-poc-phone-first-policy.js'
+      - 'mark3-development/core/three-poc-enrichment-operator.js'
+      - 'mark3-development/scripts/three-poc-phone-first-policy-selftest.js'
+      - 'mark3-development/package.json'
+      - '.github/workflows/three-poc-phone-first-policy.yml'
+  push:
+    branches:
+      - mark3-development
+      - fix/mark3-live-poc-gaps-pending-phones-20261001
+    paths:
+      - 'mark3-development/core/three-poc-phone-first-policy.js'
+      - 'mark3-development/core/three-poc-enrichment-operator.js'
+      - 'mark3-development/scripts/three-poc-phone-first-policy-selftest.js'
+      - 'mark3-development/package.json'
+      - '.github/workflows/three-poc-phone-first-policy.yml'
+
+jobs:
+  phone-first-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax-check POC phone policy
+        working-directory: mark3-development
+        run: |
+          node --check core/three-poc-phone-first-policy.js
+          node --check core/three-poc-enrichment-operator.js
+          node --check core/apollo-enrichment.js
+      - name: Run India-first phone policy regression
+        working-directory: mark3-development
+        run: npm run check:phone-first

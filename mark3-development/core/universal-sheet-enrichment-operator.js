@@ -29,6 +29,7 @@ const rowSelection = require('./universal-row-selection');
 const targetResolver = require('./universal-sheet-target-resolver');
 const indiaPolicy = require('./india-preference-policy');
 const personAnchorPolicy = require('./person-anchor-enrichment-policy');
+const INDIA_PHONE_POLICY_VERSION = 'india-phone-first-5-attempts-v1';
 
 function text(value) { return String(value ?? '').trim(); }
 function throwSystemic(error) {
@@ -44,6 +45,27 @@ function websiteDomain(value) { return ranker.hostname(value); }
 
 function candidateIndiaPriority(candidate = {}) {
   return indiaPolicy.personIndiaPriority(candidate);
+}
+
+function indiaPhoneFirstEnabled(options = {}) {
+  return options.indiaPhoneFirst !== false && options.requireIndianPhone === true;
+}
+
+function indiaFirstDecisionMakerTitles() {
+  return (apollo.COMPANY_DECISION_PRIORITY || [])
+    .filter((tier) => Number(tier?.priority || 99) >= 3)
+    .flatMap((tier) => Array.isArray(tier?.titles) ? tier.titles : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .filter((value, index, list) =>
+      list.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index
+    )
+    .slice(0, 30);
+}
+
+function hasIndianPhoneSignal(candidates = []) {
+  return (Array.isArray(candidates) ? candidates : [])
+    .some((candidate) => candidateIndiaPriority(candidate) >= 2);
 }
 
 const PHONE_ASSIGNMENTS_FILE = path.join(config.projectRoot, '.ultron', 'lead-enrichment', 'pending-phone-assignments.json');
@@ -200,6 +222,14 @@ const FREE_EMAIL_DOMAINS = new Set([
   'icloud.com','me.com','proton.me','protonmail.com','aol.com','rediffmail.com',
 ]);
 
+// Company Name cells may contain a second-line sector/category description
+// (e.g. "Crusoe\nAI compute"). Use the identity line for Apollo employer
+// matching while leaving the actual worksheet cell and evidence unchanged.
+function sheetCompanyIdentity(value) {
+  const lines = String(value ?? '').split(/\r?\n/).map((part) => part.trim()).filter(Boolean);
+  return lines[0] || '';
+}
+
 function cleanedCompanyEvidence(value) {
   return text(value)
     .replace(/^[\s:–—-]+|[\s:–—-]+$/g, '')
@@ -224,7 +254,11 @@ function firstBusinessEmailDomain(value) {
 }
 
 function inferHiringCompanyFromEvidence(plan, row = []) {
-  if (text(plan.context?.company)) return {company:text(plan.context.company),domain:websiteDomain(plan.context.website),source:'sheet-company',anchorPerson:null};
+  if (text(plan.context?.company)) return {
+    company: sheetCompanyIdentity(plan.context.company),
+    domain: websiteDomain(plan.context.website),
+    source: 'sheet-company', anchorPerson: null,
+  };
   const evidence = contextEvidenceText(plan);
   if (!evidence) return null;
 
@@ -344,7 +378,7 @@ function anchorNeedsHydration(plan = {}, evidence = {}, destinationGroup = null)
 
 function companyFromCompanyAnchor(anchor) {
   const values = anchor?.snapshot?.values || {};
-  const company = text(values.company || values.name);
+  const company = sheetCompanyIdentity(values.company || values.name);
   const domain = websiteDomain(values.website || '');
   return company ? {
     company,
@@ -358,12 +392,12 @@ function companyFromCompanyAnchor(anchor) {
 
 function nearestCompanyIdentity(plan) {
   const values = plan.anchor?.snapshot?.values || {};
-  if (values.company) return text(values.company);
+  if (values.company) return sheetCompanyIdentity(values.company);
   for (const item of plan.groups?.existing || []) {
-    const company = text(item.snapshot?.values?.company);
+    const company = sheetCompanyIdentity(item.snapshot?.values?.company);
     if (company) return company;
   }
-  return text(plan.context?.company || '');
+  return sheetCompanyIdentity(plan.context?.company || '');
 }
 
 async function resolvePersonAnchor(plan, row, options = {}) {
@@ -613,6 +647,23 @@ async function syncBackgroundEmailAssignments(){
   for(const source of sources.values()) await syncPendingEmailAssignments(source,[],freshStats(),{emailWaterfallSyncPolls:0});
 }
 
+// An individual Apollo people/match phone receipt must never be owned by
+// different Apollo persons. Old corrupted persisted receipts are preserved for
+// diagnosis, but cannot authorize staging a new POC or a contact-cell write.
+function phoneReceiptOwnershipConflict(requestId, personId, options = {}) {
+  const receipt = text(requestId);
+  const person = text(personId);
+  if (!receipt || !person) return false;
+  loadBackgroundPhoneAssignments();
+  return [
+    ...backgroundPhoneAssignments.values(),
+    ...(Array.isArray(options.pendingPhoneQueue) ? options.pendingPhoneQueue : []),
+  ].some((item) => item.phoneMode !== 'waterfall'
+    && text(item.phoneRequestId) === receipt
+    && text(item.apolloPersonId)
+    && text(item.apolloPersonId) !== person);
+}
+
 function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   // Every verified person passes this point, so capture paid pending email
   // waterfall ownership before phone-specific early returns.
@@ -625,9 +676,14 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   const phoneStatus = text(person?.phoneStatus);
   const phoneWaterfallRequestId = text(person?.phoneWaterfallRequestId);
   const phoneRequestId = text(person?.phoneRequestId);
-  const isNativePending = phoneStatus === 'pending';
+  // A person ID alone cannot be polled. Apollo must confirm a request ID;
+  // otherwise this becomes an immortal phantom pending phone lookup.
+  const isNativePending = phoneStatus === 'pending' && Boolean(phoneRequestId);
   const isWaterfallPending = phoneStatus === 'waterfall_pending' && Boolean(phoneWaterfallRequestId);
-  if (!apolloPersonId || text(person?.phone) || (!isNativePending && !isWaterfallPending)) return;
+  if (!apolloPersonId || text(person?.phone) || (!isNativePending && !isWaterfallPending)) return false;
+  if (isNativePending && phoneReceiptOwnershipConflict(phoneRequestId, apolloPersonId, options)) {
+    return false;
+  }
 
   const key = `${rowNumber}|${group.fields.phone.index}`;
   const item = {
@@ -647,6 +703,7 @@ function queuePendingPhone(options, rowNumber, group, snapshot, person) {
   const existingIndex = queue.findIndex((entry) => entry.key === key);
   if (existingIndex >= 0) queue[existingIndex] = item;
   else queue.push(item);
+  return true;
 }
 
 function phoneSyncPolls(options = {}) {
@@ -694,6 +751,21 @@ function pendingPhoneRowsForSource(spreadsheetId, sheetName) {
     .filter(Number.isInteger));
 }
 
+// Keep phone ownership group-specific: a pending POC-2 must not prevent POC-1
+// enrichment on the same company row, and must not be purchased a second time.
+function pendingPhoneTargetsForSource(spreadsheetId, sheetName) {
+  loadBackgroundPhoneAssignments();
+  return new Set([...backgroundPhoneAssignments.values()]
+    .filter((item) => item.spreadsheetId === spreadsheetId && item.sheetName === sheetName)
+    .filter((item) => Number.isInteger(Number(item.rowNumber)) && Number.isInteger(Number(item.groupOrdinal)))
+    // A receipt reused by multiple Apollo people is not a valid owned pending
+    // phone. Let an explicitly approved rerun repair that exact POC rather than
+    // freezing its missing phone forever; preserve the old record for audit.
+    .filter((item) => item.phoneMode === 'waterfall'
+      || !phoneReceiptOwnershipConflict(item.phoneRequestId, item.apolloPersonId))
+    .map((item) => contactabilityTargetKey(item.rowNumber, item.groupOrdinal)));
+}
+
 function registerBackgroundPhoneAssignments(source, items = []) {
   for (const item of items) {
     if (!item?.apolloPersonId) continue;
@@ -734,10 +806,15 @@ async function syncBackgroundPhoneAssignments() {
   const handledIds = new Set();
   const now = Date.now();
   const directBatchLimit = phoneDirectBatchLimit({ backgroundFirstPendingContacts: true }, items.length);
-  const directPollKeys = new Set(webhookItems
-    .filter(([, item]) => item.phoneRequestId && Number(item.nextDirectPollAt || 0) <= now)
-    .slice(0, directBatchLimit)
-    .map(([key]) => key));
+  // Poll-only native reveals are tracked by exact person-owned request IDs.
+  // Duplicated historical receipts (observed during the phone incident) must
+  // not monopolize the direct polling budget or yield another POC's number.
+  const uniquePollable = webhookItems.filter(([, item]) =>
+    item.phoneRequestId
+    && !phoneReceiptOwnershipConflict(item.phoneRequestId, item.apolloPersonId)
+    && Number(item.nextDirectPollAt || 0) <= now);
+  const directPollKeys = new Set([...new Map(uniquePollable.map(([key, item]) =>
+    [String(item.phoneRequestId), key])).values()].slice(0, directBatchLimit));
   let directQuotaLimited = false;
 
   for (const [key, item] of items) {
@@ -769,7 +846,7 @@ async function syncBackgroundPhoneAssignments() {
         terminal = true;
       } else if (item.phoneRequestId && directPollKeys.has(key) && !directQuotaLimited) {
         try {
-          const direct = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0 });
+          const direct = await apollo.pollWebhookResult(item.phoneRequestId, { polls: 0, expectedPersonId: item.apolloPersonId });
           phone = apollo.validPhone(direct?.phone);
           const directState = text(direct?.state);
           terminal = ['found', 'not_found'].includes(directState);
@@ -967,6 +1044,7 @@ async function syncPendingPhoneAssignments(source, queue = [], stats, options = 
         result: await apollo.pollWebhookResult(item.phoneRequestId, {
           polls: directPolls,
           maxWaitMs: waitMs,
+          expectedPersonId: item.apolloPersonId,
         }),
       })
     );
@@ -1249,6 +1327,15 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
 
     const needEmail = Boolean(group.fields.email && !apollo.validEmail(snapshot.values.email || ''));
     const needPhone = Boolean(group.fields.phone && !apollo.validPhone(snapshot.values.phone || ''));
+    const existingPhonePending = needPhone
+      && options.pendingPhoneTargets instanceof Set
+      && options.pendingPhoneTargets.has(contactabilityTargetKey(options.rowNumber, group.ordinal));
+    // A paid request already owns this exact row and POC. Do not reveal/replace
+    // the same phone again while its durable callback is still outstanding.
+    if (existingPhonePending && !needEmail && !needsEmbeddedDesignationRepair(item)) {
+      stats.existingPhoneAwaitingCallback = Number(stats.existingPhoneAwaitingCallback || 0) + 1;
+      continue;
+    }
     const verificationContext = existingPersonVerificationContext(item, companyContext);
     let resolved = null;
     let verificationPath = '';
@@ -1259,14 +1346,14 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
     try {
       if (snapshot.linkedinKind === 'linkedin_person') {
         verificationPath = 'exact-linkedin';
-        resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone });
+        resolved = await apollo.resolvePersonProfile(snapshot.values.linkedin, { needEmail, needPhone: needPhone && !existingPhonePending });
       } else if (snapshot.values.email && firstBusinessEmailDomain(snapshot.values.email)) {
         verificationPath = 'apollo-business-email';
         resolved = await apollo.resolvePersonByBusinessEmail(
           snapshot.values.email,
           verificationContext.company,
           verificationContext.domain,
-          { needEmail: true, needPhone },
+          { needEmail: true, needPhone: needPhone && !existingPhonePending },
         );
       } else if (snapshot.values.name && (verificationContext.company || verificationContext.domain)) {
         verificationPath = 'apollo-name-company';
@@ -1274,7 +1361,7 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
           existingContactSearchName(snapshot.values.name),
           verificationContext.company,
           verificationContext.domain,
-          { needEmail, needPhone },
+          { needEmail, needPhone: needPhone && !existingPhonePending },
         );
       }
     } catch (error) {
@@ -1306,12 +1393,30 @@ async function repairExistingGroups(row, plan, companyContext, stats, options = 
       }
     }
 
+    const newlyPendingPhone = directVerified && needPhone
+      && !apollo.validPhone(resolved?.phone || '')
+      && ['pending', 'waterfall_pending'].includes(text(resolved?.phoneStatus))
+      && Boolean(text(resolved?.apolloPersonId || resolved?.id))
+      && (text(resolved?.phoneStatus) === 'pending' || Boolean(text(resolved?.phoneWaterfallRequestId)));
+    if (newlyPendingPhone) {
+      // Register ownership before considering replacements. A verified, paid
+      // callback is an outstanding result, not evidence of phone exhaustion.
+      queuePendingPhone(options, Number(options.rowNumber), group, snapshot, resolved);
+    }
+
     // Contactability now outranks identity preservation for non-anchor POC slots.
     // If the existing person still has no actual usable phone, replace the WHOLE
     // POC group with a different verified same-company person from the shared
     // bounded phone-qualified shortlist. +91/email policy is inherited from
     // contactabilityTier(), and a distinct replacement is mandatory.
-    if (needPhone && !apollo.validPhone(resolved?.phone || '')) {
+    if (
+      options.allowVerifiedExistingPocReplacement === true
+      && needPhone && !existingPhonePending && !newlyPendingPhone
+      && !apollo.validPhone(resolved?.phone || '')
+    ) {
+      // Existing named contacts may have been manually entered by the owner.
+      // Replacement requires separate explicit permission, never ordinary
+      // "resume enrichment" or a provider failure. Complete records are untouched.
       const replacement = await selectContactableReplacement(item, plan, companyContext, stats, {
         ...options,
         row,
@@ -1453,7 +1558,8 @@ function companyPriorityCandidate(candidate = {}) {
 }
 
 async function discoverCompanyPeople(companyContext, cache, stats, options = {}) {
-  const key = `${ranker.companyKey(companyContext.company)}|${ranker.hostname(companyContext.domain)}|${ranker.normalize(options.location || '')}`;
+  const policyKey = indiaPhoneFirstEnabled(options) ? INDIA_PHONE_POLICY_VERSION : 'general';
+  const key = `${policyKey}|${ranker.companyKey(companyContext.company)}|${ranker.hostname(companyContext.domain)}|${ranker.normalize(options.location || '')}`;
   if (cache.has(key)) { stats.candidateCacheHits++; runContext.cacheHit('discovery'); return cache.get(key); }
   const persisted = durableEnrichmentCache.get('candidate-discovery', key);
   if (persisted.hit) { stats.candidateCacheHits++; stats.persistentCandidateCacheHits = Number(stats.persistentCandidateCacheHits || 0) + 1; runContext.cacheHit('discovery'); cache.set(key, persisted.value || []); return persisted.value || []; }
@@ -1742,6 +1848,10 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
   if (!queryBrand) return [];
 
   const personUrls = new Set();
+  const linkedinSearchLocation = text(options.location) || (options.indiaFirstSearch ? 'India' : '');
+  const linkedinPeopleKeywords = options.indiaFirstSearch
+    ? 'talent acquisition recruiter human resources HR TA associate coordinator executive recruitment associate recruitment coordinator'
+    : 'recruiter talent acquisition human resources HR founder director owner manager';
   const rowNumber = options.rowNumber !== null && options.rowNumber !== undefined && options.rowNumber !== ''
     && Number.isInteger(Number(options.rowNumber))
     ? Number(options.rowNumber)
@@ -1806,9 +1916,9 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
         if (personUrls.size >= 8) break;
         try {
           const constrained = await linkedinMcp.callTool('search_people', {
-            keywords: 'recruiter talent acquisition human resources HR founder director owner manager',
+            keywords: linkedinPeopleKeywords,
             current_company: urn,
-            ...(options.location ? { location: String(options.location) } : {}),
+            ...(linkedinSearchLocation ? { location: linkedinSearchLocation } : {}),
           });
           stats.linkedinFallbackCurrentCompanySearches = Number(stats.linkedinFallbackCurrentCompanySearches || 0) + 1;
           collectLinkedInPersonUrls(constrained, personUrls);
@@ -1827,7 +1937,7 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
     try {
       const employees = await linkedinMcp.callTool('get_company_employees', {
         company_name: slug,
-        keywords: 'recruiter talent acquisition human resources HR founder director owner manager',
+        keywords: linkedinPeopleKeywords,
       });
       stats.linkedinFallbackEmployeeSearches = Number(stats.linkedinFallbackEmployeeSearches || 0) + 1;
       collectLinkedInPersonUrls(employees, personUrls);
@@ -1850,17 +1960,23 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
 
   // Fallback when LinkedIn does not expose a company slug/people page.
   if (!personUrls.size) {
-    const queries = [
-      `${queryBrand} recruiter`,
-      `${queryBrand} talent acquisition human resources`,
-      `${queryBrand} founder director owner manager`,
-    ];
+    const queries = options.indiaFirstSearch
+      ? [
+          `${queryBrand} talent acquisition recruiter HR`,
+          `${queryBrand} talent acquisition associate coordinator recruitment`,
+          `${queryBrand} human resources recruiter`,
+        ]
+      : [
+          `${queryBrand} recruiter`,
+          `${queryBrand} talent acquisition human resources`,
+          `${queryBrand} founder director owner manager`,
+        ];
     for (const keywords of queries) {
       if (personUrls.size >= 8) break;
       try {
         const result = await linkedinMcp.callTool('search_people', {
           keywords,
-          ...(options.location ? { location: String(options.location) } : {}),
+          ...(linkedinSearchLocation ? { location: linkedinSearchLocation } : {}),
         });
         stats.linkedinFallbackSearches = Number(stats.linkedinFallbackSearches || 0) + 1;
         collectLinkedInPersonUrls(result, personUrls);
@@ -1891,7 +2007,12 @@ async function discoverLinkedInFallbackPeople(companyContext, stats, options = {
   for (const linkedinUrl of urls.slice(0, limit)) {
     const candidate = await verifyLinkedInCompanyEmployee(linkedinUrl, companyContext, stats);
     if (!candidate?.id || !candidate?.title) continue;
-    verified.push(candidate);
+    verified.push({
+      ...candidate,
+      ...(options.indiaFirstSearch
+        ? { location: linkedinSearchLocation || 'India', indiaSearchHint: true }
+        : {}),
+    });
   }
 
   stats.linkedinFallbackVerifiedCandidates = Number(stats.linkedinFallbackVerifiedCandidates || 0) + verified.length;
@@ -2177,13 +2298,14 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     2,
     8,
   );
-  const key = `priority-fast-v3|${discoveryMode}|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
+  const policyKey = indiaPhoneFirstEnabled(options) ? INDIA_PHONE_POLICY_VERSION : 'general';
+  const key = `priority-fast-v4|${policyKey}|${discoveryMode}|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
   let initialDeepSeed = [];
   if (cache.has(key)) {
     stats.candidateCacheHits++;
     runContext.cacheHit('discovery');
     const cached = cache.get(key) || [];
-    if (options.primarySweep || cached.length >= requiredPool) return cached;
+    if (options.primarySweep || (cached.length >= requiredPool && (!indiaFirst || hasIndianPhoneSignal(cached)))) return cached;
     initialDeepSeed = cached;
   }
   const persisted = durableEnrichmentCache.get('priority-candidate-discovery', key);
@@ -2193,7 +2315,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     runContext.cacheHit('discovery');
     const cached = persisted.value || [];
     cache.set(key, cached);
-    if (options.primarySweep || cached.length >= requiredPool) return cached;
+    if (options.primarySweep || (cached.length >= requiredPool && (!indiaFirst || hasIndianPhoneSignal(cached)))) return cached;
     initialDeepSeed = mergeCandidatePools(initialDeepSeed, cached);
   }
 
@@ -2206,7 +2328,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   add(initialDeepSeed);
   let reusedSweep = false;
   if (!options.primarySweep) {
-    const sweepKey = `priority-fast-v3|sweep|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
+    const sweepKey = `priority-fast-v4|${policyKey}|sweep|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
     if (cache.has(sweepKey)) {
       add(cache.get(sweepKey) || []);
       reusedSweep = true;
@@ -2226,6 +2348,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   const priorityLimit = integer(options.priorityCandidateLimit, 20, 6, 40);
   const broadLimit = integer(options.adaptiveBroadCandidateLimit, 30, 10, 50);
   const minimumUsefulPool = requiredPool;
+  const indiaFirst = indiaPhoneFirstEnabled(options);
 
   // Reuse exact Apollo profiles already verified elsewhere in this workbook or
   // an earlier run. This is especially useful when several rows belong to the
@@ -2258,6 +2381,39 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
         code: String(error?.code || 'APOLLO_PRIORITY_FAST_SEARCH_FAILED'),
         message: String(error?.message || error || '').slice(0, 300),
       });
+    }
+  }
+
+  // Strict India-first mode gets a dedicated lower-level HR/TA search even when
+  // Apollo already returned enough high-authority people. People Search is zero-credit,
+  // and this is explicitly about finding an Indian-phone-capable contact before any
+  // foreign-phone fallback is allowed.
+  if (!options.primarySweep && indiaFirst && !hasIndianPhoneSignal(merged)) {
+    const titles = indiaFirstDecisionMakerTitles();
+    if (titles.length) {
+      try {
+        const indiaPriority = await apollo.searchCompanyPeopleBroad({
+          company,
+          domain,
+          location: options.location || 'India',
+          limit: Math.max(priorityLimit, 30),
+          titles,
+        });
+        stats.candidateSearches++;
+        stats.candidatePrioritySearches++;
+        stats.indiaPrioritySearches = Number(stats.indiaPrioritySearches || 0) + 1;
+        const discovered = Array.isArray(indiaPriority?.people) ? indiaPriority.people : [];
+        stats.indiaFirstCandidatesDiscovered = Number(stats.indiaFirstCandidatesDiscovered || 0) + discovered.length;
+        add(discovered);
+      } catch (error) {
+        throwSystemic(error);
+        stats.indiaPrioritySearchFailures = Number(stats.indiaPrioritySearchFailures || 0) + 1;
+        stats.discoveryDiagnostics.push({
+          company: company || domain,
+          code: String(error?.code || 'APOLLO_INDIA_PRIORITY_SEARCH_FAILED'),
+          message: String(error?.message || error || '').slice(0, 300),
+        });
+      }
     }
   }
 
@@ -2361,7 +2517,42 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   }
 
   // 6. Authenticated LinkedIn is the final sparse-company identity fallback.
-  if (merged.length < minimumUsefulPool && linkedinZeroResultFallbackEnabled(options)) {
+  // Strict India-first mode may invoke this even when Apollo has a populated
+  // company pool, because a populated foreign-heavy pool is not proof that an
+  // Indian TA/HR contact does not exist.
+  let indiaLinkedInFallbackUsed = false;
+  if (!options.primarySweep && indiaFirst && !hasIndianPhoneSignal(merged) && linkedinZeroResultFallbackEnabled(options)) {
+    try {
+      const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, {
+        ...options,
+        indiaFirstSearch: true,
+        location: text(options.location) || 'India',
+      });
+      stats.indiaLinkedInFallbackRuns = Number(stats.indiaLinkedInFallbackRuns || 0) + 1;
+      indiaLinkedInFallbackUsed = true;
+      stats.indiaFirstCandidatesDiscovered = Number(stats.indiaFirstCandidatesDiscovered || 0) + linkedinPeople.length;
+      add(linkedinPeople);
+    } catch (error) {
+      stats.indiaLinkedInFallbackRuns = Number(stats.indiaLinkedInFallbackRuns || 0) + 1;
+      indiaLinkedInFallbackUsed = true;
+      throwSystemic(error);
+      const typed = typedFailureSummary(error, { stage: error?.stage || 'india-first-authenticated-linkedin' });
+      stats.discoveryDiagnostics.push({
+        rowNumber: options.rowNumber,
+        groupOrdinal: 2,
+        company: company || domain,
+        code: typed.code,
+        subsystem: typed.subsystem,
+        type: typed.type,
+        stage: typed.stage,
+        message: typed.message,
+        hint: typed.hint,
+      });
+      if (linkedinSafetyCapError(error)) throw error;
+    }
+  }
+
+  if (merged.length < minimumUsefulPool && !indiaLinkedInFallbackUsed && linkedinZeroResultFallbackEnabled(options)) {
     try {
       const linkedinPeople = await discoverLinkedInFallbackPeople(companyContext, stats, options);
       add(linkedinPeople);
@@ -2593,6 +2784,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       outcome = await pollNativePhone(person.phoneRequestId, {
         polls,
         maxWaitMs: waitMs,
+        expectedPersonId: apolloPersonId,
       });
     } else if (text(person.phoneWaterfallRequestId)) {
       const quality = require('./apollo-three-poc-quality');
@@ -2611,17 +2803,27 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
     if (callbackAfter) return recordResolved(callbackAfter);
 
     const state = text(outcome?.state).toLowerCase();
-    if (state === 'pending' || person.phoneStatus === 'pending' || person.phoneStatus === 'waterfall_pending') {
-      stats.candidatePhoneSettlementPending = Number(stats.candidatePhoneSettlementPending || 0) + 1;
-      return person;
-    }
-    if (['not_found', 'terminal', 'unavailable'].includes(state)) {
+    // A terminal/unknown/invalid result overrides the earlier synchronous
+    // "pending" match status. Previously the pending flag won this branch and
+    // ULTRON staged new POC names/emails for already-dead phone request IDs.
+    if (state === 'not_found') {
       stats.candidatePhoneSettlementNotFound = Number(stats.candidatePhoneSettlementNotFound || 0) + 1;
       return { ...person, phone: null, phoneStatus: 'not_found' };
     }
+    if (['terminal', 'unavailable', 'delivery_failed', 'owner_mismatch', 'owner_unverified', 'error'].includes(state)) {
+      stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
+      return { ...person, phone: null, phoneStatus: 'unavailable',
+        phoneSettlementFailure: state, phoneSettlementReason: text(outcome?.terminalReason) };
+    }
+    if (state === 'pending' || (!outcome
+      && ['pending','waterfall_pending'].includes(text(person.phoneStatus))
+      && (text(person.phoneRequestId) || text(person.phoneWaterfallRequestId)))) {
+      stats.candidatePhoneSettlementPending = Number(stats.candidatePhoneSettlementPending || 0) + 1;
+      return person;
+    }
 
     stats.candidatePhoneSettlementUnavailable = Number(stats.candidatePhoneSettlementUnavailable || 0) + 1;
-    return person;
+    return { ...person, phone: null, phoneStatus: 'unavailable' };
   } catch (error) {
     throwSystemic(error);
     stats.candidatePhoneSettlementErrors = Number(stats.candidatePhoneSettlementErrors || 0) + 1;
@@ -2692,18 +2894,29 @@ function preferredContactShortlist(candidates = [], plan = {}, companyContext = 
   const pragmaticPool = pragmaticSameEmployerCandidates(candidates, companyContext, existing);
   const pool = mergeCandidatePools(priorityPool, fallbackRanking, pragmaticPool);
 
-  // One bounded shortlist is shared across every POC slot. Eight candidates is
-  // broad enough to move past founders with unavailable phones into TA/HR,
-  // recruiters and other managers without scanning every company employee.
+  // One bounded shortlist is shared across every POC slot. In strict India-first
+  // mode, India-aware candidates receive reservation priority BEFORE foreign-phone
+  // candidates. This prevents a Head/Director with a foreign number from consuming
+  // the shortlist while a lower-level Indian TA/HR candidate never gets hydrated.
   const limit = phoneQualifiedCandidateLimit(options);
-  const phoneHinted = pool
-    .map((candidate, index) => ({
-      candidate,
-      index,
-      indiaPriority: candidateIndiaPriority(candidate),
-      phonePreference: Number(apollo.phoneAvailabilityPriority(candidate) || 0),
-      rolePriority: Number(apollo.decisionPriority(candidate.title || candidate.headline || '')),
-    }))
+  const indiaFirst = indiaPhoneFirstEnabled(options);
+  const annotated = pool.map((candidate, index) => ({
+    candidate,
+    index,
+    indiaPriority: candidateIndiaPriority(candidate),
+    phonePreference: Number(apollo.phoneAvailabilityPriority(candidate) || 0),
+    rolePriority: Number(apollo.decisionPriority(candidate.title || candidate.headline || '')),
+  }));
+  const indiaAware = annotated
+    .filter((item) => item.indiaPriority > 0)
+    .sort((a, b) =>
+      b.indiaPriority - a.indiaPriority
+      || b.phonePreference - a.phonePreference
+      || a.rolePriority - b.rolePriority
+      || a.index - b.index
+    )
+    .map((item) => item.candidate);
+  const phoneHinted = annotated
     .filter((item) => item.phonePreference > 0)
     .sort((a, b) => b.indiaPriority - a.indiaPriority
       || b.phonePreference - a.phonePreference
@@ -2713,7 +2926,10 @@ function preferredContactShortlist(candidates = [], plan = {}, companyContext = 
   const roleDiversity = [1, 2, 3, 4].flatMap((priority) =>
     pool.filter((candidate) => Number(apollo.decisionPriority(candidate.title || candidate.headline || '')) === priority).slice(0, 2)
   );
-  return mergeCandidatePools(phoneHinted, roleDiversity, pool).slice(0, limit);
+  const ordered = indiaFirst
+    ? mergeCandidatePools(indiaAware, phoneHinted, roleDiversity, pool)
+    : mergeCandidatePools(phoneHinted, roleDiversity, pool);
+  return ordered.slice(0, limit);
 }
 
 
@@ -2722,15 +2938,37 @@ function chooseContactabilityCandidate(entries = []) {
     ...entry,
     index: Number.isInteger(entry?.index) ? entry.index : index,
     tier: Number.isFinite(Number(entry?.tier))
-      ? Number(entry.tier)
+      ? Number(entry?.tier)
       : contactabilityTier(entry?.person || entry),
   }));
-  const qualified = normalized
-    .filter((entry) => entry.tier > 0)
-    .sort((a, b) => b.tier - a.tier || a.index - b.index);
-  return qualified[0] || null;
-}
+  const qualified = normalized.filter((entry) => entry.tier > 0);
+  if (!qualified.length) return null;
 
+  // Phase 1: keep the hardened India preference. A verified +91 result always
+  // wins over an international result, with email and decision-maker authority
+  // breaking ties inside the Indian-phone tier.
+  const indian = qualified
+    .filter((entry) => entry.tier >= 3)
+    .sort((a, b) =>
+      b.tier - a.tier
+      || apollo.decisionPriority(a.person?.title || a.person?.headline || '') - apollo.decisionPriority(b.person?.title || b.person?.headline || '')
+      || Number(Boolean(apollo.validEmail(b.person?.email || ''))) - Number(Boolean(apollo.validEmail(a.person?.email || '')))
+      || a.index - b.index
+    );
+  if (indian.length) return indian[0];
+
+  // Phase 2: if the bounded decision-maker search produced no Indian number,
+  // deliberately fall back to the previous behavior: choose the highest-
+  // authority POC with any verified usable phone, even when that phone is
+  // international. Do not let an India-location hint alone demote the top POC.
+  return qualified
+    .filter((entry) => entry.tier < 3)
+    .sort((a, b) =>
+      apollo.decisionPriority(a.person?.title || a.person?.headline || '') - apollo.decisionPriority(b.person?.title || b.person?.headline || '')
+      || Number(Boolean(apollo.validEmail(b.person?.email || ''))) - Number(Boolean(apollo.validEmail(a.person?.email || '')))
+      || a.index - b.index
+    )[0] || null;
+}
 async function selectContactableReplacement(item, plan, companyContext, stats, options = {}) {
   if (!item?.snapshot?.hasIdentity || item.isAnchor) return null;
   if (apollo.validPhone(item.snapshot?.values?.phone || '')) return null;
@@ -2926,9 +3164,17 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       };
       if (entry.tier > 0) checked.push(entry);
       else if (
-        ['pending', 'waterfall_pending'].includes(text(person.phoneStatus))
-        && text(person.apolloPersonId || person.id)
+        text(person.apolloPersonId || person.id)
         && writePlan.writes.length
+        && (
+          (text(person.phoneStatus) === 'pending'
+            && text(person.phoneRequestId)
+            && !phoneReceiptOwnershipConflict(
+              person.phoneRequestId, person.apolloPersonId || person.id, options
+            ))
+          || (text(person.phoneStatus) === 'waterfall_pending'
+            && text(person.phoneWaterfallRequestId))
+        )
       ) {
         // Apollo accepted this verified person's phone reveal but has not
         // settled it yet. Preserve one exact owner, not an anonymous callback.
@@ -2941,7 +3187,17 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     if (checked.some((entry) => entry.tier === 4)) break;
   }
 
-  const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
+  const indiaFirst = indiaPhoneFirstEnabled(options);
+  const indianChecked = checked.filter((entry) => entry.tier >= 3);
+  // During the results-first sweep, strict India-first mode never spends the
+  // international fallback early. Otherwise a foreign-number Head/Director can
+  // be written before the deep India-specific search has had a chance to find
+  // a lower-level +91 HR/TA contact.
+  const selected = indianChecked.length
+    ? chooseContactabilityCandidate(indianChecked)
+    : (indiaFirst && options.resultsFirstSweep
+      ? null
+      : (checked.length ? chooseContactabilityCandidate(checked) : null));
 
   if (!selected || selected.tier <= 0) {
     // All bounded immediate-phone alternatives were checked first. A verified
@@ -2949,13 +3205,17 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
     // no-phone candidate. Stage only the highest-ranked pending owner, plus
     // safely verified email, so the paid callback can settle the phone later.
     // This never invents a phone or replaces an existing different identity.
-    const pendingOwner = pendingChecked.sort((a, b) =>
+    const pendingPool = indiaFirst && options.resultsFirstSweep
+      ? pendingChecked.filter((entry) => candidateIndiaPriority(entry.person) > 0)
+      : pendingChecked;
+    const pendingOwner = pendingPool.sort((a, b) =>
       candidateIndiaPriority(b.person) - candidateIndiaPriority(a.person)
       || apollo.decisionPriority(a.person.title || '') - apollo.decisionPriority(b.person.title || '')
       || a.index - b.index
     )[0] || null;
-    if (pendingOwner) {
-      queuePendingPhone(options, Number(options.rowNumber), target.group, target.snapshot, pendingOwner.person);
+    if (pendingOwner && queuePendingPhone(
+      options, Number(options.rowNumber), target.group, target.snapshot, pendingOwner.person
+    )) {
       claimed.add(pendingOwner.rawKey);
       rememberCandidate(existing, pendingOwner.person);
       stats.pendingPocIdentityStaged = Number(stats.pendingPocIdentityStaged || 0) + 1;
@@ -3300,6 +3560,10 @@ function freshStats() {
     linkedinHydrationRecoveryAttempts: 0,
     linkedinHydrationRecoverySuccesses: 0,
     linkedinHydrationRecoveryFailures: 0,
+    indiaPrioritySearches: 0,
+    indiaPrioritySearchFailures: 0,
+    indiaFirstCandidatesDiscovered: 0,
+    indiaLinkedInFallbackRuns: 0,
     postHydrationDuplicates: 0,
     discoveryDiagnostics: [],
     pendingPhoneRequests: 0,
@@ -3587,7 +3851,10 @@ async function run(request = {}, options = {}) {
   const cache = options.discoveryCache instanceof Map ? options.discoveryCache : new Map();
   const pendingPhoneQueue = [];
   const pendingEmailQueue = emailStore.forSource(source);
-  const runOptions = { ...options, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue };
+  const runOptions = {
+    ...options, discoveryCache: cache, pendingPhoneQueue, pendingEmailQueue,
+    pendingPhoneTargets: pendingPhoneTargetsForSource(source.spreadsheetId, source.sheetName),
+  };
   const targetRows = Array.isArray(options.targetRows)
     ? new Set(options.targetRows.map((value) => Number(value)).filter(Number.isInteger))
     : null;
@@ -4123,8 +4390,8 @@ function formatResult(result) {
     status,
     `Schema: header row ${schema.headerRowNumber || '?'}, ${groups} POC group${groups === 1 ? '' : 's'}, ${companies} company group${companies === 1 ? '' : 's'}, confidence ${Number(schema.confidence || 0).toFixed(2)}.`,
     `Progress: processed ${Number(s.rowsProcessed || 0)}/${Number(s.rowsSeen || 0)} rows; changed ${Number(s.cellsChanged || 0)} cells across ${Number(s.rowsChanged || 0)} rows; selected ${Number(s.newPeopleSelected || 0)} phone-qualified new people; repaired ${Number(s.existingGroupsRepaired || 0)} existing POCs.`,
-    `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations. Verified new owners staged pending phone: ${Number(s.pendingPocIdentityStaged || 0)}. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
-    `LinkedIn fallback: ${Number(s.linkedinFallbackCompanyProfiles || 0)} company profiles, ${Number(s.linkedinFallbackCompanyUrns || 0)} company URNs, ${Number(s.linkedinFallbackProfilesFound || 0)} profile refs, ${Number(s.linkedinFallbackVerifiedCandidates || 0)} Apollo-verified candidates.`,
+    `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations; India-first escalation ${Number(s.indiaPrioritySearches || 0)} searches/${Number(s.indiaPrioritySearchFailures || 0)} failures, ${Number(s.indiaFirstCandidatesDiscovered || 0)} extra candidates. Verified new owners staged pending phone: ${Number(s.pendingPocIdentityStaged || 0)}. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
+    `LinkedIn fallback: ${Number(s.linkedinFallbackCompanyProfiles || 0)} company profiles, ${Number(s.linkedinFallbackCompanyUrns || 0)} company URNs, ${Number(s.linkedinFallbackProfilesFound || 0)} profile refs, ${Number(s.linkedinFallbackVerifiedCandidates || 0)} Apollo-verified candidates; India-first LinkedIn runs ${Number(s.indiaLinkedInFallbackRuns || 0)}.`,
     `Results-first: ${deferred.count} rows deferred from the fast sweep; deterministic recheck ${s.deterministicRecheckAttempted ? 'ran' : 'not needed'}.`,
     issueParts.length ? `Remaining: ${issueParts.join('; ')}.` : 'Remaining: no bounded deterministic blockers recorded.',
     `Final-POC contact waterfall: phone ${Number(contactQuality.phoneWaterfallStarted || 0)} started, ${Number(contactQuality.phoneWaterfallSucceeded || 0)} found, ${Number(contactQuality.phoneWaterfallPending || 0)} pending; email ${Number(contactQuality.waterfallStarted || 0)} started, ${Number(contactQuality.waterfallSucceeded || 0)} found, ${Number(contactQuality.waterfallPending || 0)} pending.`,
@@ -4140,6 +4407,7 @@ module.exports = {
   foldedSheetTitle,
   selectUniversalSheetTargets,
   companyFromCompanyAnchor,
+  sheetCompanyIdentity,
   inferHiringCompanyFromEvidence,
   preferredHiringCompanyContext,
   anchorNameTokens,
@@ -4165,13 +4433,18 @@ module.exports = {
   syncPendingEmailAssignments,
   syncBackgroundEmailAssignments,
   queuePendingPhone,
+  phoneReceiptOwnershipConflict,
   registerBackgroundPhoneAssignments,
   syncBackgroundPhoneAssignments,
   startBackgroundPhoneWatcher,
   loadBackgroundPhoneAssignments,
   persistBackgroundPhoneAssignments,
   pendingPhoneRowsForSource,
+  pendingPhoneTargetsForSource,
   candidateIndiaPriority,
+  indiaPhoneFirstEnabled,
+  indiaFirstDecisionMakerTitles,
+  hasIndianPhoneSignal,
   backgroundPhoneStatus,
   syncPendingPhoneAssignments,
   repairExistingGroups,

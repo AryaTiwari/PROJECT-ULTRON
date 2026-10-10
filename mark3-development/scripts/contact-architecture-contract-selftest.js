@@ -29,6 +29,21 @@ const bannedTestContracts = [
     needle: 'final verified POCs use one bounded poll-only phone waterfall instead of duplicate native+waterfall spend',
     reason: 'old poll-only phone architecture',
   },
+  // Cross-suite contract migration guard. Startup imports many selftests
+  // indirectly; catch retired phone-delivery assertions in ALL selftests
+  // rather than discovering one after another during npm start.
+  {
+    needle: 'Apollo native phone reveal with webhook settlement as the production default',
+    reason: 'webhook is no longer native Apollo phone delivery default',
+  },
+  {
+    needle: 'webhook settlement is the production default',
+    reason: 'legacy native-webhook-first claim; native Apollo poll-only is the default',
+  },
+  {
+    needle: 'custom poll_only phone waterfall is experimental',
+    reason: 'retired exact prose; native poll_only is production while the custom legacy waterfall remains opt-in',
+  },
   {
     needle: "run_waterfall_phone', 'true'",
     reason: 'custom phone waterfall must not be asserted as the production default',
@@ -75,7 +90,7 @@ const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'u
 const humanErrorTest = fs.readFileSync(path.join(__dirname, 'human-error-vocabulary-selftest.js'), 'utf8');
 
 assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
-assert.match(quality, /Native Apollo reveal \+ webhook settlement is the production default/);
+assert.match(quality, /Native Apollo reveal with direct poll-only result settlement is the default/);
 assert.match(quality, /resultsFirstResolveDecisionMaker/);
 assert.match(quality, /resultsFirstResolvePersonProfile/);
 assert.match(quality, /carryLegacyPhoneRequest/);
@@ -102,8 +117,13 @@ assert.match(control, /Universal spreadsheet approval re-entry stopped safely/);
 assert.match(apolloFetch, /APOLLO_NETWORK_FETCH_FAILED/);
 assert.match(rescue, /candidateFillTargets\(plan\)/);
 assert.match(diagnostics, /POC3_REQUESTED_UNRESOLVED/);
-assert.match(spreadsheetController, /Apollo native phone reveal with webhook settlement as the production default/);
-assert.match(spreadsheetController, /custom poll_only phone waterfall is experimental\/legacy-only/);
+// Validate actual transport/opt-in behavior, never mutable user-facing prose.
+assert.match(quality, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/,
+  'legacy custom waterfall is disabled by default');
+assert.match(apollo, /ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only'/,
+  'native Apollo direct polling must remain the production delivery default');
+assert.match(apollo, /url\.searchParams\.set\('poll_only', 'true'\)/,
+  'the native phone request must use Apollo polling when webhook mode is not selected');
 
 assert.match(errorVocabulary, /function humanTitleFor/);
 assert.match(errorVocabulary, /if \(t === 'RATE_LIMIT'\) return \`\$\{label\} rate limit reached\`/);

@@ -100,13 +100,25 @@ assert.equal(
   'phone waterfall parser must also accept direct person phone_numbers',
 );
 
+const idlessQueue = [];
+operator.queuePendingPhone(
+  { pendingPhoneQueue: idlessQueue },
+  7,
+  existing.group,
+  existing.snapshot,
+  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending', phone: '' },
+);
+assert.equal(idlessQueue.length, 0,
+  'a person ID without an authentic phone request ID must not become a phantom pending callback');
+
 const queue = [];
 operator.queuePendingPhone(
   { pendingPhoneQueue: queue },
   7,
   existing.group,
   existing.snapshot,
-  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending', phone: '' },
+  { id: 'apollo-hemanth', name: 'Hemanth Raj',
+    phoneStatus: 'pending', phoneRequestId: '1039995589705121974', phone: '' },
 );
 assert.equal(queue.length, 1, 'verified Apollo person with pending phone must enter end-of-run phone sync');
 assert.equal(queue[0].rowNumber, 7);
@@ -130,6 +142,20 @@ operator.queuePendingPhone(
 assert.equal(directQueue.length, 1, 'native Apollo pending phone with request_id must be owned by the exact sheet cell');
 assert.equal(directQueue[0].phoneMode, 'native');
 assert.equal(directQueue[0].phoneRequestId, '1039995589705121975');
+
+// A reused individual people/match receipt cannot own two different POCs.
+assert.equal(operator.phoneReceiptOwnershipConflict(
+  '1039995589705121975', 'another-apollo-person', {pendingPhoneQueue:directQueue}
+), true, 'different Apollo people cannot share one paid native reveal receipt');
+const collisionQueue = [...directQueue];
+const duplicateAccepted = operator.queuePendingPhone(
+  {pendingPhoneQueue:collisionQueue}, 10, existing.group, existing.snapshot,
+  {id:'another-apollo-person',name:'Different Verified Person',
+   phoneStatus:'pending',phoneRequestId:'1039995589705121975',phone:''}
+);
+assert.equal(duplicateAccepted,false,'reject a phone receipt already owned by another person');
+assert.equal(collisionQueue.length,1,'do not stage a second owner for a duplicate receipt');
+
 
 const waterfallQueue = [];
 operator.queuePendingPhone(
@@ -155,7 +181,8 @@ operator.queuePendingPhone(
   7,
   existing.group,
   existing.snapshot,
-  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending', phone: '' },
+  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending',
+    phoneRequestId: '1039995589705121974', phone: '' },
 );
 assert.equal(queue.length, 1, 'same person/cell phone request must not be queued twice');
 
@@ -165,7 +192,8 @@ operator.queuePendingPhone(
   7,
   existing.group,
   completedSnapshot,
-  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending', phone: '' },
+  { id: 'apollo-hemanth', name: 'Hemanth Raj', phoneStatus: 'pending',
+    phoneRequestId: '1039995589705121974', phone: '' },
 );
 assert.equal(queue.length, 1, 'already-populated phone cell must never be queued for overwrite');
 
@@ -202,13 +230,14 @@ assert.match(operatorSource, /persistBackgroundPhoneAssignments/);
 assert.match(operatorSource, /loadBackgroundPhoneAssignments/);
 assert.match(operatorSource, /resumedPhoneAssignments/);
 
-// Native Apollo reveal/webhook is the production phone path. The custom
-// poll-only phone waterfall is retained only as an explicit experimental/legacy
-// compatibility path so already-paid request IDs remain resumable.
+// Assert executable delivery semantics, not a mutable explanatory sentence.
+// Native Apollo direct poll-only is the default. The separate custom phone
+// waterfall remains opt-in and previously paid receipts stay resumable.
 assert.match(apolloSource, /run_waterfall_phone', 'false'/);
 assert.match(apolloSource, /reveal_phone_number', needPhone \? 'true' : 'false'/);
+assert.match(apolloSource, /ULTRON_M3_APOLLO_PHONE_DELIVERY_MODE', 'poll_only'/);
+assert.match(apolloSource, /url\.searchParams\.set\('poll_only', 'true'\)/);
 assert.match(contactQualitySource, /ULTRON_M3_THREE_POC_PHONE_WATERFALL_EXPERIMENTAL', '0'/);
-assert.match(contactQualitySource, /Native Apollo reveal \+ webhook settlement is the production default/);
 assert.match(contactQualitySource, /async function improveVerifiedPhone/);
 assert.match(contactQualitySource, /async function pollPhoneRequest/);
 assert.match(contactQualitySource, /function pendingPhoneWaterfallRequestId/);
@@ -269,22 +298,37 @@ sheets.batchValues=async(id,ranges)=>Promise.all(ranges.map(range=>sheets.values
     assert.equal(
       apollo.pendingPhoneRequestFresh({
         phoneStatus: 'pending',
+        phoneRequestId: '1039995589705121974',
         phoneRequestedAt: new Date().toISOString(),
       }),
       true,
-      'fresh Apollo pending phone request should be reused briefly',
+      'valid pending phone receipt remains reusable without repurchasing',
     );
     assert.equal(
       apollo.pendingPhoneRequestFresh({
         phoneStatus: 'pending',
-        phoneRequestedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+        phoneRequestedAt: new Date().toISOString(),
       }),
       false,
-      'stale Apollo pending phone request must become eligible for reveal retry',
+      'fresh timestamp without a paid reveal receipt cannot certify a pending phone',
+    );
+    assert.equal(
+      apollo.pendingPhoneRequestFresh({
+        phoneStatus: 'pending',
+        phoneRequestId: '1039995589705121974',
+        phoneRequestedAt: new Date(Date.now() - 31 * 86400000).toISOString(),
+      }),
+      false,
+      'expired Apollo receipt is not reusable and must not be silently repurchased',
     );
     apollo.fetchPhoneResults = async () => [{ apollo_person_id: 'apollo-hemanth', phone: '+919876543210' }];
-    apollo.pollWebhookResult = async (requestId) => {
+    apollo.pollWebhookResult = async (requestId, options) => {
+      if (requestId === '1039995589705121974') {
+        assert.equal(options.expectedPersonId, 'apollo-hemanth');
+        return { state: 'pending', phone: null };
+      }
       assert.equal(requestId, '1039995589705121975');
+      assert.equal(options.expectedPersonId, 'apollo-direct');
       return { state: 'found', phone: '+919123456789' };
     };
     apollo.recordPhoneResult = () => ['https://www.linkedin.com/in/hemanth-test'];

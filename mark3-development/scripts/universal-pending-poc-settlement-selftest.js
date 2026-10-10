@@ -69,6 +69,41 @@ const context = require('../core/universal-run-context');
     assert.equal(terminalQueue.length,0);
     assert.equal(terminal.reason,'contactability-top3-exhausted');
 
+    // Apollo's terminal request_id_unknown MUST override an earlier "pending"
+    // match response. This was silently staging dozens of names and emails
+    // without any recoverable mobile number.
+    apollo.resolveDecisionMaker=async()=>({...nativePending});
+    const deadPollStats=operator.freshStats();
+    const deadResult=await operator.settleVerifiedPhoneForSelection(
+      {...nativePending},deadPollStats,{
+        ...options([]),
+        pollNativePhone:async()=>({state:'terminal',terminalReason:'request_id_unknown'}),
+      }
+    );
+    assert.equal(deadResult.phoneStatus,'unavailable','expired/unknown receipt is NOT still pending');
+    assert.equal(deadResult.phoneSettlementReason,'request_id_unknown');
+    const deadQueue=[];
+    const deadStaging=await operator.fillManualPriorityGroup(
+      row,plan,companyContext,[candidate],operator.freshStats(),{
+        ...options(deadQueue),
+        pollNativePhone:async()=>({state:'terminal',terminalReason:'request_id_unknown'}),
+      }
+    );
+    assert.equal(deadStaging.writes.length,0,'never write new POC name/email for terminal phone receipt');
+    assert.equal(deadQueue.length,0);
+
+    // An individual native receipt already owned by a different Apollo person
+    // cannot stage a second contact even when its synchronous status says pending.
+    const collidedQueue=[{
+      key:'5|8',rowNumber:5,columnIndex:8,phoneMode:'native',
+      apolloPersonId:'different-person',phoneRequestId:'fixture-phone-request-1',
+    }];
+    const collided=await operator.fillManualPriorityGroup(
+      row,plan,companyContext,[candidate],operator.freshStats(),options(collidedQueue)
+    );
+    assert.equal(collided.writes.length,0,'shared receipt must not manufacture a second POC identity');
+    assert.equal(collidedQueue.length,1,'preserve the original disputed receipt unchanged');
+
     // Concurrent phone settlements must not re-fetch the same /results snapshot
     // once for every candidate. A requested fresh read remains possible.
     await context.run({},async()=>{
@@ -80,6 +115,72 @@ const context = require('../core/universal-run-context');
       await operator.readSharedPhoneResults(read,{forceFresh:true});
       assert.equal(requests,2,'later fresh callback reads must remain possible');
     });
+
+    // Existing named POC-2 already has an owned, pending paid phone reveal.
+    // Contact repair must not purchase the same phone or replace the person.
+    const namedPoc2 = {
+      group: { id: 'poc-2', ordinal: 2, kind: 'person', fields: {
+        name: {index:6,header:'2nd POC'},
+        email: {index:7,header:'Email'},
+        phone: {index:8,header:'Phone'},
+      }},
+      isAnchor: false,
+      snapshot: { empty:false, hasIdentity:true, values: {
+        name:'Existing Recruiter — Talent Acquisition Head',
+        email:'existing@example.in', phone:'', linkedin:'',
+      }},
+    };
+    const originalByName = apollo.resolvePersonByNameCompany;
+    const originalByEmail = apollo.resolvePersonByBusinessEmail;
+    apollo.resolvePersonByNameCompany = async () => {
+      throw new Error('Already-pending phone must not trigger another Apollo lookup');
+    };
+    try {
+      const awaitingStats = operator.freshStats();
+      const awaitingWrites = await operator.repairExistingGroups(
+        ['Example India Hiring','Tech','', '', '', '',namedPoc2.snapshot.values.name,
+          namedPoc2.snapshot.values.email,''],
+        { groups: { partial:[namedPoc2], existing:[namedPoc2] } },
+        {company:'Example India Hiring',domain:''},
+        awaitingStats,
+        {rowNumber:2,pendingPhoneTargets:new Set(['2:2'])}
+      );
+      assert.deepEqual(awaitingWrites, [], 'pending POC must remain unchanged');
+      assert.equal(awaitingStats.existingPhoneAwaitingCallback, 1);
+
+      // Even without pending callback state, an exact existing/manual identity
+      // is immutable by default. A missing phone cannot authorize swapping it.
+      let exactChecks = 0;
+      const exactVerifiedExisting = async () => {
+        exactChecks++;
+        return { identityVerified:true, noMatch:false, ambiguous:false,
+          name:'Existing Recruiter', title:'Talent Acquisition Head',
+          organizationName:'Example India Hiring',
+          email:'existing@example.in', phone:null, phoneStatus:'not_found' };
+      };
+      // A populated work email legitimately selects this route before the
+      // name+company fallback. Mock BOTH paths so CI never uses real Apollo.
+      apollo.resolvePersonByNameCompany = exactVerifiedExisting;
+      apollo.resolvePersonByBusinessEmail = exactVerifiedExisting;
+      const protectedStats = operator.freshStats();
+      const protectedWrites = await operator.repairExistingGroups(
+        ['Example India Hiring','Tech','','','','',namedPoc2.snapshot.values.name,
+          namedPoc2.snapshot.values.email,''],
+        {groups:{partial:[namedPoc2],existing:[namedPoc2]}},
+        {company:'Example India Hiring',domain:''},protectedStats,
+        {rowNumber:2,candidatePool:[{
+          id:'different',name:'Different Recruiter',title:'HR Director',
+          phone:'+919999999999',organizationName:'Example India Hiring',
+        }],allowVerifiedExistingPocReplacement:false}
+      );
+      assert.equal(exactChecks,1,'only the exact existing identity may be checked');
+      assert.ok(!protectedWrites.some((write)=>write.field==='name' || write.field==='phone'),
+        'do not overwrite an existing manually entered POC with another candidate');
+      assert.equal(protectedStats.existingGroupsReplaced || 0,0);
+    } finally {
+      apollo.resolvePersonByNameCompany = originalByName;
+      apollo.resolvePersonByBusinessEmail = originalByEmail;
+    }
 
     console.log('Pending POC settlement regression passed: staged verified owner + email, exact durable callback coordinates, no fabricated phone, terminal no-phone rejection, and one shared callback read across 20 candidates.');
   } finally {

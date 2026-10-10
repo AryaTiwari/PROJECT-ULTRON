@@ -12,6 +12,7 @@ const fallbackPass = require('./universal-big-pickle-fallback-pass');
 const fallback = require('./universal-big-pickle-fallback');
 const aiBatchRescue = require('./universal-ai-batch-rescue');
 const engine = require('./universal-enrichment-engine');
+const planner = require('./universal-enrichment-planner');
 const typedErrors = require('./spreadsheet-enrichment-errors');
 const diagnostics = require('./universal-enrichment-diagnostics');
 const apollo = require('./apollo-enrichment');
@@ -600,6 +601,28 @@ function mergePocPhaseResults(results = []) {
   };
 }
 
+// The fast sweep's leftover queue is diagnostic evidence, not an authoritative
+// worklist. Some empty POC-1 groups have no queued event even though D:F is blank.
+// Re-evaluate the *live* sheet after each phase so every requested ordinal is
+// eligible for its deep revision, independently of the other POC's progress.
+function livePocGapRows(rowPlans = [], schema = {}, ordinal, options = {}, pendingTargets = new Set()) {
+  const group = (schema?.personGroups || []).find((item) => Number(item?.ordinal || 0) === Number(ordinal));
+  if (!group) return [];
+  return (rowPlans || []).filter((record) => {
+    const rowNumber = Number(record?.rowNumber);
+    if (!rowMatchesTargetSelection(options, rowNumber)) return false;
+    const snapshot = planner.groupSnapshot(record.row, group);
+    const missingIdentity = !snapshot.hasIdentity;
+    const missingEmail = Boolean(group.fields.email && !text(snapshot.values.email));
+    const missingPhone = Boolean(group.fields.phone && !text(snapshot.values.phone));
+    if (!missingIdentity && !missingPhone && !missingEmail) return false;
+    // An exact pending phone owns the PHONE request, not all gaps in that POC.
+    // Permit verification/fill of a missing email without buying the phone again.
+    if (!missingIdentity && !missingEmail && pendingTargets.has(`${rowNumber}:${ordinal}`)) return false;
+    return true;
+  }).map((record) => Number(record.rowNumber)).sort((a, b) => a - b);
+}
+
 async function runPocPhasePipeline(request, runOptions = {}) {
   if (runOptions.dryRun || runOptions.pocPhasePipeline === false || runOptions.contactPhaseOrdinal) {
     return base.run(request, runOptions);
@@ -646,7 +669,20 @@ async function runPocPhasePipeline(request, runOptions = {}) {
     // then unresolved POC-2. Each pass re-reads the live sheet and reuses the
     // shared discovery/hydration cache created by the fast pass.
     for (const ordinal of ordinals) {
-      const targetRows = unresolvedRowsFor(fast, ordinal);
+      const liveSource = await base.readUniversalSheet(request.sheetUrl || request.url, {
+        ...runOptions,
+        sheetName: request.sheetName || runOptions.sheetName,
+        sheetId: request.sheetId ?? runOptions.sheetId ?? null,
+        explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative || runOptions.explicitNameAuthoritative),
+      });
+      const liveAnalysis = engine.analyzeSheet(liveSource.rows, {
+        rowLimit: runOptions.rowLimit,
+        schema: runOptions.schema,
+      });
+      const pendingTargets = base.pendingPhoneTargetsForSource(liveSource.spreadsheetId, liveSource.sheetName);
+      const targetRows = livePocGapRows(
+        liveAnalysis.rowPlans, liveSource.schema, ordinal, runOptions, pendingTargets
+      );
       if (!targetRows.length) continue;
       const deep = await timed(`deep-poc-${ordinal}`, targetRows, () => base.run(request, {
         ...runOptions,
@@ -1196,6 +1232,7 @@ module.exports = {
   mergePrimaryAndFallback,
   providerRetryReasonsFromPrimary,
   mergePocPhaseResults,
+  livePocGapRows,
   runPocPhasePipeline,
   mergePrimaryAndAiRescue,
 };
