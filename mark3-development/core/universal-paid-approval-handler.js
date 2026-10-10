@@ -14,6 +14,8 @@ const enrichmentMissions = require('./universal-enrichment-mission-store');
 const enrichmentRecovery = require('./universal-enrichment-recovery');
 const providerCircuits = require('./universal-provider-circuit-breaker');
 const targetResolver = require('./universal-sheet-target-resolver');
+const writeScopeCompiler = require('./universal-enrichment-write-scope');
+const phoneFirstPolicy = require('./universal-phone-first-policy');
 
 const OPERATION = 'universal-spreadsheet-enrichment';
 const EXECUTION_CONTRACT = 'universal-coordinated-multi-poc-v4';
@@ -111,6 +113,100 @@ function publicEnrichmentResult(result = {}) {
       haltAtRow: s.haltAtRow || null,
     },
   };
+}
+
+function writeScopeContract(scope = {}) {
+  return {
+    requestedOrdinals: Array.isArray(scope.requestedOrdinals) ? scope.requestedOrdinals : [],
+    requestedFields: Array.isArray(scope.requestedFields) ? scope.requestedFields : [],
+    ignoredFields: Array.isArray(scope.ignoredFields) ? scope.ignoredFields : [],
+  };
+}
+
+function refreshWriteScope(priorScope = {}, schema = {}) {
+  const contract = writeScopeContract(priorScope);
+  const writeScope = writeScopeCompiler.compileContract(contract, schema);
+  return {
+    writeScope,
+    unmappedTargets: writeScopeCompiler.unmappedRequestedTargets(writeScope, schema),
+  };
+}
+
+async function refreshApprovalAfterSchemaDrift(decision, payload, canonicalTarget) {
+  const schemaOptions = payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {};
+  const targetRequest = {
+    sheetUrl: payload.url,
+    sheetName: canonicalTarget.sheetName,
+    sheetId: canonicalTarget.sheetId,
+    explicitNameAuthoritative: true,
+    validatedSheetMetadata: canonicalTarget.validatedSheetMetadata,
+  };
+  const inspection = await universal.run(targetRequest, {
+    dryRun: true,
+    rowLimit: payload.rowLimit || undefined,
+    schema: schemaOptions,
+    expectedPersonGroups: payload.expectedPersonGroups || undefined,
+    requireIndianPhone: Boolean(payload.requireIndianPhone),
+    policyMode: payload.policyMode || undefined,
+    originalMessage: payload.originalMessage || undefined,
+  });
+  const schema = inspection.schema || {};
+  const refreshed = refreshWriteScope(payload.writeScope || {}, schema);
+  if (refreshed.unmappedTargets.length) {
+    const names = refreshed.unmappedTargets.map((item) => `POC-${item.ordinal} ${item.field}`).join(', ');
+    const message = `The worksheet layout changed after the previous approval, and the refreshed layout has no mapped column for ${names}. Apollo was not called and nothing was edited. Add or label the intended column, then rerun; ULTRON will not guess a destination.`;
+    if (payload.missionId) enrichmentMissions.update(payload.missionId, {
+      status: 'PAUSED', completionState: 'NEEDS_SCHEMA_CLARIFICATION', approvalValid: false,
+      schemaFingerprint: schema.structuralFingerprint || schema.fingerprint || null,
+      writeScope: refreshed.writeScope,
+      protectedColumns: refreshed.writeScope.protectedColumns,
+      readScope: refreshed.writeScope.readScope,
+      lastError: { subsystem: 'SCHEMA', type: 'SCHEMA', code: 'UNIVERSAL_SCHEMA_FIELDS_UNMAPPED', stage: 'schema-drift-revalidation' },
+    });
+    return response(false, message, {
+      error: 'UNIVERSAL_SCHEMA_FIELDS_UNMAPPED', errorCode: 'UNIVERSAL_SCHEMA_FIELDS_UNMAPPED',
+      errorSubsystem: 'SCHEMA', errorType: 'SCHEMA', errorStage: 'schema-drift-revalidation',
+      paidToolApproval: publicApproval(decision), apolloCalled: false, unmappedTargets: refreshed.unmappedTargets,
+    });
+  }
+
+  const refreshedPayload = {
+    ...payload,
+    sheetName: canonicalTarget.sheetName,
+    sheetId: canonicalTarget.sheetId,      schemaFingerprint: schema.structuralFingerprint || schema.fingerprint || null,
+      writeScope: refreshed.writeScope,
+    };
+  const approvalSummary = require('./universal-spreadsheet-domain-controller').approvalSummary({
+    sheetName: canonicalTarget.sheetName,
+    schema,
+    analysis: inspection.analysis,
+    rowLimitApplied: payload.rowLimit || null,
+  }, { ...refreshedPayload, writeScope: refreshed.writeScope });
+  const approval = paidTools.request(
+    'apollo',
+    OPERATION,
+    refreshedPayload,
+    `The worksheet columns changed after the previous approval. ULTRON re-inspected the live worksheet; no Apollo calls or writes occurred under the stale approval. Updated plan: ${approvalSummary}`,
+  );
+  if (payload.missionId) enrichmentMissions.update(payload.missionId, {
+    status: 'AWAITING_APOLLO_APPROVAL', completionState: 'AWAITING_APOLLO_APPROVAL', approvalValid: false,
+    approvalId: approval.id,
+    schemaFingerprint: refreshedPayload.schemaFingerprint,
+    requestedPOCs: refreshed.writeScope.requestedOrdinals,
+    requestedFields: refreshed.writeScope.requestedFields,
+    ignoredFields: refreshed.writeScope.ignoredFields,
+    writeScope: refreshed.writeScope,
+    protectedColumns: refreshed.writeScope.protectedColumns,
+    readScope: refreshed.writeScope.readScope,
+    request: refreshedPayload,
+    lastError: null,
+  });
+  return response(true, paidTools.prompt(approval), {
+    model: 'apollo-approval-gate', provider: 'local-approval-gate', taskType: 'paid-tool-approval',
+    paidToolApproval: publicApproval(approval), apolloCalled: false,
+    schemaDriftRefreshed: true, universalEnrichmentMission: payload.missionId
+      ? enrichmentMissions.publicSummary(enrichmentMissions.get(payload.missionId)) : null,
+  });
 }
 
 async function canonicalApprovedTarget(payload = {}) {
@@ -213,7 +309,16 @@ async function execute(decision) {
       ? `POC-${Number(payload.contactPhaseOrdinal)} diagnostic`
       : 'coordinated multi-POC production';
     const canonicalTarget = await canonicalApprovedTarget(payload);
-    if (payload.missionId) enrichmentMissions.update(payload.missionId, { status:'RUNNING', completionState:'RUNNING', approvalId:decision.id, approvalValid:true, startedAt:enrichmentMissions.get(payload.missionId)?.startedAt || new Date().toISOString(), sheetName:canonicalTarget.sheetName, sheetId:canonicalTarget.sheetId, lastError:null });
+    // The approved policy mode is explicit task metadata, resolved once by the
+    // controller and stored with the approval/mission. It is never re-inferred
+    // from an environment variable or an earlier mission. Resolved BEFORE the
+    // mission update below, which reads approvalPolicy.
+    const approvalPolicy = phoneFirstPolicy.resolveMode({
+      policyMode: payload.policyMode,
+      requireIndianPhone: payload.requireIndianPhone,
+      indianPhonePolicySource: payload.indianPhonePolicySource,
+    }, {});
+    if (payload.missionId) enrichmentMissions.update(payload.missionId, { status:'RUNNING', completionState:'RUNNING', approvalId:decision.id, approvalValid:true, policyMode: approvalPolicy.mode, policySource: approvalPolicy.source, startedAt:enrichmentMissions.get(payload.missionId)?.startedAt || new Date().toISOString(), sheetName:canonicalTarget.sheetName, sheetId:canonicalTarget.sheetId, lastError:null });
     const result = await paidTools.withPermit(decision, async () => universal.run({
       sheetUrl: payload.url,
       sheetName: canonicalTarget.sheetName,
@@ -222,6 +327,10 @@ async function execute(decision) {
       validatedSheetMetadata: canonicalTarget.validatedSheetMetadata,
     }, {
       apolloApproved: true,
+      policyMode: approvalPolicy.mode,
+      policySource: approvalPolicy.source,
+      policyIndiaRequired: Boolean(approvalPolicy.indiaRequired),
+      originalMessage: payload.originalMessage || undefined,
       expectedSchemaFingerprint: payload.schemaFingerprint || undefined,
       rowLimit: payload.rowLimit || undefined,
       schema: payload.expectedPersonGroups ? { expectedPersonGroups: payload.expectedPersonGroups } : {},
@@ -310,6 +419,16 @@ async function execute(decision) {
       provider: fallbackUsed ? 'deterministic+apollo+google-sheets+bounded-direct-env-ai' : 'deterministic+apollo+google-sheets',
     });
   } catch (error) {
+    if ((error?.code === 'UNIVERSAL_SCHEMA_DRIFT'
+      || (error?.code === 'UNIVERSAL_SCHEMA_AMBIGUOUS'
+        && /columns changed after approval/i.test(String(error?.message || ''))))
+      && payload?.missionId) {
+      try {
+        return await refreshApprovalAfterSchemaDrift(decision, payload, canonicalTarget);
+      } catch (refreshError) {
+        error = refreshError;
+      }
+    }
     // Preserve provider/network semantics before applying any universal fallback.
     // Raw transport errors such as "Failed to fetch" must become typed NETWORK
     // failures rather than being mislabeled INTERNAL by the approval boundary.
@@ -336,6 +455,7 @@ async function execute(decision) {
       errorStage: typed.stage,
       errorHint: typed.hint,
       errorMessage: typed.message,
+      errorDiagnostics: typed.original?.diagnostics || error?.diagnostics || null,
       diagnostic,
       retryAttempts: typed.retryAttempts,
       attemptedRange: typed.attemptedRange || null,
@@ -365,4 +485,7 @@ module.exports = {
   publicApproval,
   publicEnrichmentResult,
   boundedRows,
+  writeScopeContract,
+  refreshWriteScope,
+  refreshApprovalAfterSchemaDrift,
 };

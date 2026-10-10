@@ -141,6 +141,11 @@ function create(input = {}) {
       estimatedCreditsConsumed: null,
     },
     budget: input.budget || {},
+    // Explicit selection policy recorded with the mission, so a resume can never
+    // run under a different (or stale) phone policy than the approved one.
+    policyMode: input.policyMode || input.request?.policyMode || 'hiring-authority',
+    policySource: input.policySource || input.request?.policySource || 'default',
+    policyIndiaRequired: Boolean(input.policyIndiaRequired ?? input.request?.policyIndiaRequired),
     provenance: [],
     request: input.request || null,
     lastError: null,

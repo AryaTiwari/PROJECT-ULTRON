@@ -85,6 +85,7 @@ function format(m) {
     `Sheet: ${m.spreadsheetTitle || m.spreadsheetId || 'unknown'}`,
     `Worksheet: ${m.sheetName || 'unknown'}${m.sheetId != null ? ` (id ${m.sheetId})` : ''}`,
     `State: ${m.status}`,
+    `Policy: ${m.policyMode || 'hiring-authority'}${m.policyIndiaRequired ? ' (India phone required)' : ''}${m.policySource ? ` via ${m.policySource}` : ''}`,
     `Rows: ${done} processed; ${partial} partial; ${remaining} remaining; ${total || '?'} total`,
     `Forward frontier: last ${m.lastProcessedRow ?? 'none'}; next ${m.nextRow ?? m.startRow ?? 'unknown'}; end ${m.endRow ?? 'unknown'}`,
   ];
@@ -132,6 +133,7 @@ function health() {
       || process.env.NVIDIA_API_KEY
     ) ? 'healthy' : 'unused',
     missionStore: 'healthy',
+    policyMode: mission?.policyMode || 'hiring-authority',
     checkpoint: mission?.lastSafeCheckpoint ? 'healthy' : 'empty',
     writeFirewall: 'armed',
     pendingPhoneCallbacks: pending,
@@ -147,6 +149,7 @@ function health() {
     `LinkedIn: ${state.linkedin}`,
     `Direct AI: ${state.directAi}`,
     `Mission store: ${state.missionStore}`,
+    `Selection policy: ${state.policyMode}`,
     `Checkpoint: ${state.checkpoint}`,
     `Write firewall: ${state.writeFirewall}`,
     `Pending phone callbacks: ${state.pendingPhoneCallbacks}`,
@@ -260,7 +263,9 @@ async function inspectMission(mission) {
       );
     }
 
-    if (mission.schemaFingerprint && inspection.schema?.fingerprint !== mission.schemaFingerprint) {
+    if (mission.schemaFingerprint
+      && inspection.schema?.fingerprint !== mission.schemaFingerprint
+      && inspection.schema?.structuralFingerprint !== mission.schemaFingerprint) {
       missions.update(mission.missionId, {
         status: 'FAILED_SAFE',
         completionState: 'FAILED_SAFE',
@@ -332,9 +337,43 @@ function requestApproval(mission, inspection, targetSelection, summary, targetCo
   );
 }
 
+// Policy continuity preflight. A mission records the selection policy it was
+// approved and started under. Resuming under a different policy would silently
+// change whether a usable phone is a hard qualification, so it is refused
+// without touching the sheet, the budget or the mission's saved state.
+function policyConflictResponse(mission) {
+  const phoneFirstPolicy = require('./universal-phone-first-policy');
+  const resolved = phoneFirstPolicy.resolveMode(mission.request || {}, {});
+  const conflict = phoneFirstPolicy.policyConflict(mission, resolved);
+  if (!conflict.conflict) return null;
+  return response(
+    [
+      `Resume refused: the selection policy changed for mission ${mission.missionId}.`,
+      '',
+      `Approved policy: ${conflict.savedMode}${conflict.savedIndiaRequired ? ' (India phone required)' : ''}`,
+      `Resolved policy: ${conflict.currentMode}${conflict.currentIndiaRequired ? ' (India phone required)' : ''}`,
+      '',
+      'Nothing was re-run and no cell was written; the saved mission is unchanged and still resumable under its own policy.',
+      `Start a new enrichment run with the "${conflict.currentMode}" policy, or resume this mission without changing its policy.`,
+    ].join('\n'),
+    {
+      error: conflict.code,
+      errorCode: conflict.code,
+      errorSubsystem: 'POLICY',
+      errorType: 'POLICY',
+      errorStage: 'resume-policy-preflight',
+      universalEnrichmentMission: missions.publicSummary(mission),
+      policyConflict: conflict,
+    },
+  );
+}
+
 async function resume() {
   const mission = missions.latestResumable();
   if (!mission) return response('No resumable universal spreadsheet-enrichment mission was found.');
+
+  const policyRefusal = policyConflictResponse(mission);
+  if (policyRefusal) return policyRefusal;
 
   if (mission.nextEligibleAt && Date.now() < Date.parse(mission.nextEligibleAt)) {
     return response(
@@ -383,6 +422,9 @@ async function resume() {
 async function retryUnresolved() {
   const mission = missions.latestResumable() || missions.latest();
   if (!mission) return response('No universal spreadsheet-enrichment mission is available for unresolved-row retry.');
+
+  const policyRefusal = policyConflictResponse(mission);
+  if (policyRefusal) return policyRefusal;
 
   const inspection = await inspectMission(mission);
   const frontier = recoverForwardFrontier(mission, inspection);

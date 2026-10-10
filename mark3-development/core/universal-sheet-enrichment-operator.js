@@ -28,6 +28,7 @@ const durableEnrichmentCache = require('./universal-enrichment-cache');
 const rowSelection = require('./universal-row-selection');
 const targetResolver = require('./universal-sheet-target-resolver');
 const indiaPolicy = require('./india-preference-policy');
+const phoneFirstPolicy = require('./universal-phone-first-policy');
 const personAnchorPolicy = require('./person-anchor-enrichment-policy');
 
 function text(value) { return String(value ?? '').trim(); }
@@ -59,7 +60,80 @@ function deepProviderFallbacksEnabled(options = {}) {
 }
 
 function indiaPhoneFirstEnabled(options = {}) {
-  return options.indiaPhoneFirst !== false && options.requireIndianPhone === true;
+  if (options.indiaPhoneFirst === false) return false;
+  // The explicit policy mode is authoritative task metadata: phone-first-india
+  // implies the five-attempt India budget and the gated international fallback.
+  if (options.phoneFirstPolicyState?.mode === phoneFirstPolicy.MODES.PHONE_FIRST_INDIA) return true;
+  return options.requireIndianPhone === true;
+}
+
+// One policy state per run. Created once on the authoritative run options object
+// so spreads and row-level copies share the same India budgets and counters.
+function phoneFirstPolicyState(request = {}, options = {}) {
+  if (options.phoneFirstPolicyState?.mode) return options.phoneFirstPolicyState;
+  const resolved = phoneFirstPolicy.resolveMode(request || {}, options || {});
+  const state = phoneFirstPolicy.createRunState(resolved.mode, resolved);
+  options.phoneFirstPolicyState = state;
+  return state;
+}
+
+function activePolicyState(options = {}) {
+  return options.phoneFirstPolicyState || phoneFirstPolicyState(options.request || {}, options);
+}
+
+function policyBudgetFor(options = {}, companyKey = '') {
+  const state = activePolicyState(options);
+  return state.budgetFor(companyKey || 'unknown-company');
+}
+
+// Durable discovery evidence is keyed by policy identity (version + mode), so a
+// candidate pool gathered under one selection policy is never served to a run
+// executing under another, and a change to the policy rules invalidates older
+// entries instead of silently reusing them.
+function policyCacheNamespace(options = {}, base) {
+  return phoneFirstPolicy.cacheNamespace(base, activePolicyState(options).mode);
+}
+
+// Per-stage timings are recorded on the run's policy state, so the final report
+// publishes actual per-stage p50/p95 instead of one aggregate elapsed time.
+function stageTiming(options = {}) {
+  return activePolicyState(options).latencies;
+}
+
+// Never persist an empty candidate pool that came from an incomplete search.
+// A transient provider failure is not evidence that a company has no people, and
+// storing it (even as a "negative") would silently suppress that company for the
+// whole TTL. A non-empty pool is always safe to reuse.
+function cacheDiscoveryResult(namespace, key, people, incomplete) {
+  const list = Array.isArray(people) ? people : [];
+  if (!list.length && incomplete) return null;
+  return durableEnrichmentCache.set(namespace, key, list, { negative: list.length === 0 });
+}
+
+// True when discovery saw at least one recorded failure since the baseline, so
+// an empty candidate pool is incomplete evidence rather than a real no-result.
+function transientDiscoveryFailure(stats = {}, baseline = 0) {
+  const observed = Number(stats.candidatePrioritySearchFailures || 0)
+    + Number(stats.indiaPrioritySearchFailures || 0)
+    + Number(stats.discoveryDiagnostics?.length || 0);
+  return observed > Number(baseline || 0);
+}
+
+// Hard gate: in phone-first mode a foreign number is never usable before the
+// five distinct India-focused attempts have completed for this company.
+function internationalFallbackGate(options = {}, companyKey = '') {
+  const state = activePolicyState(options);
+  if (state.mode !== phoneFirstPolicy.MODES.PHONE_FIRST_INDIA) {
+    return { allowed: true, mode: state.mode, reason: 'not-phone-first-india', budget: null };
+  }
+  const budget = policyBudgetFor(options, companyKey);
+  const allowed = phoneFirstPolicy.internationalFallbackAllowed({ mode: state.mode, budget });
+  return {
+    allowed,
+    mode: state.mode,
+    budget,
+    reason: allowed ? 'india-budget-exhausted' : phoneFirstPolicy.fallbackBlockReason({ mode: state.mode, budget }),
+  };
 }
 
 function indiaFirstDecisionMakerTitles() {
@@ -195,6 +269,15 @@ function selectUniversalSheetTargets(meta = {}, options = {}) {
 }
 
 async function readUniversalSheet(sheetUrl, options = {}) {
+  const stageStartedAt = Date.now();
+  try {
+    return await readUniversalSheetBody(sheetUrl, options);
+  } finally {
+    stageTiming(options).record('sheets-read', Date.now() - stageStartedAt);
+  }
+}
+
+async function readUniversalSheetBody(sheetUrl, options = {}) {
   const spreadsheetId = sheets.spreadsheetId(sheetUrl);
   const validated = options.validatedSheetMetadata;
   const meta = validated?.spreadsheetId === spreadsheetId
@@ -1589,9 +1672,19 @@ function companyPriorityCandidate(candidate = {}) {
 }
 
 async function discoverCompanyPeople(companyContext, cache, stats, options = {}) {
+  const stageStartedAt = Date.now();
+  try {
+    return await discoverCompanyPeopleBody(companyContext, cache, stats, options);
+  } finally {
+    stageTiming(options).record('discovery', Date.now() - stageStartedAt);
+  }
+}
+
+async function discoverCompanyPeopleBody(companyContext, cache, stats, options = {}) {
   const key = `${ranker.companyKey(companyContext.company)}|${ranker.hostname(companyContext.domain)}|${ranker.normalize(options.location || '')}`;
   if (cache.has(key)) { stats.candidateCacheHits++; runContext.cacheHit('discovery'); return cache.get(key); }
-  const persisted = durableEnrichmentCache.get('candidate-discovery', key);
+  const discoveryNamespace = policyCacheNamespace(options, 'candidate-discovery');
+  const persisted = durableEnrichmentCache.get(discoveryNamespace, key);
   if (persisted.hit) { stats.candidateCacheHits++; stats.persistentCandidateCacheHits = Number(stats.persistentCandidateCacheHits || 0) + 1; runContext.cacheHit('discovery'); cache.set(key, persisted.value || []); return persisted.value || []; }
 
   const broadResult = await apollo.searchCompanyPeopleBroad({
@@ -1611,6 +1704,9 @@ async function discoverCompanyPeople(companyContext, cache, stats, options = {})
   const minimumPriorityPool = integer(options.minimumPriorityPool, 6, 2, 20);
   const broadPriorityCount = broadPeople.filter(companyPriorityCandidate).length;
   let targetedPeople = [];
+  // A transient provider failure is not evidence that the company has no
+  // people. It must never be persisted as a negative (no-result) cache entry.
+  let transientFailure = false;
   if (broadPriorityCount < minimumPriorityPool) {
     try {
       const targetedResult = await apollo.searchCompanyPeopleBroad({
@@ -1626,6 +1722,7 @@ async function discoverCompanyPeople(companyContext, cache, stats, options = {})
     } catch (error) {
       // Supplemental discovery must not erase a successful broad search. Keep the
       // row usable and expose the diagnostic in stats.
+      transientFailure = true;
       stats.candidatePrioritySearchFailures++;
       stats.discoveryDiagnostics.push({
         company: companyContext.company,
@@ -1638,7 +1735,7 @@ async function discoverCompanyPeople(companyContext, cache, stats, options = {})
   const people = mergeCandidatePools(broadPeople, targetedPeople);
   stats.candidatesDiscovered += people.length;
   cache.set(key, people);
-  durableEnrichmentCache.set('candidate-discovery', key, people, { negative: people.length === 0 });
+  cacheDiscoveryResult(discoveryNamespace, key, people, transientFailure);
   return people;
 }
 
@@ -2233,6 +2330,15 @@ async function hydrateDecisionMakerVerified(candidate, companyContext, stats, op
   return runContext.memo(key,()=>hydrateDecisionMakerUncached(candidate,companyContext,stats,options));
 }
 async function hydrateDecisionMakerUncached(candidate, companyContext, stats, options = {}) {
+  const stageStartedAt = Date.now();
+  try {
+    return await hydrateDecisionMakerUncachedBody(candidate, companyContext, stats, options);
+  } finally {
+    stageTiming(options).record('hydration', Date.now() - stageStartedAt);
+  }
+}
+
+async function hydrateDecisionMakerUncachedBody(candidate, companyContext, stats, options = {}) {
   const needEmail = options.needEmail !== false;
   const needPhone = options.needPhone !== false;
   try {
@@ -2319,6 +2425,15 @@ async function hydrateDecisionMakerUncached(candidate, companyContext, stats, op
 }
 
 async function discoverPriorityPeopleFast(companyContext, cache, stats, options = {}) {
+  const stageStartedAt = Date.now();
+  try {
+    return await discoverPriorityPeopleFastBody(companyContext, cache, stats, options);
+  } finally {
+    stageTiming(options).record('discovery-priority', Date.now() - stageStartedAt);
+  }
+}
+
+async function discoverPriorityPeopleFastBody(companyContext, cache, stats, options = {}) {
   const company = text(companyContext?.company);
   const domain = websiteDomain(companyContext?.domain || '');
   const discoveryMode = options.primarySweep ? 'sweep' : 'deep';
@@ -2329,6 +2444,17 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     8,
   );
   const key = `priority-fast-v3|${discoveryMode}|${ranker.companyKey(company)}|${domain}|${ranker.normalize(options.location || '')}`;
+  const discoveryNamespace = policyCacheNamespace(options, 'priority-candidate-discovery');
+  // Transient provider failures that are not systemic (so discovery continues)
+  // must never be remembered as "this company has no people". Baselines let the
+  // cache writes below tell a genuine empty result from an incomplete one.
+  const failureBaseline = Number(stats.candidatePrioritySearchFailures || 0)
+    + Number(stats.indiaPrioritySearchFailures || 0)
+    + Number(stats.discoveryDiagnostics?.length || 0);
+  // Hoisted deliberately: the candidate-cache branches immediately below consult
+  // the India-first gate, so a warm cache used to reach it before initialization
+  // (temporal dead zone) and crash deep discovery on every cached run.
+  const indiaFirst = indiaPhoneFirstEnabled(options);
   let initialDeepSeed = [];
   if (cache.has(key)) {
     stats.candidateCacheHits++;
@@ -2337,7 +2463,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     if (options.primarySweep || (cached.length >= requiredPool && (!indiaFirst || hasIndianPhoneSignal(cached)))) return cached;
     initialDeepSeed = cached;
   }
-  const persisted = durableEnrichmentCache.get('priority-candidate-discovery', key);
+  const persisted = durableEnrichmentCache.get(discoveryNamespace, key);
   if (persisted.hit) {
     stats.candidateCacheHits++;
     stats.persistentCandidateCacheHits = Number(stats.persistentCandidateCacheHits || 0) + 1;
@@ -2364,7 +2490,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
       stats.candidateCacheHits++;
       runContext.cacheHit('discovery');
     } else {
-      const priorSweep = durableEnrichmentCache.get('priority-candidate-discovery', sweepKey);
+      const priorSweep = durableEnrichmentCache.get(discoveryNamespace, sweepKey);
       if (priorSweep.hit) {
         add(priorSweep.value || []);
         reusedSweep = true;
@@ -2377,7 +2503,12 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   const priorityLimit = integer(options.priorityCandidateLimit, 20, 6, 40);
   const broadLimit = integer(options.adaptiveBroadCandidateLimit, 30, 10, 50);
   const minimumUsefulPool = requiredPool;
-  const indiaFirst = indiaPhoneFirstEnabled(options);
+  // These two flags gate the deep public-index and authenticated-LinkedIn
+  // fallbacks below. They were referenced without ever being declared, so every
+  // deep-discovery run that reached the fallback region threw a ReferenceError
+  // and the India escalation fallbacks could never execute at all.
+  const fastMode = fastUniversalEnrichmentEnabled(options);
+  const deepFallbacks = deepProviderFallbacksEnabled(options);
 
   // Reuse exact Apollo profiles already verified elsewhere in this workbook or
   // an earlier run. This is especially useful when several rows belong to the
@@ -2413,36 +2544,66 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     }
   }
 
-  // Strict India-first mode gets a dedicated lower-level HR/TA search even when
-  // Apollo already returned enough high-authority people. People Search is zero-credit,
-  // and this is explicitly about finding an Indian-phone-capable contact before any
-  // foreign-phone fallback is allowed.
-  if (!options.primarySweep && indiaFirst && !hasIndianPhoneSignal(merged)) {
-    const titles = indiaFirstDecisionMakerTitles();
-    if (titles.length) {
-      try {
-        const indiaPriority = await apollo.searchCompanyPeopleBroad({
-          company,
-          domain,
-          location: options.location || 'India',
-          limit: Math.max(priorityLimit, 30),
-          titles,
-        });
-        stats.candidateSearches++;
-        stats.candidatePrioritySearches++;
-        stats.indiaPrioritySearches = Number(stats.indiaPrioritySearches || 0) + 1;
-        const discovered = Array.isArray(indiaPriority?.people) ? indiaPriority.people : [];
-        stats.indiaFirstCandidatesDiscovered = Number(stats.indiaFirstCandidatesDiscovered || 0) + discovered.length;
-        add(discovered);
-      } catch (error) {
-        throwSystemic(error);
-        stats.indiaPrioritySearchFailures = Number(stats.indiaPrioritySearchFailures || 0) + 1;
-        stats.discoveryDiagnostics.push({
-          company: company || domain,
-          code: String(error?.code || 'APOLLO_INDIA_PRIORITY_SEARCH_FAILED'),
-          message: String(error?.message || error || '').slice(0, 300),
-        });
-      }
+  // Strict India-first mode runs the explicit five-attempt India search plan.
+  // Every attempt is a genuinely distinct strategy (lower-level HR/TA/recruiting,
+  // HR managers, TA leadership, broader role variants and a final high-recall
+  // pass) and is counted individually. People Search is zero-credit. The plan
+  // stops issuing new searches the moment a verified Indian number is available,
+  // and finishing it is the ONLY way the international fallback is unlocked.
+  stats.indiaSignalPresentInPool = hasIndianPhoneSignal(merged);
+  const indiaVerifiedInPool = Array.isArray(merged) && merged.some((candidate) => phoneFirstPolicy.hasVerifiedIndianPhone(candidate));
+  if (!options.primarySweep && indiaFirst && !indiaVerifiedInPool
+    && !policyBudgetFor(options, ranker.companyKey(company) || company || domain).exhausted()) {
+    const state = activePolicyState(options);
+    const budget = policyBudgetFor(options, ranker.companyKey(company) || company || domain);
+    const indiaTitles = indiaFirstDecisionMakerTitles();
+    const indiaStrategies = phoneFirstPolicy.INDIA_SEARCH_STRATEGIES.map((strategy, index) =>
+      (index === 0 && indiaTitles.length ? { ...strategy, titles: indiaTitles } : strategy));
+    try {
+      const indiaPlan = await phoneFirstPolicy.discoverIndiaPeople({
+        search: (query) => apollo.searchCompanyPeopleBroad(query),
+        companyContext: { company, domain },
+        budget,
+        limit: Math.max(priorityLimit, 30),
+        concurrency: 2,
+        strategies: indiaStrategies,
+        settledMap: runContext.settledMap,
+        hasIndianPhone: (people) => (Array.isArray(people) ? people : [])
+          .some((candidate) => phoneFirstPolicy.hasVerifiedIndianPhone(candidate)),
+        onAttempt: (attempt) => {
+          stats.candidateSearches++;
+          state.recordCounter('indiaSearchAttempts');
+          stats.indiaSearchStrategyIds = [...(stats.indiaSearchStrategyIds || []), attempt.strategyId];
+          if (attempt.outcome === 'failed') {
+            stats.candidatePrioritySearchFailures++;
+            state.recordCounter('indiaSearchFailures');
+            stats.discoveryDiagnostics.push({
+              company: company || domain,
+              code: 'APOLLO_INDIA_STRATEGY_SEARCH_FAILED',
+              strategyId: attempt.strategyId,
+              message: String(attempt.error || '').slice(0, 300),
+            });
+          } else {
+            stats.candidatePrioritySearches++;
+          }
+        },
+      });
+      stats.indiaPrioritySearches = Number(stats.indiaPrioritySearches || 0) + indiaPlan.attempts.length;
+      stats.indiaSearchAttempts = budget.attemptCount();
+      stats.indiaSearchAttemptsRemaining = budget.remaining();
+      stats.indiaSearchExhausted = budget.exhausted();
+      stats.indiaSearchStoppedEarly = indiaPlan.stoppedEarly || null;
+      stats.indiaSearchAttemptAudit = indiaPlan.budget.attempts;
+      stats.indiaFirstCandidatesDiscovered = Number(stats.indiaFirstCandidatesDiscovered || 0) + indiaPlan.people.length;
+      add(indiaPlan.people);
+    } catch (error) {
+      throwSystemic(error);
+      stats.indiaPrioritySearchFailures = Number(stats.indiaPrioritySearchFailures || 0) + 1;
+      stats.discoveryDiagnostics.push({
+        company: company || domain,
+        code: String(error?.code || 'APOLLO_INDIA_PRIORITY_SEARCH_FAILED'),
+        message: String(error?.message || error || '').slice(0, 300),
+      });
     }
   }
 
@@ -2454,7 +2615,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
     // An empty result is still useful run-local evidence. Repeating the same
     // company/location search on another row moments later cannot improve it.
     cache.set(key, merged);
-    durableEnrichmentCache.set('priority-candidate-discovery', key, merged, { negative: merged.length === 0 });
+    cacheDiscoveryResult(discoveryNamespace, key, merged, transientDiscoveryFailure(stats, failureBaseline));
     return merged;
   }
 
@@ -2613,7 +2774,7 @@ async function discoverPriorityPeopleFast(companyContext, cache, stats, options 
   // exact-row rechecks cannot gain new evidence by repeating the same provider
   // waterfall moments later, and repeated calls can consume Apollo credits.
   cache.set(key, merged);
-  durableEnrichmentCache.set('priority-candidate-discovery', key, merged, { negative: merged.length === 0 });
+  cacheDiscoveryResult(discoveryNamespace, key, merged, transientDiscoveryFailure(stats, failureBaseline));
   return merged;
 }
 
@@ -2808,6 +2969,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
     if (callbackBefore) return recordResolved(callbackBefore);
 
     let outcome = null;
+    const revealStartedAt = Date.now();
     if (text(person.phoneRequestId)) {
       const pollNativePhone = typeof options.pollNativePhone === 'function'
         ? options.pollNativePhone
@@ -2825,6 +2987,7 @@ async function settleVerifiedPhoneForSelection(person, stats, options = {}) {
       outcome = await pollWaterfallPhone(person.phoneWaterfallRequestId, { polls });
       quality.recordPhoneWaterfallOutcome?.({ apolloPersonId }, outcome);
     }
+    stageTiming(options).record('phone-reveal', Date.now() - revealStartedAt);
 
     const directPhone = apollo.validPhone(outcome?.phone || '');
     if (directPhone) return recordResolved(directPhone);
@@ -2964,7 +3127,7 @@ function preferredContactShortlist(candidates = [], plan = {}, companyContext = 
 }
 
 
-function chooseContactabilityCandidate(entries = []) {
+function chooseContactabilityCandidate(entries = [], gate = {}) {
   const normalized = (Array.isArray(entries) ? entries : []).map((entry, index) => ({
     ...entry,
     index: Number.isInteger(entry?.index) ? entry.index : index,
@@ -2992,6 +3155,10 @@ function chooseContactabilityCandidate(entries = []) {
   // deliberately fall back to the previous behavior: choose the highest-
   // authority POC with any verified usable phone, even when that phone is
   // international. Do not let an India-location hint alone demote the top POC.
+  //
+  // Phone-first India mode gates this phase: the foreign tier stays closed until
+  // the five distinct India-focused attempts are complete for this company.
+  if (gate.internationalFallbackAllowed === false) return null;
   return qualified
     .filter((entry) => entry.tier < 3)
     .sort((a, b) =>
@@ -3085,7 +3252,10 @@ async function selectContactableReplacement(item, plan, companyContext, stats, o
     if (tier === 4) break;
   }
 
-  const selected = checked.length ? chooseContactabilityCandidate(checked) : null;
+  const fallbackGate = internationalFallbackGate(options, companyContext?.company || companyContext?.domain || '');
+  const selected = checked.length
+    ? chooseContactabilityCandidate(checked, { internationalFallbackAllowed: fallbackGate.allowed })
+    : null;
   if (!selected || selected.tier <= 0) return null;
   return selected;
 }
@@ -3223,16 +3393,18 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   }
 
   const indiaFirst = indiaPhoneFirstEnabled(options);
+  const fallbackGate = internationalFallbackGate(options, companyContext?.company || companyContext?.domain || '');
   const indianChecked = checked.filter((entry) => entry.tier >= 3);
   // During the results-first sweep, strict India-first mode never spends the
   // international fallback early. Otherwise a foreign-number Head/Director can
   // be written before the deep India-specific search has had a chance to find
-  // a lower-level +91 HR/TA contact.
+  // a lower-level +91 HR/TA contact. Phone-first India mode additionally keeps
+  // the foreign tier closed until the five India attempts are complete.
   const selected = indianChecked.length
     ? chooseContactabilityCandidate(indianChecked)
-    : (indiaFirst && options.resultsFirstSweep
-      ? null
-      : (checked.length ? chooseContactabilityCandidate(checked) : null));
+    : ((!options.resultsFirstSweep && fallbackGate.allowed)
+      ? (checked.length ? chooseContactabilityCandidate(checked, { internationalFallbackAllowed: true }) : null)
+      : null);
 
   if (!selected || selected.tier <= 0) {
     // All bounded immediate-phone alternatives were checked first. A verified
@@ -3272,12 +3444,29 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
       };
     }
     stats.emptyPocNoPhoneRejected = Number(stats.emptyPocNoPhoneRejected || 0) + 1;
+    // Typed terminal status: a definitive no-phone outcome is reported
+    // differently from an India search that still has attempts left to run.
+    const policyState = activePolicyState(options);
+    const exhausted = phoneFirstPolicy.exhaustedOutcome({
+      mode: policyState.mode,
+      requiresPhone: policyState.requiresPhone,
+      budget: policyBudgetFor(options, companyContext?.company || companyContext?.domain || ''),
+      reason: 'every-verified-candidate-lacked-a-valid-phone',
+    });
+    stats.phoneFirstOutcome = exhausted.status;
+    stats.policyOutcomeCounts = {
+      ...(stats.policyOutcomeCounts || {}),
+      [exhausted.status]: Number(stats.policyOutcomeCounts?.[exhausted.status] || 0) + 1,
+    };
+    if (exhausted.status === phoneFirstPolicy.OUTCOMES.NO_VERIFIED_PHONE_AVAILABLE) {
+      policyState.recordCounter('noVerifiedPhoneRows');
+    }
     markContactabilityExhausted(
       stats,
       options.rowNumber,
       ordinal,
       companyContext?.company || '',
-      `No safely verified decision-maker returned a usable phone after checking the bounded ${shared.length}-candidate shortlist.`
+      `${exhausted.status} (${exhausted.reason}): no safely verified decision-maker returned a usable phone after checking the bounded ${shared.length}-candidate shortlist.`
     );
     stats.selectionAudit.push({
       groupId: target.group.id,
@@ -3303,6 +3492,15 @@ async function fillManualPriorityGroup(row, plan, companyContext, candidates, st
   const phone = apollo.validPhone(person.phone || '');
   const indianPhone = phone ? apollo.indianPhone(phone) : null;
   const email = apollo.validEmail(person.email || '');
+
+  // Policy counters: a selected person is classified by strict phone evidence,
+  // so an international fallback is never silently reported as an India win.
+  const selectedEvidence = phoneFirstPolicy.phoneEvidence(person);
+  if (selectedEvidence.state === 'indian-verified') {
+    activePolicyState(options).recordCounter('indianNumbersFound');
+  } else if (selectedEvidence.state === 'international-verified') {
+    activePolicyState(options).recordCounter('internationalFallbacksUsed');
+  }
 
   stats.newPeopleSelected++;
   stats.embeddedDesignationWrites += writePlan.writes.filter((write) => write.embeddedRole).length;
@@ -3604,6 +3802,22 @@ function freshStats() {
     indiaPrioritySearchFailures: 0,
     indiaFirstCandidatesDiscovered: 0,
     indiaLinkedInFallbackRuns: 0,
+    // Explicit selection-policy evidence for this run (never inferred later).
+    policyMode: phoneFirstPolicy.MODES.HIRING_AUTHORITY,
+    policySource: null,
+    policyRequiresPhone: false,
+    policyIndiaRequired: false,
+    // Actual measured duration per pipeline stage (samples, p50, p95, max).
+    stageLatency: {},
+    indiaSignalPresentInPool: false,
+    indiaSearchAttempts: 0,
+    indiaSearchAttemptsRemaining: null,
+    indiaSearchExhausted: false,
+    indiaSearchStoppedEarly: null,
+    indiaSearchStrategyIds: [],
+    indiaSearchAttemptAudit: [],
+    phoneFirstOutcome: null,
+    policyOutcomeCounts: {},
     postHydrationDuplicates: 0,
     discoveryDiagnostics: [],
     pendingPhoneRequests: 0,
@@ -3832,14 +4046,38 @@ function prioritizeIdentityGapRows(records = [], targetRows = null, phaseOrdinal
 async function run(request = {}, options = {}) {
   const sheetUrl = request.sheetUrl || request.url;
   if (!sheetUrl) throw new Error('Universal enrichment requires a Google Sheet URL.');
+  // Explicit, testable selection policy for this run. Resolved once, from task
+  // metadata, and carried on the run options so every stage (discovery,
+  // selection, callbacks, diagnostics) reads the same mode instead of
+  // re-inferring it from text, environment variables or an earlier mission.
+  const policyState = phoneFirstPolicyState(request, options);
   const source = await readUniversalSheet(sheetUrl, {
     ...options,
     sheetName: request.sheetName || options.sheetName,
     sheetId: request.sheetId ?? options.sheetId ?? null,
     explicitNameAuthoritative: Boolean(request.explicitNameAuthoritative || options.explicitNameAuthoritative),
   });
-  const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema });
-  if (options.dryRun) return { ok: true, dryRun: true, deterministic: true, modelCalls: 0, ...source, analysis, schema: engine.schemaSummary(source.schema), stats: { ...freshStats(), rowsSeen: analysis.stats.dataRows } };
+  const analysis = engine.analyzeSheet(source.rows, { rowLimit: options.rowLimit, schema: options.schema, resolvedSchema: source.schema });
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      deterministic: true,
+      modelCalls: 0,
+      ...source,
+      analysis,
+      schema: engine.schemaSummary(source.schema),
+      policy: phoneFirstPolicy.summarize(policyState),
+      stats: {
+        ...freshStats(),
+        policyMode: policyState.mode,
+        policySource: policyState.source,
+        policyRequiresPhone: Boolean(policyState.requiresPhone),
+        policyIndiaRequired: Boolean(policyState.indiaRequired),
+        rowsSeen: analysis.stats.dataRows,
+      },
+    };
+  }
   if (options.apolloApproved !== true) {
     const error = new Error('Apollo approval is required before universal enrichment can query paid person enrichment.');
     error.code = 'APOLLO_APPROVAL_REQUIRED';
@@ -3847,9 +4085,70 @@ async function run(request = {}, options = {}) {
     throw error;
   }
 
-  if(options.expectedSchemaFingerprint && options.expectedSchemaFingerprint !== source.schema.fingerprint) throw Object.assign(new Error('The worksheet columns changed after approval. Inspect and approve the new layout.'),{code:'UNIVERSAL_SCHEMA_AMBIGUOUS',subsystem:'SCHEMA',errorType:'SCHEMA'});
-  require('./universal-schema-safety').assertSafe(source.schema);
+  // Phase 14 — schema drift is a FIRST-CLASS, recoverable condition with full
+  // diagnostics. It is never UNIVERSAL_SCHEMA_AMBIGUOUS: nothing here is
+  // ambiguous, the approved layout simply no longer matches the live sheet.
+  // Approvals stamped with the legacy header fingerprint stay valid when only
+  // value-driven padding (empty header cells) differs.
+  const stableFingerprint = (value) => String(value || '').split('|').map((part) => part.trim()).filter(Boolean).join('|');
+  const gateContext = { worksheet: source.sheetName, spreadsheetId: source.spreadsheetId };
+  if (options.expectedSchemaFingerprint) {
+    const approved = String(options.expectedSchemaFingerprint);
+    const structural = String(source.schema.structuralFingerprint || '');
+    const legacy = String(source.schema.fingerprint || '');
+    const structuralFormat = /^h\d+\|/.test(approved);
+    const matches = approved === structural
+      || approved === legacy
+      || (!structuralFormat && stableFingerprint(approved) === stableFingerprint(legacy));
+    if (!matches) {
+      const changedHeaders = [];
+      if (!structuralFormat && legacy) {
+        const approvedParts = approved.split('|');
+        const currentParts = legacy.split('|');
+        for (let i = 0; i < Math.max(approvedParts.length, currentParts.length); i++) {
+          if ((approvedParts[i] || '') !== (currentParts[i] || '')) {
+            changedHeaders.push({ index: i, approved: approvedParts[i] ?? null, current: currentParts[i] ?? null });
+          }
+        }
+      }
+      const diagnostics = {
+        code: 'UNIVERSAL_SCHEMA_DRIFT',
+        worksheet: source.sheetName,
+        spreadsheetId: source.spreadsheetId,
+        headerRow: source.schema.headerRowNumber ?? null,
+        approvedFingerprint: approved,
+        currentFingerprint: legacy || null,
+        currentStructuralFingerprint: structural || null,
+        changedHeaders,
+        candidateColumns: (source.schema.columns || []).map((column) => ({ index: column.index, header: column.header || '', role: column.role || 'unknown' })),
+        resolutionAttempts: ['canonical-structural-fingerprint-comparison'],
+        reason: 'The worksheet structure changed after Apollo approval.',
+        recoverable: true,
+        strategy: 'reinspect-and-reapprove',
+      };
+      throw Object.assign(new Error('The worksheet columns changed after approval. Inspect and approve the new layout.'), {
+        code: 'UNIVERSAL_SCHEMA_DRIFT',
+        subsystem: 'SCHEMA',
+        errorType: 'SCHEMA',
+        questions: ['The worksheet columns changed after approval. Re-inspect the layout and approve it again; no Apollo call or write happened under the stale approval.'],
+        hint: 'Re-inspect the worksheet and approve the refreshed layout.',
+        diagnostics,
+      });
+    }
+  }
+  require('./universal-schema-safety').assertSafe(source.schema, gateContext);
+  // Freeze the canonical schema for this run (Phase 14): every downstream
+  // stage consumes this exact structure; internal recheck passes re-run these
+  // same gates against a fresh read, so a mid-run structural change is always
+  // detected instead of silently written against.
+  source.schema.frozen = true;
+  source.schema.frozenAt = new Date().toISOString();
+  try { source.schema.schemaHash = schemaTools.hashSchema(source.schema); } catch { source.schema.schemaHash = null; }
   const stats = freshStats();
+  stats.policyMode = policyState.mode;
+  stats.policySource = policyState.source;
+  stats.policyRequiresPhone = Boolean(policyState.requiresPhone);
+  stats.policyIndiaRequired = Boolean(policyState.indiaRequired);
   const internalRecheck = Boolean(options.recheckPass);
   const phaseOrdinal = Number(options.contactPhaseOrdinal || 0) || null;
   const phaseOrdinals = phaseOrdinal ? [phaseOrdinal] : (options.requireIndianPhone ? [1, 2] : null);
@@ -4359,6 +4658,8 @@ async function run(request = {}, options = {}) {
     }
   }
 
+  stats.stageLatency = policyState.latencies.summary();
+
   return {
     ok: true,
     deterministic: true,
@@ -4373,6 +4674,7 @@ async function run(request = {}, options = {}) {
     analysis: analysis.stats,
     contactPhaseOrdinal: phaseOrdinal,
     contactPhaseLabel: stats.contactPhaseLabel,
+    policy: phoneFirstPolicy.summarize(policyState),
     stats,
   };
 }
@@ -4424,6 +4726,7 @@ function formatResult(result) {
     `Schema: header row ${schema.headerRowNumber || '?'}, ${groups} POC group${groups === 1 ? '' : 's'}, ${companies} company group${companies === 1 ? '' : 's'}, confidence ${Number(schema.confidence || 0).toFixed(2)}.`,
     `Progress: processed ${Number(s.rowsProcessed || 0)}/${Number(s.rowsSeen || 0)} rows; changed ${Number(s.cellsChanged || 0)} cells across ${Number(s.rowsChanged || 0)} rows; selected ${Number(s.newPeopleSelected || 0)} phone-qualified new people; repaired ${Number(s.existingGroupsRepaired || 0)} existing POCs.`,
     `Apollo: ${Number(s.candidateSearches || 0)} discovery calls, ${Number(s.candidateCacheHits || 0)} cache hits, ${Number(s.hydrationAttempts || 0)} hydrations; India-first escalation ${Number(s.indiaPrioritySearches || 0)} searches/${Number(s.indiaPrioritySearchFailures || 0)} failures, ${Number(s.indiaFirstCandidatesDiscovered || 0)} extra candidates. Verified new owners staged pending phone: ${Number(s.pendingPocIdentityStaged || 0)}. Contact settlement: phone ${Number(s.phoneCellsFilled || 0)} filled/${Number(s.phoneStillPending || 0)} pending; email ${Number(s.emailCellsFilled || 0)} filled/${Number(s.emailStillPending || 0)} pending.`,
+    `Policy: ${s.policyMode || 'hiring-authority'}${s.policyIndiaRequired ? ' (India phone required)' : ''}${s.policySource ? ` via ${s.policySource}` : ''}. India search attempts used: ${Number(s.indiaSearchAttempts || 0)} of ${phoneFirstPolicy.INDIA_ATTEMPT_LIMIT}${s.indiaSearchStoppedEarly ? ` (stopped early: ${s.indiaSearchStoppedEarly})` : ''}; remaining ${s.indiaSearchAttemptsRemaining ?? 'n/a'}. Outcomes: ${Object.entries(s.policyOutcomeCounts || {}).map(([key, value]) => `${key} ${value}`).join('; ') || 'none recorded'}.`,
     `LinkedIn fallback: ${Number(s.linkedinFallbackCompanyProfiles || 0)} company profiles, ${Number(s.linkedinFallbackCompanyUrns || 0)} company URNs, ${Number(s.linkedinFallbackProfilesFound || 0)} profile refs, ${Number(s.linkedinFallbackVerifiedCandidates || 0)} Apollo-verified candidates; India-first LinkedIn runs ${Number(s.indiaLinkedInFallbackRuns || 0)}.`,
     `Results-first: ${deferred.count} rows deferred from the fast sweep; deterministic recheck ${s.deterministicRecheckAttempted ? 'ran' : 'not needed'}.`,
     issueParts.length ? `Remaining: ${issueParts.join('; ')}.` : 'Remaining: no bounded deterministic blockers recorded.',
@@ -4478,6 +4781,11 @@ module.exports = {
   fastUniversalEnrichmentEnabled,
   deepProviderFallbacksEnabled,
   indiaPhoneFirstEnabled,
+  phoneFirstPolicy,
+  phoneFirstPolicyState,
+  activePolicyState,
+  policyBudgetFor,
+  internationalFallbackGate,
   indiaFirstDecisionMakerTitles,
   hasIndianPhoneSignal,
   backgroundPhoneStatus,

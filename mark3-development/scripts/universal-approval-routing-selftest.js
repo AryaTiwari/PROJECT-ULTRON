@@ -36,10 +36,10 @@ assert.match(controlSource, /const paidApprovalResult = await resolveUniversalPa
 assert.match(controlSource, /if \(paidApprovalResult\) return paidApprovalResult/);
 assert.match(controlSource, /controller: 'universal-spreadsheet-domain-controller'/);
 
-assert.match(inspectorSource, /sheets\.values\(/);
+assert.match(inspectorSource, /operator\.readUniversalSheet\(/);
 assert.match(inspectorSource, /engine\.analyzeSheet\(/);
 assert.doesNotMatch(inspectorSource, /apollo-enrichment|linkedin-mcp|model-router|OmniRoute|chatOmniRouteOnly/);
-assert.match(inspectorSource, /inspectionMode: 'values-only-preapproval'/);
+assert.match(inspectorSource, /inspectionMode: 'unified-canonical-preapproval'/);
 assert.match(inspectorSource, /UNIVERSAL_SHEET_VALUES_READ_FAILED/);
 assert.match(inspectorSource, /UNIVERSAL_SHEET_PLANNING_FAILED/);
 
@@ -62,6 +62,8 @@ const control = require('../core/command-control-plane');
 const handler = require('../core/universal-paid-approval-handler');
 const controller = require('../core/universal-spreadsheet-domain-controller');
 const sheets = require('../core/google-sheets-operator');
+const paidTools = require('../core/paid-tool-approval');
+const universal = require('../core/universal-sheet-enrichment-targeted');
 
 assert.equal(handler.OPERATION, 'universal-spreadsheet-enrichment');
 assert.match(handler.modePrefix(undefined), /FULL-SHEET MODE/);
@@ -128,13 +130,65 @@ assert.equal(googleThreePocRoute.controller, 'universal-spreadsheet-domain-contr
     assert.equal(exact.sheetId, 1566066221);
     assert.equal(exact.matchedBy, 'sheetId');
 
-    const folded = await handler.canonicalApprovedTarget({
+  const folded = await handler.canonicalApprovedTarget({
       url: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
       sheetName: 'Arya',
       sheetId: null,
     });
     assert.equal(folded.sheetName, 'Arya ');
     assert.equal(folded.matchedBy, 'folded-name');
+
+    const previousScope = {
+      requestedOrdinals: [1, 2], requestedFields: ['email', 'role', 'phone'], ignoredFields: [],
+    };
+    const oldSchema = {
+      personGroups: [
+        { id: 'person-1', ordinal: 1, fields: { name: 2, phone: 3, email: 4 } },
+        { id: 'person-2', ordinal: 2, fields: { name: 5, email: 7 } },
+      ],
+    };
+    const currentSchema = {
+      personGroups: [
+        { id: 'person-1', ordinal: 1, fields: { name: 2, phone: 3, email: 4 } },
+        { id: 'person-2', ordinal: 2, fields: { name: 5, phone: 6, email: 7 } },
+      ],
+    };
+    assert.deepEqual(handler.refreshWriteScope(previousScope, oldSchema).unmappedTargets, [
+      { ordinal: 2, field: 'phone', columnIndex: null, header: null },
+    ], 'Preflight detects a requested POC field without a safe destination.');
+    const rebound = handler.refreshWriteScope(previousScope, currentSchema);
+    assert.equal(rebound.unmappedTargets.length, 0);
+    assert.ok(rebound.writeScope.allowed.some((item) => item.ordinal === 2 && item.field === 'phone' && item.columnIndex === 6));
+
+    const oldRun = universal.run;
+    const oldApprovalRequest = paidTools.request;
+    let refreshedApproval = null;
+    universal.run = async () => ({
+      schema: {
+        fingerprint: 'current-header-layout', headerRowNumber: 1, confidence: 0.95,
+        safety: { safe: true }, columns: [], personGroups: currentSchema.personGroups,
+        companyGroups: [{ id: 'company-1', ordinal: 1, fields: { company: 0 } }],
+        continuityRecoveries: [], headerRepairs: [],
+      },
+      analysis: { stats: { dataRows: 41, openPersonSlots: 82, partialPersonSlots: 0 } },
+    });
+    paidTools.request = (tool, operation, payload, summary) => {
+      refreshedApproval = { id: 'approval-refreshed', tool, operation, payload, summary, status: 'pending' };
+      return refreshedApproval;
+    };
+    const renewed = await handler.refreshApprovalAfterSchemaDrift(
+      { id: 'approval-old', tool: 'apollo', operation: handler.OPERATION, status: 'approved' },
+      { url: 'https://docs.google.com/spreadsheets/d/sheet-123', sheetName: 'Aryalead', expectedPersonGroups: 2, schemaFingerprint: 'old-header-layout', writeScope: previousScope },
+      { sheetName: 'Aryalead', sheetId: 3 },
+    );
+    assert.equal(renewed.ok, true);
+    assert.equal(renewed.schemaDriftRefreshed, true);
+    assert.equal(renewed.apolloCalled, false);
+    assert.equal(refreshedApproval.payload.schemaFingerprint, 'current-header-layout');
+    assert.ok(refreshedApproval.payload.writeScope.allowed.some((item) => item.ordinal === 2 && item.field === 'phone' && item.columnIndex === 6));
+    assert.match(refreshedApproval.summary, /columns changed after the previous approval/i);
+    universal.run = oldRun;
+    paidTools.request = oldApprovalRequest;
   } finally {
     sheets.metadata = originalMetadata;
     sheets.spreadsheetId = originalSpreadsheetId;

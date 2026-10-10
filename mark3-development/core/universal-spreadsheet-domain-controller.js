@@ -17,6 +17,7 @@ const enrichmentWriteScope = require('./universal-enrichment-write-scope');
 const apolloBudget = require('./universal-apollo-budget');
 const rowSelection = require('./universal-row-selection');
 const selfHealer = require('./universal-enrichment-self-healer');
+const phoneFirstPolicy = require('./universal-phone-first-policy');
 
 approvalHandler.install();
 
@@ -256,6 +257,7 @@ function typedFailure(error, context = {}) {
       targetDiagnostic: targetDiagnostic.availableTabs.length || targetDiagnostic.requestedSheetName ? targetDiagnostic : null,
       headerPreview: Array.isArray(error?.headerPreview) ? error.headerPreview : null,
       schemaQuestions: selfHealer.cleanList(error?.questions || error?.schema?.safety?.questions),
+      errorDiagnostics: error?.diagnostics || error?.schema?.safety?.diagnostics || null,
     },
   };
 }
@@ -273,6 +275,14 @@ function approvalSummary(inspection, policy = {}) {
   const people = summary.personGroups?.length || 0;
   const companies = summary.companyGroups?.length || 0;
   const header = summary.headerRowNumber || '?';
+  const writeMap = new Map();
+  for (const item of policy.writeScope?.allowed || []) {
+    if (!writeMap.has(item.ordinal)) writeMap.set(item.ordinal, new Set());
+    writeMap.get(item.ordinal).add(item.field);
+  }
+  const mappedTargets = [...writeMap.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([ordinal, fields]) => `POC-${ordinal}: ${[...fields].sort().join(', ')}`);
   return [
     `ULTRON deterministically inspected worksheet "${inspection?.sheetName || '?'}" before Apollo approval.`,
     rowLimitNotice(inspection?.rowLimitApplied),
@@ -280,6 +290,7 @@ function approvalSummary(inspection, policy = {}) {
       ? `FORWARD RESUME MODE: live write-scope recovery found the last processed row at ${policy.resumeFrontier?.lastProcessedRow ?? 'unknown'}; this approved pass will start at row ${policy.resumeFrontier?.nextRow ?? policy.targetRows?.[0] ?? 'unknown'} and will not rewind into historical unresolved rows.`
       : '',
     `It detected header row ${header}, ${people} person/contact group${people === 1 ? '' : 's'} and ${companies} company group${companies === 1 ? '' : 's'} without assuming a fixed POC count or fixed column letters.`,
+    mappedTargets.length ? `Approved write map: ${mappedTargets.join('; ')}.` : '',
     (summary.continuityRecoveries || []).length
       ? `Schema continuity recovery reconstructed ${(summary.continuityRecoveries || []).length} explicitly expected missing contact group${(summary.continuityRecoveries || []).length === 1 ? '' : 's'} in blank trailing columns. ${(summary.headerRepairs || []).length} missing header cell${(summary.headerRepairs || []).length === 1 ? '' : 's'} will be restored only after approval and only if those cells are still blank.`
       : 'Schema continuity recovery was not needed.',
@@ -443,6 +454,16 @@ async function handle(message, context = {}) {
   const indianPhonePolicySource = explicitIndianPhonePolicy
     ? 'explicit'
     : (automaticTwoPocIndianPolicy ? 'automatic-poc1-poc2-default' : null);
+  // The selection policy is resolved exactly once, here, from the request and
+  // its explicit India-phone gate. Execution, mission metadata, the approval
+  // payload and diagnostics all read this mode; nothing re-infers it later.
+  const policyResolution = phoneFirstPolicy.resolveMode({
+    originalMessage: original,
+    requireIndianPhone,
+    indianPhonePolicySource,
+  }, {});
+  const policyMode = policyResolution.mode;
+  const policySource = policyResolution.source;
   const expectedPersonGroups = parseExpectedPersonGroups(original) || (requireIndianPhone ? 2 : 0);
   const contactPhaseOrdinal = parseContactPhaseOrdinal(original);
   const explicitNameAuthoritative = Boolean(requestedSheetName);
@@ -498,14 +519,32 @@ async function handle(message, context = {}) {
     rowLimit: rowLimit || null,
     expectedPersonGroups: expectedPersonGroups || null,
     contactPhaseOrdinal: contactPhaseOrdinal || null,
-    schemaFingerprint: summary.fingerprint || null,
+    schemaFingerprint: summary.structuralFingerprint || summary.fingerprint || null,
     requireIndianPhone,
     indianPhonePolicySource,
+    policyMode,
+    policySource,
+    policyRequiresPhone: Boolean(policyResolution.requiresPhone),
+    policyIndiaRequired: Boolean(policyResolution.indiaRequired),
     requestedAt: new Date().toISOString(),
     originalMessage: original,
   };
 
   const writeScope = enrichmentWriteScope.compile(original, inspection.analysis?.schema || {});
+  const unmappedTargets = enrichmentWriteScope.unmappedRequestedTargets(writeScope, inspection.analysis?.schema || {});
+  if (unmappedTargets.length) {
+    const descriptions = unmappedTargets.map((item) => `POC-${item.ordinal} ${item.field}`).join(', ');
+    const failure = typedFailure(Object.assign(new Error(`No worksheet output column is mapped for ${descriptions}.`), {
+      code: 'UNIVERSAL_SCHEMA_FIELDS_UNMAPPED',
+      subsystem: 'SCHEMA',
+      errorType: 'SCHEMA',
+      stage: 'requested-write-scope-validation',
+      hint: `Add or label the intended ${descriptions} column${unmappedTargets.length === 1 ? '' : 's'}, then rerun. ULTRON will not guess which blank column to use.`,
+    }));
+    return response(false,
+      `Universal spreadsheet enrichment needs a clearer worksheet layout: ${failure.diagnostic}. ${failure.typed.hint} Apollo was not called and nothing was edited.`,
+      { ...failure.fields, diagnostic: failure.diagnostic, apolloCalled: false, spreadsheetUrl: sheetUrl, sheetName: exactSheetName || null, unmappedTargets });
+  }
   const estimate = apolloBudget.estimate({
     eligibleRows: inspection.analysis?.stats?.dataRows || 0,
     completeSlots: Number(inspection.analysis?.stats?.completePersonSlots || 0),
@@ -564,7 +603,7 @@ async function handle(message, context = {}) {
 
   const requestKey = crypto.createHash('sha256').update(JSON.stringify({
     spreadsheetId: inspection.spreadsheetId, sheetId: inspection.sheetId,
-    schemaFingerprint: summary.fingerprint, fields: writeScope.requestedFields,
+    schemaFingerprint: summary.structuralFingerprint || summary.fingerprint, fields: writeScope.requestedFields,
     ordinals: writeScope.requestedOrdinals, rowLimit: rowLimit || null,
     resumeMode: forwardResumeRequested ? 'forward-only' : 'standard',
     startRow,
@@ -574,13 +613,16 @@ async function handle(message, context = {}) {
     requestKey, provider: 'apollo', spreadsheetId: inspection.spreadsheetId,
     spreadsheetUrl: sheetUrl, spreadsheetTitle: inspection.spreadsheetTitle,
     sheetName: exactSheetName, sheetId: inspection.sheetId,
-    schemaFingerprint: summary.fingerprint,
+    schemaFingerprint: summary.structuralFingerprint || summary.fingerprint,
     requestedPOCs: writeScope.requestedOrdinals.length ? writeScope.requestedOrdinals : (summary.personGroups || []).map(group => group.ordinal),
     requestedFields: writeScope.requestedFields, ignoredFields: writeScope.ignoredFields,
     readScope: writeScope.readScope, writeScope, protectedColumns: writeScope.protectedColumns,
     status: 'AWAITING_APOLLO_APPROVAL',
     totalEligibleRows: forwardResumeRequested ? targetRowCount : (eligibleRowNumbers.length || inspection.analysis?.stats?.dataRows || 0),
     startRow, endRow,
+    policyMode,
+    policySource,
+    policyIndiaRequired: Boolean(policyResolution.indiaRequired),
     budget: apolloBudget.limits({}), request,
   });
   if (forwardFrontier) enrichmentMissions.setRecoveredFrontier(mission.missionId, forwardFrontier);
@@ -593,7 +635,7 @@ async function handle(message, context = {}) {
     'apollo',
     approvalHandler.OPERATION,
     request,
-    approvalSummary(inspection, request),
+    approvalSummary(inspection, { ...request, writeScope }),
   );
   enrichmentMissions.update(mission.missionId, { approvalId: approval.id, status: 'AWAITING_APOLLO_APPROVAL', completionState: 'AWAITING_APOLLO_APPROVAL' });
 

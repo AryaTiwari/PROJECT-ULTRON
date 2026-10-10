@@ -49,7 +49,23 @@ function recover(schema) {
   const recoveries = [];
 
   const seeds = columns.filter(ordinalIdentityColumn).sort((a, b) => a.index - b.index);
+
+  // Abstain instead of guessing: two ordinal identity columns with the same
+  // ordinal, the same normalized header AND the same evidence score are
+  // genuinely equivalent. Recovering one of them positionally would silently
+  // choose a person for that contact slot, so neither is recovered and the
+  // safety layer reports the real ambiguity with full diagnostics.
+  const equivalentSeeds = new Set();
   for (const seed of seeds) {
+    const twins = seeds.filter((other) =>
+      Number(other.slotHint) === Number(seed.slotHint)
+      && schemaTools.normalizeHeader(other.header || '') === schemaTools.normalizeHeader(seed.header || '')
+      && Number(other.score || 0) === Number(seed.score || 0));
+    if (twins.length > 1) for (const twin of twins) equivalentSeeds.add(twin);
+  }
+
+  for (const seed of seeds) {
+    if (equivalentSeeds.has(seed)) continue;
     const ordinal = Number(seed.slotHint);
     let group = groups.find((candidate) => Number(candidate.ordinal) === ordinal) || null;
     if (!group) {

@@ -10,6 +10,7 @@ const schemaContinuity = require('./universal-schema-continuity-recovery');
 const adaptiveRanking = require('./universal-adaptive-ranking-policy');
 const apolloQuality = require('./apollo-three-poc-quality');
 const candidateDiscovery = require('./three-poc-candidate-discovery-policy');
+const phoneFirstPolicy = require('./universal-phone-first-policy');
 
 const INSTALL_FLAG = Symbol.for('ultron.mark3.universalDeterministicBootstrap.installed');
 
@@ -26,7 +27,9 @@ function install() {
   // 6) recover explicitly requested trailing POC groups when blank header blocks were lost,
   // 7) replace fixed weighting with population-adaptive deterministic ranking,
   // 8) install final-verified-POC business-email quality (no personal-email reveal),
-  // 9) install high-recall zero-credit Apollo discovery before paid hydration.
+  // 9) install high-recall zero-credit Apollo discovery before paid hydration,
+  // 10) install the explicit phone-first-India selection policy (five-attempt
+  //     India budget, hard phone qualification, gated international fallback).
   const apolloNetwork = apolloFetchHardening.install();
   const values = valuesRangeHardening.install();
   const schema = schemaHardening.install();
@@ -37,6 +40,7 @@ function install() {
   const ranking = adaptiveRanking.install();
   const contactQuality = apolloQuality.install();
   const highRecallDiscovery = candidateDiscovery.install();
+  const phoneFirst = phoneFirstPolicy.install();
 
   const api = Object.freeze({
     apolloNetwork,
@@ -49,6 +53,7 @@ function install() {
     ranking,
     contactQuality,
     highRecallDiscovery,
+    phoneFirst,
     deterministic: true,
     modelCalls: 0,
   });

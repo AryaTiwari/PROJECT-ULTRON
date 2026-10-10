@@ -62,10 +62,10 @@ function pushAllowed(allowed, group, field, extra = {}) {
   });
 }
 
-function compile(input, schema = {}) {
-  const ignored = ignoredFields(input);
-  const fields = requestedFields(input).filter((field) => !ignored.includes(field));
-  const requestedOrdinals = ordinals(input);
+function compileContract(contract = {}, schema = {}) {
+  const ignored = [...new Set((contract.ignoredFields || []).map(String))];
+  const fields = [...new Set((contract.requestedFields || []).map(String))].filter((field) => !ignored.includes(field));
+  const requestedOrdinals = [...new Set((contract.requestedOrdinals || []).map(Number).filter((value) => Number.isInteger(value) && value > 0))].sort((a, b) => a - b);
   const groups = (schema.personGroups || []).filter(
     (group) => !requestedOrdinals.length || requestedOrdinals.includes(Number(group.ordinal || 1)),
   );
@@ -111,6 +111,32 @@ function compile(input, schema = {}) {
     protectedColumns,
     readScope: (schema.columns || []).map((column) => column.index),
   };
+}
+
+function compile(input, schema = {}) {
+  return compileContract({
+    requestedFields: requestedFields(input),
+    requestedOrdinals: ordinals(input),
+    ignoredFields: ignoredFields(input),
+  }, schema);
+}
+
+function unmappedRequestedTargets(scope, schema = {}) {
+  const groups = Array.isArray(schema.personGroups) ? schema.personGroups : [];
+  const issues = [];
+  for (const ordinal of scope?.requestedOrdinals || []) {
+    const group = groups.find((item) => Number(item.ordinal || 1) === Number(ordinal));
+    for (const field of scope?.requestedFields || []) {
+      // Designations can be safely carried alongside a verified person's name
+      // when the worksheet has no separate title column.
+      const embeddedInName = field === 'role' && Number.isInteger(descriptorIndex(group?.fields?.name));
+      if (embeddedInName) continue;
+      if (!Number.isInteger(descriptorIndex(group?.fields?.[field]))) {
+        issues.push({ ordinal: Number(ordinal), field, columnIndex: null, header: null });
+      }
+    }
+  }
+  return issues;
 }
 
 function allowed(scope, groupId, field, columnIndex) {
@@ -163,7 +189,9 @@ module.exports = {
   ordinals,
   requestedFields,
   ignoredFields,
+  compileContract,
   compile,
+  unmappedRequestedTargets,
   allowed,
   assertChanges,
 };

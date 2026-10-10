@@ -42,7 +42,7 @@ async function main(){
  const searchesBefore=searches;
  await assert.rejects(operator.run(request,{apolloApproved:false}),e=>e.code==='APOLLO_APPROVAL_REQUIRED');
  assert.equal(searches,searchesBefore,'inspection cannot call Apollo');
- await assert.rejects(operator.run(request,{apolloApproved:true,expectedSchemaFingerprint:'changed-layout'}),e=>e.code==='UNIVERSAL_SCHEMA_AMBIGUOUS');
+ await assert.rejects(operator.run(request,{apolloApproved:true,expectedSchemaFingerprint:'changed-layout'}),e=>e.code==='UNIVERSAL_SCHEMA_DRIFT'&&e.diagnostics?.recoverable===true&&e.diagnostics?.approvedFingerprint==='changed-layout');
  assert.equal(searches,searchesBefore,'changed approved schema cannot call Apollo');
  result=await operator.run(request,{apolloApproved:true,backgroundPhoneWatcher:false});
  assert.equal(result.completionState,'COMPLETE');assert.equal(grid[1][1],'First Person — Founder');assert.equal(grid[1][2],'p1@acme.example');

@@ -80,10 +80,14 @@ async function run() {
   const originals = {
     readCell: sheets.readCell,
     writeCells: sheets.writeCells,
+    batchValues: sheets.batchValues,
   };
   const writes = [];
   try {
     sheets.readCell = async (_id, range) => range.endsWith('I1') ? 'Existing protected header' : '';
+    // applyRecoveredHeaderRepairs reads current header cells through batchGet.
+    // Keep the fixture offline: only I1 is populated, everything else is blank.
+    sheets.batchValues = async (_id, ranges) => ranges.map((range) => [range.endsWith('I1') ? ['Existing protected header'] : ['']]);
     sheets.writeCells = async (_id, changes) => {
       writes.push(...changes);
       return { updatedCells: changes.length };
@@ -101,6 +105,7 @@ async function run() {
   } finally {
     sheets.readCell = originals.readCell;
     sheets.writeCells = originals.writeCells;
+    sheets.batchValues = originals.batchValues;
     restoreExpectedGroupsEnv();
   }
 

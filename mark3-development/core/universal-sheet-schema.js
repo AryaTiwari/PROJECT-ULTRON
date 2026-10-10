@@ -25,9 +25,78 @@ const FAMILIES = Object.freeze({
   notes:new Set(['notes','note','remarks','remark','comments','comment']),
 });
 
-function normalizeHeader(value){return String(value??'').toLowerCase().replace(/&/g,' and ').replace(/[_./\\-]+/g,' ').replace(/[^a-z0-9+ ]+/g,' ').replace(/\s+/g,' ').trim();}
+function normalizeHeader(value){return String(value??'').toLowerCase().replace(/\bp[\s./_-]*o[\s./_-]*c(?=[\s._-]|$)/g,'poc').replace(/&/g,' and ').replace(/[_./\\-]+/g,' ').replace(/[^a-z0-9+ ]+/g,' ').replace(/\s+/g,' ').trim();}
+
+// ---------------------------------------------------------------------------
+// Central semantic alias dictionary (one place for every header synonym).
+// STRONG aliases are safe anywhere in a header; CONTEXTUAL aliases only count
+// when an explicit POC/ordinal index scopes them ("POC 1 Number" = phone,
+// but a bare "Number" is never assumed to be a phone column).
+// ---------------------------------------------------------------------------
+const FIELD_ALIAS_ORDER = Object.freeze(['status','phone','email','linkedin','website','role','company','name']);
+const FIELD_ALIASES = Object.freeze({
+  status: Object.freeze(['call outcome','outcome','status','stage','progress']),
+  phone: Object.freeze(['phone number','mobile number','contact number','mobile no','contact no','phone','mobile','telephone','tel','cell','whatsapp']),
+  email: Object.freeze(['email address','email id','e mail','email','mail']),
+  linkedin: Object.freeze(['linkedin url','linkedin profile','linkedin link','profile link','profile url','linkedin','profile']),
+  website: Object.freeze(['company website','company domain','website','web site','homepage','domain']),
+  role: Object.freeze(['job title','job role','designation','title','role','position','seniority','department']),
+  company: Object.freeze(['company name','organisation','organization','employer','company','business','firm']),
+  name: Object.freeze(['full name','contact name','person name','poc name','display name','name','contact']),
+});
+const CONTEXTUAL_ALIASES = Object.freeze({
+  phone: Object.freeze(['number','no']),
+  company: Object.freeze(['account','client','org']),
+  website: Object.freeze(['web']),
+});
+function escapeRegex(value){return String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+function extractPocIndex(h){
+  if(!h) return null;
+  const numeric=h.match(/(?:^|\s)(\d{1,2})(?:st|nd|rd|th)?(?=\s|$)/)?.[1]
+    || h.match(/\b(?:poc|contact|person|decision maker|dm|lead)\s*(\d{1,2})\b/)?.[1];
+  if(numeric){const n=Number(numeric);if(Number.isInteger(n)&&n>=1&&n<=99)return n;}
+  for(const token of h.split(' ')) if(ORDINAL_WORDS[token]) return ORDINAL_WORDS[token];
+  return null;
+}
+// Deterministic, order-independent header semantics: exact alias > longest
+// phrase alias > POC-scoped contextual alias. Never uses column position.
+function semanticForHeader(value){
+  const h=normalizeHeader(value);
+  if(!h) return {normalized:'',pocIndex:null,field:null,source:null};
+  const pocIndex=extractPocIndex(h);
+  // "Person or Company Name" / "Company or Person Name" identities are person
+  // names, never company seeds — preserve the historical person-anchor reading.
+  if(/\b(?:person|contact|poc|decision maker)\s+or\s+company\b/.test(h)||/\bcompany\s+or\s+(?:person|contact|poc|decision maker)\b/.test(h))
+    return {normalized:h,pocIndex,field:'name',source:'phrase-alias'};
+  // "Company Link" / "Company LinkedIn" columns hold links, not the company
+  // identity itself: they must attach to the company group as its LinkedIn
+  // field instead of spawning a second company entity.
+  if(/\b(?:company|organisation|organization|employer|business)\b/.test(h)&&/\b(?:link|url|profile|linkedin)\b/.test(h)&&!/\b(?:website|web site|domain|homepage)\b/.test(h))
+    return {normalized:h,pocIndex,field:'linkedin',source:'company-link'};
+  for(const field of FIELD_ALIAS_ORDER) if(FIELD_ALIASES[field].includes(h)) return {normalized:h,pocIndex,field,source:'exact-alias'};
+  let best=null;
+  const consider=(field,alias,contextual)=>{
+    if(contextual && !pocIndex) return;
+    const match=new RegExp(`(?:^| )${escapeRegex(alias)}( |$)`).exec(h);
+    if(!match) return;
+    const candidate={field,alias,index:match.index};
+    if(!best||alias.length>best.alias.length||(alias.length===best.alias.length&&candidate.index<best.index)) best=candidate;
+  };
+  // Typed field aliases (phone/email/status/...) always outrank generic entity
+  // words like "contact": "Contact Email" is an email column, "First Contact
+  // Phone" is a phone column. Generic person wording only decides the field
+  // when no typed alias is present ("Primary Contact", "Point of Contact").
+  for(const field of FIELD_ALIAS_ORDER){
+    if(field==='name') continue;
+    for(const alias of FIELD_ALIASES[field]) consider(field,alias,false);
+    for(const alias of (CONTEXTUAL_ALIASES[field]||[])) consider(field,alias,true);
+  }
+  if(!best) for(const alias of FIELD_ALIASES.name) consider('name',alias,false);
+  if(best) return {normalized:h,pocIndex,field:best.field,source:pocIndex?'poc-qualified-alias':'phrase-alias'};
+  return {normalized:h,pocIndex,field:null,source:null};
+}
 function words(value){return normalizeHeader(value).split(' ').filter(Boolean);}
-function slotHint(value){const h=normalizeHeader(value);if(!h)return null;const numeric=h.match(/(?:^|\s)(\d{1,2})(?:st|nd|rd|th)?(?:\s|$)/)?.[1]||h.match(/\b(?:poc|contact|person|decision maker|dm|lead)\s*(\d{1,2})\b/)?.[1];if(numeric){const n=Number(numeric);if(Number.isInteger(n)&&n>=1&&n<=99)return n;}for(const token of h.split(' '))if(ORDINAL_WORDS[token])return ORDINAL_WORDS[token];return null;}
+function slotHint(value){return extractPocIndex(normalizeHeader(value));}
 function looksEmail(value){return Boolean(require('./universal-contact-normalization').normalizeEmail(value));}
 function looksPhone(value){const s=String(value||'').trim();if(!s||/linkedin|https?:\/\//i.test(s))return false;const d=s.replace(/\D/g,'');return d.length>=7&&d.length<=15&&/[+()\d -]/.test(s);}
 function linkedInKind(value){const s=String(value||'').trim();if(!/(?:https?:\/\/)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\//i.test(s))return null;if(/linkedin\.com\/in\//i.test(s))return'linkedin_person';if(/linkedin\.com\/company\//i.test(s))return'linkedin_company';return'linkedin';}
@@ -61,7 +130,18 @@ function headerRoleScores(header,signature={}){
   if(/\b(post|job|requirement|vacancy|description|details|jd)\b/.test(h))scores.details+=45;if(/\b(source|reference|evidence)\b/.test(h))scores.source+=40;if(/\b(status|stage|outcome|progress)\b/.test(h))scores.status+=45;if(/\b(notes?|remarks?|comments?)\b/.test(h))scores.notes+=45;
   if((signature.email||0)>=.5)scores.email+=80*signature.email;if((signature.phone||0)>=.5)scores.phone+=75*signature.phone;
   if((signature.linkedinPerson||0)>=.35){scores.linkedin_person+=90*signature.linkedinPerson;scores.linkedin+=55*signature.linkedinPerson;}if((signature.linkedinCompany||0)>=.35){scores.linkedin_company+=90*signature.linkedinCompany;scores.linkedin+=55*signature.linkedinCompany;}if((signature.linkedin||0)>=.5)scores.linkedin+=60*signature.linkedin;if((signature.url||0)>=.6&&(signature.linkedin||0)<.2)scores.website+=45*signature.url;
-  if(/\bemail (?:status|verified|verification|confidence)\b/.test(h))scores.email-=60;if(/\bphone (?:status|verified|verification|type)\b/.test(h))scores.phone-=55;if(h==='number'||h==='no'||h==='id')scores.phone=Math.min(scores.phone,signature.phone>=.5?45:0);if(/\bcompany\b/.test(h))scores.name-=8;if(/\bperson|contact|poc|candidate\b/.test(h))scores.company-=8;return scores;
+  if(/\bemail (?:status|verified|verification|confidence)\b/.test(h))scores.email-=60;if(/\bphone (?:status|verified|verification|type)\b/.test(h))scores.phone-=55;  if(h==='number'||h==='no'||h==='id')scores.phone=Math.min(scores.phone,signature.phone>=.5?45:0);if(/\bcompany\b/.test(h))scores.name-=8;if(/\bperson|contact|poc|candidate\b/.test(h))scores.company-=8;
+  // Semantic alias resolution is the strongest deterministic signal: an
+  // explicit POC-qualified alias ("2nd POC Mobile") or an exact alias
+  // ("Designation") outranks incidental token matches and column position.
+  const sem=semanticForHeader(header);
+  if(sem.field&&scores[sem.field]!==undefined){
+    if(sem.pocIndex) scores[sem.field]+=85;
+    else if(sem.source==='exact-alias') scores[sem.field]+=75;
+    else scores[sem.field]+=60;
+    if(sem.field==='status'&&sem.pocIndex) scores.status+=40; // "2nd POC call outcome" is a status column, never a POC identity
+  }
+  return scores;
 }
 function bestRole(scores){const a=Object.entries(scores).sort((x,y)=>y[1]-x[1]),[role,score]=a[0]||['unknown',0],second=a[1]?.[1]||0;return{role:score>=24?role:'unknown',confidence:score>0?Math.max(0,Math.min(1,(score-Math.max(0,second*.35))/100)):0,score,margin:score-second};}
 function columnSamples(rows,h,i,limit=60){const a=[];for(let r=h+1;r<Math.min(rows.length,h+1+limit);r++)a.push(rows[r]?.[i]??'');return a;}
@@ -73,7 +153,8 @@ function personSeed(c){if(c.role!=='name')return false;return !(/\b(company|orga
 function companySeed(c){return c.role==='company'||c.role==='linkedin_company';}
 function canonicalPersonField(role){if(role==='linkedin_person'||role==='linkedin')return'linkedin';return['name','role','phone','email','company','location'].includes(role)?role:null;}
 function canonicalCompanyField(role){if(role==='linkedin_company'||role==='linkedin')return'linkedin';return['company','website','phone','email','location'].includes(role)?role:null;}
-function putField(g,f,c){if(!f)return;const old=g.fields[f];if(!old||c.confidence>old.confidence){if(old)g.alternates.push({field:f,...old});g.fields[f]={index:c.index,header:c.header,confidence:c.confidence,role:c.role};}else g.alternates.push({field:f,index:c.index,header:c.header,confidence:c.confidence,role:c.role});}
+function putAlternate(g,entry){const list=g.alternates||(g.alternates=[]);if(!list.some((item)=>item.field===entry.field&&Number(item.index)===Number(entry.index)))list.push(entry);}
+function putField(g,f,c){if(!f)return;const old=g.fields[f];if(!old||c.confidence>old.confidence){if(old)putAlternate(g,{field:f,...old,score:old.score??c.score??null});g.fields[f]={index:c.index,header:c.header,confidence:c.confidence,role:c.role,score:c.score??old?.score??null};}else putAlternate(g,{field:f,index:c.index,header:c.header,confidence:c.confidence,role:c.role,score:c.score??null});}
 function makeGroup(kind,ordinal,seed){return{id:`${kind}-${ordinal||'unscoped'}-${seed?.index??'x'}`,kind,ordinal:ordinal||null,seedIndex:seed?.index??null,fields:{},alternates:[],confidence:0};}
 function explicitPersonGroups(columns){const map=new Map();for(const c of columns){if(!c.slotHint)continue;const f=canonicalPersonField(c.role);if(!f)continue;const headerPerson=/\b(poc|person|contact|candidate|decision maker|dm|lead)\b/.test(c.normalizedHeader),typed=['name','role','phone','email','linkedin_person'].includes(c.role);if(!headerPerson&&!typed)continue;if(!map.has(c.slotHint))map.set(c.slotHint,makeGroup('person',c.slotHint,c));putField(map.get(c.slotHint),f,c);}return map;}
 function assignPersonGroups(columns){
@@ -116,10 +197,43 @@ function assignCompanyGroups(columns,claimed=new Set()){const seeds=columns.filt
     putField(g,canonicalCompanyField(seed.role),seed);groups.push(g);
   }for(const c of columns){if(claimed.has(c.index))continue;const f=canonicalCompanyField(c.role);if(!f||c.role==='name'||!groups.length)continue;if(groups.some((g)=>Object.values(g.fields).some((v)=>v.index===c.index)))continue;let target=groups[0];for(const g of groups){if((g.seedIndex??-1)<=c.index)target=g;else break;}putField(target,f,c);}for(const g of groups)g.confidence=Math.min(1,.45+Object.keys(g.fields).length*.12);return groups;}
 function dedicatedProviderColumn(column){return /^(?:apollo)(?:\s|$)/.test(String(column?.normalizedHeader||''));}
+// A row qualifies as grouped-header context for the detected header row when
+// exactly one of the two rows carries explicit POC/ordinal labels and the
+// other carries plain field labels.
+function groupContextRow(rows,headerRowIndex){
+  const slotCells=(row)=>{let slots=0,nonEmpty=0;for(const value of row||[]){const t=String(value??'').trim();if(!t)continue;nonEmpty++;if(slotHint(t))slots++;}return{slots,nonEmpty};};
+  const headerStats=slotCells(rows[headerRowIndex]);
+  if(!headerStats.nonEmpty)return null;
+  for(const r of [headerRowIndex-1,headerRowIndex+1]){
+    if(r<0||r>=(rows||[]).length)continue;
+    const stats=slotCells(rows[r]);
+    if(stats.nonEmpty<2||stats.slots<2)continue;
+    if(headerStats.slots>0)continue; // both rows ordinal-labelled → not a group/field pair
+    return r;
+  }
+  return null;
+}
 function inferSchema(rows,options={}){
   const header=detectHeaderRow(rows,options);
   if(!header){const e=new Error('Could not infer a reliable spreadsheet header row or semantic column graph.');e.code='UNIVERSAL_SCHEMA_NOT_FOUND';throw e;}
-  const columns=header.columns;
+  let columns=header.columns,effectiveHeader=rows[header.rowIndex];
+  // Phase 6 — grouped / multi-row headers: when the adjacent row carries the
+  // explicit POC/ordinal group labels and the detected header row carries the
+  // field labels (or vice versa), the effective header is the column-wise
+  // merge of both rows. Single-row headers are untouched.
+  const contextRowIndex=groupContextRow(rows,header.rowIndex);
+  if(contextRowIndex!==null){
+    const upper=Math.min(contextRowIndex,header.rowIndex),lower=Math.max(contextRowIndex,header.rowIndex);
+    const a=rows[upper]||[],b=rows[lower]||[];
+    effectiveHeader=Array.from({length:Math.max(a.length,b.length)},(_,i)=>{
+      const x=String(a[i]??'').trim(),y=String(b[i]??'').trim();
+      return x&&y?`${x} ${y}`:(x||y);
+    });
+    const view=rows.slice();view[header.rowIndex]=effectiveHeader;
+    columns=analyzeColumns(view,header.rowIndex);
+    const raw=rows[header.rowIndex]||[];
+    for(let i=0;i<columns.length;i++)columns[i].rawHeader=String(raw[i]??'').trim();
+  }
   const explicitPocScope=Number(options.expectedPersonGroups||0)>0;
   // When a command explicitly targets POC groups, dedicated provider-output
   // columns such as APOLLO CONTACT/PHONE/EMAIL are evidence from another
@@ -132,7 +246,30 @@ function inferSchema(rows,options={}){
   const context={};
   for(const c of graphColumns){if(personIndexes.has(c.index))continue;if(companyGroups.some((g)=>Object.values(g.fields).some((f)=>f.index===c.index)))continue;if(['details','location','source','status','notes','website','company'].includes(c.role))(context[c.role]||=[]).push({index:c.index,header:c.header,confidence:c.confidence});}
   const semantic=graphColumns.filter((c)=>c.role!=='unknown'),groupEvidence=[...personGroups,...companyGroups].reduce((s,g)=>s+g.confidence,0),confidence=Math.max(0,Math.min(1,.25+Math.min(.25,semantic.length*.025)+Math.min(.35,groupEvidence*.12)+Math.min(.15,header.score/400)));
-  return{schemaVersion:1,headerRowIndex:header.rowIndex,headerRowNumber:header.rowNumber,confidence,columns,entityGroups:[...personGroups,...companyGroups],personGroups,companyGroups,contextColumns:context,providerSectionColumns,fingerprint:columns.map((c)=>normalizeHeader(c.header)).join('|')};
+  return{schemaVersion:1,headerRowIndex:header.rowIndex,headerRowNumber:header.rowNumber,confidence,columns,entityGroups:[...personGroups,...companyGroups],personGroups,companyGroups,contextColumns:context,providerSectionColumns,fingerprint:columns.map((c)=>normalizeHeader(c.header)).join('|'),structuralFingerprint:structuralFingerprintOf(header.rowNumber,columns)};
+}
+
+// Canonical, value-independent structural identity (Phase 8/14): header row
+// plus every non-empty normalized header. Data-width padding (empty headers
+// beyond the real table) and cell values can never change it.
+function structuralFingerprintOf(headerRowNumber,columns){
+  const parts=(Array.isArray(columns)?columns:[])
+    .filter((column)=>normalizeHeader(column.header))
+    .map((column)=>`${Number(column.index)}:${normalizeHeader(column.header)}`);
+  return `h${Number(headerRowNumber)||0}|${parts.join('|')}`;
+}
+// Stable hash of the fully resolved canonical schema (frozen-schema contract).
+function hashSchema(schema){
+  if(!schema) return null;
+  const crypto=require('crypto');
+  const group=(item)=>({ordinal:item.ordinal??null,fields:Object.fromEntries(Object.entries(item.fields||{}).map(([field,descriptor])=>[field,Number(descriptor.index)]))});
+  const canonical={
+    headerRow:Number(schema.headerRowNumber||0),
+    columns:(schema.columns||[]).map((column)=>[Number(column.index),normalizeHeader(column.header),column.role||'unknown']),
+    personGroups:(schema.personGroups||[]).map(group),
+    companyGroups:(schema.companyGroups||[]).map(group),
+  };
+  return crypto.createHash('sha1').update(JSON.stringify(canonical)).digest('hex');
 }
 function fieldIndex(group,field){return Number.isInteger(group?.fields?.[field]?.index)?group.fields[field].index:-1;}
-module.exports={normalizeHeader,words,slotHint,looksEmail,looksPhone,linkedInKind,looksUrl,valueSignature,headerRoleScores,bestRole,analyzeColumns,detectHeaderRow,inferSchema,assignPersonGroups,assignCompanyGroups,dedicatedProviderColumn,fieldIndex};
+module.exports={normalizeHeader,words,slotHint,extractPocIndex,semanticForHeader,structuralFingerprintOf,hashSchema,looksEmail,looksPhone,linkedInKind,looksUrl,valueSignature,headerRoleScores,bestRole,analyzeColumns,detectHeaderRow,groupContextRow,inferSchema,assignPersonGroups,assignCompanyGroups,dedicatedProviderColumn,fieldIndex};

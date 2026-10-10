@@ -188,6 +188,7 @@ function recover(rows, schema, options = {}) {
   schema.expectedPersonGroups = expected;
   schema.schemaVersion = Math.max(5, Number(schema.schemaVersion || 1));
   schema.fingerprint = schema.columns.map((column) => schemaTools.normalizeHeader(column.header)).join('|');
+  schema.structuralFingerprint = schemaTools.structuralFingerprintOf(schema.headerRowNumber, schema.columns);
 
   const groupEvidence = schema.personGroups.reduce((sum, group) => sum + Number(group.confidence || 0), 0);
   schema.confidence = clamp(Math.max(Number(schema.confidence || 0), 0.28 + Math.min(0.6, groupEvidence * 0.16)));

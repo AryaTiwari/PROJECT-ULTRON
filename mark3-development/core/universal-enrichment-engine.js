@@ -5,7 +5,10 @@ const planner = require('./universal-enrichment-planner');
 const ranker = require('./universal-authority-ranker');
 
 function analyzeSheet(rows, options = {}) {
-  const schema = schemaTools.inferSchema(rows, options.schema || {});
+  // Phase 14 (schema freeze): when the caller already resolved the canonical
+  // schema, row planning MUST consume that frozen schema instead of
+  // re-interpreting the worksheet a second time.
+  const schema = options.resolvedSchema || schemaTools.inferSchema(rows, options.schema || {});
   const rowPlans = [];
   const stats = {
     dataRows: 0,
@@ -142,6 +145,9 @@ function schemaSummary(schema) {
     headerRepairs: Array.isArray(schema.headerRepairs) ? schema.headerRepairs : [],
     expectedPersonGroups: Number(schema.expectedPersonGroups || 0) || null,
     fingerprint: schema.fingerprint,
+    structuralFingerprint: schema.structuralFingerprint || null,
+    frozen: Boolean(schema.frozen),
+    schemaHash: schema.schemaHash || null,
   };
 }
 

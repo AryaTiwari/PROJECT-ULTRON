@@ -155,4 +155,8 @@ module.exports = {
   companyLocationEvidence,
   companyIndiaPriority,
   personIndiaPriority,
+  // Canonical strict validator: a real Indian mobile, or nothing. Exported so
+  // every policy layer (universal phone-first selection included) uses one
+  // definition instead of re-implementing the +91 rules.
+  strictIndianMobile,
 };
