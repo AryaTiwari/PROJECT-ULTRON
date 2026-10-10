@@ -32,6 +32,7 @@ jobs:
         run: |
           node --check core/three-poc-phone-first-policy.js
           node --check core/three-poc-enrichment-operator.js
+          node --check core/apollo-enrichment.js
       - name: Run India-first phone policy regression
         working-directory: mark3-development
         run: npm run check:phone-first
