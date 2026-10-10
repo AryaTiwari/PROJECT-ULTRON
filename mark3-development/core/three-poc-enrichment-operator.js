@@ -9,6 +9,8 @@ const apollo = require('./apollo-enrichment');
 const modelRouter = require('./model-router');
 
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'three-poc-enrichment', 'jobs.json');
+const PHONE_POLICY_VERSION = 'india-phone-first-5-attempts-v1';
+const DEFAULT_PHONE_POLICY_MODE = 'india-first-5-attempts';
 let watcherTimer = null;
 let watcherRemaining = 0;
 
@@ -135,6 +137,35 @@ function saveState(state) {
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
   state.jobs = (state.jobs || []).slice(-20);
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+function currentPhonePolicy(options = {}) {
+  const mode = String(options.phonePolicyMode || process.env.ULTRON_M3_PHONE_POLICY_MODE || DEFAULT_PHONE_POLICY_MODE)
+    .trim().toLowerCase();
+  return { version: PHONE_POLICY_VERSION, mode };
+}
+
+function recordStageLatency(stats, stage, startedAt) {
+  const duration = Math.max(0, Date.now() - startedAt);
+  if (!stats.stageLatencyMs) stats.stageLatencyMs = {};
+  const bucket = stats.stageLatencyMs[stage] || (stats.stageLatencyMs[stage] = { count: 0, total: 0, max: 0, samples: [] });
+  bucket.count++;
+  bucket.total += duration;
+  bucket.max = Math.max(bucket.max, duration);
+  bucket.samples.push(duration);
+  if (bucket.samples.length > 1000) bucket.samples.shift();
+  return duration;
+}
+
+function summarizeStageLatency(stats) {
+  for (const bucket of Object.values(stats.stageLatencyMs || {})) {
+    const sorted = [...bucket.samples].sort((a, b) => a - b);
+    const percentile = (p) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)] : 0;
+    bucket.p50 = percentile(0.5);
+    bucket.p95 = percentile(0.95);
+    bucket.average = bucket.count ? Math.round(bucket.total / bucket.count) : 0;
+    delete bucket.samples;
+  }
 }
 
 function normalizeHeader(value) {
@@ -983,8 +1014,11 @@ async function enrichWorkbook(source, options = {}) {
     createdLinkedInColumns[sheet.sheetName] = await ensurePocLinkedInColumns(source, sheet);
   }
 
+  const phonePolicy = currentPhonePolicy(options);
   const job = {
     id: `three-poc-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+    phonePolicyVersion: phonePolicy.version,
+    phonePolicyMode: phonePolicy.mode,
     source,
     provider,
     requestedSheetName: String(options.sheetName || '').trim() || null,
@@ -1057,6 +1091,9 @@ async function enrichWorkbook(source, options = {}) {
     matchedExistingPocSlots: 0,
     updatedCells: 0,
     agentModels: new Set(),
+    phonePolicyVersion: phonePolicy.version,
+    phonePolicyMode: phonePolicy.mode,
+    stageLatencyMs: {},
   };
 
   const rowLimit = Math.max(1, Math.min(500, Number(options.rowLimit || process.env.ULTRON_M3_THREE_POC_ROW_LIMIT || 500)));
@@ -1072,7 +1109,8 @@ async function enrichWorkbook(source, options = {}) {
   ];
 
   const candidatePoolFor = async (companyContext) => {
-    const key = String(companyContext.domain || companyContext.company || '').trim().toLowerCase();
+    const stageStartedAt = Date.now();
+    const key = `${phonePolicy.version}:${phonePolicy.mode}:${String(companyContext.domain || companyContext.company || '').trim().toLowerCase()}`;
     if (key && candidatePoolCache.has(key)) {
       stats.candidatePoolCacheHits++;
       return candidatePoolCache.get(key);
@@ -1100,6 +1138,7 @@ async function enrichWorkbook(source, options = {}) {
       });
     }
     if (key) candidatePoolCache.set(key, pool);
+    recordStageLatency(stats, 'candidateSearch', stageStartedAt);
     return pool;
   };
 
@@ -1439,6 +1478,8 @@ async function enrichWorkbook(source, options = {}) {
   }
 
   stats.agentModels = [...stats.agentModels];
+  summarizeStageLatency(stats);
+  job.stats = stats;
   job.status = stats.rowLimitReached
     ? 'partial_safe_cap'
     : (stats.failedRows ? 'completed_with_errors' : (stats.pendingPhones ? 'waiting_for_phone_webhooks' : 'completed'));
@@ -1478,6 +1519,12 @@ async function resumeCappedJob(options = {}) {
   if (options.jobId && String(options.jobId) !== String(previous.id)) {
     const error = new Error('The approved POC resume checkpoint no longer matches the latest resumable job. Nothing was executed.');
     error.code = 'THREE_POC_RESUME_CHECKPOINT_MISMATCH';
+    throw error;
+  }
+  const requestedPolicy = currentPhonePolicy(options);
+  if (previous.phonePolicyVersion !== requestedPolicy.version || previous.phonePolicyMode !== requestedPolicy.mode) {
+    const error = new Error('The saved POC mission uses a different or legacy phone-selection policy. Resume is blocked to prevent stale policy/cache results from bypassing the current India-first requirement. Start a new explicitly approved run after reviewing the checkpoint.');
+    error.code = 'THREE_POC_RESUME_POLICY_MISMATCH';
     throw error;
   }
 
