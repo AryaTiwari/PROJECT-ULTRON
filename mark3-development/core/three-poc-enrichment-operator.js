@@ -1130,15 +1130,16 @@ async function enrichWorkbook(source, options = {}) {
       }));
       for (const result of results) if (result?.people?.length) indiaPools.push(result.people);
       const candidates = phoneFirstPolicy.mergeCandidates(indiaPools);
-      verifiedIndianPhoneFound = candidates.some((person) =>
+      const verifiedIndianPhones = candidates.filter((person) =>
         Boolean(phoneFirstPolicy.strictIndianMobile(person.phone || person.phone_number || person.mobile_phone, person.location || person.country || ''))
       );
+      verifiedIndianPhoneFound = verifiedIndianPhones.length > 0;
+      stats.verifiedIndianPhoneCandidates += verifiedIndianPhones.length;
       if (verifiedIndianPhoneFound) break;
     }
     stats.indiaPhoneSearchAttempts += attemptsCompleted;
 
     let people = phoneFirstPolicy.mergeCandidates(indiaPools);
-    if (verifiedIndianPhoneFound) stats.verifiedIndianPhoneCandidates++;
     let internationalFallbackUsed = false;
     if (phoneFirstPolicy.canUseInternationalFallback(attemptsCompleted, verifiedIndianPhoneFound)) {
       // No qualifying +91 number surfaced in the five India-focused searches.
