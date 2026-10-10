@@ -14,6 +14,7 @@ assert.equal(policy.isIndiaLocated({ location: 'Bengaluru, India' }), true);
 assert.equal(policy.isIndiaLocated({ location: 'Indianapolis, USA' }), false);
 assert.equal(policy.phonePriority({ phone: '+91 9876543210' }), 4);
 assert.equal(policy.phonePriority({ location: 'Mumbai, India', hasDirectPhone: true }), 3);
+assert.equal(policy.phonePriority({ location: 'Mumbai, India', directPhoneAvailability: 1 }), 1);
 assert.equal(policy.phonePriority({ phone: '+1 415 555 0100' }), 2);
 assert.equal(policy.phonePriority({ location: 'Mumbai, India' }), 1);
 assert.equal(policy.canUseInternationalFallback(4, false), false);
