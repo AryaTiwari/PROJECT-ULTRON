@@ -36,7 +36,7 @@ function isIndiaLocated(person = {}) {
 
 function directPhoneAvailable(person = {}) {
   const value = text(person.hasDirectPhone ?? person.has_direct_phone ?? person.directPhoneAvailability).toLowerCase();
-  return /^(?:yes|true|available|found|confirmed|1|2)$/.test(value)
+  return /^(?:yes|true|available|found|confirmed|2)$/.test(value)
     || /\b(?:yes|available|direct phone available)\b/.test(value);
 }
 
