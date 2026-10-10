@@ -7,6 +7,7 @@ const googleSheets = require('./google-sheets-operator');
 const fileVault = require('./file-vault');
 const apollo = require('./apollo-enrichment');
 const modelRouter = require('./model-router');
+const phoneFirstPolicy = require('./three-poc-phone-first-policy');
 
 const STATE_FILE = path.join(config.projectRoot, '.ultron', 'three-poc-enrichment', 'jobs.json');
 let watcherTimer = null;
@@ -405,6 +406,13 @@ function candidateView(person, index) {
     departments: person.departments || [],
     functions: person.functions || [],
     location: person.location || '',
+    country: person.country || '',
+    country_name: person.country_name || '',
+    city: person.city || '',
+    state: person.state || '',
+    phone: person.phone || person.phone_number || person.mobile_phone || '',
+    hasDirectPhone: person.hasDirectPhone ?? person.has_direct_phone ?? null,
+    directPhoneAvailability: person.directPhoneAvailability ?? null,
     linkedinUrl: person.linkedinUrl || '',
     organizationName: person.organizationName || '',
     organizationDomain: person.organizationDomain || '',
@@ -430,6 +438,9 @@ function localHiringScore(candidate, context = {}) {
   if (/sap/.test(hiringContext) && /sap/.test(combined)) score += 28;
   if (String(candidate?.seniority || '').match(/owner|founder|c[_-]?suite|vp|head|director|manager/i)) score += 12;
   if (title) score += 4;
+  // Phone-first policy dominates title-only ranking: verified +91 first,
+  // then India-located direct-dial candidates, then other callable contacts.
+  score += phoneFirstPolicy.phonePriority(candidate) * 100;
   return score;
 }
 
@@ -448,6 +459,11 @@ function preRankCandidates(candidates, context = {}, limit = 10) {
     seen.add(key);
     chosen.push(entry.candidate);
   };
+
+  // Keep contacts with a credible phone path at the front of the shortlist;
+  // otherwise category diversity can accidentally put a no-phone recruiter
+  // ahead of a verified +91 number or a direct-dial international fallback.
+  for (const entry of ranked.filter((item) => phoneFirstPolicy.phonePriority(item.candidate) >= 2)) add(entry);
 
   // Keep category diversity so OmniRoute still makes the contextual decision.
   const categoryPatterns = [
@@ -1072,33 +1088,78 @@ async function enrichWorkbook(source, options = {}) {
   ];
 
   const candidatePoolFor = async (companyContext) => {
-    const key = String(companyContext.domain || companyContext.company || '').trim().toLowerCase();
+    const key = `${phoneFirstPolicy.PHONE_FIRST_POLICY_VERSION}:${String(companyContext.domain || companyContext.company || '').trim().toLowerCase()}`;
     if (key && candidatePoolCache.has(key)) {
       stats.candidatePoolCacheHits++;
       return candidatePoolCache.get(key);
     }
-    stats.candidateSearchCalls++;
-    let pool = null;
-    try {
-      pool = await apollo.searchCompanyPeopleBroad({
-        company: companyContext.company,
-        domain: companyContext.domain,
-        limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
-        titles: hiringCandidateTitles,
-      });
-    } catch {
-      stats.candidateSearchFallbacks++;
+    const limit = Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40)));
+    const indiaPools = [];
+    let attemptsCompleted = 0;
+    let verifiedIndianPhoneFound = false;
+
+    // Five distinct India-focused discovery attempts are required before the
+    // international fallback is eligible. Run in bounded pairs for latency,
+    // then stop early only if search results actually contain a valid +91 mobile.
+    const searchPlan = phoneFirstPolicy.INDIA_SEARCH_ATTEMPTS;
+    for (let index = 0; index < searchPlan.length; index += 2) {
+      const batch = searchPlan.slice(index, index + 2);
+      const results = await Promise.all(batch.map(async (attempt) => {
+        stats.candidateSearchCalls++;
+        try {
+          const result = await apollo.searchCompanyPeopleBroad({
+            company: companyContext.company,
+            domain: companyContext.domain,
+            location: 'India',
+            limit,
+            titles: attempt.titles,
+          });
+          attemptsCompleted++;
+          return result;
+        } catch {
+          stats.candidateSearchFallbacks++;
+          attemptsCompleted++;
+          return null;
+        }
+      }));
+      for (const result of results) if (result?.people?.length) indiaPools.push(result.people);
+      const candidates = phoneFirstPolicy.mergeCandidates(indiaPools);
+      verifiedIndianPhoneFound = candidates.some((person) =>
+        Boolean(phoneFirstPolicy.strictIndianMobile(person.phone || person.phone_number || person.mobile_phone, person.location || person.country || ''))
+      );
+      if (verifiedIndianPhoneFound) break;
     }
-    // Smaller firms sometimes expose no HR/recruiting titles. Fall back to a broad
-    // employer search and let the selector reason from company/hiring context.
-    if (!pool || (pool.people || []).length < 2) {
-      if (pool) stats.candidateSearchFallbacks++;
-      pool = await apollo.searchCompanyPeopleBroad({
-        company: companyContext.company,
-        domain: companyContext.domain,
-        limit: Math.max(12, Math.min(60, Number(options.candidateLimit || process.env.ULTRON_M3_THREE_POC_CANDIDATES || 40))),
-      });
+
+    let people = phoneFirstPolicy.mergeCandidates(indiaPools);
+    let internationalFallbackUsed = false;
+    if (phoneFirstPolicy.canUseInternationalFallback(attemptsCompleted, verifiedIndianPhoneFound)) {
+      // No qualifying +91 number surfaced in the five India-focused searches.
+      // Only now widen discovery, preserving India/direct-dial priority in ranking.
+      internationalFallbackUsed = true;
+      stats.candidateSearchCalls++;
+      try {
+        const globalPool = await apollo.searchCompanyPeopleBroad({
+          company: companyContext.company,
+          domain: companyContext.domain,
+          limit,
+          titles: hiringCandidateTitles,
+        });
+        people = phoneFirstPolicy.mergeCandidates([people, globalPool.people || []]);
+      } catch {
+        stats.candidateSearchFallbacks++;
+      }
     }
+
+    const pool = {
+      ok: true,
+      company: companyContext.company,
+      domain: companyContext.domain,
+      people,
+      candidatesChecked: people.length,
+      indiaSearchAttempts: attemptsCompleted,
+      internationalFallbackUsed,
+      verifiedIndianPhoneFound,
+    };
     if (key) candidatePoolCache.set(key, pool);
     return pool;
   };
