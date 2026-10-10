@@ -1263,6 +1263,7 @@ async function enrichWorkbook(source, options = {}) {
 
             let finalRanking = selected.ranking.slice(0, Math.max(openSlots.length * 3, 4));
             if (reviewerRequired(selected.ranking, openSlots.length)) {
+              const reviewerStartedAt = Date.now();
               try {
                 stats.omniRouteReviewerCalls++;
                 const reviewed = await reviewerAgent(context, companyContext, reasoningCandidates, selected.ranking, {
@@ -1282,7 +1283,9 @@ async function enrichWorkbook(source, options = {}) {
                     ...selected.ranking.filter((item) => !reviewedKeys.has(item.candidateKey)),
                   ].slice(0, Math.max(openSlots.length * 3, 4));
                 }
-              } catch {}
+              } catch {} finally {
+                recordStageLatency(stats, 'reviewer', reviewerStartedAt);
+              }
             }
 
             const rankedPeople = selectedPeople(reasoningCandidates, finalRanking, Math.min(6, Math.max(openSlots.length * 3, 4)));
@@ -1402,6 +1405,7 @@ async function enrichWorkbook(source, options = {}) {
 
         let finalRanking = selected.ranking.slice(0, 8);
         if (reviewerRequired(selected.ranking, requestedSlotCount)) {
+          const reviewerStartedAt = Date.now();
           try {
             stats.omniRouteReviewerCalls++;
             const reviewed = await reviewerAgent(context, companyContext, reasoningCandidates, selected.ranking, { count: requestedSlotCount });
@@ -1414,7 +1418,9 @@ async function enrichWorkbook(source, options = {}) {
               if (!selected.ranking.length) stats.reviewerRescuedRows++;
               finalRanking = reviewed.ranking;
             }
-          } catch {}
+          } catch {} finally {
+            recordStageLatency(stats, 'reviewer', reviewerStartedAt);
+          }
         }
 
         if (!finalRanking.length) {
@@ -1593,10 +1599,14 @@ function formatResult(result) {
   const anchoredWrites = result.anchoredRows
     ? ` Actual anchored writes: POC-1 F/G = ${result.poc1PhonesWritten || 0} phone, ${result.poc1EmailsWritten || 0} email; POC-2 H/I/J = ${result.poc2NamesWritten || 0} name/designation, ${result.poc2PhonesWritten || 0} phone, ${result.poc2EmailsWritten || 0} email; POC-3 K/L/M = ${result.poc3NamesWritten || 0} name/designation, ${result.poc3PhonesWritten || 0} phone, ${result.poc3EmailsWritten || 0} email. Existing POC slots repaired/upgraded: ${result.existingPocSlotsRepaired || 0}.`
     : '';
+  const latencySummary = Object.entries(result.stageLatencyMs || {})
+    .map(([stage, timing]) => `${stage} p50/p95/avg/max=${Number(timing.p50 || 0)}/${Number(timing.p95 || 0)}/${Number(timing.average || 0)}/${Number(timing.max || 0)}ms (n=${Number(timing.count || 0)})`)
+    .join('; ');
+  const latencyText = latencySummary ? ` Stage latency: ${latencySummary}.` : '';
   const cap = result.rowLimitReached
     ? ` Safety cap reached after ${result.scannedRows} rows; ${result.remainingEligibleRows || 0} eligible row${Number(result.remainingEligibleRows || 0) === 1 ? '' : 's'} remain, checkpointed at row ${result.nextRowNumber}. Use “resume POC enrichment” and approve the new Apollo run to continue from that checkpoint; earlier rows will not be replayed.`
     : '';
-  return `Agentic ${result.maxPocSlots || 3}-POC enrichment ${result.rowLimitReached ? 'chunk finished' : 'finished'}. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${pending}${unresolved}${cap}`;
+  return `Agentic ${result.maxPocSlots || 3}-POC enrichment ${result.rowLimitReached ? 'chunk finished' : 'finished'}. Processed ${result.scannedRows} row${result.scannedRows === 1 ? '' : 's'} across ${result.compatibleSheets.join(', ')}; completed ${result.completedRows}; selected ${result.aiSelections} NEW AI-ranked additional POCs; resolved ${result.anchorsResolved || 0} exact POC-1 LinkedIn anchor${Number(result.anchorsResolved || 0) === 1 ? '' : 's'}; changed ${result.updatedCells || 0} spreadsheet cell${Number(result.updatedCells || 0) === 1 ? '' : 's'}.${anchored}${anchoredWrites}${discovery}${latencyText}${pending}${unresolved}${cap}`;
 }
 
 module.exports = {
