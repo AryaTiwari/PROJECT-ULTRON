@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const policy = require('../core/three-poc-phone-first-policy');
 const operatorSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc-enrichment-operator.js'), 'utf8');
+const policySource = fs.readFileSync(path.join(__dirname, '..', 'core', 'three-poc-phone-first-policy.js'), 'utf8');
 const apolloSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'apollo-enrichment.js'), 'utf8');
 
 assert.equal(policy.INDIA_SEARCH_ATTEMPTS.length, 5);
@@ -33,13 +34,14 @@ assert.equal(merged.length, 3);
 assert.equal(merged.find((item) => item.id === 'same').phone, '+91 9876543210');
 
 // Static wiring checks prevent the policy from silently becoming an unused helper.
-assert.match(operatorSource, /phoneFirstPolicy\.INDIA_SEARCH_ATTEMPTS/);
-assert.match(operatorSource, /location:\s*'India'/);
-assert.match(operatorSource, /canUseInternationalFallback\(attemptsCompleted, verifiedIndianPhoneFound\)/);
+assert.match(operatorSource, /phoneFirstPolicy\.discoverCandidates/);
+assert.match(policySource, /INDIA_SEARCH_ATTEMPTS/);
+assert.match(policySource, /location:\s*'India'/);
+assert.match(policySource, /canUseInternationalFallback\(attemptsCompleted, verifiedIndianPhoneFound\)/);
 assert.match(operatorSource, /PHONE_FIRST_POLICY_VERSION/);
 assert.match(operatorSource, /THREE_POC_RESUME_POLICY_MISMATCH/);
-assert.match(operatorSource, /stats\.indiaPhoneSearchAttempts/);
-assert.match(operatorSource, /stats\.internationalFallbackSearches/);
+assert.match(policySource, /stats\.indiaPhoneSearchAttempts/);
+assert.match(policySource, /stats\.internationalFallbackSearches/);
 assert.match(apolloSource, /country_name:\s*String\(person\?\.country_name/);
 
 (async () => {
