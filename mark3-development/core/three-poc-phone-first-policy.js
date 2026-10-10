@@ -52,7 +52,7 @@ function phonePriority(person = {}) {
 function strictInternationalPhone(value) {
   const raw = text(value);
   if (!raw || strictIndianMobile(raw)) return false;
-  const digits = raw.replace(/\\D/g, '');
+  const digits = raw.replace(/\D/g, '');
   return digits.length >= 7 && digits.length <= 15;
 }
 
